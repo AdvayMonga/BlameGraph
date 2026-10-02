@@ -141,6 +141,7 @@ class Run:
 
 
 CODEX_DIFF_RE = re.compile(r"\nfile update:\n(diff --git .*)\Z", re.S)
+TRAILING_DIFF_RE = re.compile(r"(?:^|\n)diff --git a/.*\Z", re.S)
 
 
 @dataclass
@@ -162,10 +163,16 @@ class Step:
 
     @property
     def output(self) -> str:
-        """Tool output with the codex harness's trailing cumulative diff removed."""
+        """Tool output with the codex harness's trailing cumulative diff removed (the 'file update:' header
+        sometimes lands in the command field instead, so any trailing `diff --git` block is cut too)."""
         if self.result is None:
             return ""
-        return CODEX_DIFF_RE.sub("", self.result.tool_output_text)
+        out = CODEX_DIFF_RE.sub("", self.result.tool_output_text)
+        if "git diff" not in self.cmd:
+            m = TRAILING_DIFF_RE.search(out)
+            if m:
+                out = out[:m.start()]
+        return re.sub(r"\n?file update:\s*\Z", "", out)
 
     @property
     def codex_diff(self) -> str | None:

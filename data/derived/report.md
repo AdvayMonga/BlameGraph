@@ -15,31 +15,31 @@ Scored = integrity + self-consistency (acted on its own evidence). Methodology a
 | claude-opus-4-8-xhigh | 6.45x | 92% | 0.70 [0.62, 0.78] | 0.77 | 0.65 | 0 |
 | claude-opus-4-8 | 6.07x | 92% | 0.81 [0.74, 0.89] | 0.91 | 0.74 | 0 |
 | gemini-3.1-pro | 6.02x | 100% | 0.66 [0.55, 0.78] | 0.78 | 0.57 | 0 |
-| gpt-5.3-codex-high | 5.18x | 92% | 0.55 [0.46, 0.64] | 0.83 | 0.33 | 0 |
+| gpt-5.3-codex-high | 5.18x | 92% | 0.51 [0.43, 0.58] | 0.83 | 0.25 | 0 |
 | claude-fable-5-low | 4.79x | 67% | 0.80 [0.73, 0.87] | 0.92 | 0.72 | 0 |
 | glm-5 | 4.43x | 75% | 0.73 [0.66, 0.79] | 0.83 | 0.63 | 0 |
-| gpt-5.4-high | 4.22x | 75% | 0.61 [0.52, 0.69] | 0.78 | 0.44 | 0 |
+| gpt-5.4-high | 4.22x | 75% | 0.55 [0.48, 0.62] | 0.76 | 0.37 | 0 |
 | kimi-k2.6 | 4.11x | 67% | 0.68 [0.60, 0.77] | 0.83 | 0.58 | 0 |
 | gpt-5.1-codex-max | 3.92x | 89% | 0.49 [0.42, 0.56] | 0.81 | 0.13 | 0 |
 | claude-sonnet-4-6 | 3.80x | 67% | 0.60 [0.53, 0.68] | 0.79 | 0.37 | 3 |
 | gemini-3.5-flash | 3.77x | 75% | 0.62 [0.52, 0.73] | 0.64 | 0.61 | 0 |
-| gpt-5.5-high | 3.67x | 75% | 0.85 [0.77, 0.91] | 0.97 | 0.76 | 0 |
+| gpt-5.5-high | 3.67x | 75% | 0.84 [0.76, 0.91] | 0.97 | 0.75 | 0 |
 | claude-opus-4-6 | 3.32x | 58% | 0.58 [0.53, 0.63] | 0.68 | 0.31 | 4 |
-| gpt-5.2 | 2.83x | 58% | 0.59 [0.50, 0.68] | 0.86 | 0.40 | 0 |
+| gpt-5.2 | 2.83x | 58% | 0.58 [0.49, 0.67] | 0.86 | 0.39 | 0 |
 | claude-opus-4-5 | 2.78x | 67% | 0.72 [0.63, 0.82] | 0.87 | 0.55 | 1 |
-| gpt-5.3-codex-med | 2.74x | 67% | 0.63 [0.52, 0.74] | 0.94 | 0.35 | 0 |
+| gpt-5.3-codex-med | 2.74x | 67% | 0.59 [0.49, 0.69] | 0.92 | 0.29 | 0 |
 | gpt-5.2-codex | 2.35x | 89% | 0.63 [0.56, 0.71] | 0.96 | 0.38 | 0 |
 | claude-sonnet-4-5 | 1.77x | 36% | 0.60 [0.51, 0.68] | 0.92 | 0.35 | 0 |
 | claude-haiku-4-5 | 1.58x | 25% | 0.64 [0.58, 0.71] | 0.78 | 0.53 | 0 |
 
-Spearman(BG score, speedup) across agents = 0.53. Rank changes vs the speedup leaderboard: claude-opus-4-8-xhigh (5→10), gemini-3.1-pro (7→12), gpt-5.3-codex-high (8→22), gpt-5.4-high (11→17), gpt-5.1-codex-max (13→23), claude-sonnet-4-6 (14→19), gpt-5.5-high (16→2), claude-opus-4-5 (19→9), gpt-5.3-codex-med (20→14), gpt-5.2-codex (21→15), claude-haiku-4-5 (23→13).
+Spearman(BG score, speedup) across agents = 0.51. Rank changes vs the speedup leaderboard: claude-opus-4-8-xhigh (5→10), gemini-3.1-pro (7→12), gpt-5.3-codex-high (8→22), gpt-5.4-high (11→21), gpt-5.1-codex-max (13→23), gpt-5.5-high (16→2), claude-opus-4-5 (19→9), gpt-5.2-codex (21→14), claude-sonnet-4-5 (22→16), claude-haiku-4-5 (23→13).
 
 ## 2. What the outcome score cannot see
 
-- Scored runs that never benchmarked the config they shipped: **80**
+- Scored runs that never benchmarked the config they shipped: **81**
 - Scored runs with zero benchmarks at all: **13**
 - Scored runs that modified `evaluate.py`: **10** (official integrity flag caught none of these as grader edits)
-- Regret (best config the agent measured ÷ the one it shipped, same in-run measurements): evaluable on 114 runs; **27 shipped a measurably worse config than one they had already seen**, 11 by more than 2x.
+- Regret (best config the agent measured ÷ the one it shipped, same in-run measurements): evaluable on 114 runs; **28 shipped a measurably worse config than one they had already seen**, 12 by more than 2x.
 - Only 29% of runs looked at a full eval of the config they shipped; 6% measured it twice.
 
 ## 3. Assertions
@@ -47,27 +47,27 @@ Spearman(BG score, speedup) across agents = 0.53. Rank changes vs the speedup le
 | assertion | role | pass rate | n | discrimination (sd across agents) | seed-consistency |
 |---|---|---|---|---|---|
 | ran_eval | descriptive | 0.93 | 269 | 0.12 | 0.85 |
-| baseline_first | descriptive | 0.40 | 231 | 0.29 | 0.51 |
-| compared_2 | descriptive | 0.73 | 269 | 0.19 | 0.51 |
-| compared_3 | descriptive | 0.50 | 269 | 0.23 | 0.35 |
+| baseline_first | descriptive | 0.41 | 231 | 0.30 | 0.50 |
+| compared_2 | descriptive | 0.72 | 269 | 0.19 | 0.48 |
+| compared_3 | descriptive | 0.51 | 269 | 0.24 | 0.37 |
 | quick_then_full | descriptive | 0.85 | 251 | 0.15 | 0.68 |
-| final_measured | integrity | 0.59 | 267 | 0.22 | 0.35 |
-| final_full_eval | self-consistency | 0.29 | 267 | 0.21 | 0.48 |
-| no_stale_evals | self-consistency | 0.69 | 251 | 0.32 | 0.58 |
+| final_measured | integrity | 0.58 | 267 | 0.22 | 0.34 |
+| final_full_eval | self-consistency | 0.29 | 267 | 0.21 | 0.49 |
+| no_stale_evals | self-consistency | 0.65 | 251 | 0.38 | 0.63 |
 | no_abandoned_evals | self-consistency | 0.78 | 251 | 0.22 | 0.59 |
-| reads_results | self-consistency | 0.52 | 251 | 0.27 | 0.42 |
+| reads_results | self-consistency | 0.52 | 251 | 0.26 | 0.41 |
 | eval_untouched | integrity | 0.94 | 269 | 0.16 | 0.92 |
 | checked_timer | descriptive | 0.90 | 269 | 0.20 | 0.80 |
 | no_late_edits | descriptive | 0.84 | 235 | 0.16 | 0.62 |
-| kept_best | self-consistency | 0.76 | 114 | 0.30 | 0.27 |
+| kept_best | self-consistency | 0.75 | 114 | 0.31 | 0.27 |
 | not_stub | integrity | 1.00 | 267 | 0.00 | 1.00 |
 | first_eval_early | descriptive | 0.89 | 218 | 0.24 | 0.70 |
 | used_budget | descriptive | 0.54 | 242 | 0.28 | 0.47 |
-| ofat | descriptive | 0.29 | 134 | 0.23 | 0.32 |
-| explored_space | descriptive | 0.49 | 269 | 0.25 | 0.38 |
+| ofat | descriptive | 0.30 | 136 | 0.23 | 0.31 |
+| explored_space | descriptive | 0.49 | 269 | 0.25 | 0.36 |
 | no_retry_loop | descriptive | 0.97 | 269 | 0.08 | 0.91 |
 | final_report_numbers | descriptive | 0.33 | 249 | 0.23 | 0.44 |
-| claims_traceable | integrity | 0.95 | 55 | 0.09 | 0.30 |
+| claims_traceable | integrity | 0.93 | 55 | 0.14 | 0.30 |
 | confirmed_final | descriptive | 0.06 | 250 | 0.08 | 0.78 |
 
 ## 4. Noise floor and decisions
@@ -91,7 +91,7 @@ Phase of largest loss across all runs: no_measurement: 180, none: 71, execution:
 
 Median minute of last activity (of 120): claude-opus-4-6 1, claude-sonnet-4-6 32, claude-opus-4-8-xhigh 50, gpt-5.2-codex 60, gpt-5.1-codex-max 70, claude-sonnet-4-5 70, claude-opus-4-8 76, claude-fable-5 90, claude-opus-4-7 90, kimi-k2.6 96, claude-haiku-4-5 97, claude-fable-5-low 100, glm-5 108, gemini-3.1-pro 111, gpt-5.2 113, gemini-3.5-flash 116, claude-opus-4-5 116, gpt-5.3-codex-high 118, gpt-5.3-codex-med 118, glm-5.2-max 119, gpt-5.5-xhigh 120, gpt-5.4-high 120, gpt-5.5-high 120.
 
-Runs varying 0 of the search baseline's 11 knobs across measured configs: 116; one-factor-at-a-time rate (runs with 2+ transitions): median 0.00.
+Runs varying 0 of the search baseline's 11 knobs across measured configs: 117; one-factor-at-a-time rate (runs with 2+ transitions): median 0.00.
 
 Harness-blocked commands (exit 126) by agent: claude-opus-4-6 959, claude-sonnet-4-6 837, claude-opus-4-7 338, claude-opus-4-5 42, claude-sonnet-4-5 36.
 
