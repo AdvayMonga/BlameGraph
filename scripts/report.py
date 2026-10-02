@@ -151,6 +151,9 @@ def main():
     L.append("- Early warning (`scripts/early_warning.py`): process counters at minute 15/30/60/90 do **not** predict whether a run scores (leave-one-agent-out AUC ~0.5). The only signal is the crude rule 'has one healthy measurement by minute 30' (82% vs 59% scored).")
     L.append("- Warm-cache hypothesis (in-run numbers optimistic because of prefix caching on a reused request set): not supported at n=30 comparable runs.")
     L.append("- Claims audit: no fabricated numbers found (98% traceable); the integrity problem is unmeasured submissions and grader edits, not reporting.\n")
+    L.append("## Figures\n")
+    for f in ("fig_outcome_vs_process", "fig_assertion_heatmap", "fig_regret", "fig_budget", "fig_rank_stability"):
+        L.append(f"![{f}]({f}.png)\n")
     L.append("## Caveats\n")
     L.append("- Codex traces truncate multi-line commands and (gpt-5.5) omit file writes; config reconstruction there is passive.")
     L.append("- In-run numbers are only compared when the eval was a standard harness invocation on a full request set with no failures; 54% of eval launches are non-standard and excluded from regret/decomposition.")

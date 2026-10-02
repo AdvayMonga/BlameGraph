@@ -6,19 +6,20 @@ from dataclasses import dataclass
 
 from .experiment import ConfigVersion, ExperimentLog
 
-# src/baselines/search_spaces/vllm.yaml in aisa-group/InferenceBench (11 parameters)
+# src/baselines/search_spaces/vllm.yaml in aisa-group/InferenceBench (11 parameters); SGLang's equivalents are
+# mapped onto the same knob names so exploration is comparable across engines
 SEARCH_SPACE = {
-    "max_num_seqs": r"--max-num-seqs",
-    "max_num_batched_tokens": r"--max-num-batched-tokens",
-    "gpu_memory_utilization": r"--gpu-memory-utilization",
-    "block_size": r"--block-size",
-    "enable_chunked_prefill": r"--(no-)?enable-chunked-prefill",
-    "enable_prefix_caching": r"--(no-)?enable-prefix-caching",
-    "enforce_eager": r"--enforce-eager",
+    "max_num_seqs": r"--max-num-seqs|--max-running-requests",
+    "max_num_batched_tokens": r"--max-num-batched-tokens|--chunked-prefill-size|--max-prefill-tokens",
+    "gpu_memory_utilization": r"--gpu-memory-utilization|--mem-fraction-static",
+    "block_size": r"--block-size|--page-size",
+    "enable_chunked_prefill": r"--(no-)?enable-chunked-prefill|--chunked-prefill-size",
+    "enable_prefix_caching": r"--(no-)?enable-prefix-caching|--disable-radix-cache",
+    "enforce_eager": r"--enforce-eager|--disable-cuda-graph",
     "quantization": r"--quantization",
     "kv_cache_dtype": r"--kv-cache-dtype",
     "attention_backend": r"VLLM_ATTENTION_BACKEND|--attention-backend",
-    "num_speculative_tokens": r"--speculative-config|--num-speculative-tokens",
+    "num_speculative_tokens": r"--speculative-config|--num-speculative-tokens|--speculative-num-steps|--speculative-algorithm",
 }
 # other knobs agents commonly touch that are outside the baseline's space
 EXTRA_KNOBS = {
