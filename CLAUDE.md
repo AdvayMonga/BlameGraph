@@ -38,6 +38,24 @@ search-space coverage) are reported descriptively, never scored — they penaliz
 - `scripts/free_pass.py` — all assertions over the corpus → `data/derived/assertions.csv`; per-agent rates, discrimination, seed consistency, outcome relationship.
 - `scripts/flip_test.py` — inject each failure into every applicable run and report which assertions flip (validates the assertion set).
 
+## Loop-facing tool (`blamegraph/tool/`, stdlib only — it is vendored into the harness container)
+The eval as a *tool*: facts for the agent, judgments for the researcher. No heuristics are ever sent to the loop.
+- `ledger.py` — append-only `.blamegraph/ledger.jsonl` in the task dir: `session_start`, `config` (hash of start_server.sh), `launch` (inferred from a new serving process), `measure` (mode, standard flags?, live config, stale?, cache cold/warm, metrics), `submission`, grader hashes.
+- `probe.py` — which process serves the port and when it started; "stale" = start_server.sh modified after the server started (no launch hook needed).
+- `validate.py` — task rules → `{valid, reasons, facts}`: grader untouched (vs session start and vs the harness's pristine hash), submission is a known config, measured at least once standard+full+fresh, metrics physical, no env overrides.
+- `landscape.py` — pooled (scenario, config) → measurements across sessions; `near()` returns prior points with counts/CV, `noise()` the cross-session repeatability.
+- `context.py` — `pack()`/`pack_text()`: the only thing a loop should read. Measurements with uncertainty, validity-if-submitted-now, nearby prior points. Never scores or advice.
+- `adapter.py` — ledger → `ExperimentLog`, so all trace-based assertions/blame/noise analyses run unchanged on native ledgers (researcher side).
+- `cli.py` — `session-start | measure (wraps the pristine grader) | submit | validate | context | landscape-add`.
+- `tests/test_tool.py` — end-to-end with a fake grader and a real local server: standard/non-standard flags, stale detection, cache state, validator flips (unmeasured submission, grader edit, pristine-hash mismatch), landscape, adapter, submit. Run `python tests/test_tool.py`.
+
+### Harness integration (fork: `../InferenceBench`, branch `blamegraph`, remote github.com/AdvayMonga/InferenceBench)
+`scripts/vendor_tool.py` copies the tool to `src/eval/inference/blamegraph_tool/` (+ `grader_entry.py`); `scripts/patch_harness.py` edits `src/run_task.sh`:
+task-side `evaluate.py` becomes a wrapper that records then calls the pristine grader; the read-only `/opt/inference_eval` bundle ships the tool;
+a `session_start` event is written when the task dir is prepared (with the wrapper's sha256 as the pristine grader hash);
+after the agent finishes and before final eval, `submit` records the submission, validates, and copies `blamegraph_ledger.jsonl` + `blamegraph_validation.json` into `EVAL_DIR`.
+Re-run both scripts after changing the tool. Untested on a real H100 run so far (no GPU here); tested end-to-end with the fake grader.
+
 ## Data quirks (handled in the loader; don't re-derive)
 No timestamps (use `timer.sh` outputs). Old codex traces append the cumulative `git diff` to tool
 results; new codex (gpt-5.5) traces omit file-write tool calls entirely; all codex traces keep only the
