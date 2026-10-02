@@ -170,6 +170,10 @@ def main():
         ja = j[j.applicable == 1].groupby("agent").bad.mean().sort_values()
         L.append("\nJudged-failure rate by agent (applicable questions): " + ", ".join(f"{a} {v:.2f}" for a, v in ja.items()) + ".\n")
 
+    L.append("## 7c. Process is a trait (see `scripts/trait_analysis.py`)\n")
+    L.append("- ICC(1), share of a run's within-scenario z-score explained by agent identity: speedup 0.18, BG score 0.28, self-consistency **0.34**.")
+    L.append("- Split-half: agent ranking on scenarios A+B vs C+D — speedup rho 0.59, BG 0.80, self-consistency **0.86**.")
+    L.append("- Effort buys outcome, not discipline: gpt-5.5 high→xhigh speedup 3.7x→7.7x, BG 0.84→0.86; fable-5 low→default 4.8x→7.3x, BG 0.80→0.83.\n")
     L.append("## 8. Benchmark audit and negative results\n")
     L.append("- See `scripts/benchmark_audit.py`: under seed resampling (k=3), only ~half of agent pairs keep a stable order on the speedup leaderboard; the top rank's 95% interval spans [1, 12].")
     L.append("- Early warning (`scripts/early_warning.py`): process counters at minute 15/30/60/90 do **not** predict whether a run scores (leave-one-agent-out AUC ~0.5). The only signal is the crude rule 'has one healthy measurement by minute 30' (82% vs 59% scored).")
