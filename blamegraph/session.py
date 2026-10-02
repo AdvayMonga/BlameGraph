@@ -1,6 +1,7 @@
-"""Append-only ledger written at the source by the harness wrappers.
+"""Session format: an append-only event log (one JSON object per line) that a loop writes, or an adapter
+converts its own logs into. Validation and feedback read this format.
 
-One JSON object per line in `ledger.jsonl`. Event kinds:
+Event kinds:
   config      {hash, path, size, diff_lines, content}       start_server.sh changed (content hashed after normalization)
   launch      {config_hash, pid}                             a server was started from that config
   measure     {id, config_hash, live_hash, mode, standard, flags, cache_state, metrics, failure_rate, quality, request_set}

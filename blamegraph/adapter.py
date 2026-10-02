@@ -1,9 +1,8 @@
-"""Turn a native ledger into the ExperimentLog the trace-based analyses consume, so assertions, blame and noise
-analyses run unchanged on sessions recorded at the source."""
+"""Session (ledger) -> ExperimentLog, so assertions, blame and noise analyses run on any loop's sessions."""
 from __future__ import annotations
 
-from ..experiment import ConfigVersion, EvalLaunch, ExperimentLog, Observation
-from .ledger import Ledger
+from .experiment import ConfigVersion, EvalLaunch, ExperimentLog, Observation
+from .session import Ledger
 
 
 def log_from_ledger(led: Ledger, run_id: str = "ledger") -> ExperimentLog:

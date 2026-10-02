@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
-from .ledger import Ledger, config_hash, file_hash
+from .session import Ledger, config_hash, file_hash
 
 MAX_PHYSICAL_GEN_TPS = 20_000.0   # from InferenceBench's integrity floor
 MIN_PHYSICAL_TPOT_S = 1e-4
@@ -44,12 +44,19 @@ def _physical(metrics: dict | None) -> bool:
     return True
 
 
-def validate(ledger: Ledger, config_path: Path, grader_paths: list[Path], pristine_grader: dict[str, str] | None = None) -> Verdict:
-    """`pristine_grader` maps grader path -> expected hash (from the harness's own copy, outside the agent's reach)."""
+def validate(ledger: Ledger, config_path: Path | None = None, grader_paths: list[Path] | None = None,
+             pristine_grader: dict[str, str] | None = None) -> Verdict:
+    """Live mode: pass `config_path`/`grader_paths` to hash the files on disk now. Recorded mode (finished sessions):
+    omit them and the submission event's config hash and grader hashes are used. `pristine_grader` maps grader
+    path -> expected hash from a copy outside the agent's reach."""
     reasons = []
-    shipped = config_hash(config_path.read_text()) if config_path.exists() else None
-    start_hashes, _ = ledger.grader_hashes()
-    now_hashes = {str(p): file_hash(p) for p in grader_paths}
+    sub = ledger.submission() or {}
+    if config_path is not None:
+        shipped = config_hash(config_path.read_text()) if config_path.exists() else None
+    else:
+        shipped = sub.get("config_hash")
+    start_hashes, end_hashes = ledger.grader_hashes()
+    now_hashes = {str(p): file_hash(p) for p in grader_paths} if grader_paths is not None else (end_hashes or {})
     # grader_untouched
     for k, h in now_hashes.items():
         if start_hashes and start_hashes.get(k) not in (None, h):
@@ -59,7 +66,7 @@ def validate(ledger: Ledger, config_path: Path, grader_paths: list[Path], pristi
     # submission_known
     known = {c["hash"] for c in ledger.configs()}
     if shipped is None:
-        reasons.append("submission_known: start_server.sh is missing")
+        reasons.append("submission_known: no submitted config (file missing or no submission event)")
     elif shipped not in known:
         reasons.append("submission_known: the shipped start_server.sh was never recorded by a measurement or launch")
     # submission_measured
