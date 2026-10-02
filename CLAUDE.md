@@ -31,6 +31,8 @@ search-space coverage) are reported descriptively, never scored — they penaliz
 - `scripts/early_warning.py` — negative result: process at minute T does not predict scoring.
 - `scripts/figures.py` — `data/derived/fig_*.png` used by the report.
 - `scripts/extract_obs.py` — run the extractor (`--pilot N` first).
+- **Laya (open System One judge, $0):** `scripts/make_laya_data.py` builds `data/laya/{extract,judge}_{train,val,test}.jsonl` from the cached Haiku/Sonnet labels (split by run; no human labels). `scripts/laya_eval.py` scores any checkpoint; `scripts/laya_make_items.py` tokenizes items for the official MPS fine-tune script (`notebooks/laya_finetune_typed_decisions_mps.py` in github.com/NandhaKishorM/laya, cloned to the scratchpad); `scripts/laya_calibrate.py` fits a temperature on val; `scripts/laya_report.py` compares. Models live in `data/laya/models/` (gitignored). Zero-shot `laya-typed-decisions`: extract acc 0.58 / judge 0.74.
+- `scripts/laya_baseline.py` — TF-IDF+LR reference for the same tasks (extract 0.94, judge 0.74).
 - `scripts/corpus_stats.py` — raw per-run counters → `data/derived/runs.csv`.
 - `scripts/experiment_stats.py` — experiment-log metrics → `data/derived/experiment.csv` + summaries.
 - `scripts/free_pass.py` — all assertions over the corpus → `data/derived/assertions.csv`; per-agent rates, discrimination, seed consistency, outcome relationship.
