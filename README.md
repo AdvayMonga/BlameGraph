@@ -1,12 +1,12 @@
 # BlameGraph
 
-An evaluation tool for agents that optimize LLM inference servers, built on InferenceBench and designed to sit inside an autoresearch loop.
+Feedback for autoresearch loops that optimize inference systems: did the agent earn its result, and what actually happened in the session?
 
-- **It audits the session, not just the submission.** InferenceBench scores the server an agent ships; BlameGraph replays the hours before that and records what the agent configured, launched, measured, read, and finally shipped.
-- **Two things are scored: integrity and self-consistency.** Integrity: the grader was untouched, the submission is a config that was actually benchmarked, the numbers are physically possible. Self-consistency: the agent read the results it asked for, kept the best config it measured, and benchmarked the server it thought it was benchmarking.
-- **Everything else is described, never scored.** How many knobs it varied, whether it ran a baseline first, how much of the budget it used: reported for the researcher, deliberately kept out of the score so no way of working is prescribed.
-- **Every assertion earns its place.** Failures are injected into real traces and an assertion stays only if it flips; its stability under reseeding and its agreement across seeds are measured and published.
-- **As a tool, it hands the loop facts, not advice.** A ledger of measurements with uncertainty, a validator with public rules, and a pooled landscape of what every prior run measured. The agent sees what happened and decides for itself; process judgments stay on the researcher's dashboard.
-- **Numbers the agent printed are normalized once and cached.** A small model reads each benchmark output into structured form; a judge answers a handful of anchored yes/no questions about the final report. Both are optional on a harness that logs the measurements directly.
-- **The benchmark itself gets audited.** Rank stability of the leaderboard under reseeding, harness artifacts in the traces, and the benchmark's own noise floor are first-class outputs.
-- **Entry points:** `scripts/report.py` for the full results, `scripts/explain_run.py RUN_ID` for one run's story, the dashboard for browsing, `blamegraph/tool/` for the loop-facing interface. See `CLAUDE.md` for layout and data quirks.
+- **It reads a finished session and reports on it.** Input is a session log (or an InferenceBench-format trace); output is an integrity verdict, a set of facts, and researcher diagnostics.
+- **Integrity is a verdict with reasons.** The grader was untouched, the submission is something that was actually measured on a fresh setup, and the numbers are physically possible. Anything else voids the result.
+- **Facts go to the agent; judgments don't.** The agent-facing half says what was measured, what was shipped, what was best, and which measurements were stale, non-standard, or never read. It never says what to do next.
+- **Diagnostics stay with the researcher.** Self-consistency and methodology assertions and a blame breakdown (found, kept, executed) show how the session went without being fed back as advice.
+- **Assertions are tested by breaking things.** Known failures are injected into real traces and each assertion must flip when its failure is present.
+- **Equivalence checks are next.** For kernels and servers, "faster" only counts if the output is the same: randomized and held-out inputs against a reference, side-effect and timing checks, token-level agreement for model servers.
+- **Usage:** `python -m blamegraph feedback <session.jsonl | run_dir>` (add `--agent-text` for the agent-facing half only). Tests: `python tests/test_feedback.py`, `python tests/test_flip.py`.
+- The full research snapshot on public InferenceBench traces (analyses, judge, dashboard) is preserved at the `research-v1` tag.

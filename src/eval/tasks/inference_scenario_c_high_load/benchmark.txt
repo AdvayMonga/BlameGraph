@@ -1,1 +1,0 @@
-InferenceBench Scenario C: High load (throughput)

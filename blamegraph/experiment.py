@@ -355,8 +355,8 @@ def _extract_observation(out: str, step_i: int, config_idx: int | None) -> Obser
     return None
 
 
-def build_log(run: Run, llm_obs: dict[int, dict] | None = None) -> ExperimentLog:
-    """`llm_obs` maps step_i -> extractor JSON (see extract.py); when given it replaces regex observation parsing."""
+def build_log(run: Run) -> ExperimentLog:
+    """Reconstruct the experiment log from a raw trace (sessions recorded at the source use adapter.log_from_ledger)."""
     log = ExperimentLog(run_id=run.run_id)
     content: str | None = None
     live_idx: int | None = None        # config version running on the server
@@ -436,11 +436,7 @@ def build_log(run: Run, llm_obs: dict[int, dict] | None = None) -> ExperimentLog
         # -- metric observations (from any output the agent saw)
         if tool in ("bash", "shell", "taskoutput", "monitor", "read") and out and OBS_KW_RE.search(out):
             pending = log.evals[-1].config_idx if log.evals else None
-            if llm_obs is not None and st.i in llm_obs:
-                from .extract import to_observation
-                obs = to_observation(st.i, llm_obs[st.i], pending)
-            else:
-                obs = _extract_observation(out, st.i, pending)
+            obs = _extract_observation(out, st.i, pending)
             if obs:
                 obs.quick = log.evals[-1].quick if log.evals else None
                 obs.standard = log.evals[-1].standard if log.evals else None
