@@ -24,7 +24,7 @@ there rather than re-deriving. Trace quirks (codex truncation, sandbox exit-126,
 `traces.py`/`experiment.py`.
 
 ## Decided eval conventions (2026-10-02; change only with the user)
-Target: Qwen3-30B-A3B (MoE) on one H100, **thinking off**. No method specifications to the agent (Bitter Lesson):
+Target: Qwen3-30B-A3B (MoE) on one H100, **thinking off**, starting engine **vLLM** (the agent may replace it). No method specifications to the agent (Bitter Lesson):
 the benchmark defines objective + correctness + validity only, checked end to end (no internal-invariant checks).
 - **Regimes (8):** single stream, saturated, bursty, long prompt/short output, short prompt/long output, shared
   prefix multi-turn, overload, cold start. All always run; the task picks the objective (one, several, or all, with
@@ -33,8 +33,10 @@ the benchmark defines objective + correctness + validity only, checked end to en
 - **Metrics (client-side, per-request rows):** TTFT from scheduled send to first *real* token; TPOT =
   (E2E − TTFT)/(n − 1); tokens re-counted with the reference tokenizer; goodput = max rate with ≥99% of requests
   meeting both TTFT and TPOT limits (p99); failures; peak memory as a limit, not an objective; cost = goodput per
-  GPU-second from process start; joules/token. Latency limits: not yet fixed (borrow MLPerf Llama-3.1-8B
-  2000/100 ms conversational, 500/30 ms interactive, or set from the baseline).
+  GPU-second from process start; joules/token. Latency limits (MLPerf Llama-3.1-8B, checked at p99):
+  conversational TTFT ≤ 2000 ms / TPOT ≤ 100 ms (saturated, bursty, long prompt, long output, shared prefix,
+  overload); interactive TTFT ≤ 500 ms / TPOT ≤ 30 ms (single stream). Check at calibration whether the
+  long-prompt regime's prompt lengths fit 2000 ms TTFT on the unmodified baseline.
 - **Load:** open-loop Poisson for bursty/overload/limit-finding; closed-loop doubling concurrency sweep for
   saturated; concurrency 1 for single stream; warmup outside the window; full tier ≥600 s per regime; short tier
   validated by rank correlation with the full tier; client must be shown not to be the bottleneck.
