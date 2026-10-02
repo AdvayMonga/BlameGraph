@@ -28,7 +28,7 @@ def main():
     import importlib
     ft = importlib.import_module(Path(a.script).stem)
     ft.prepare_model(a.model_dir)
-    tok = AutoTokenizer.from_pretrained(a.model_dir)
+    tok = AutoTokenizer.from_pretrained(str(Path(a.model_dir) / "tokenizer"))
     cfg = json.loads((Path(a.model_dir) / "rl_agent_config.json").read_text())
     cfg = {**cfg, "max_len": cfg.get("max_len", 1024), "head_max_len": cfg.get("head_max_len", 256)}
     items, skipped = [], 0
