@@ -115,6 +115,12 @@ Runs with numeric claims in the final report: 80; claims 259; traceable to a too
 
 Judged-failure rate by agent (applicable questions): gpt-5.5-high 0.08, kimi-k2.6 0.12, claude-fable-5 0.17, claude-fable-5-low 0.18, gpt-5.2-codex 0.20, glm-5 0.21, claude-opus-4-5 0.23, gpt-5.5-xhigh 0.25, claude-opus-4-7 0.26, glm-5.2-max 0.27, claude-haiku-4-5 0.31, claude-sonnet-4-6 0.31, gpt-5.4-high 0.31, claude-opus-4-8 0.33, gpt-5.3-codex-med 0.35, claude-opus-4-6 0.35, gpt-5.3-codex-high 0.38, claude-sonnet-4-5 0.44, gemini-3.1-pro 0.50, gpt-5.2 0.50, gemini-3.5-flash 0.57, claude-opus-4-8-xhigh 0.64, gpt-5.1-codex-max 0.67.
 
+## 7c. Process is a trait (see `scripts/trait_analysis.py`)
+
+- ICC(1), share of a run's within-scenario z-score explained by agent identity: speedup 0.18, BG score 0.28, self-consistency **0.34**.
+- Split-half: agent ranking on scenarios A+B vs C+D — speedup rho 0.59, BG 0.80, self-consistency **0.86**.
+- Effort buys outcome, not discipline: gpt-5.5 high→xhigh speedup 3.7x→7.7x, BG 0.84→0.86; fable-5 low→default 4.8x→7.3x, BG 0.80→0.83.
+
 ## 8. Benchmark audit and negative results
 
 - See `scripts/benchmark_audit.py`: under seed resampling (k=3), only ~half of agent pairs keep a stable order on the speedup leaderboard; the top rank's 95% interval spans [1, 12].
