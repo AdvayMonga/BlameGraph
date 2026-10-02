@@ -11,6 +11,7 @@ search-space coverage) are reported descriptively, never scored — they penaliz
 
 ## Layout
 - `data/inferencebench/` — HF `aisa-group/InferenceBench-Trajectories` (269 runs, 23 agents × 4 scenarios × 3 seeds). Not committed.
+- `src/`, `agents/`, `containers/`, `README.inferencebench.md` — the InferenceBench harness (upstream, plus the BlameGraph hooks in `src/run_task.sh`).
 - `data/derived/` — CSVs produced by scripts.
 - `blamegraph/traces.py` — `Run`/`Event`/`Step` loader. `Run.steps()` pairs tool calls with results (FIFO within an assistant turn). Mirrors InferenceBench scoring (`primary_metric`, integrity floor, `gate_passed`, `scored`) and estimates `speedup` from backed-out baseline constants.
 - `blamegraph/experiment.py` — `build_log(run)` reconstructs the experiment log: `start_server.sh` versions (file tools, heredocs, codex cumulative diffs, or passive full reads), server restarts (command or startup banner), `evaluate.py` launches (quick/full, stale-config, killed, observed), metric observations seen by the agent, timer anchors, `eval_script_modified`.
@@ -50,12 +51,12 @@ The eval as a *tool*: facts for the agent, judgments for the researcher. No heur
 - `cli.py` — `session-start | measure (wraps the pristine grader) | submit | validate | context | landscape-add`.
 - `tests/test_tool.py` — end-to-end with a fake grader and a real local server: standard/non-standard flags, stale detection, cache state, validator flips (unmeasured submission, grader edit, pristine-hash mismatch), landscape, adapter, submit. Run `python tests/test_tool.py`.
 
-### Harness integration (fork: `../InferenceBench`, branch `blamegraph`, remote github.com/AdvayMonga/InferenceBench)
-`scripts/vendor_tool.py` copies the tool to `src/eval/inference/blamegraph_tool/` (+ `grader_entry.py`); `scripts/patch_harness.py` edits `src/run_task.sh`:
+### Harness integration (this repo is a fork of aisa-group/InferenceBench; harness lives in `src/`, `agents/`, `containers/`)
+`scripts/patch_harness.py` edits `src/run_task.sh` (already applied; idempotent). The eval bundle copies `blamegraph/tool` into the container as `inference_eval.blamegraph_tool`; `src/eval/inference/grader_entry.py` is the pristine grader:
 task-side `evaluate.py` becomes a wrapper that records then calls the pristine grader; the read-only `/opt/inference_eval` bundle ships the tool;
 a `session_start` event is written when the task dir is prepared (with the wrapper's sha256 as the pristine grader hash);
 after the agent finishes and before final eval, `submit` records the submission, validates, and copies `blamegraph_ledger.jsonl` + `blamegraph_validation.json` into `EVAL_DIR`.
-Re-run both scripts after changing the tool. Untested on a real H100 run so far (no GPU here); tested end-to-end with the fake grader.
+No vendoring step: the container copy is taken from `blamegraph/tool` at run time. Untested on a real H100 run so far (no GPU here); tested end-to-end with the fake grader.
 
 ## Data quirks (handled in the loader; don't re-derive)
 No timestamps (use `timer.sh` outputs). Old codex traces append the cumulative `git diff` to tool

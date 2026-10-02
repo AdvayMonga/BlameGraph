@@ -509,7 +509,7 @@ PY
     mkdir -p "${JOB_DIR}/task/.blamegraph"
     BLAMEGRAPH_GRADER_HASH="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest()[:16])' "${JOB_DIR}/task/evaluate.py")"
     export BLAMEGRAPH_GRADER_HASH
-    PYTHONPATH="src/eval/inference" python3 -m blamegraph_tool.cli session-start --task-dir "${JOB_DIR}/task" --scenario "${EVALUATION_TASK}" || true
+    python3 -m blamegraph.tool.cli session-start --task-dir "${JOB_DIR}/task" --scenario "${EVALUATION_TASK}" || true
 fi
 find "${JOB_DIR}/task" -maxdepth 1 -type f -name "*.sh" -exec chmod +x {} + 2>/dev/null || true
 cp -r "containers/other_home_data/.codex" "${JOB_DIR}/"
@@ -549,7 +549,7 @@ mkdir -p "${INFERENCE_EVAL_BUNDLE}/bin"
 cp src/eval/inference/bin/launch_supervised_server.sh "${INFERENCE_EVAL_BUNDLE}/bin/"
 chmod +x "${INFERENCE_EVAL_BUNDLE}/bin/launch_supervised_server.sh"
 # BlameGraph: measurement ledger + validator, read-only inside the container
-cp -r src/eval/inference/blamegraph_tool "${INFERENCE_EVAL_BUNDLE}/blamegraph_tool"
+cp -r blamegraph/tool "${INFERENCE_EVAL_BUNDLE}/blamegraph_tool"
 cp src/eval/inference/grader_entry.py "${INFERENCE_EVAL_BUNDLE}/grader_entry.py"
 mkdir -p "${INFERENCE_EVAL_BUNDLE}/baselines"
 cp -r src/eval/inference/baselines/quality "${INFERENCE_EVAL_BUNDLE}/baselines/"
@@ -1714,7 +1714,7 @@ nvidia-smi || true
 capture_agent_runtime_for_final_eval
 # BlameGraph: record the submission and validate the session before anything is scored
 if [[ "${EVALUATION_TASK}" == inference_scenario_* ]]; then
-    PYTHONPATH="src/eval/inference" python3 -m blamegraph_tool.cli submit --task-dir "${JOB_DIR}/task" --pristine-grader-hash "${BLAMEGRAPH_GRADER_HASH:-}" \
+    python3 -m blamegraph.tool.cli submit --task-dir "${JOB_DIR}/task" --pristine-grader-hash "${BLAMEGRAPH_GRADER_HASH:-}" \
         > "${EVAL_DIR}/blamegraph_validation.json" 2>> "${EVAL_LOG}" || echo "[blamegraph] submission INVALID (see blamegraph_validation.json)" | tee -a "${EVAL_LOG}"
     copy_if_exists "${JOB_DIR}/task/.blamegraph/ledger.jsonl" "${EVAL_DIR}/blamegraph_ledger.jsonl"
 fi

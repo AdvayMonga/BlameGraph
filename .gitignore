@@ -22,10 +22,8 @@ containers/empty_dot_git
 containers/build_logs/
 containers/*.sif
 *.sif
-data/*
 results/
 out/
-scripts/
 tau_sensitivity_out/
 src/eval/inference/baselines/
 src/commit_utils/rejudge/
@@ -202,3 +200,5 @@ __marimo__/
 data/inferencebench/
 *.pyc
 data/laya/models/
+data/results/
+data/landscape.jsonl
