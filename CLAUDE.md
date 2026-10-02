@@ -46,6 +46,7 @@ The eval as a *tool*: facts for the agent, judgments for the researcher. No heur
 - `landscape.py` — pooled (scenario, config) → measurements across sessions; `near()` returns prior points with counts/CV, `noise()` the cross-session repeatability.
 - `context.py` — `pack()`/`pack_text()`: the only thing a loop should read. Measurements with uncertainty, validity-if-submitted-now, nearby prior points. Never scores or advice.
 - `adapter.py` — ledger → `ExperimentLog`, so all trace-based assertions/blame/noise analyses run unchanged on native ledgers (researcher side).
+- `loop.py` — `ingest(EVAL_DIR, landscape)` reads what the patched harness leaves behind (ledger, validation, metrics.json) and `paired_compare()` gives a seed-paired geomean ratio with bootstrap CI (invalid sessions enter at the 1.0x floor). `scripts/loop_iteration.py` wraps both plus `context`; `scripts/report_ledgers.py` runs the assertions over a results root (researcher side).
 - `cli.py` — `session-start | measure (wraps the pristine grader) | submit | validate | context | landscape-add`.
 - `tests/test_tool.py` — end-to-end with a fake grader and a real local server: standard/non-standard flags, stale detection, cache state, validator flips (unmeasured submission, grader edit, pristine-hash mismatch), landscape, adapter, submit. Run `python tests/test_tool.py`.
 
