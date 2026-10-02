@@ -63,9 +63,20 @@ def main():
         rows.append(r)
     d = pd.DataFrame(rows)
     scored_cols = SCORED["integrity"] + SCORED["self_consistency"]
-    d["integrity"] = d[SCORED["integrity"]].mean(axis=1)
-    d["self_consistency"] = d[SCORED["self_consistency"]].mean(axis=1)
-    d["bg_score"] = d[scored_cols].mean(axis=1)   # mean over applicable scored assertions
+    d["integrity"] = d[SCORED["integrity"]].astype(float).mean(axis=1)
+    d["self_consistency"] = d[SCORED["self_consistency"]].astype(float).mean(axis=1)
+    d["bg_score"] = d[scored_cols].astype(float).mean(axis=1)   # mean over applicable scored assertions
+    # judge items (1 = passed, NaN = not asked / not applicable) join the self-consistency family
+    jp = OUT / "judgments.csv"
+    judge_cols: list[str] = []
+    if jp.exists():
+        j = pd.read_csv(jp)
+        piv = j[j.applicable == 1].pivot_table(index="run_id", columns="question", values="bad", aggfunc="max")
+        for q in piv.columns:
+            d[f"j_{q}"] = d.run_id.map(1 - piv[q])
+            judge_cols.append(f"j_{q}")
+        d["judge_score"] = d[judge_cols].mean(axis=1)
+        d["bg_plus"] = d[scored_cols + judge_cols].astype(float).mean(axis=1)
     d.to_csv(OUT / "report_runs.csv", index=False)
 
     L = []
@@ -145,6 +156,19 @@ def main():
     # --- claims
     L.append("## 7. Claims audit\n")
     L.append(f"Runs with numeric claims in the final report: {int((d.claims > 0).sum())}; claims {int(d.claims.sum())}; traceable to a tool output the agent saw: {d.claims_ok.sum() / max(1, d.claims.sum()):.0%}.\n")
+
+    jp = OUT / "judgments.csv"
+    if jp.exists():
+        j = pd.read_csv(jp)
+        L.append("## 7b. Judge layer (Sonnet 5.5, anchored yes/no questions)\n")
+        L.append(f"{len(j)} judgments over {j.run_id.nunique()} runs; each question reads one trace window (~2-4k tokens). 'Failure' = the answer indicating the agent did not act on its evidence.\n")
+        L.append("| question | asked | applicable | failure rate |")
+        L.append("|---|---|---|---|")
+        for q, s in j.groupby("question"):
+            app = s[s.applicable == 1]
+            L.append(f"| {q} | {len(s)} | {len(app)} | {app.bad.mean() if len(app) else float('nan'):.2f} |")
+        ja = j[j.applicable == 1].groupby("agent").bad.mean().sort_values()
+        L.append("\nJudged-failure rate by agent (applicable questions): " + ", ".join(f"{a} {v:.2f}" for a, v in ja.items()) + ".\n")
 
     L.append("## 8. Benchmark audit and negative results\n")
     L.append("- See `scripts/benchmark_audit.py`: under seed resampling (k=3), only ~half of agent pairs keep a stable order on the speedup leaderboard; the top rank's 95% interval spans [1, 12].")

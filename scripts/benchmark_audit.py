@@ -72,8 +72,9 @@ def main():
             for j in range(i + 1, len(agents)):
                 p = np.nanmean(M[i] < M[j]); st += (p >= 0.95 or p <= 0.05)
         return st / pairs
-    for col in ("bg_score", "integrity", "self_consistency"):
-        print(f"stable pairs for {col:17s}: {pair_stability(col):.0%}")
+    for col in ("bg_score", "integrity", "self_consistency", "judge_score", "bg_plus"):
+        if col in d:
+            print(f"stable pairs for {col:17s}: {pair_stability(col):.0%}")
 
     # 2) reliability: all-seeds-scored cells, and worst-seed speedup
     print("\n== Reliability")

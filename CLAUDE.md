@@ -23,6 +23,13 @@ search-space coverage) are reported descriptively, never scored — they penaliz
 - `blamegraph/blame.py` — found × kept × executed decomposition and loss events (model-free blame graph).
 - `blamegraph/oracle.py` — pooled config→metric landscape across runs; nearest-neighbour "what others measured near your shipped config".
 - `scripts/report.py` — everything above → `data/derived/report.md` + `report_runs.csv`, incl. the v1 BG score (integrity + self-consistency, bootstrap CIs) vs the speedup leaderboard.
+- `blamegraph/judge.py` — judge layer (`claude-sonnet-5-5`, effort low, JSON schema): 7 anchored yes/no questions (`QUESTIONS`), windows built from the experiment log; cache `data/derived/judgments.jsonl` (user-approved $8 cap; full corpus cost ~$3).
+- `scripts/judge_pilot.py` / `scripts/judge_analysis.py` — run the judge (`--dry` to size) and summarize answers vs code assertions.
+- `scripts/explain_run.py RUN_ID` — narrative of one run's experiment log + assertions + blame events (use this to audit any claim).
+- `scripts/irt.py` — Rasch fit: assertion difficulty/discrimination, agent ability with bootstrap CIs.
+- `scripts/benchmark_audit.py` — speedup-leaderboard rank stability under seed resampling vs BG score; reliability; harness normalization.
+- `scripts/early_warning.py` — negative result: process at minute T does not predict scoring.
+- `scripts/figures.py` — `data/derived/fig_*.png` used by the report.
 - `scripts/extract_obs.py` — run the extractor (`--pilot N` first).
 - `scripts/corpus_stats.py` — raw per-run counters → `data/derived/runs.csv`.
 - `scripts/experiment_stats.py` — experiment-log metrics → `data/derived/experiment.csv` + summaries.

@@ -14,7 +14,7 @@ Scored = integrity + self-consistency (acted on its own evidence). Methodology a
 | glm-5.2-max | 6.89x | 100% | 0.74 [0.65, 0.83] | 0.86 | 0.66 | 0 |
 | claude-opus-4-8-xhigh | 6.45x | 92% | 0.70 [0.62, 0.78] | 0.77 | 0.65 | 0 |
 | claude-opus-4-8 | 6.07x | 92% | 0.81 [0.74, 0.89] | 0.91 | 0.74 | 0 |
-| gemini-3.1-pro | 6.02x | 100% | 0.66 [0.55, 0.78] | 0.78 | 0.57 | 0 |
+| gemini-3.1-pro | 6.02x | 100% | 0.66 [0.55, 0.78] | 0.78 | 0.58 | 0 |
 | gpt-5.3-codex-high | 5.18x | 92% | 0.51 [0.43, 0.58] | 0.83 | 0.25 | 0 |
 | claude-fable-5-low | 4.79x | 67% | 0.80 [0.73, 0.87] | 0.92 | 0.72 | 0 |
 | glm-5 | 4.43x | 75% | 0.73 [0.66, 0.79] | 0.83 | 0.63 | 0 |
@@ -99,12 +99,40 @@ Harness-blocked commands (exit 126) by agent: claude-opus-4-6 959, claude-sonnet
 
 Runs with numeric claims in the final report: 80; claims 259; traceable to a tool output the agent saw: 98%.
 
+## 7b. Judge layer (Sonnet 5.5, anchored yes/no questions)
+
+571 judgments over 168 runs; each question reads one trace window (~2-4k tokens). 'Failure' = the answer indicating the agent did not act on its evidence.
+
+| question | asked | applicable | failure rate |
+|---|---|---|---|
+| abandon_reasoned | 57 | 19 | 0.53 |
+| claims_supported | 156 | 143 | 0.46 |
+| error_reacted | 126 | 58 | 0.03 |
+| headline_from_shipped | 124 | 62 | 0.44 |
+| noticed_failures | 21 | 18 | 0.06 |
+| regression_investigated | 30 | 16 | 0.06 |
+| stale_aware | 57 | 8 | 0.25 |
+
+Judged-failure rate by agent (applicable questions): gpt-5.5-high 0.08, kimi-k2.6 0.12, claude-fable-5 0.17, claude-fable-5-low 0.18, gpt-5.2-codex 0.20, glm-5 0.21, claude-opus-4-5 0.23, gpt-5.5-xhigh 0.25, claude-opus-4-7 0.26, glm-5.2-max 0.27, claude-haiku-4-5 0.31, claude-sonnet-4-6 0.31, gpt-5.4-high 0.31, claude-opus-4-8 0.33, gpt-5.3-codex-med 0.35, claude-opus-4-6 0.35, gpt-5.3-codex-high 0.38, claude-sonnet-4-5 0.44, gemini-3.1-pro 0.50, gpt-5.2 0.50, gemini-3.5-flash 0.57, claude-opus-4-8-xhigh 0.64, gpt-5.1-codex-max 0.67.
+
 ## 8. Benchmark audit and negative results
 
 - See `scripts/benchmark_audit.py`: under seed resampling (k=3), only ~half of agent pairs keep a stable order on the speedup leaderboard; the top rank's 95% interval spans [1, 12].
 - Early warning (`scripts/early_warning.py`): process counters at minute 15/30/60/90 do **not** predict whether a run scores (leave-one-agent-out AUC ~0.5). The only signal is the crude rule 'has one healthy measurement by minute 30' (82% vs 59% scored).
 - Warm-cache hypothesis (in-run numbers optimistic because of prefix caching on a reused request set): not supported at n=30 comparable runs.
 - Claims audit: no fabricated numbers found (98% traceable); the integrity problem is unmeasured submissions and grader edits, not reporting.
+
+## Figures
+
+![fig_outcome_vs_process](fig_outcome_vs_process.png)
+
+![fig_assertion_heatmap](fig_assertion_heatmap.png)
+
+![fig_regret](fig_regret.png)
+
+![fig_budget](fig_budget.png)
+
+![fig_rank_stability](fig_rank_stability.png)
 
 ## Caveats
 
