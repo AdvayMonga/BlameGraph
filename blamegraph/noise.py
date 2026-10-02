@@ -6,6 +6,11 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from .experiment import ExperimentLog, Observation
+from .traces import BASELINE_METRIC
+
+# 3x the best speedup the InferenceBench search baselines reached per scenario: anything above is not a
+# comparable measurement (tiny request sets, warm caches, patched graders, or a cheating server)
+PLAUSIBLE_MAX_SPEEDUP = {"A": 15.0, "B": 45.0, "C": 150.0, "D": 17.0}
 
 
 def _primary(o: Observation, scenario: str) -> float | None:
@@ -13,19 +18,26 @@ def _primary(o: Observation, scenario: str) -> float | None:
         return 1 / o.ttft_p50
     if scenario == "B" and o.tpot_p50:
         return 1 / o.tpot_p50
-    if scenario in ("C", "D") and o.rps:
-        return o.rps
+    if scenario == "C" and (o.rps_geomean or o.rps):
+        return o.rps_geomean or o.rps
+    if scenario == "D" and o.rps and o.ttft_p50 and o.tpot_p50:
+        return (1 / o.ttft_p50 * 1 / o.tpot_p50 * o.rps) ** (1 / 3)
     return None
 
 
-def clean_observations(log: ExperimentLog, scenario: str, full_only: bool = True) -> list[tuple[int, float]]:
-    """(config_idx, metric) for healthy observations: attributed to a config, no request failures, full eval if asked."""
+def clean_observations(log: ExperimentLog, scenario: str, full_only: bool = True, standard_only: bool = True) -> list[tuple[int, float]]:
+    """(config_idx, metric) for comparable observations: attributed to a config, no request failures,
+    full eval if asked, standard harness invocation if asked (and never from a run that patched the grader),
+    and within the plausible range for this hardware."""
     out = []
+    if standard_only and log.eval_script_modified:
+        return out
+    cap = PLAUSIBLE_MAX_SPEEDUP[scenario] * BASELINE_METRIC[scenario]
     for o in log.observations:
-        if o.config_idx is None or (o.failure_rate or 0) > 0 or (full_only and o.quick):
+        if o.config_idx is None or (o.failure_rate or 0) > 0 or (full_only and o.quick) or (standard_only and o.standard is False):
             continue
         v = _primary(o, scenario)
-        if v:
+        if v and v <= cap:
             out.append((o.config_idx, v))
     return out
 

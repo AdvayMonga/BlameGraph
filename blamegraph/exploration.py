@@ -29,8 +29,21 @@ EXTRA_KNOBS = {
 }
 
 
+DEFAULT_RE = re.compile(r"\$\{\w+:-([^}]*)\}")
+
+
+def resolve(value: str) -> str:
+    """`${VAR:-8192}` -> `8192`; a value that still references a variable is unresolved."""
+    return DEFAULT_RE.sub(r"\1", value)
+
+
+def is_parameterized(values: dict[str, str]) -> bool:
+    return any("$" in v for v in values.values())
+
+
 def knob_values(cfg: ConfigVersion) -> dict[str, str]:
-    """Value (or presence) of each known knob in a config; env-var knobs read `export X=val`."""
+    """Value (or presence) of each known knob in a config; env-var knobs read `export X=val`.
+    `${VAR:-default}` resolves to the default; other `$VAR` references stay as-is (see is_parameterized)."""
     body = re.sub(r"\\\n", " ", cfg.content)
     flags = cfg.flags
     out: dict[str, str] = {}
@@ -40,10 +53,10 @@ def knob_values(cfg: ConfigVersion) -> dict[str, str]:
             continue
         tok = m.group(0)
         if tok.startswith("--"):
-            out[name] = flags.get(tok, "")
+            out[name] = resolve(flags.get(tok, ""))
         else:
             env = re.search(re.escape(tok.split("|")[0]) + r"\w*\s*=\s*['\"]?([^'\"\s;]+)", body)
-            out[name] = env.group(1) if env else "set"
+            out[name] = resolve(env.group(1)) if env else "set"
     return out
 
 

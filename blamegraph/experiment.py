@@ -15,6 +15,9 @@ STUB_MARK = "has no engine configured"
 EVAL_LAUNCH_RE = re.compile(r"(?:python3?(?:\s+-\w+)*\s+\S*|\./)evaluate\.py\b")
 EVAL_KILL_RE = re.compile(r"\b(pkill|kill|killall)\b[^\n|;&]*evaluate\.py")
 QUICK_RE = re.compile(r"--quick\b")
+# a "standard" eval uses only the harness's own flags and no INFERENCE_BENCH_* overrides (except the base model)
+STANDARD_FLAGS = {"--quick", "--json-output-file", "--server-url", "--model", "--host", "--port"}
+NONSTD_ENV_RE = re.compile(r"\bINFERENCE_BENCH_(?!BASE_MODEL\b)\w+\s*=")
 # in-place edits of the grader from the shell: sed -i, patch, tee/redirect into it, cp/mv over it
 EVAL_TAMPER_RE = re.compile(
     r"(sed\s+-i[^\n|;&]*evaluate\.py|(?:^|[|;&]\s*)patch\b[^\n|;&]*evaluate\.py|apply_patch[^\n]*evaluate\.py|"
@@ -86,6 +89,8 @@ class EvalLaunch:
     error: bool
     observed: bool = False        # a metric observation followed before the next launch
     killed: bool = False          # agent explicitly killed evaluate.py before observing
+    standard: bool = True         # harness-default invocation (comparable to the final eval)
+    warm: bool = False            # an earlier eval already ran on this server instance (caches warm)
 
 
 @dataclass
@@ -94,12 +99,15 @@ class Observation:
     ttft_p50: float | None = None
     tpot_p50: float | None = None
     rps: float | None = None
+    rps_geomean: float | None = None   # geomean over burst/poisson/constant when all three were reported (scenario C metric)
     gen_tps: float | None = None
     failure_rate: float | None = None
     quality_pass: bool | None = None
     mmlu_ratio: float | None = None
     config_idx: int | None = None   # config believed measured (live at the preceding eval launch)
     quick: bool | None = None       # whether the preceding eval launch was a --quick smoke test
+    standard: bool | None = None    # whether the preceding eval launch was a standard invocation
+    warm: bool | None = None        # whether the preceding eval ran on an already-exercised server instance
 
 
 @dataclass
@@ -286,6 +294,20 @@ SEG_SPLIT_RE = re.compile(r"\|\||&&|[|;\n]")
 NON_LAUNCH_HEAD_RE = re.compile(r"^\s*(grep|pgrep|ps|pkill|kill|echo|printf|cat|sed|head|tail|less|ls|chmod|wc|test|\[)\b")
 
 
+def _is_standard_eval(cmd: str) -> bool:
+    """True when every flag after evaluate.py is a harness flag and no INFERENCE_BENCH_* override is set."""
+    if NONSTD_ENV_RE.search(cmd):
+        return False
+    for seg in SEG_SPLIT_RE.split(cmd):
+        m = EVAL_LAUNCH_RE.search(seg)
+        if not m or NON_LAUNCH_HEAD_RE.match(seg):
+            continue
+        flags = set(re.findall(r"(--[\w-]+)", seg[m.end():]))
+        if flags - STANDARD_FLAGS:
+            return False
+    return True
+
+
 def _launches_eval(cmd: str) -> bool:
     """True when some pipeline segment actually executes evaluate.py (not grep/ps/echo mentioning it)."""
     for seg in SEG_SPLIT_RE.split(cmd):
@@ -338,6 +360,7 @@ def build_log(run: Run, llm_obs: dict[int, dict] | None = None) -> ExperimentLog
     log = ExperimentLog(run_id=run.run_id)
     content: str | None = None
     live_idx: int | None = None        # config version running on the server
+    evals_on_instance = 0              # eval launches since the last server start
     elapsed: float | None = None
 
     def add_version(step_i: int, new_content: str):
@@ -400,13 +423,15 @@ def build_log(run: Run, llm_obs: dict[int, dict] | None = None) -> ExperimentLog
             started_by_output = STARTUP_BANNER_RE.search(out) and not re.match(r"\s*(tail|cat|grep|less|head)\b", cmd)
             if started_by_cmd or started_by_output:
                 live_idx = cur_idx()
+                evals_on_instance = 0
                 log.server_starts.append((st.i, live_idx))
             # -- eval launches
             if launches_eval:
                 log.evals.append(EvalLaunch(
                     step_i=st.i, quick=bool(QUICK_RE.search(cmd)), config_idx=live_idx,
                     config_stale=(cur_idx() is not None and live_idx is not None and cur_idx() != live_idx),
-                    minute=elapsed, error=st.is_error))
+                    minute=elapsed, error=st.is_error, standard=_is_standard_eval(cmd), warm=evals_on_instance > 0))
+                evals_on_instance += 1
 
         # -- metric observations (from any output the agent saw)
         if tool in ("bash", "shell", "taskoutput", "monitor", "read") and out and OBS_KW_RE.search(out):
@@ -418,6 +443,8 @@ def build_log(run: Run, llm_obs: dict[int, dict] | None = None) -> ExperimentLog
                 obs = _extract_observation(out, st.i, pending)
             if obs:
                 obs.quick = log.evals[-1].quick if log.evals else None
+                obs.standard = log.evals[-1].standard if log.evals else None
+                obs.warm = log.evals[-1].warm if log.evals else None
                 log.observations.append(obs)
                 if log.evals:
                     log.evals[-1].observed = True

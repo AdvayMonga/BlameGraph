@@ -17,6 +17,13 @@ search-space coverage) are reported descriptively, never scored — they penaliz
 - `blamegraph/assertions.py` — code-checkable assertions (`ASSERTIONS` registry, `evaluate(run, log)`); each returns True/False/None(n/a).
 - `blamegraph/exploration.py` — knobs varied across measured configs vs. the search baseline's 11-knob vLLM space; one-factor-at-a-time rate.
 - `blamegraph/inject.py` — failure injectors (`INJECTORS`) that turn a real run into one with a known process failure.
+- `blamegraph/extract.py` — Haiku observation extractor (`claude-haiku-4-5`, structured JSON); cache `data/derived/observations.jsonl` (8,876 steps, $15.61 — never re-run blindly; `extract_runs` only pays for uncached steps). Key from `.env` (`ANTHROPIC_API_KEY`, optional `ANTHROPIC_WORKSPACE_ID`).
+- `blamegraph/noise.py` — `clean_observations` (comparable measurements: standard invocation, full, failure-free, plausible), within-config noise floor, decision margins.
+- `blamegraph/audit.py` — claims audit: numbers in the final report vs numbers in tool outputs the agent saw.
+- `blamegraph/blame.py` — found × kept × executed decomposition and loss events (model-free blame graph).
+- `blamegraph/oracle.py` — pooled config→metric landscape across runs; nearest-neighbour "what others measured near your shipped config".
+- `scripts/report.py` — everything above → `data/derived/report.md` + `report_runs.csv`, incl. the v1 BG score (integrity + self-consistency, bootstrap CIs) vs the speedup leaderboard.
+- `scripts/extract_obs.py` — run the extractor (`--pilot N` first).
 - `scripts/corpus_stats.py` — raw per-run counters → `data/derived/runs.csv`.
 - `scripts/experiment_stats.py` — experiment-log metrics → `data/derived/experiment.csv` + summaries.
 - `scripts/free_pass.py` — all assertions over the corpus → `data/derived/assertions.csv`; per-agent rates, discrimination, seed consistency, outcome relationship.
@@ -30,5 +37,8 @@ sandbox malfunction (`Exit code 126`, even on `date`/`echo`). Baseline numbers a
 `BASELINE_METRIC` is backed out from the README leaderboard.
 
 ## Status
-Free (code-only) layer done and validated by flip tests. Next (needs `ANTHROPIC_API_KEY`): Haiku
-extractor for observed metrics (~$10), then judgment assertions for self-consistency (~$50, pilot first).
+Code layer + Haiku extractor done; `scripts/report.py` is the single entry point for results. Comparability
+rule: only standard, full, failure-free in-run evals are compared with anything (54% of launches are
+non-standard). Open: judge layer for non-numeric self-consistency (needs budget approval), SGLang knob
+parsing, oracle is sparse (configs rarely repeat across runs — needs a surrogate), D/C in-run metrics are
+approximations of the official geomeans.

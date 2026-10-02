@@ -122,6 +122,10 @@ def to_observation(step_i: int, data: dict, config_idx: int | None) -> Observati
                       tpot_p50=data.get("tpot_p50_s"), rps=data.get("request_throughput_rps"),
                       gen_tps=data.get("generation_tps"), failure_rate=data.get("failure_rate"),
                       mmlu_ratio=data.get("mmlu_ratio"), quality_pass=data.get("quality_pass"))
+    profs = [p for p in (data.get("profiles") or []) if p.get("request_throughput_rps")]
+    if len(profs) >= 3:
+        import math
+        obs.rps_geomean = math.prod(p["request_throughput_rps"] for p in profs[:3]) ** (1 / 3)
     # sanity: latencies in seconds, within physical range
     for f in ("ttft_p50", "tpot_p50"):
         v = getattr(obs, f)
