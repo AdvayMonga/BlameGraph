@@ -491,22 +491,25 @@ esac
 if [[ "${EVALUATION_TASK}" == inference_scenario_* ]]; then
     cat > "${JOB_DIR}/task/evaluate.py" <<'PY'
 #!/usr/bin/env python3
+"""evaluate.py: runs the official benchmark. BlameGraph records each measurement to .blamegraph/ledger.jsonl
+(config hash, live server state, flags, metrics) before handing off to the pristine grader."""
+import os
 import sys
 from pathlib import Path
 
+TASK_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, "/opt")
-from inference_eval.runner import build_parser, run_evaluation  # noqa: E402
-
-
-def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
-    run_evaluation(Path(__file__).resolve().parent, args)
-
+os.environ.setdefault("BLAMEGRAPH_TASK_DIR", str(TASK_DIR))
+from inference_eval.blamegraph_tool.cli import main as blamegraph_main  # noqa: E402
 
 if __name__ == "__main__":
-    main()
+    blamegraph_main(["measure", "--task-dir", str(TASK_DIR), "--grader", "/opt/inference_eval/grader_entry.py", "--", *sys.argv[1:]])
 PY
+    # record the session start and the pristine wrapper hash (outside the agent's reach)
+    mkdir -p "${JOB_DIR}/task/.blamegraph"
+    BLAMEGRAPH_GRADER_HASH="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest()[:16])' "${JOB_DIR}/task/evaluate.py")"
+    export BLAMEGRAPH_GRADER_HASH
+    PYTHONPATH="src/eval/inference" python3 -m blamegraph_tool.cli session-start --task-dir "${JOB_DIR}/task" --scenario "${EVALUATION_TASK}" || true
 fi
 find "${JOB_DIR}/task" -maxdepth 1 -type f -name "*.sh" -exec chmod +x {} + 2>/dev/null || true
 cp -r "containers/other_home_data/.codex" "${JOB_DIR}/"
@@ -545,6 +548,9 @@ cp src/eval/inference/cache_samples.py "${INFERENCE_EVAL_BUNDLE}/"
 mkdir -p "${INFERENCE_EVAL_BUNDLE}/bin"
 cp src/eval/inference/bin/launch_supervised_server.sh "${INFERENCE_EVAL_BUNDLE}/bin/"
 chmod +x "${INFERENCE_EVAL_BUNDLE}/bin/launch_supervised_server.sh"
+# BlameGraph: measurement ledger + validator, read-only inside the container
+cp -r src/eval/inference/blamegraph_tool "${INFERENCE_EVAL_BUNDLE}/blamegraph_tool"
+cp src/eval/inference/grader_entry.py "${INFERENCE_EVAL_BUNDLE}/grader_entry.py"
 mkdir -p "${INFERENCE_EVAL_BUNDLE}/baselines"
 cp -r src/eval/inference/baselines/quality "${INFERENCE_EVAL_BUNDLE}/baselines/"
 cp -r src/eval/inference/baselines/samples "${INFERENCE_EVAL_BUNDLE}/baselines/"
@@ -1706,6 +1712,12 @@ echo "GPU status (before eval):"
 nvidia-smi || true
 
 capture_agent_runtime_for_final_eval
+# BlameGraph: record the submission and validate the session before anything is scored
+if [[ "${EVALUATION_TASK}" == inference_scenario_* ]]; then
+    PYTHONPATH="src/eval/inference" python3 -m blamegraph_tool.cli submit --task-dir "${JOB_DIR}/task" --pristine-grader-hash "${BLAMEGRAPH_GRADER_HASH:-}" \
+        > "${EVAL_DIR}/blamegraph_validation.json" 2>> "${EVAL_LOG}" || echo "[blamegraph] submission INVALID (see blamegraph_validation.json)" | tee -a "${EVAL_LOG}"
+    copy_if_exists "${JOB_DIR}/task/.blamegraph/ledger.jsonl" "${EVAL_DIR}/blamegraph_ledger.jsonl"
+fi
 pre_eval_cleanup_barrier
 echo "GPU status (after cleanup):"
 nvidia-smi || true
