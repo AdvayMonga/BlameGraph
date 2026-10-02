@@ -146,6 +146,11 @@ def main():
     L.append("## 7. Claims audit\n")
     L.append(f"Runs with numeric claims in the final report: {int((d.claims > 0).sum())}; claims {int(d.claims.sum())}; traceable to a tool output the agent saw: {d.claims_ok.sum() / max(1, d.claims.sum()):.0%}.\n")
 
+    L.append("## 8. Benchmark audit and negative results\n")
+    L.append("- See `scripts/benchmark_audit.py`: under seed resampling (k=3), only ~half of agent pairs keep a stable order on the speedup leaderboard; the top rank's 95% interval spans [1, 12].")
+    L.append("- Early warning (`scripts/early_warning.py`): process counters at minute 15/30/60/90 do **not** predict whether a run scores (leave-one-agent-out AUC ~0.5). The only signal is the crude rule 'has one healthy measurement by minute 30' (82% vs 59% scored).")
+    L.append("- Warm-cache hypothesis (in-run numbers optimistic because of prefix caching on a reused request set): not supported at n=30 comparable runs.")
+    L.append("- Claims audit: no fabricated numbers found (98% traceable); the integrity problem is unmeasured submissions and grader edits, not reporting.\n")
     L.append("## Caveats\n")
     L.append("- Codex traces truncate multi-line commands and (gpt-5.5) omit file writes; config reconstruction there is passive.")
     L.append("- In-run numbers are only compared when the eval was a standard harness invocation on a full request set with no failures; 54% of eval launches are non-standard and excluded from regret/decomposition.")

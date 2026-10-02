@@ -99,6 +99,13 @@ Harness-blocked commands (exit 126) by agent: claude-opus-4-6 959, claude-sonnet
 
 Runs with numeric claims in the final report: 80; claims 259; traceable to a tool output the agent saw: 98%.
 
+## 8. Benchmark audit and negative results
+
+- See `scripts/benchmark_audit.py`: under seed resampling (k=3), only ~half of agent pairs keep a stable order on the speedup leaderboard; the top rank's 95% interval spans [1, 12].
+- Early warning (`scripts/early_warning.py`): process counters at minute 15/30/60/90 do **not** predict whether a run scores (leave-one-agent-out AUC ~0.5). The only signal is the crude rule 'has one healthy measurement by minute 30' (82% vs 59% scored).
+- Warm-cache hypothesis (in-run numbers optimistic because of prefix caching on a reused request set): not supported at n=30 comparable runs.
+- Claims audit: no fabricated numbers found (98% traceable); the integrity problem is unmeasured submissions and grader edits, not reporting.
+
 ## Caveats
 
 - Codex traces truncate multi-line commands and (gpt-5.5) omit file writes; config reconstruction there is passive.
