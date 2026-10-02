@@ -19,11 +19,15 @@ Hard rule from the user: the loop may receive **facts only, never heuristics or 
   logprob shift, top-k or full logits), `flips.py` (paired flip test, exact one-sided McNemar), `checks.py` (length
   ratio, consistency), `gate.py` (`evaluate` → verdict with per-check gates; `calibrate` from known-good/known-bad
   candidates, refuses if inseparable; `to_ledger_record` → inference-server lab ledger `equiv` record),
-  `scoring.py` (MMLU-Pro letters, MATH `\boxed{}`), `client.py` (vLLM-style `generate` and `score_tokens` via
-  `prompt_logprobs`).
+  `scoring.py` (MMLU-Pro letters, MATH `\boxed{}`), `tasks.py` (loaders from the Hub into `data/tasks/`: MMLU-Pro
+  490 stratified, MATH-500, MBPP sanitized 427 scored by running unit tests in a limited subprocess, synthetic
+  needle-in-haystack 180 at ~4k/12k/24k tokens), `client.py` (vLLM-style `generate`, `generate_stream`,
+  `score_tokens` via `prompt_logprobs`), `run.py` (`reference` once per model/hardware, `candidate` per change,
+  `calibrate_files`). CLI: `python -m blamegraph equiv reference|candidate|calibrate`.
 - `blamegraph/canaries.py` — cheat proxy in front of any OpenAI-compatible server (`truncate`, `early_eos`,
   `fake_first`, `drop`, `cache`, `inflate_usage`); `python -m blamegraph.canaries --upstream URL --cheat NAME`.
-- `tests/test_feedback.py`, `tests/test_equivalence.py`, `tests/test_canaries.py` (all synthetic, no GPU) and
+- `tests/test_feedback.py`, `tests/test_equivalence.py`, `tests/test_equiv_run.py` (full reference→calibrate→verdict
+  flow on fake servers), `tests/test_canaries.py` (all synthetic, no GPU) and
   `tests/test_flip.py` (injection on real traces; skips without data). Run each with `python tests/<file>.py`.
 - `data/` is gitignored and local only: `data/inferencebench/` (public traces, `hf download aisa-group/InferenceBench-Trajectories --repo-type dataset --local-dir data/inferencebench`), `data/derived/` (cached Haiku/Sonnet outputs from the research phase — the only copy), `data/laya/`.
 
@@ -77,6 +81,6 @@ Requirement on their side: the OpenAI shim returns `logprobs: None`; the diverge
 belong in their corpus builder, not here.
 
 ## Next
-Task loaders (MMLU-Pro, MATH-500) and scorers for code (unit tests) and long-context retrieval; calibration runs on
-the H100 (reference outputs, FP8/INT8 good set, degraded bad set) to set the gate thresholds; honest canaries live
-in the engine repo; adapter from their lab ledger to `blamegraph.session` once their tools write it.
+Calibration on the H100: `equiv reference` against unmodified vLLM (BF16, VLLM_BATCH_INVARIANT=1); `equiv candidate`
+for FP8 and INT8 (good) and a degraded quant (bad); `equiv calibrate`. Needs GPU spend approval. Engine-side work
+(prompt_logprobs in the shim, honest canaries, missing corpus regimes) goes to inference-server on a branch.

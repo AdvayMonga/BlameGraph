@@ -13,9 +13,11 @@ def length_ratio(ref_lengths: list[int], cand_lengths: list[int]) -> dict:
     return {"ratio": tc / tr if tr else float("nan"), "n": len(ref_lengths), "requests_under_half_length": short}
 
 
-def consistency(responses: list[dict], tokenize: Callable[[str], list], eos_text: tuple[str, ...] = ()) -> dict:
+def consistency(responses: list[dict], tokenize: Callable[[str], list], eos_text: tuple[str, ...] = (),
+                count_tolerance: int = 1) -> dict:
     """Each response: {"text": full text, "first_token_text": text of the first streamed token chunk,
-    "reported_tokens": token count the server reported}. Counts are re-derived with the reference tokenizer."""
+    "reported_tokens": token count the server reported}. Counts are re-derived with the reference tokenizer;
+    `count_tolerance` allows the end-of-sequence token to be counted or not."""
     bad_first = bad_count = after_eos = 0
     for r in responses:
         text = r.get("text") or ""
@@ -23,7 +25,7 @@ def consistency(responses: list[dict], tokenize: Callable[[str], list], eos_text
         if ft is not None and (not ft or not text.startswith(ft)):
             bad_first += 1
         rep = r.get("reported_tokens")
-        if rep is not None and rep != len(tokenize(text)):
+        if rep is not None and abs(rep - len(tokenize(text))) > count_tolerance:
             bad_count += 1
         for e in eos_text:
             k = text.find(e)
