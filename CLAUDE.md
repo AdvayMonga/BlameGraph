@@ -81,6 +81,9 @@ Requirement on their side: the OpenAI shim returns `logprobs: None`; the diverge
 belong in their corpus builder, not here.
 
 ## Next
-Calibration on the H100: `equiv reference` against unmodified vLLM (BF16, VLLM_BATCH_INVARIANT=1); `equiv candidate`
-for FP8 and INT8 (good) and a degraded quant (bad); `equiv calibrate`. Needs GPU spend approval. Engine-side work
-(prompt_logprobs in the shim, honest canaries, missing corpus regimes) goes to inference-server on a branch.
+Engine side is on inference-server branch `blamegraph/scoring-and-canaries` (not merged): `prompt_logprobs` scoring
+in the shim (`CustomTorchBackend.score_logprobs`) and `INFERENCE_SERVER_CANARY` honest canaries. Still open: wire the
+lab's `equiv` tool to `blamegraph equiv candidate` once the lab can launch a candidate engine (its `bench` isn't
+wired either); missing corpus regimes in their corpus builder (their call); calibration on the H100 (`equiv
+reference` on vLLM BF16 batch-invariant, `equiv candidate` for FP8/INT8 and a degraded quant, `equiv calibrate`),
+which needs GPU spend approval.
