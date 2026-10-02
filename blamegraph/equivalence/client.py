@@ -33,6 +33,27 @@ def generate(base_url: str, model: str, messages: list[dict], max_tokens: int = 
             "finish_reason": ch.get("finish_reason")}
 
 
+def generate_stream(base_url: str, model: str, messages: list[dict], max_tokens: int = 2048) -> dict:
+    """Same request, streamed. Returns {"first_token_text": first non-role chunk's text, "text": full text}."""
+    body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": 0.0, "top_p": 1.0,
+            "stream": True, "chat_template_kwargs": {"enable_thinking": False}}
+    req = urllib.request.Request(f"{base_url.rstrip('/')}/v1/chat/completions", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    first, parts = None, []
+    with urllib.request.urlopen(req, timeout=600) as r:
+        for raw in r:
+            line = raw.strip()
+            if not line.startswith(b"data: ") or line == b"data: [DONE]":
+                continue
+            delta = (json.loads(line[6:]).get("choices") or [{}])[0].get("delta") or {}
+            if "content" not in delta:
+                continue                          # role-only chunk: not a token
+            if first is None:
+                first = delta["content"] or ""    # an empty first content chunk is recorded as such (fake first token)
+            parts.append(delta["content"] or "")
+    return {"first_token_text": first, "text": "".join(parts)}
+
+
 def score_tokens(base_url: str, model: str, token_ids: list[int], start: int, top_k: int = 20) -> list[Position]:
     """Teacher-forced scoring of token_ids[start:] given everything before it (start >= 1).
     Returns one Position per scored token: the token's own logprob and the top-k alternatives."""
