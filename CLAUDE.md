@@ -1,8 +1,9 @@
 # BlameGraph
 
-Feedback tool for autoresearch loops that optimize inference (servers now, kernels next). The user is building the
-loop itself (measurement + context retrieval) in a separate repo; BlameGraph only *judges finished sessions*.
-See the parent `../CLAUDE.md` for coding guidelines.
+The referee side of the eval for autoresearch loops that optimize inference: correctness gate, adversarial canaries,
+integrity verdict and session feedback. The loop, its engine and its measurement live in the user's repo
+github.com/AdvayMonga/inference-server (custom engine, `lab/` environment, design in its `ENVIRONMENT.md`); don't
+duplicate what is there. See the parent `../CLAUDE.md` for coding guidelines.
 
 Hard rule from the user: the loop may receive **facts only, never heuristics or advice**. Integrity is a verdict
 (valid/invalid + reasons); self-consistency and methodology are researcher diagnostics, never fed to the agent.
@@ -14,7 +15,16 @@ Hard rule from the user: the loop may receive **facts only, never heuristics or 
 - `blamegraph/adapter.py` — session → `ExperimentLog`, so assertions/blame run on loop sessions.
 - `blamegraph/traces.py`, `experiment.py` — InferenceBench trace loader and experiment-log reconstruction (configs, launches, evals, observations, stale/warm/standard flags). Regex-only number parsing.
 - `blamegraph/assertions.py` — code-checkable assertions; `inject.py` — failure injectors; `blame.py` — found×kept×executed; `noise.py` — comparable observations + noise floor; `audit.py` — claims audit; `exploration.py` — knobs varied.
-- `tests/test_feedback.py` (synthetic sessions, validator flips) and `tests/test_flip.py` (injection on real traces; skips without data).
+- `blamegraph/equivalence/` — correctness gate. `divergence.py` (teacher-forced KL / top-1 agreement / ref-token
+  logprob shift, top-k or full logits), `flips.py` (paired flip test, exact one-sided McNemar), `checks.py` (length
+  ratio, consistency), `gate.py` (`evaluate` → verdict with per-check gates; `calibrate` from known-good/known-bad
+  candidates, refuses if inseparable; `to_ledger_record` → inference-server lab ledger `equiv` record),
+  `scoring.py` (MMLU-Pro letters, MATH `\boxed{}`), `client.py` (vLLM-style `generate` and `score_tokens` via
+  `prompt_logprobs`).
+- `blamegraph/canaries.py` — cheat proxy in front of any OpenAI-compatible server (`truncate`, `early_eos`,
+  `fake_first`, `drop`, `cache`, `inflate_usage`); `python -m blamegraph.canaries --upstream URL --cheat NAME`.
+- `tests/test_feedback.py`, `tests/test_equivalence.py`, `tests/test_canaries.py` (all synthetic, no GPU) and
+  `tests/test_flip.py` (injection on real traces; skips without data). Run each with `python tests/<file>.py`.
 - `data/` is gitignored and local only: `data/inferencebench/` (public traces, `hf download aisa-group/InferenceBench-Trajectories --repo-type dataset --local-dir data/inferencebench`), `data/derived/` (cached Haiku/Sonnet outputs from the research phase — the only copy), `data/laya/`.
 
 ## History
@@ -24,7 +34,7 @@ there rather than re-deriving. Trace quirks (codex truncation, sandbox exit-126,
 `traces.py`/`experiment.py`.
 
 ## Decided eval conventions (2026-10-02; change only with the user)
-Target: Qwen3-30B-A3B (MoE) on one H100, **thinking off**, starting engine **vLLM** (the agent may replace it). No method specifications to the agent (Bitter Lesson):
+Target: Qwen3-30B-A3B (MoE) on one H100, **thinking off**. Engine under optimization: the user's own engine (inference-server). Reference for correctness: unmodified vLLM, BF16, `VLLM_BATCH_INVARIANT=1`. No method specifications to the agent (Bitter Lesson):
 the benchmark defines objective + correctness + validity only, checked end to end (no internal-invariant checks).
 - **Regimes (8):** single stream, saturated, bursty, long prompt/short output, short prompt/long output, shared
   prefix multi-turn, overload, cold start. All always run; the task picks the objective (one, several, or all, with
@@ -56,6 +66,17 @@ the benchmark defines objective + correctness + validity only, checked end to en
 - **Canaries:** honest regressions (slower kernel, KV leak, fewer admissions, slower startup) and adversarial
   cheats (cached answers, early EOS, silent drops, pre-clock work, benchmark-pattern detection); each must be flagged.
 
+## Overlap with inference-server (checked 2026-10-02)
+Exists there, don't rebuild: client-side open-loop measurement (`scripts/bench/replay_trace.py`, `bench_serving.py`),
+per-request rows, noise bands + significance, comparison refusal (`research/compare.py`), process-start accounting,
+corpus with seen/held-out + versioning (cold_start, steady_interactive, long_context, spike), sandbox/grader audit,
+lab ledger (`lab/ledger.py`, kinds test/equiv/bench/profile/submit/finding). Absent there (built here): output
+equivalence beyond fixed-prompt parity, quantization quality gate, flip tests, KL, adversarial canaries.
+Requirement on their side: the OpenAI shim returns `logprobs: None`; the divergence check needs `prompt_logprobs`
+(contract in `equivalence/client.py`). Regimes missing from their corpus (short/long output, overload, shared prefix)
+belong in their corpus builder, not here.
+
 ## Next
-Corpus generator and correctness gate (both GPU-free to build), then load client/metrics/validity, canaries;
-adapter for the user's loop logs once that repo is ready. Avoid duplicating measurement the user's loop already has.
+Task loaders (MMLU-Pro, MATH-500) and scorers for code (unit tests) and long-context retrieval; calibration runs on
+the H100 (reference outputs, FP8/INT8 good set, degraded bad set) to set the gate thresholds; honest canaries live
+in the engine repo; adapter from their lab ledger to `blamegraph.session` once their tools write it.
