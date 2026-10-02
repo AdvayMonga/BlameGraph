@@ -202,3 +202,6 @@ data/inferencebench/
 data/laya/models/
 data/results/
 data/landscape.jsonl
+
+# all data stays local
+data/
