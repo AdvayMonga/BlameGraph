@@ -1,0 +1,341 @@
+<title>BlameGraph</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: sticky tab bar, one 1200px column, dense data tables; charts are SVG drawn from the data */
+:root {
+  --bg: #f7f7f4; --surface: #fcfcfb; --fg: #15171a; --muted: #5b6168; --line: #e3e4df; --line-strong: #c9cbc4;
+  --accent: #2a78d6; --accent-soft: #e4eefb;
+  --claude: #2a78d6; --codex: #eb6834; --opencode: #1baf7a;
+  --pass: #008300; --fail: #e34948; --na: #b8bab3;
+  --heat-0: #f1f5fb; --heat-1: #2a78d6;
+  --font-ui: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-data: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #16181b; --surface: #1d2024; --fg: #eceeea; --muted: #a3a8a0; --line: #2d3136; --line-strong: #454a51;
+  --accent: #3987e5; --accent-soft: #1d2d44; --claude: #3987e5; --codex: #d95926; --opencode: #199e70;
+  --pass: #3fb950; --fail: #e66767; --na: #5b6168; --heat-0: #20262e; --heat-1: #3987e5; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #16181b; --surface: #1d2024; --fg: #eceeea; --muted: #a3a8a0; --line: #2d3136; --line-strong: #454a51;
+  --accent: #3987e5; --accent-soft: #1d2d44; --claude: #3987e5; --codex: #d95926; --opencode: #199e70;
+  --pass: #3fb950; --fail: #e66767; --na: #5b6168; --heat-0: #20262e; --heat-1: #3987e5; color-scheme: dark }
+
+body { background: var(--bg); color: var(--fg); font-family: var(--font-ui); font-size: 14px; line-height: 1.45; }
+.wrap { max-width: 1200px; margin: 0 auto; padding: 0 16px 48px; }
+header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); }
+header.top .wrap { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding-block: 10px; }
+.brand { font-weight: 600; letter-spacing: .01em; }
+.brand small { color: var(--muted); font-weight: 400; margin-left: 8px; }
+nav { display: flex; gap: 4px; flex-wrap: wrap; }
+nav button { font: inherit; background: none; border: 1px solid transparent; color: var(--muted); padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+nav button[aria-selected="true"] { color: var(--fg); background: var(--surface); border-color: var(--line); }
+nav button:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible, tr[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+h1 { font-size: 22px; font-weight: 600; margin: 24px 0 4px; text-wrap: balance; }
+h2 { font-size: 16px; font-weight: 600; margin: 28px 0 10px; }
+p.lede { color: var(--muted); max-width: 70ch; margin: 0 0 16px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-top: 16px; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+.tile .big { font-family: var(--font-data); font-size: 28px; font-weight: 500; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.tile .lbl { color: var(--muted); margin-top: 4px; font-size: 13px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin-top: 12px; min-width: 0; }
+.row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; cursor: pointer; user-select: none; }
+th.num, td.num { text-align: right; font-family: var(--font-data); font-size: 13px; }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover { background: var(--accent-soft); }
+tr.selected { background: var(--accent-soft); }
+.bar { display: inline-block; height: 8px; background: var(--accent); border-radius: 2px; vertical-align: middle; }
+.bartrack { display: inline-block; width: 80px; height: 8px; background: var(--line); border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+.chip { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--muted); }
+.chip.integrity { border-color: var(--accent); color: var(--accent); }
+.chip.self_consistency { border-color: var(--opencode); color: var(--opencode); }
+.verdict { font-family: var(--font-data); font-size: 12px; }
+.verdict.pass { color: var(--pass); } .verdict.fail { color: var(--fail); } .verdict.na { color: var(--na); }
+.harness { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: -0.5px; }
+.h-claude { background: var(--claude); } .h-codex { background: var(--codex); } .h-opencode { background: var(--opencode); }
+.controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
+select, input[type=search] { font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--fg); }
+svg text { font-family: var(--font-ui); fill: var(--fg); }
+svg .grid { stroke: var(--line); stroke-width: 1; }
+svg .axis { stroke: var(--line-strong); stroke-width: 1; }
+svg .lab { fill: var(--muted); font-size: 11px; }
+svg .mono { font-family: var(--font-data); }
+#tip { position: fixed; pointer-events: none; background: var(--fg); color: var(--bg); padding: 6px 9px; border-radius: 6px; font-size: 12px; max-width: 320px; z-index: 20; white-space: pre-line; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
+.detail { margin-top: 12px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 8px; }
+.chips span { font-family: var(--font-data); font-size: 12px; }
+.finding { border-top: 1px solid var(--line); padding: 10px 0; }
+.finding .q { font-weight: 500; }
+.finding .ev { font-family: var(--font-data); font-size: 12px; color: var(--muted); margin-top: 4px; white-space: normal; }
+.finding .ra { margin-top: 4px; font-size: 13px; white-space: normal; }
+code { font-family: var(--font-data); font-size: 12px; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+.muted { color: var(--muted); }
+.note { font-size: 13px; color: var(--muted); max-width: 80ch; }
+@media (prefers-reduced-motion: no-preference) { nav button, tr.clickable { transition: background .12s; } }
+</style>
+
+<header class="top"><div class="wrap">
+  <div class="brand">BlameGraph <small id="sub"></small></div>
+  <nav role="tablist" id="nav"></nav>
+</div></header>
+
+<div class="wrap">
+  <section id="tab-overview" role="tabpanel">
+    <h1>Did the agent earn its number?</h1>
+    <p class="lede">InferenceBench scores the server an agent ships after a 2-hour session. BlameGraph replays the session and checks whether the agent measured what it shipped, kept what it measured, and reported it truthfully. 269 public runs, 23 agents, 4 scenarios, 3 seeds.</p>
+    <div class="tiles" id="tiles"></div>
+    <h2>Outcome vs process, per agent</h2>
+    <div class="panel">
+      <div class="row" style="justify-content:space-between">
+        <div class="legend"><span><i style="background:var(--claude)"></i>claude</span><span><i style="background:var(--codex)"></i>codex</span><span><i style="background:var(--opencode)"></i>opencode</span><span class="muted">whiskers: 95% bootstrap CI over runs</span></div>
+      </div>
+      <div id="scatter"></div>
+      <p class="note">Process score = mean of the integrity and self-consistency assertions (methodology assertions are shown but not scored). Rank order under seed resampling is stable for 49% of agent pairs on speedup and 64% on the process score.</p>
+    </div>
+  </section>
+
+  <section id="tab-agents" role="tabpanel" hidden>
+    <h1>Agents</h1>
+    <p class="lede">Click a column to sort, a row to open the agent's assertion profile. Speedup is the geometric mean over scenarios of per-scenario means, as InferenceBench reports it; worst-seed is the same with the minimum over seeds.</p>
+    <div class="panel tablewrap"><table id="agents"></table></div>
+    <div id="agent-detail" class="panel detail" hidden></div>
+  </section>
+
+  <section id="tab-assertions" role="tabpanel" hidden>
+    <h1>Assertions</h1>
+    <p class="lede">Each assertion is a yes/no question answered from the trace by code. Discrimination is the correlation of an item with the run's mean over the other items; seed consistency is how often the three seeds of one agent–scenario cell agree.</p>
+    <div class="panel tablewrap"><table id="asserts"></table></div>
+    <h2>Pass rate per agent</h2>
+    <div class="panel tablewrap"><div id="heatmap"></div></div>
+  </section>
+
+  <section id="tab-runs" role="tabpanel" hidden>
+    <h1>Runs</h1>
+    <div class="controls">
+      <select id="f-agent"><option value="">all agents</option></select>
+      <select id="f-scenario"><option value="">all scenarios</option><option>A</option><option>B</option><option>C</option><option>D</option></select>
+      <select id="f-scored"><option value="">scored or not</option><option value="1">scored</option><option value="0">unscored</option></select>
+      <select id="f-fail"><option value="">failing any assertion…</option></select>
+      <span class="muted" id="runcount"></span>
+    </div>
+    <div class="panel tablewrap"><table id="runs"></table></div>
+    <div id="run-detail" class="panel detail" hidden></div>
+  </section>
+
+  <section id="tab-findings" role="tabpanel" hidden>
+    <h1>Judge findings</h1>
+    <p class="lede">Each finding is one anchored question answered by Sonnet 5.5 from a short window of the trace, with the decisive quote. Only applicable answers are shown; "failure" marks the answer indicating the agent did not act on its evidence.</p>
+    <div class="controls">
+      <select id="j-question"><option value="">all questions</option></select>
+      <select id="j-bad"><option value="">all answers</option><option value="1">failures only</option><option value="0">non-failures only</option></select>
+      <select id="j-agent"><option value="">all agents</option></select>
+      <span class="muted" id="jcount"></span>
+    </div>
+    <div class="panel" id="findings"></div>
+  </section>
+</div>
+<div id="tip" hidden></div>
+
+<script id="data" type="application/json">/*__DATA__*/</script>
+<script>
+const D = JSON.parse(document.getElementById('data').textContent);
+const $ = (s, r=document) => r.querySelector(s);
+const fmt = (v, d=2) => (v==null || Number.isNaN(v)) ? '–' : (+v).toFixed(d);
+const pct = v => v==null ? '–' : Math.round(v*100) + '%';
+const HC = {claude:'var(--claude)', codex:'var(--codex)', opencode:'var(--opencode)'};
+const tip = $('#tip');
+function showTip(e, text){ tip.textContent = text; tip.hidden = false; moveTip(e); }
+function moveTip(e){ const x = Math.min(e.clientX + 12, window.innerWidth - 330); tip.style.left = x + 'px'; tip.style.top = (e.clientY + 12) + 'px'; }
+function hideTip(){ tip.hidden = true; }
+$('#sub').textContent = `${D.n_runs} InferenceBench runs · generated ${D.generated}`;
+
+/* ---------- tabs ---------- */
+const TABS = [['overview','Overview'],['agents','Agents'],['assertions','Assertions'],['runs','Runs'],['findings','Findings']];
+const nav = $('#nav');
+TABS.forEach(([id,label]) => { const b = document.createElement('button'); b.role='tab'; b.textContent=label; b.dataset.tab=id; b.onclick=()=>showTab(id); nav.appendChild(b); });
+function showTab(id){ TABS.forEach(([t])=>{ $('#tab-'+t).hidden = t!==id; }); [...nav.children].forEach(b=>b.setAttribute('aria-selected', b.dataset.tab===id)); try{ localStorage.setItem('bg.tab', id);}catch(e){} if(location.hash!=='#'+id) history.replaceState(null,'','#'+id); }
+let initial = (location.hash||'').slice(1); if(!TABS.some(([t])=>t===initial)){ try{ initial = localStorage.getItem('bg.tab') || 'overview'; }catch(e){ initial='overview'; } }
+showTab(TABS.some(([t])=>t===initial) ? initial : 'overview');
+
+/* ---------- overview tiles ---------- */
+const H = D.headline;
+const tiles = [
+  [H.never_measured_final, 'scored runs that never benchmarked the config they shipped'],
+  [`${H.regret_runs} / ${H.regret_n}`, 'runs that shipped a config they had measured as worse than another'],
+  [H.grader_edited, 'scored runs that edited evaluate.py (the grader)'],
+  [`${pct(H.stable_pairs_speedup)} → ${pct(H.stable_pairs_bg)}`, 'agent pairs with a stable rank order: speedup → process score'],
+  [`${H.icc_speedup} → ${H.icc_selfc}`, 'share of run variance explained by agent identity: speedup → self-consistency'],
+];
+$('#tiles').innerHTML = tiles.map(([v,l])=>`<div class="tile"><div class="big">${v}</div><div class="lbl">${l}</div></div>`).join('');
+
+/* ---------- scatter ---------- */
+function scatter(){
+  const W = Math.min(1100, $('#scatter').clientWidth || 900), Hh = 460, m = {l:52, r:20, t:14, b:44};
+  const xs = D.agents.map(a=>a.speedup), ys = D.agents.map(a=>a.bg);
+  const xmin = 1.2, xmax = Math.max(...xs)*1.15, ymin = Math.max(0, Math.min(...D.agents.map(a=>a.bg_lo))-0.03), ymax = Math.min(1, Math.max(...D.agents.map(a=>a.bg_hi))+0.03);
+  const X = v => m.l + (Math.log(v)-Math.log(xmin))/(Math.log(xmax)-Math.log(xmin))*(W-m.l-m.r);
+  const Y = v => Hh - m.b - (v-ymin)/(ymax-ymin)*(Hh-m.t-m.b);
+  let s = `<svg viewBox="0 0 ${W} ${Hh}" width="100%" style="max-width:100%;display:block" role="img" aria-label="Scatter of speedup versus process score per agent">`;
+  const xt = [1.5,2,3,4,6,8].filter(v=>v<=xmax);
+  xt.forEach(v=>{ s+=`<line class="grid" x1="${X(v)}" x2="${X(v)}" y1="${m.t}" y2="${Hh-m.b}"/><text class="lab mono" x="${X(v)}" y="${Hh-m.b+16}" text-anchor="middle">${v}×</text>`; });
+  for(let v=Math.ceil(ymin*10)/10; v<=ymax+1e-9; v=+(v+0.1).toFixed(1)){ s+=`<line class="grid" x1="${m.l}" x2="${W-m.r}" y1="${Y(v)}" y2="${Y(v)}"/><text class="lab mono" x="${m.l-8}" y="${Y(v)+4}" text-anchor="end">${v.toFixed(1)}</text>`; }
+  s+=`<line class="axis" x1="${m.l}" x2="${W-m.r}" y1="${Hh-m.b}" y2="${Hh-m.b}"/><line class="axis" x1="${m.l}" x2="${m.l}" y1="${m.t}" y2="${Hh-m.b}"/>`;
+  s+=`<text class="lab" x="${(m.l+W-m.r)/2}" y="${Hh-6}" text-anchor="middle">InferenceBench speedup (geomean, log scale)</text>`;
+  s+=`<text class="lab" transform="translate(14 ${(m.t+Hh-m.b)/2}) rotate(-90)" text-anchor="middle">process score</text>`;
+  D.agents.forEach((a,i)=>{ const x=X(a.speedup), y=Y(a.bg); s+=`<line x1="${x}" x2="${x}" y1="${Y(a.bg_lo)}" y2="${Y(a.bg_hi)}" stroke="var(--line-strong)" stroke-width="2"/>`; });
+  D.agents.forEach((a,i)=>{ const x=X(a.speedup), y=Y(a.bg); s+=`<circle data-i="${i}" cx="${x}" cy="${y}" r="6" fill="${HC[a.harness]}" stroke="var(--surface)" stroke-width="2"/>`; });
+  const label = new Set(['gpt-5.5-high','gpt-5.5-xhigh','claude-fable-5','gpt-5.1-codex-max','claude-opus-4-6','claude-haiku-4-5','gpt-5.3-codex-high','gemini-3.1-pro']);
+  D.agents.forEach(a=>{ if(label.has(a.agent)) s+=`<text class="lab" x="${X(a.speedup)+9}" y="${Y(a.bg)-6}">${a.agent}</text>`; });
+  s+='</svg>';
+  $('#scatter').innerHTML = s;
+  $('#scatter').querySelectorAll('circle').forEach(c=>{ const a=D.agents[+c.dataset.i]; const t=`${a.agent} (${a.harness})\nspeedup ${fmt(a.speedup)}× · worst seed ${fmt(a.worst_seed)}×\nprocess ${fmt(a.bg)} [${fmt(a.bg_lo)}, ${fmt(a.bg_hi)}]\nintegrity ${fmt(a.integrity)} · self-consistency ${fmt(a.self_consistency)}\nscored runs ${pct(a.scored)} · last activity min ${fmt(a.last_min,0)}`; c.onmousemove=e=>showTip(e,t); c.onmouseleave=hideTip; c.onclick=()=>{ showTab('agents'); openAgent(a.agent); }; c.style.cursor='pointer'; });
+}
+scatter(); window.addEventListener('resize', ()=>{ scatter(); heatmap(); });
+
+/* ---------- generic sortable table ---------- */
+function table(el, cols, rows, onRow, selectedKey){
+  let sortKey = el.dataset.sort || cols.find(c=>c.default)?.key, desc = el.dataset.desc !== '0';
+  function render(){
+    const data = [...rows].sort((a,b)=>{ const va=a[sortKey], vb=b[sortKey]; if(va==null) return 1; if(vb==null) return -1; return (typeof va==='string' ? va.localeCompare(vb) : va-vb) * (desc?-1:1); });
+    el.innerHTML = '<thead><tr>' + cols.map(c=>`<th class="${c.num?'num':''}" data-k="${c.key}">${c.label}${sortKey===c.key ? (desc?' ↓':' ↑'):''}</th>`).join('') + '</tr></thead><tbody>' +
+      data.map(r=>`<tr class="clickable ${selectedKey && r[selectedKey.k]===selectedKey.v ? 'selected':''}" tabindex="0" data-id="${r[cols[0].key]}">` + cols.map(c=>`<td class="${c.num?'num':''}">${c.fmt ? c.fmt(r[c.key], r) : (r[c.key] ?? '–')}</td>`).join('') + '</tr>').join('') + '</tbody>';
+    el.querySelectorAll('th').forEach(th=>th.onclick=()=>{ if(sortKey===th.dataset.k) desc=!desc; else { sortKey=th.dataset.k; desc=true; } el.dataset.sort=sortKey; el.dataset.desc=desc?'1':'0'; render(); });
+    el.querySelectorAll('tbody tr').forEach(tr=>{ const r=data.find(x=>String(x[cols[0].key])===tr.dataset.id); tr.onclick=()=>onRow(r); tr.onkeydown=e=>{ if(e.key==='Enter') onRow(r); }; });
+  }
+  render();
+}
+const barcell = (v, max=1) => v==null ? '–' : `<span class="bartrack"><span class="bar" style="width:${Math.round(v/max*80)}px"></span></span>${fmt(v)}`;
+const harnessCell = (a) => `<span class="harness h-${a.harness}"></span>${a.agent}`;
+
+/* ---------- agents ---------- */
+const agentCols = [
+  {key:'agent', label:'agent', fmt:(v,r)=>harnessCell(r)},
+  {key:'speedup', label:'speedup', num:true, fmt:v=>fmt(v)+'×', default:true},
+  {key:'worst_seed', label:'worst seed', num:true, fmt:v=>fmt(v)+'×'},
+  {key:'scored', label:'scored', num:true, fmt:pct},
+  {key:'bg', label:'process', num:true, fmt:(v,r)=>`${fmt(v)} <span class="muted">[${fmt(r.bg_lo)}, ${fmt(r.bg_hi)}]</span>`},
+  {key:'integrity', label:'integrity', num:true, fmt:v=>barcell(v)},
+  {key:'self_consistency', label:'self-consistency', num:true, fmt:v=>barcell(v)},
+  {key:'judge', label:'judge', num:true, fmt:v=>fmt(v)},
+  {key:'last_min', label:'last active (min)', num:true, fmt:v=>fmt(v,0)},
+  {key:'blocked_runs', label:'sandbox-hit runs', num:true},
+];
+let selectedAgent = null;
+function renderAgents(){ table($('#agents'), agentCols, D.agents, r=>openAgent(r.agent), selectedAgent && {k:'agent', v:selectedAgent}); }
+renderAgents();
+function openAgent(name){
+  selectedAgent = name; renderAgents();
+  const a = D.agents.find(x=>x.agent===name); const el = $('#agent-detail'); el.hidden = false;
+  const groups = ['integrity','self_consistency','descriptive'];
+  const runs = D.runs.filter(r=>r.agent===name);
+  el.innerHTML = `<h2 style="margin-top:0">${harnessCell(a)} <span class="muted">· ${a.n} runs · speedup ${fmt(a.speedup)}× · process ${fmt(a.bg)}</span></h2>
+    <div class="two">${groups.map(g=>`<div><div class="chip ${g}" style="margin-bottom:8px">${g.replace('_',' ')}</div>${D.assertions.filter(it=>it.role===g).map(it=>`<div class="row" style="gap:8px;margin:3px 0"><span style="width:170px;font-size:13px" title="${it.text}">${it.name}</span>${barcell(a.passes[it.name])}</div>`).join('')}</div>`).join('')}
+    </div>
+    <h2>Runs</h2><div class="tablewrap"><table>${runs.map(r=>`<tr class="clickable" data-run="${r.run_id}"><td>${r.run_id}</td><td>${r.scenario}</td><td>${r.scored?'scored':'<span class="muted">unscored</span>'}</td><td class="num">${fmt(r.speedup)}×</td><td class="num">process ${fmt(r.bg)}</td><td class="num">regret ${fmt(r.regret)}</td><td>${r.phase}</td><td class="num">${r.n_evals} evals · ${r.n_configs} configs</td></tr>`).join('')}</table></div>`;
+  el.querySelectorAll('tr[data-run]').forEach(tr=>tr.onclick=()=>{ showTab('runs'); openRun(tr.dataset.run); });
+  el.scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+/* ---------- assertions ---------- */
+const assertCols = [
+  {key:'name', label:'assertion', fmt:(v,r)=>`<span title="${r.text}">${v}</span>`},
+  {key:'role', label:'role', fmt:v=>`<span class="chip ${v}">${v.replace('_',' ')}</span>`},
+  {key:'pass_rate', label:'pass rate', num:true, fmt:v=>barcell(v), default:true},
+  {key:'n', label:'n', num:true},
+  {key:'spread', label:'spread across agents', num:true, fmt:v=>fmt(v)},
+  {key:'discrimination', label:'discrimination', num:true, fmt:v=>fmt(v)},
+  {key:'seed_consistency', label:'seed consistency', num:true, fmt:v=>fmt(v)},
+];
+table($('#asserts'), assertCols, D.assertions, r=>{ showTab('runs'); $('#f-fail').value=r.name; renderRuns(); });
+function heatmap(){
+  const items = D.assertions.map(a=>a.name), agents = D.agents;
+  const cw = 34, ch = 22, left = 170, top = 110, W = left + items.length*cw + 10, Hh = top + agents.length*ch + 8;
+  let s = `<svg viewBox="0 0 ${W} ${Hh}" width="${W}" height="${Hh}" style="max-width:none" role="img" aria-label="Heatmap of assertion pass rates per agent">`;
+  items.forEach((it,j)=>{ s+=`<text class="lab" transform="translate(${left+j*cw+cw/2+4} ${top-6}) rotate(-60)" font-size="11">${it}</text>`; });
+  agents.forEach((a,i)=>{ s+=`<text class="lab" x="${left-8}" y="${top+i*ch+15}" text-anchor="end" font-size="11">${a.agent}</text>`;
+    items.forEach((it,j)=>{ const v=a.passes[it]; const fill = v==null ? 'var(--line)' : `color-mix(in oklab, var(--heat-1) ${Math.round(v*100)}%, var(--heat-0))`; s+=`<rect data-a="${i}" data-j="${j}" x="${left+j*cw+1}" y="${top+i*ch+1}" width="${cw-2}" height="${ch-2}" rx="2" fill="${fill}"/>`; }); });
+  s+='</svg>';
+  $('#heatmap').innerHTML = s;
+  $('#heatmap').querySelectorAll('rect').forEach(r=>{ const a=agents[+r.dataset.a], it=items[+r.dataset.j]; r.onmousemove=e=>showTip(e, `${a.agent}\n${it}: ${a.passes[it]==null?'n/a':pct(a.passes[it])}`); r.onmouseleave=hideTip; });
+}
+heatmap();
+
+/* ---------- runs ---------- */
+const fAgent = $('#f-agent'), fFail = $('#f-fail');
+D.agents.forEach(a=>{ fAgent.insertAdjacentHTML('beforeend', `<option>${a.agent}</option>`); $('#j-agent').insertAdjacentHTML('beforeend', `<option>${a.agent}</option>`); });
+D.assertions.forEach(a=>fFail.insertAdjacentHTML('beforeend', `<option value="${a.name}">fails ${a.name}</option>`));
+['#f-agent','#f-scenario','#f-scored','#f-fail'].forEach(id=>$(id).onchange=renderRuns);
+const runCols = [
+  {key:'run_id', label:'run'}, {key:'agent', label:'agent', fmt:(v,r)=>harnessCell(r)}, {key:'scenario', label:'sc'},
+  {key:'scored', label:'scored', fmt:v=>v?'yes':'<span class="muted">no</span>'},
+  {key:'speedup', label:'speedup', num:true, fmt:v=>fmt(v)+'×', default:true},
+  {key:'bg', label:'process', num:true, fmt:v=>fmt(v)}, {key:'integrity', label:'integ.', num:true, fmt:v=>fmt(v)}, {key:'self_consistency', label:'self-c.', num:true, fmt:v=>fmt(v)},
+  {key:'regret', label:'regret', num:true, fmt:v=>fmt(v)}, {key:'phase', label:'loss phase'},
+  {key:'n_evals', label:'evals', num:true}, {key:'n_measured', label:'configs measured', num:true}, {key:'last_min', label:'last min', num:true, fmt:v=>fmt(v,0)},
+];
+let selectedRun = null;
+function renderRuns(){
+  const a=fAgent.value, sc=$('#f-scenario').value, scd=$('#f-scored').value, fl=fFail.value;
+  const rows = D.runs.filter(r=>(!a||r.agent===a)&&(!sc||r.scenario===sc)&&(!scd||String(+r.scored)===scd)&&(!fl||r.asserts[fl]===false));
+  $('#runcount').textContent = `${rows.length} runs`;
+  table($('#runs'), runCols, rows, r=>openRun(r.run_id), selectedRun && {k:'run_id', v:selectedRun});
+}
+renderRuns();
+function openRun(id){
+  selectedRun = id; renderRuns();
+  const r = D.runs.find(x=>x.run_id===id), t = D.timelines[id], el = $('#run-detail'); el.hidden=false;
+  const fds = D.findings.filter(f=>f.run_id===id);
+  el.innerHTML = `<h2 style="margin-top:0">${id} <span class="muted">· ${harnessCell(r)} · scenario ${r.scenario} · ${r.scored?'scored':'unscored'} · speedup ${fmt(r.speedup)}×</span></h2>
+    <div class="legend" style="margin-bottom:6px"><span>▮ config written</span><span>▲ server start</span><span>● full eval</span><span>○ quick eval</span><span>◆ observed result (height = speedup seen)</span><span class="muted">red outline = stale / killed / failures</span></div>
+    <div class="tablewrap" id="timeline"></div>
+    <div class="two" style="margin-top:12px">
+      <div><h2 style="margin-top:0">Assertions</h2><div class="chips">${D.assertions.map(a=>{ const v=r.asserts[a.name]; const c=v===true?'pass':v===false?'fail':'na'; return `<span class="verdict ${c}" title="${a.text}">${v===true?'✓':v===false?'✗':'·'} ${a.name}</span>`; }).join('')}</div>
+        <h2>Blame</h2>${t.blame.length ? t.blame.map(b=>`<div><code>${b.kind}</code> at step ${b.i} <span class="muted">${b.note||''}</span></div>`).join('') : '<div class="muted">no loss events</div>'}
+        ${t.eval_modified ? '<div style="margin-top:8px;color:var(--fail)">evaluate.py was modified during this run</div>' : ''}
+        <div class="note" style="margin-top:8px">found ${fmt(r.found)}× · shipped config measured in-run ${fmt(r.shipped_obs)}× · official ${fmt(r.speedup)}× · regret ${fmt(r.regret)}. Reproduce: <code>python scripts/explain_run.py ${id}</code></div></div>
+      <div><h2 style="margin-top:0">Judge findings</h2>${fds.length ? fds.map(findingHTML).join('') : '<div class="muted">no applicable judge questions for this run</div>'}</div>
+    </div>`;
+  timeline(t, $('#timeline'));
+  el.scrollIntoView({behavior:'smooth', block:'start'});
+}
+function timeline(t, el){
+  const W = Math.max(600, Math.min(1100, el.clientWidth||900)), Hh = 150, m={l:40,r:16,t:16,b:26};
+  const n = Math.max(1, t.n_steps, ...t.events.map(e=>e.i)); const X = i => m.l + i/n*(W-m.l-m.r);
+  const sps = t.events.filter(e=>e.t==='obs' && e.sp).map(e=>e.sp); const smax = Math.max(1, ...sps);
+  const Y = sp => Hh - m.b - (Math.log(Math.max(1,sp))/Math.log(Math.max(1.01,smax)))*(Hh-m.t-m.b-30);
+  let s = `<svg viewBox="0 0 ${W} ${Hh}" width="${W}" height="${Hh}" role="img" aria-label="Run timeline">`;
+  s += `<line class="axis" x1="${m.l}" x2="${W-m.r}" y1="${Hh-m.b}" y2="${Hh-m.b}"/><text class="lab" x="${m.l}" y="${Hh-8}">step 0</text><text class="lab" x="${W-m.r}" y="${Hh-8}" text-anchor="end">step ${n}</text>`;
+  if (smax>1) s += `<text class="lab mono" x="${m.l-6}" y="${Y(smax)+4}" text-anchor="end">${smax.toFixed(1)}×</text><text class="lab mono" x="${m.l-6}" y="${Y(1)+4}" text-anchor="end">1×</text>`;
+  const base = Hh-m.b;
+  t.events.forEach((e,k)=>{
+    const x = X(e.i);
+    if (e.t==='config') s += `<rect data-k="${k}" x="${x-1.5}" y="${base-14}" width="3" height="14" fill="var(--muted)"/>`;
+    else if (e.t==='start') s += `<path data-k="${k}" d="M${x} ${base-30} l5 9 h-10 z" fill="var(--accent)"/>`;
+    else if (e.t==='eval') s += `<circle data-k="${k}" cx="${x}" cy="${base-44}" r="5" fill="${e.quick?'var(--surface)':'var(--fg)'}" stroke="${(e.stale||e.killed)?'var(--fail)':'var(--fg)'}" stroke-width="1.5"/>`;
+    else if (e.t==='obs' && e.sp) s += `<path data-k="${k}" d="M${x} ${Y(e.sp)-6} l6 6 l-6 6 l-6 -6 z" fill="${HC.opencode}" stroke="${e.fail>0?'var(--fail)':'var(--surface)'}" stroke-width="1.5"/>`;
+  });
+  if (t.final_cfg!=null){ const fe = t.events.find(e=>e.t==='config'&&e.v===t.final_cfg); if(fe) s+=`<text class="lab" x="${X(fe.i)}" y="${base-18}" text-anchor="middle">shipped v${fe.v}</text>`; }
+  s += '</svg>'; el.innerHTML = s;
+  el.querySelectorAll('[data-k]').forEach(n=>{ const e=t.events[+n.dataset.k]; const txt = e.t==='config' ? `config v${e.v} written (${e.eng})${e.min!=null?` · min ${e.min}`:''}` : e.t==='start' ? `server start, config v${e.v}` : e.t==='eval' ? `${e.quick?'quick':'full'} eval on config v${e.v}${e.stale?' · STALE server':''}${e.killed?' · killed':''}${e.obs?'':' · result never read'}${e.std===false?' · non-standard flags':''}${e.min!=null?` · min ${e.min}`:''}` : `observed ${fmt(e.sp)}× on config v${e.v}${e.fail?` · failure rate ${pct(e.fail)}`:''}`; n.onmousemove=ev=>showTip(ev, `step ${e.i}: ${txt}`); n.onmouseleave=hideTip; });
+}
+
+/* ---------- findings ---------- */
+const jq = $('#j-question'); Object.keys(D.questions).forEach(q=>jq.insertAdjacentHTML('beforeend', `<option>${q}</option>`));
+['#j-question','#j-bad','#j-agent'].forEach(id=>$(id).onchange=renderFindings);
+function findingHTML(f){ return `<div class="finding"><div class="q">${f.question.replace(/_/g,' ')} → <span class="verdict ${f.bad?'fail':'pass'}">${f.answer}${f.bad?' (failure)':''}</span> <span class="muted">· confidence ${fmt(f.confidence)}</span></div><div class="ev">“${f.evidence}”</div><div class="ra">${f.rationale}</div></div>`; }
+function renderFindings(){
+  const q=jq.value, b=$('#j-bad').value, a=$('#j-agent').value;
+  const rows = D.findings.filter(f=>(!q||f.question===q)&&(!b||String(f.bad)===b)&&(!a||f.agent===a));
+  $('#jcount').textContent = `${rows.length} findings`;
+  $('#findings').innerHTML = rows.slice(0,200).map(f=>`<div class="finding"><div class="row" style="justify-content:space-between"><span><code>${f.run_id}</code> ${f.agent}</span><span class="muted">${D.questions[f.question] ? '' : ''}</span></div>${findingHTML(f)}</div>`).join('') + (rows.length>200 ? `<div class="muted" style="padding-top:8px">showing 200 of ${rows.length}</div>` : '');
+  $('#findings').querySelectorAll('code').forEach(c=>{ c.style.cursor='pointer'; c.onclick=()=>{ showTab('runs'); openRun(c.textContent); }; });
+}
+renderFindings();
+</script>
