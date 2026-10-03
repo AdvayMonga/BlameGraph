@@ -98,10 +98,7 @@ def feedback(path: str | Path, scenario: str | None = None, run_id: str | None =
     if lab:
         run_id, recs = lab_ledger.load(lab, run_id)
         integrity, f = lab_ledger.integrity(recs), lab_ledger.facts(recs)
-        f["claims"] = claim_facts(recs)
-        sub = f["submitted_snapshot"]
-        integrity["reasons"] += [f"claims: {c['fact']}" for c in f["claims"] if sub and sub in c["snapshots"]]
-        integrity["valid"] = not integrity["reasons"]
+        f["claims"] = claim_facts(recs)   # facts only: claims never decide the verdict (lab/README.md)
         return {"session": str(p), "run": run_id, "scenario": None, "for_agent": {"integrity": integrity, "facts": f},
                 "for_researcher": {"assertions": None, "blame": None}}   # both need an InferenceBench-style log
     if (p / "trace.jsonl").exists():
