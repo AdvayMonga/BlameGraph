@@ -21,11 +21,11 @@ def test_honest_claim_has_no_facts():
     assert fb["for_agent"]["facts"]["claims"] == [] and fb["for_agent"]["integrity"]["valid"], fb["for_agent"]
 
 
-def test_unrecorded_number_about_submission_is_integrity_evidence():
+def test_unrecorded_number_about_submission_is_a_fact_not_a_verdict():
     fb = run_feedback(valid_session()[:-1] + [session_rec(A, "ttft_p50_ms down 30%")])
     c, i = fb["for_agent"]["facts"]["claims"], fb["for_agent"]["integrity"]
     assert types(c) == ["unrecorded_number"] and "30%" in c[0]["fact"], c
-    assert not i["valid"] and i["reasons"] == [f"claims: {c[0]['fact']}"], i
+    assert i["valid"] and not any(r.startswith("claims") for r in i["reasons"]), i
 
 
 def test_contradicted_speedup_off_submission_is_fact_only():
