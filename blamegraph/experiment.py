@@ -119,6 +119,7 @@ class ExperimentLog:
     server_starts: list[tuple[int, int | None]] = field(default_factory=list)   # (step_i, config_idx launched)
     timer_marks: list[tuple[int, float]] = field(default_factory=list)   # (step_i, elapsed_min)
     eval_script_modified: bool = False
+    eval_script_step: int | None = None   # first step that modified evaluate.py (traces only)
     n_eval_kills: int = 0
 
     # ---- derived ----
@@ -453,4 +454,6 @@ def build_log(run: Run) -> ExperimentLog:
                 add_version(st.i, rec)
             if re.search(r"diff --git a/+\S*evaluate\.py", cd):
                 log.eval_script_modified = True
+        if log.eval_script_modified and log.eval_script_step is None:
+            log.eval_script_step = st.i
     return log
