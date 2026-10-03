@@ -2,6 +2,7 @@
 that can be unsealed once per corpus version. Stdlib only; state lives in JSON files written atomically."""
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -49,7 +50,16 @@ class HoldoutGuard:
         return json.loads(self.path.read_text())
 
     def query(self, seen_value: float, heldout_value: float) -> dict:
-        """Seen value if it agrees with held-out within the noisy threshold, else held-out + Laplace (spends budget)."""
+        """Seen value if it agrees with held-out within the noisy threshold, else held-out + Laplace (spends budget).
+        Read-modify-write under an exclusive lock, so parallel sessions sharing the state file never lose a query."""
+        with open(self.path.with_name(self.path.name + ".lock"), "a") as lf:
+            fcntl.flock(lf, fcntl.LOCK_EX)
+            try:
+                return self._query(seen_value, heldout_value)
+            finally:
+                fcntl.flock(lf, fcntl.LOCK_UN)
+
+    def _query(self, seen_value: float, heldout_value: float) -> dict:
         s = self.state()
         if s["budget_left"] <= 0:
             raise Refused(f"held-out budget of {s['params']['budget']} exhausted after {s['n_queries']} queries")

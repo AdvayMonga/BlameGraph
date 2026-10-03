@@ -136,6 +136,21 @@ def test_sealed_split_detects_changes_and_unseals_once():
         assert SealedSplit(d / "sealed.json").unseal("v2 final", "referee") == [d / "b.jsonl"]  # new version unseals
 
 
+def test_parallel_queries_lose_nothing():
+    import tempfile, threading
+    from blamegraph.holdout import HoldoutGuard
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "g.json"
+        HoldoutGuard(path, budget=1000, threshold=0.05, sigma=0.001, seed=1)
+        def worker():
+            g = HoldoutGuard(path, budget=1000, threshold=0.05, sigma=0.001, seed=1)
+            for _ in range(25):
+                g.query(0.5, 0.5)
+        ts = [threading.Thread(target=worker) for _ in range(8)]
+        [t.start() for t in ts]; [t.join() for t in ts]
+        assert HoldoutGuard(path, budget=1000, threshold=0.05, sigma=0.001, seed=1).state()["n_queries"] == 200
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
