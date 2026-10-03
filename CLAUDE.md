@@ -87,8 +87,9 @@ belong in their corpus builder, not here.
 ## Next
 Calibration on the H100 (`equiv reference` on vLLM BF16 batch-invariant; `equiv candidate` for FP8/INT8 good and a
 degraded quant bad; `equiv calibrate`) and validating the kernel checker's CUDA timing; both need GPU spend approval.
-Engine side on inference-server branch `blamegraph/scoring-and-canaries` (not merged): `prompt_logprobs` scoring and
-`INFERENCE_SERVER_CANARY` honest canaries (later: move them to referee-owned patches). In their lab: wire `equiv` to
-`blamegraph equiv candidate` once it can launch a candidate engine; the held-out guard in `lab/ledger.py` checks
-top-level `config.split`/`metrics` but `tools._record` nests results under `result`, so held-out submits would bypass
-it; missing corpus regimes are their call.
+Engine side is merged in inference-server (#80): `prompt_logprobs` scoring; honest canaries now live in their
+`lab/canary.py`, applied from outside the engine. Awaiting the user's review there: branch `lab/heldout-guard` (held-out
+data nested under another field is refused; `Toolbox._record_heldout` writes top-level `config` + `metrics`) and
+`lab/knowledge-tool` (`knowledge` tool over `finding` records, seeded at run start). In their lab: wire `equiv` to
+`blamegraph equiv candidate` once it can launch a candidate engine; `tiers.py` needs real short/full runs; missing
+corpus regimes are their call. README stays a few one-line feature bullets, not a dev doc.
