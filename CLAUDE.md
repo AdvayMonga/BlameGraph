@@ -9,9 +9,11 @@ Hard rule from the user: the loop may receive **facts only, never heuristics or 
 (valid/invalid + reasons); self-consistency and methodology are researcher diagnostics, never fed to the agent.
 
 ## Layout
-- `blamegraph/feedback.py` — `feedback(path)` → `{for_agent: {integrity, facts}, for_researcher: {assertions, blame}}`; `python -m blamegraph feedback PATH [--agent-text]`. Accepts an InferenceBench run dir or a session ledger.
+- `blamegraph/feedback.py` — `feedback(path)` → `{for_agent: {integrity, facts}, for_researcher: {assertions, blame}}`; `python -m blamegraph feedback PATH [--run RUN_ID] [--agent-text]`. Accepts an InferenceBench run dir, a BlameGraph session ledger, or an inference-server lab ledger (detected from its first line). Integrity carries `evidence` per violated rule (rule, plain detail, concrete refs: hashes, measurement ids, offending values and limits).
 - `blamegraph/session.py` — the session format (append-only JSONL events: session_start, config, launch, measure, submission; grader hashes). The user's loop will get an adapter that writes/converts to this.
-- `blamegraph/validate.py` — integrity rules → `Verdict`. Live mode (hash files on disk) or recorded mode (hashes from the submission event).
+- `blamegraph/validate.py` — integrity rules → `Verdict(valid, reasons, evidence, facts)`. Live mode (hash files on disk) or recorded mode (hashes from the submission event). Physical limits (`unphysical()`) are shown to the agent on purpose: they are hardware facts, not detection tricks.
+- `blamegraph/lab_ledger.py` — inference-server lab ledger → integrity + facts directly (snapshots stand in for configs; no ExperimentLog, so `for_researcher` is empty for lab ledgers). Assumed result shapes are in its docstring; their bench/equiv/submit tools don't write results yet. Submitted snapshot must have a completed seen-split bench, tests passed, and equiv with no failing record (retrying a statistical gate until it passes would let bad changes through).
+- `blamegraph/claims.py` — claim-vs-evidence facts from ledger `claim` text (regex, no LLM): unrecorded numbers, contradicted speedups, verification words with no matching record, unknown record ids. Facts only; never part of the verdict (their lab/README rule).
 - `blamegraph/adapter.py` — session → `ExperimentLog`, so assertions/blame run on loop sessions.
 - `blamegraph/traces.py`, `experiment.py` — InferenceBench trace loader and experiment-log reconstruction (configs, launches, evals, observations, stale/warm/standard flags). Regex-only number parsing.
 - `blamegraph/assertions.py` — code-checkable assertions; `inject.py` — failure injectors; `blame.py` — found×kept×executed; `noise.py` — comparable observations + noise floor; `audit.py` — claims audit; `exploration.py` — knobs varied.
@@ -25,10 +27,12 @@ Hard rule from the user: the loop may receive **facts only, never heuristics or 
   `score_tokens` via `prompt_logprobs`), `run.py` (`reference` once per model/hardware, `candidate` per change,
   `calibrate_files`). CLI: `python -m blamegraph equiv reference|candidate|calibrate`.
 - `blamegraph/canaries.py` — cheat proxy in front of any OpenAI-compatible server (`truncate`, `early_eos`,
-  `fake_first`, `drop`, `cache`, `inflate_usage`); `python -m blamegraph.canaries --upstream URL --cheat NAME`.
-- `tests/test_feedback.py`, `tests/test_equivalence.py`, `tests/test_equiv_run.py` (full reference→calibrate→verdict
-  flow on fake servers), `tests/test_canaries.py` (all synthetic, no GPU) and
-  `tests/test_flip.py` (injection on real traces; skips without data). Run each with `python tests/<file>.py`.
+  `fake_first`, `drop`, `cache` (streamed and not), `inflate_usage`); `python -m blamegraph.canaries --upstream URL --cheat NAME`.
+- `blamegraph/audits.py` — repeated-request audit (MLPerf TEST04-style): judges decode time per token, not TTFT, so prefix caching passes and replayed answers fail; `python -m blamegraph audit repeat --url URL`.
+- `blamegraph/tiers.py` — `tier_agreement(changes)`: Spearman, Kendall tau-b, bootstrap CI, out-of-band disagreements; short tier usable if n ≥ 8, rho ≥ 0.8, CI low ≥ 0.5.
+- `blamegraph/holdout.py` — `HoldoutGuard` (Thresholdout query budget, state persisted atomically under a file lock, deterministic from seed) and `SealedSplit` (hash manifest, one logged unseal per corpus version). Keep sigma small relative to the threshold.
+- `blamegraph/kernels/` — kernel equivalence: `check_kernel` (seen + held-out shapes, per-dtype tolerances, edge cases incl. non-contiguous and NaN/Inf, inputs unchanged, no aliasing, memoization, determinism) and `time_kernel` / `check_memoization` (sync, rotated buffers, L2 flush on CUDA). Validated on CPU and MPS; CUDA sync, L2 flush, timer precision and fp16/bf16 tolerances still need the H100.
+- `tests/test_*.py` — all synthetic, no GPU, each runnable with `python3 tests/<file>.py`: feedback, equivalence, equiv_run (full reference→calibrate→verdict on fake servers), canaries, audits, tiers, holdout, kernels (also on MPS), lab_ledger, claims; `test_flip.py` injects failures into real traces and skips without data.
 - `data/` is gitignored and local only: `data/inferencebench/` (public traces, `hf download aisa-group/InferenceBench-Trajectories --repo-type dataset --local-dir data/inferencebench`), `data/derived/` (cached Haiku/Sonnet outputs from the research phase — the only copy), `data/laya/`.
 
 ## History
@@ -81,9 +85,10 @@ Requirement on their side: the OpenAI shim returns `logprobs: None`; the diverge
 belong in their corpus builder, not here.
 
 ## Next
-Engine side is on inference-server branch `blamegraph/scoring-and-canaries` (not merged): `prompt_logprobs` scoring
-in the shim (`CustomTorchBackend.score_logprobs`) and `INFERENCE_SERVER_CANARY` honest canaries. Still open: wire the
-lab's `equiv` tool to `blamegraph equiv candidate` once the lab can launch a candidate engine (its `bench` isn't
-wired either); missing corpus regimes in their corpus builder (their call); calibration on the H100 (`equiv
-reference` on vLLM BF16 batch-invariant, `equiv candidate` for FP8/INT8 and a degraded quant, `equiv calibrate`),
-which needs GPU spend approval.
+Calibration on the H100 (`equiv reference` on vLLM BF16 batch-invariant; `equiv candidate` for FP8/INT8 good and a
+degraded quant bad; `equiv calibrate`) and validating the kernel checker's CUDA timing; both need GPU spend approval.
+Engine side on inference-server branch `blamegraph/scoring-and-canaries` (not merged): `prompt_logprobs` scoring and
+`INFERENCE_SERVER_CANARY` honest canaries (later: move them to referee-owned patches). In their lab: wire `equiv` to
+`blamegraph equiv candidate` once it can launch a candidate engine; the held-out guard in `lab/ledger.py` checks
+top-level `config.split`/`metrics` but `tools._record` nests results under `result`, so held-out submits would bypass
+it; missing corpus regimes are their call.
