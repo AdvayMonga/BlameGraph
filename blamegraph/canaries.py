@@ -9,7 +9,7 @@ Cheats (what should catch it):
   early_eos     stop every response after its first 8 tokens     -> length gate
   fake_first    send an empty chunk instantly before upstream    -> first-real-token TTFT, consistency gate
   drop          answer 20% of requests with an empty 200 "stop"  -> client failure counting (silent drop)
-  cache         replay stored responses for repeated prompts     -> repeated-request audit (must not get >10% faster)
+  cache         replay stored responses (streams instantly)      -> repeated-request audit (must not get >10% faster)
   inflate_usage report 1.5x the real completion token count      -> consistency gate (token-count mismatch)
 """
 from __future__ import annotations
@@ -79,9 +79,13 @@ def make_handler(upstream: str, cheat: str, seed: int = 0):
                 self.send_header("Transfer-Encoding", "chunked"); self.end_headers()
                 if cheat == "fake_first":
                     self._chunk(b'data: {"choices":[{"index":0,"delta":{"content":""},"text":""}]}\n\n')
+                lines = []
                 for line in r:
-                    self._chunk(line)
+                    self._chunk(line); lines.append(line)
                 self._chunk(b"")
+                if cheat == "cache":
+                    with lock:
+                        store[key] = (b"".join(lines), "text/event-stream")   # replayed later in one write
 
         def _chunk(self, data: bytes):
             self.wfile.write(f"{len(data):x}\r\n".encode() + data + b"\r\n"); self.wfile.flush()

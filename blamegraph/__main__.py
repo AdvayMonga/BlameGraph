@@ -1,7 +1,8 @@
 """python -m blamegraph feedback PATH [--scenario A] [--agent-text]
 python -m blamegraph equiv reference --url URL --out DIR [--tasks mmlu_pro,math,code,needle]
 python -m blamegraph equiv candidate --ref DIR --url URL --out FILE.json [--thresholds FILE]
-python -m blamegraph equiv calibrate --good A.json B.json --bad C.json --out thresholds.json"""
+python -m blamegraph equiv calibrate --good A.json B.json --bad C.json --out thresholds.json
+python -m blamegraph audit repeat --url URL [--model M] [--n 20] [--api chat|completions]"""
 from __future__ import annotations
 
 import argparse
@@ -28,7 +29,15 @@ def main():
     c.add_argument("--concurrency", type=int, default=16)
     k = e.add_parser("calibrate"); k.add_argument("--good", nargs="+", required=True); k.add_argument("--bad", nargs="+", required=True)
     k.add_argument("--out", required=True)
+    q = sub.add_parser("audit", help="validity audits against a live server").add_subparsers(dest="kind", required=True)
+    q = q.add_parser("repeat"); q.add_argument("--url", required=True); q.add_argument("--model", default=MODEL)
+    q.add_argument("--n", type=int, default=20); q.add_argument("--api", choices=("chat", "completions"), default="chat")
     a = ap.parse_args()
+    if a.cmd == "audit":
+        from .audits import PROMPTS, repeat_audit
+        res = repeat_audit(a.url, a.model, PROMPTS[:a.n], api=a.api)
+        print("PASS" if res["passed"] else "FAIL", *res["reasons"], json.dumps(res["evidence"]), sep="\n  ")
+        return
     if a.cmd == "feedback":
         fb = feedback(a.path, a.scenario)
         print(render_for_agent(fb) if a.agent_text else json.dumps(fb, indent=1, default=str))
