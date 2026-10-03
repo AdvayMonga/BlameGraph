@@ -1,7 +1,8 @@
 """Feedback for one finished session.
 
-Input: an InferenceBench-format run directory (trace.jsonl, run_meta.json, metrics.json) or a session ledger
-(.jsonl in blamegraph.session format). Output has two halves:
+Input: an InferenceBench-format run directory (trace.jsonl, run_meta.json, metrics.json), a session ledger
+(.jsonl in blamegraph.session format), or one run of an inference-server lab ledger (see lab_ledger).
+Output has two halves:
   for_agent       integrity verdict + facts about what was measured and shipped. Facts only, no advice.
   for_researcher  assertion results and blame events (process diagnostics; never fed to the agent).
 """
@@ -11,6 +12,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import lab_ledger
 from .adapter import log_from_ledger
 from .assertions import evaluate
 from .audit import claims_audit
@@ -89,8 +91,14 @@ def _trace_integrity(run, log: ExperimentLog) -> dict:
     return {"valid": not reasons, "reasons": reasons}
 
 
-def feedback(path: str | Path, scenario: str | None = None) -> dict:
+def feedback(path: str | Path, scenario: str | None = None, run_id: str | None = None) -> dict:
     p = Path(path)
+    lab = lab_ledger.ledger_file(p)
+    if lab:
+        run_id, recs = lab_ledger.load(lab, run_id)
+        return {"session": str(p), "run": run_id, "scenario": None,
+                "for_agent": {"integrity": lab_ledger.integrity(recs), "facts": lab_ledger.facts(recs)},
+                "for_researcher": {"assertions": None, "blame": None}}   # both need an InferenceBench-style log
     if (p / "trace.jsonl").exists():
         run = load_run(p)
         log = build_log(run)

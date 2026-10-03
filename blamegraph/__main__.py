@@ -1,4 +1,4 @@
-"""python -m blamegraph feedback PATH [--scenario A] [--agent-text]
+"""python -m blamegraph feedback PATH [--scenario A] [--run RUN_ID] [--agent-text]
 python -m blamegraph equiv reference --url URL --out DIR [--tasks mmlu_pro,math,code,needle]
 python -m blamegraph equiv candidate --ref DIR --url URL --out FILE.json [--thresholds FILE]
 python -m blamegraph equiv calibrate --good A.json B.json --bad C.json --out thresholds.json"""
@@ -15,9 +15,10 @@ MODEL = "Qwen/Qwen3-30B-A3B"
 def main():
     ap = argparse.ArgumentParser(prog="blamegraph")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("feedback", help="feedback for one finished session (run dir or session .jsonl)")
+    p = sub.add_parser("feedback", help="feedback for one finished session (run dir, session .jsonl, or lab ledger)")
     p.add_argument("path")
     p.add_argument("--scenario", default=None)
+    p.add_argument("--run", default=None, help="lab ledger: the run to report (default: the latest)")
     p.add_argument("--agent-text", action="store_true", help="print only the agent-facing half as plain text")
     e = sub.add_parser("equiv", help="correctness gate against live servers").add_subparsers(dest="step", required=True)
     r = e.add_parser("reference"); r.add_argument("--url", required=True); r.add_argument("--out", required=True)
@@ -30,7 +31,7 @@ def main():
     k.add_argument("--out", required=True)
     a = ap.parse_args()
     if a.cmd == "feedback":
-        fb = feedback(a.path, a.scenario)
+        fb = feedback(a.path, a.scenario, a.run)
         print(render_for_agent(fb) if a.agent_text else json.dumps(fb, indent=1, default=str))
         return
     from .equivalence import run, tasks
