@@ -17,6 +17,7 @@ from .adapter import log_from_ledger
 from .assertions import evaluate
 from .audit import claims_audit
 from .blame import blame
+from .claims import claim_facts
 from .experiment import ExperimentLog, build_log
 from .noise import clean_observations
 from .session import Ledger
@@ -96,8 +97,12 @@ def feedback(path: str | Path, scenario: str | None = None, run_id: str | None =
     lab = lab_ledger.ledger_file(p)
     if lab:
         run_id, recs = lab_ledger.load(lab, run_id)
-        return {"session": str(p), "run": run_id, "scenario": None,
-                "for_agent": {"integrity": lab_ledger.integrity(recs), "facts": lab_ledger.facts(recs)},
+        integrity, f = lab_ledger.integrity(recs), lab_ledger.facts(recs)
+        f["claims"] = claim_facts(recs)
+        sub = f["submitted_snapshot"]
+        integrity["reasons"] += [f"claims: {c['fact']}" for c in f["claims"] if sub and sub in c["snapshots"]]
+        integrity["valid"] = not integrity["reasons"]
+        return {"session": str(p), "run": run_id, "scenario": None, "for_agent": {"integrity": integrity, "facts": f},
                 "for_researcher": {"assertions": None, "blame": None}}   # both need an InferenceBench-style log
     if (p / "trace.jsonl").exists():
         run = load_run(p)
