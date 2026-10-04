@@ -8,3 +8,5 @@ Referee for autoresearch loops that optimize LLM inference.
 - **Canaries:** planted cheats that must get caught
 - **Validity checks:** held-out budget, cache audit, short-vs-full test agreement
 - **Kernel checker:** rewritten kernels compute the same thing
+
+Diagnostics are developed on the public [InferenceBench trajectories](https://huggingface.co/datasets/aisa-group/InferenceBench-Trajectories).

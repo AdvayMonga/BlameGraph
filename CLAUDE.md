@@ -33,7 +33,7 @@ Top-level packages, run from the repo root (no install step). Each folder with c
 - `data/` is gitignored and local only: `data/inferencebench/` (public traces, `hf download aisa-group/InferenceBench-Trajectories --repo-type dataset --local-dir data/inferencebench`), `data/derived/` (cached Haiku/Sonnet outputs from the research phase — the only copy), `data/laya/`.
 
 ## History
-`research-v1` tag = full research snapshot: InferenceBench harness copy with hooks, Haiku extractor, Sonnet judge,
+`research-v1` tag = research snapshot (InferenceBench harness code removed from history 2026-10-04): Haiku extractor, Sonnet judge,
 dashboard, Laya experiments, report/IRT/benchmark-audit scripts, loop tool (ledger/landscape/context). Restore from
 there rather than re-deriving. Trace quirks (codex truncation, sandbox exit-126, no timestamps) are handled in
 `traces.py`/`experiment.py`.
