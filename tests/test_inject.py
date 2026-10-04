@@ -1,5 +1,5 @@
 """Flip tests on real traces: inject each known failure and check its assertion flips. Skips without the dataset.
-Run: python tests/test_flip.py [N_RUNS]"""
+Run: python tests/test_inject.py [N_RUNS]"""
 from __future__ import annotations
 
 import sys

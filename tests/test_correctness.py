@@ -1,5 +1,5 @@
 """Correctness gate on synthetic data: equal passes, acceptable noise passes, degradation and cheats fail.
-Run: python tests/test_equivalence.py"""
+Run: python tests/test_correctness.py"""
 from __future__ import annotations
 
 import math
@@ -132,6 +132,63 @@ def test_client_contract_against_fake_server():
         assert g["completion_tokens"] == 7 and score("mmlu_pro", g["text"], "C")
     finally:
         srv.shutdown()
+
+
+def test_verdict_file_rejudges_saved_result():
+    import json
+    import tempfile
+    from correctness.gate import evaluate
+    from correctness.run import verdict_file
+    div = {"kl_mean": 0.01, "kl_p99": 0.1}
+    cons = {"n": 1, "first_token_mismatch": 0, "token_count_mismatch": 0, "text_after_eos": 0, "consistent": True}
+    flips = {"math": {"flip_rate": 0.05, "p_degraded": 0.5, "score_ratio": 1.0, "lost": 1, "gained": 1}}
+    saved = evaluate(div, flips, length_ratio([10], [10]), cons, Thresholds(kl_mean=0.02, kl_p99=0.5))
+    assert saved["passed"]
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump({"result": saved}, f)
+    assert verdict_file(f.name, Thresholds(kl_mean=0.02, kl_p99=0.5))["passed"]
+    strict = verdict_file(f.name, Thresholds(kl_mean=0.005, kl_p99=0.5))
+    assert not strict["passed"] and strict["reasons"] == ["divergence: kl_mean 0.01 > 0.005"]
+
+
+def test_stream_role_chunk_is_not_a_first_token():
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from canaries.cheat_proxy import serve
+    from correctness.client import generate_stream
+
+    class H(BaseHTTPRequestHandler):
+        """vLLM-shaped stream: a role chunk with content "", then the tokens."""
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200); self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked"); self.end_headers()
+            deltas = [{"role": "assistant", "content": ""}, {"content": "Hello"}, {"content": " world"}]
+            for d in deltas:
+                line = f'data: {json.dumps({"choices": [{"index": 0, "delta": d}]})}\n\n'.encode()
+                self.wfile.write(f"{len(line):x}\r\n".encode() + line + b"\r\n")
+            end = b"data: [DONE]\n\n"
+            self.wfile.write(f"{len(end):x}\r\n".encode() + end + b"\r\n0\r\n\r\n")
+
+    up = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=up.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{up.server_address[1]}"
+    px = serve(url, 0, "fake_first")
+    tok = lambda s: s.split()
+    try:
+        honest = generate_stream(url, "m", [{"role": "user", "content": "q"}])
+        assert honest == {"first_token_text": "Hello", "text": "Hello world"}
+        assert consistency([honest], tok)["consistent"]
+        cheat = generate_stream(f"http://127.0.0.1:{px.server_address[1]}", "m", [{"role": "user", "content": "q"}])
+        assert cheat["first_token_text"] == "" and not consistency([cheat], tok)["consistent"]
+    finally:
+        up.shutdown(); px.shutdown()
 
 
 if __name__ == "__main__":

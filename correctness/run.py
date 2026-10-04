@@ -143,6 +143,13 @@ def candidate(ref_dir: str | Path, url: str, model: str, out_path: str | Path, e
     return result
 
 
+def verdict_file(result_path: str | Path, thresholds: Thresholds) -> dict:
+    """Re-judge a saved candidate result under new thresholds, from its recorded metrics (no server needed)."""
+    m = json.loads(Path(result_path).read_text())["result"]["metrics"]
+    return evaluate(m.get("divergence"), {k[6:]: v for k, v in m.items() if k.startswith("flips:")},
+                    m.get("length"), m.get("consistency"), thresholds)
+
+
 def calibrate_files(good: list[str], bad: list[str], out: str) -> Thresholds:
     load = lambda p: json.loads(Path(p).read_text())["result"]["metrics"]
     def item(m):

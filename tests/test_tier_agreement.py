@@ -1,4 +1,4 @@
-"""Short-tier validity on synthetic changes. Run: python tests/test_tiers.py"""
+"""Short-tier validity on synthetic changes. Run: python tests/test_tier_agreement.py"""
 from __future__ import annotations
 
 import random

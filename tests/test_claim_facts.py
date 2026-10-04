@@ -1,4 +1,4 @@
-"""Claim-vs-evidence facts on synthetic lab ledgers. Run: python tests/test_claims.py"""
+"""Claim-vs-evidence facts on synthetic lab ledgers. Run: python tests/test_claim_facts.py"""
 from __future__ import annotations
 
 import sys

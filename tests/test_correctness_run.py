@@ -1,6 +1,6 @@
 """End-to-end gate flow against fake servers: reference -> candidates -> calibrate -> verdicts.
 A 'good' candidate (small symmetric churn, tiny logprob noise) must pass; a 'bad' one (systematic answer loss,
-flattened distributions) must fail. Run: python tests/test_equiv_run.py"""
+flattened distributions) must fail. Run: python tests/test_correctness_run.py"""
 from __future__ import annotations
 
 import hashlib
@@ -83,7 +83,7 @@ def server(mode):
             self.send_response(200); self.send_header("Content-Type", "text/event-stream")
             self.send_header("Transfer-Encoding", "chunked"); self.end_headers()
             words = text.split(" ")
-            chunks = [{"role": "assistant"}] + [{"content": (w if i == 0 else " " + w)} for i, w in enumerate(words)]
+            chunks = [{"role": "assistant", "content": ""}] + [{"content": (w if i == 0 else " " + w)} for i, w in enumerate(words)]
             for d in chunks:
                 line = f'data: {json.dumps({"choices": [{"delta": d}]})}\n\n'.encode()
                 self.wfile.write(f"{len(line):x}\r\n".encode() + line + b"\r\n")

@@ -46,8 +46,8 @@ def generate_stream(base_url: str, model: str, messages: list[dict], max_tokens:
             if not line.startswith(b"data: ") or line == b"data: [DONE]":
                 continue
             delta = (json.loads(line[6:]).get("choices") or [{}])[0].get("delta") or {}
-            if "content" not in delta:
-                continue                          # role-only chunk: not a token
+            if "content" not in delta or ("role" in delta and not delta["content"]):
+                continue                          # role chunk (vLLM sends it with content ""): not a token
             if first is None:
                 first = delta["content"] or ""    # an empty first content chunk is recorded as such (fake first token)
             parts.append(delta["content"] or "")

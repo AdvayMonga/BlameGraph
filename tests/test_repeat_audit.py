@@ -1,4 +1,4 @@
-"""Repeated-request audit passes prefix caching and fails replayed answers. Run: python tests/test_audits.py"""
+"""Repeated-request audit passes prefix caching and fails replayed answers. Run: python tests/test_repeat_audit.py"""
 from __future__ import annotations
 
 import json

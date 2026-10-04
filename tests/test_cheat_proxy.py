@@ -1,4 +1,4 @@
-"""Each cheat proxy behaves as specified and is caught by the matching check. Run: python tests/test_canaries.py"""
+"""Each cheat proxy behaves as specified and is caught by the matching check. Run: python tests/test_cheat_proxy.py"""
 from __future__ import annotations
 
 import json
