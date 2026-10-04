@@ -6,10 +6,10 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from blamegraph.assertions import evaluate  # noqa: E402
-from blamegraph.experiment import build_log  # noqa: E402
-from blamegraph.inject import INJECTORS  # noqa: E402
-from blamegraph.traces import DATA_ROOT, iter_runs  # noqa: E402
+from diagnostics.assertions import evaluate  # noqa: E402
+from logs.reconstruct import build_log  # noqa: E402
+from diagnostics.inject import INJECTORS  # noqa: E402
+from logs.inferencebench import DATA_ROOT, iter_runs  # noqa: E402
 
 # minimum share of applicable runs where the target assertion must flip
 MIN_HIT = {"ship_worse_config": 0.3, "remove_timer": 0.6, "drop_evals_after_last_config": 0.7}

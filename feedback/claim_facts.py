@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import re
 
-from .audit import _matches
-from .lab_ledger import metrics, passed, refused
+from diagnostics.claims_audit import _matches
+from feedback.lab_verdict import metrics, passed, refused
 
 REC_RE = re.compile(r"\bev-\d{8}-[0-9a-f]{12}\b")
 HEX_RE = re.compile(r"\b[0-9a-f]{7,64}\b")

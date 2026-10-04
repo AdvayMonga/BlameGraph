@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
-from .session import Ledger, config_hash, file_hash
+from logs.session import Ledger, config_hash, file_hash
 
 MAX_PHYSICAL_GEN_TPS = 20_000.0   # from InferenceBench's integrity floor
 MIN_PHYSICAL_TPOT_S = 1e-4

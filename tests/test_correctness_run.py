@@ -12,8 +12,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from blamegraph.equivalence import run  # noqa: E402
-from blamegraph.equivalence.gate import Thresholds  # noqa: E402
+from correctness import run  # noqa: E402
+from correctness.gate import Thresholds  # noqa: E402
 
 
 def h(*xs) -> int:

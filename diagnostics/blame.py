@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .experiment import ExperimentLog
-from .noise import clean_observations
-from .traces import BASELINE_METRIC, Run
+from logs.reconstruct import ExperimentLog
+from diagnostics.noise import clean_observations
+from logs.inferencebench import BASELINE_METRIC, Run
 
 
 @dataclass

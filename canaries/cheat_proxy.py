@@ -2,7 +2,7 @@
 The harness (measurement + correctness gate + validity) must flag every cheat; one that goes unflagged is a
 blind spot. Engine-agnostic, stdlib only.
 
-  python -m blamegraph.canaries --upstream http://127.0.0.1:8000 --port 8100 --cheat truncate
+  python -m canaries --upstream http://127.0.0.1:8000 --port 8100 --cheat truncate
 
 Cheats (what should catch it):
   truncate      cap max_tokens at 40% of the request            -> length gate
@@ -14,7 +14,6 @@ Cheats (what should catch it):
 """
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import random
@@ -110,12 +109,3 @@ def serve(upstream: str, port: int, cheat: str, seed: int = 0) -> ThreadingHTTPS
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
 
-
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser(prog="blamegraph.canaries")
-    ap.add_argument("--upstream", required=True); ap.add_argument("--port", type=int, default=8100)
-    ap.add_argument("--cheat", required=True, choices=CHEATS); ap.add_argument("--seed", type=int, default=0)
-    a = ap.parse_args()
-    s = serve(a.upstream, a.port, a.cheat, a.seed)
-    print(f"cheat proxy '{a.cheat}' on http://127.0.0.1:{a.port} -> {a.upstream}")
-    threading.Event().wait()

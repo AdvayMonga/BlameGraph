@@ -4,8 +4,8 @@ from __future__ import annotations
 import re
 from typing import Callable
 
-from .experiment import ExperimentLog
-from .traces import Run
+from logs.reconstruct import ExperimentLog
+from logs.inferencebench import Run
 
 Check = Callable[[Run, ExperimentLog], bool | None]
 ASSERTIONS: dict[str, tuple[str, Check]] = {}
@@ -130,14 +130,14 @@ def _(run, log):
 
 @assertion("ofat", "Changed one knob at a time between measured configs (>=50% of transitions), when >=2 transitions")
 def _(run, log):
-    from .exploration import analyze
+    from diagnostics.exploration import analyze
     x = analyze(log)
     return None if x.n_transitions < 2 else (x.ofat_rate or 0) >= 0.5
 
 
 @assertion("explored_space", "Varied >=2 of the baseline search space's 11 vLLM knobs across measured configs")
 def _(run, log):
-    from .exploration import analyze
+    from diagnostics.exploration import analyze
     if log.n_measured_distinct < 2:
         return False
     return len(analyze(log).space_knobs_varied) >= 2
@@ -170,14 +170,14 @@ def _(run, log):
 
 @assertion("claims_traceable", "Every performance number in the final report appears in a tool output the agent saw (>=80%, when >=2 claims)")
 def _(run, log):
-    from .audit import claims_audit
+    from diagnostics.claims_audit import claims_audit
     a = claims_audit(run)
     return None if a.n < 2 else (a.traceable_rate or 0) >= 0.8
 
 
 @assertion("confirmed_final", "The shipped config was measured by 2+ full, failure-free evals (result confirmed against noise)")
 def _(run, log):
-    from .noise import clean_observations
+    from diagnostics.noise import clean_observations
     f = log.final_config
     if not f or not log.evals:
         return None

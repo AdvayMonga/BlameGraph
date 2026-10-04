@@ -1,7 +1,7 @@
 """Feedback for one finished session.
 
 Input: an InferenceBench-format run directory (trace.jsonl, run_meta.json, metrics.json), a session ledger
-(.jsonl in blamegraph.session format), or one run of an inference-server lab ledger (see lab_ledger).
+(.jsonl in logs.session format), or one run of an inference-server lab ledger (see lab_verdict).
 Output has two halves:
   for_agent       integrity verdict + facts about what was measured and shipped. Facts only, no advice.
   for_researcher  assertion results and blame events (process diagnostics; never fed to the agent).
@@ -12,17 +12,17 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import lab_ledger
-from .adapter import log_from_ledger
-from .assertions import evaluate
-from .audit import claims_audit
-from .blame import blame
-from .claims import claim_facts
-from .experiment import ExperimentLog, build_log
-from .noise import clean_observations
-from .session import Ledger
-from .traces import BASELINE_METRIC, load_run
-from .validate import unphysical, validate
+from feedback import lab_verdict
+from logs.to_experiment import log_from_ledger
+from diagnostics.assertions import evaluate
+from diagnostics.claims_audit import claims_audit
+from diagnostics.blame import blame
+from feedback.claim_facts import claim_facts
+from logs.reconstruct import ExperimentLog, build_log
+from diagnostics.noise import clean_observations
+from logs.session import Ledger
+from logs.inferencebench import BASELINE_METRIC, load_run
+from feedback.verdict import unphysical, validate
 
 SCENARIO_OF_TASK = {"inference_scenario_a_input_heavy": "A", "inference_scenario_b_output_heavy": "B",
                     "inference_scenario_c_high_load": "C", "inference_scenario_d_general": "D"}
@@ -104,10 +104,10 @@ def _trace_integrity(run, log: ExperimentLog) -> dict:
 
 def feedback(path: str | Path, scenario: str | None = None, run_id: str | None = None) -> dict:
     p = Path(path)
-    lab = lab_ledger.ledger_file(p)
+    lab = lab_verdict.ledger_file(p)
     if lab:
-        run_id, recs = lab_ledger.load(lab, run_id)
-        integrity, f = lab_ledger.integrity(recs), lab_ledger.facts(recs)
+        run_id, recs = lab_verdict.load(lab, run_id)
+        integrity, f = lab_verdict.integrity(recs), lab_verdict.facts(recs)
         f["claims"] = claim_facts(recs)   # facts only: claims never decide the verdict (lab/README.md)
         return {"session": str(p), "run": run_id, "scenario": None, "for_agent": {"integrity": integrity, "facts": f},
                 "for_researcher": {"assertions": None, "blame": None}}   # both need an InferenceBench-style log

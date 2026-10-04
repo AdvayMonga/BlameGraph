@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from blamegraph.tiers import tier_agreement  # noqa: E402
+from validity.tier_agreement import tier_agreement  # noqa: E402
 
 
 def _changes(short, full, **bands):

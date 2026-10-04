@@ -8,11 +8,11 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from blamegraph.experiment import build_log  # noqa: E402
-from blamegraph.feedback import _trace_integrity, feedback, render_for_agent  # noqa: E402
-from blamegraph.session import Ledger, file_hash  # noqa: E402
-from blamegraph.traces import Event, Run  # noqa: E402
-from blamegraph.validate import validate  # noqa: E402
+from logs.reconstruct import build_log  # noqa: E402
+from feedback.report import _trace_integrity, feedback, render_for_agent  # noqa: E402
+from logs.session import Ledger, file_hash  # noqa: E402
+from logs.inferencebench import Event, Run  # noqa: E402
+from feedback.verdict import validate  # noqa: E402
 
 ADVICE = re.compile(r"\b(should|try|consider|recommend)", re.I)
 SERVER = {"pid": 1, "started_at": 1.0, "config_changed_after_start": False}

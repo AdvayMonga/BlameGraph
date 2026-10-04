@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from blamegraph.holdout import HoldoutGuard, Refused, SealedSplit  # noqa: E402
+from validity.holdout import HoldoutGuard, Refused, SealedSplit  # noqa: E402
 
 
 def _guard(d, budget=10, threshold=0.05, sigma=0.001, seed=0, name="state.json"):
@@ -138,7 +138,7 @@ def test_sealed_split_detects_changes_and_unseals_once():
 
 def test_parallel_queries_lose_nothing():
     import tempfile, threading
-    from blamegraph.holdout import HoldoutGuard
+    from validity.holdout import HoldoutGuard
     with tempfile.TemporaryDirectory() as d:
         path = Path(d) / "g.json"
         HoldoutGuard(path, budget=1000, threshold=0.05, sigma=0.001, seed=1)

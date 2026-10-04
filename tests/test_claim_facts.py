@@ -6,9 +6,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from test_lab_ledger import A, B, bench_ok, rec, run_feedback, session_rec, valid_session  # noqa: E402
+from test_lab_verdict import A, B, bench_ok, rec, run_feedback, session_rec, valid_session  # noqa: E402
 
-from blamegraph.claims import claim_facts  # noqa: E402
+from feedback.claim_facts import claim_facts  # noqa: E402
 
 
 def types(facts: list[dict]) -> list[str]:

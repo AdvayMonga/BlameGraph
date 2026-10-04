@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .traces import Run
+from logs.inferencebench import Run
 
 # a number followed by a performance unit
 CLAIM_RE = re.compile(

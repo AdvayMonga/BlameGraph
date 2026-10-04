@@ -5,8 +5,8 @@ import copy
 import re
 from typing import Callable
 
-from .experiment import SERVER_FILE, _launches_eval, build_log, unwrap_shell
-from .traces import Event, Run
+from logs.reconstruct import SERVER_FILE, _launches_eval, build_log, unwrap_shell
+from logs.inferencebench import Event, Run
 
 Injector = Callable[[Run], Run | None]   # None when the injection is not applicable to this run
 INJECTORS: dict[str, tuple[str, str, Injector]] = {}   # name -> (description, assertion it should flip, fn)

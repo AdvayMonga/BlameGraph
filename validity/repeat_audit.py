@@ -2,7 +2,7 @@
 Prefix caching legitimately cuts a repeat's TTFT, so only decode-side timing is judged: TPOT = (E2E - TTFT)/(n - 1),
 streamed and timed client-side. Stdlib only.
 
-  python -m blamegraph audit repeat --url http://127.0.0.1:8000 [--model M] [--n 20] [--api chat|completions]
+  python -m validity repeat --url http://127.0.0.1:8000 [--model M] [--n 20] [--api chat|completions]
 """
 from __future__ import annotations
 

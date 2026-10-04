@@ -5,8 +5,8 @@ import statistics
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from .experiment import ExperimentLog, Observation
-from .traces import BASELINE_METRIC
+from logs.reconstruct import ExperimentLog, Observation
+from logs.inferencebench import BASELINE_METRIC
 
 # 3x the best speedup the InferenceBench search baselines reached per scenario: anything above is not a
 # comparable measurement (tiny request sets, warm caches, patched graders, or a cheating server)

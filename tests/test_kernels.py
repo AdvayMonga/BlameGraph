@@ -8,7 +8,7 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from blamegraph.kernels import check_kernel, check_memoization, time_kernel  # noqa: E402
+from kernels import check_kernel, check_memoization, time_kernel  # noqa: E402
 
 SEEN, HELDOUT = [(8, 64), (16, 128)], [(5, 96), (3, 200)]
 DTYPES = (torch.float32, torch.float16, torch.bfloat16)

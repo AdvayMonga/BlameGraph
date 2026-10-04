@@ -8,10 +8,10 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from blamegraph.equivalence import (Position, Thresholds, calibrate, compare_positions, consistency,  # noqa: E402
+from correctness import (Position, Thresholds, calibrate, compare_positions, consistency,  # noqa: E402
                                     divergence_summary, evaluate, flip_test, length_ratio)
-from blamegraph.equivalence.gate import to_ledger_record  # noqa: E402
-from blamegraph.equivalence.scoring import extract_choice, extract_math, score  # noqa: E402
+from correctness.gate import to_ledger_record  # noqa: E402
+from correctness.scoring import extract_choice, extract_math, score  # noqa: E402
 
 V, K = 50, 10   # toy vocabulary and top-k
 
@@ -104,7 +104,7 @@ def test_client_contract_against_fake_server():
     import json
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
-    from blamegraph.equivalence.client import generate, score_tokens
+    from correctness.client import generate, score_tokens
 
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):

@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .experiment import ConfigVersion, ExperimentLog
+from logs.reconstruct import ConfigVersion, ExperimentLog
 
 # src/baselines/search_spaces/vllm.yaml in aisa-group/InferenceBench (11 parameters); SGLang's equivalents are
 # mapped onto the same knob names so exploration is comparable across engines
