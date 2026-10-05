@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from correctness import (Position, Thresholds, calibrate, compare_positions, consistency,  # noqa: E402
+from correctness import (Position, Thresholds, compare_positions, consistency,  # noqa: E402
                                     divergence_summary, evaluate, flip_test, length_ratio)
 from correctness.gate import to_ledger_record  # noqa: E402
 from correctness.scoring import extract_choice, extract_math, score  # noqa: E402
@@ -59,24 +59,25 @@ def test_flip_test_detects_degradation_not_noise():
     assert fair["p_degraded"] > 0.05 and worse["p_degraded"] < 1e-4 and worse["score_ratio"] < 0.9
 
 
-def test_calibrated_gate_separates_good_from_bad():
-    good = [{"divergence": _seqs(0.05, seed=s), "flips": {"math": flip_test(*_answers(500, 0.6, 0.02, 0.03, seed=s))}} for s in range(3)]
-    bad = [{"divergence": _seqs(1.0, temp=1.5, seed=9), "flips": {"math": flip_test(*_answers(500, 0.6, 0.2, 0.02, seed=9))}}]
-    th = calibrate(good, bad, label="synthetic")
-    ok = evaluate(_seqs(0.05, seed=7), {"math": flip_test(*_answers(500, 0.6, 0.02, 0.03, seed=7))},
-                  length_ratio([100] * 10, [98] * 10), {"n": 1, "first_token_mismatch": 0, "token_count_mismatch": 0, "text_after_eos": 0, "consistent": True}, th)
+CONS = {"n": 1, "first_token_mismatch": 0, "token_count_mismatch": 0, "text_after_eos": 0, "consistent": True}
+
+
+def test_policy_gate_is_pooled_accuracy():
+    ln = length_ratio([100] * 10, [98] * 10)
+    good = {"math": flip_test(*_answers(20_000, 0.6, 0.02, 0.03, seed=7))}   # large n: churn averages out
+    ok = evaluate(_seqs(0.05, seed=7), good, ln, CONS)
     assert ok["passed"], ok["reasons"]
-    no = evaluate(bad[0]["divergence"], bad[0]["flips"], length_ratio([100] * 10, [98] * 10),
-                  {"n": 1, "first_token_mismatch": 0, "token_count_mismatch": 0, "text_after_eos": 0, "consistent": True}, th)
-    assert not no["passed"] and any(r.startswith("divergence") for r in no["reasons"])
-
-
-def test_inseparable_calibration_is_refused():
-    same = {"divergence": _seqs(0.05), "flips": {"math": flip_test(*_answers(500, 0.6, 0.02, 0.03))}}
-    try:
-        calibrate([same], [same]); raise AssertionError("calibration should refuse identical good/bad sets")
-    except ValueError:
-        pass
+    no = evaluate(_seqs(0.05, seed=9), {"math": flip_test(*_answers(500, 0.6, 0.2, 0.02, seed=9))}, ln, CONS)
+    assert not no["passed"] and no["reasons"][0].startswith("accuracy: pooled score ratio")
+    # divergence is a fact, not a gate: large KL with intact answers passes, and is still reported
+    far = evaluate(_seqs(1.0, temp=1.5, seed=9), good, ln, CONS)
+    assert far["passed"] and far["metrics"]["divergence"]["kl_mean"] > ok["metrics"]["divergence"]["kl_mean"]
+    # pooled over items: a 4% loss on a small task is outweighed by a large intact one
+    small = {"n": 100, "lost": 4, "gained": 0, "ref_accuracy": 0.5, "cand_accuracy": 0.46}
+    big = {"n": 1000, "lost": 10, "gained": 10, "ref_accuracy": 0.7, "cand_accuracy": 0.7}
+    r = evaluate(None, {"code": small, "mmlu_pro": big}, ln, CONS)
+    assert r["passed"] and r["gates"]["accuracy"]["evidence"]["ref_correct"] == 750
+    assert not evaluate(None, {"code": small}, ln, CONS)["passed"]
 
 
 def test_truncation_and_fake_first_token_fail():
@@ -87,7 +88,7 @@ def test_truncation_and_fake_first_token_fail():
     r = evaluate(_seqs(0.0), None, trunc, fake)
     assert not r["passed"]
     assert r["gates"]["length"]["passed"] is False and r["gates"]["consistency"]["passed"] is False
-    assert r["gates"]["flips"]["passed"] is None          # not run is not a pass
+    assert r["gates"]["accuracy"]["passed"] is None       # not run is not a pass
     rec = to_ledger_record(r, {"split": "seen"}, base="abc123")
     assert rec["kind"] == "equiv" and "gates" in rec and "id" not in rec
 
@@ -137,18 +138,15 @@ def test_client_contract_against_fake_server():
 def test_verdict_file_rejudges_saved_result():
     import json
     import tempfile
-    from correctness.gate import evaluate
     from correctness.run import verdict_file
-    div = {"kl_mean": 0.01, "kl_p99": 0.1}
-    cons = {"n": 1, "first_token_mismatch": 0, "token_count_mismatch": 0, "text_after_eos": 0, "consistent": True}
-    flips = {"math": {"flip_rate": 0.05, "p_degraded": 0.5, "score_ratio": 1.0, "lost": 1, "gained": 1}}
-    saved = evaluate(div, flips, length_ratio([10], [10]), cons, Thresholds(kl_mean=0.02, kl_p99=0.5))
-    assert saved["passed"]
+    flips = {"math": {"n": 1000, "lost": 20, "gained": 12, "ref_accuracy": 0.700, "cand_accuracy": 0.692}}
+    saved = evaluate({"kl_mean": 0.01, "kl_p99": 0.1}, flips, length_ratio([10], [10]), CONS, Thresholds(min_score_ratio=0.98))
+    assert saved["passed"]                                   # 692 / 700 = 0.9886
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"result": saved}, f)
-    assert verdict_file(f.name, Thresholds(kl_mean=0.02, kl_p99=0.5))["passed"]
-    strict = verdict_file(f.name, Thresholds(kl_mean=0.005, kl_p99=0.5))
-    assert not strict["passed"] and strict["reasons"] == ["divergence: kl_mean 0.01 > 0.005"]
+    assert verdict_file(f.name, Thresholds(min_score_ratio=0.98))["passed"]
+    strict = verdict_file(f.name, Thresholds())
+    assert not strict["passed"] and strict["reasons"][0].startswith("accuracy: pooled score ratio 0.9886")
 
 
 def test_stream_role_chunk_is_not_a_first_token():

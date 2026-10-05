@@ -18,18 +18,20 @@ Top-level packages, run from the repo root (no install step). Each folder with c
 - `diagnostics/` — researcher-only, never fed to the agent. `assertions.py` (code-checkable assertions), `inject.py` (failure injectors), `blame.py` (found×kept×executed), `noise.py` (comparable observations + noise floor), `claims_audit.py` (claims audit on InferenceBench traces), `exploration.py` (knobs varied).
 - `correctness/` — correctness gate. `divergence.py` (teacher-forced KL / top-1 agreement / ref-token
   logprob shift, top-k or full logits), `flips.py` (paired flip test, exact one-sided McNemar), `checks.py` (length
-  ratio, consistency), `gate.py` (`evaluate` → verdict with per-check gates; `calibrate` from known-good/known-bad
-  candidates, refuses if inseparable; `to_ledger_record` → inference-server lab ledger `equiv` record),
-  `scoring.py` (MMLU-Pro letters, MATH `\boxed{}`), `tasks.py` (loaders from the Hub into `data/tasks/`: MMLU-Pro
-  490 stratified, MATH-500, MBPP sanitized 427 scored by running unit tests in a limited subprocess, synthetic
-  needle-in-haystack 180 at ~4k/12k/24k tokens), `client.py` (vLLM-style `generate`, `generate_stream`,
-  `score_tokens` via `prompt_logprobs`), `run.py` (`reference` once per model/hardware, `candidate` per change,
-  `calibrate_files`, `verdict_file`). CLI: `python -m correctness reference|candidate|calibrate|verdict` (`verdict` re-judges saved results under new thresholds, no server).
+  ratio, consistency), `gate.py` (`evaluate` → verdict; gates = pooled accuracy ≥ 99% of reference, length,
+  consistency; divergence and per-task flips are reported facts; `to_ledger_record` → lab ledger `equiv` record),
+  `scoring.py` (MMLU-Pro letters, MATH `\boxed{}`), `tasks.py` (loaders from the Hub into `data/tasks/`; tier `dev`
+  ~1.6k = MMLU-Pro 490 stratified, MATH-500, MBPP sanitized 427, needle 180; tier `full` ~18.6k = MMLU-Pro 12,032,
+  MATH 5,000 (gold = last `\boxed{}` of the solution), MBPP full 974, needle 600; code scored by running unit tests
+  in a limited subprocess; needle = synthetic retrieval at ~4k/12k/24k tokens), `client.py` (vLLM-style `generate`,
+  `generate_stream`, `score_tokens` via `prompt_logprobs`), `run.py` (`reference` once per model/hardware/tier,
+  `candidate` per change, `verdict_file`). CLI: `python -m correctness reference [--tier dev|full]|candidate|verdict`
+  (`verdict` re-judges saved results under the policy, no server).
 - `canaries/cheat_proxy.py` — cheat proxy in front of any OpenAI-compatible server (`truncate`, `early_eos`,
   `fake_first`, `drop`, `cache` (streamed and not), `inflate_usage`); `python -m canaries --upstream URL --cheat NAME`.
 - `validity/` — `repeat_audit.py`: repeated-request audit (MLPerf TEST04-style), judges decode time per token, not TTFT, so prefix caching passes and replayed answers fail; `python -m validity repeat --url URL`. `tier_agreement.py`: `tier_agreement(changes)`: Spearman, Kendall tau-b, bootstrap CI, out-of-band disagreements; short tier usable if n ≥ 8, rho ≥ 0.8, CI low ≥ 0.5. `holdout.py`: `HoldoutGuard` (Thresholdout query budget, state persisted atomically under a file lock, deterministic from seed) and `SealedSplit` (hash manifest, one logged unseal per corpus version). Keep sigma small relative to the threshold.
 - `kernels/` — kernel equivalence: `check_kernel` (seen + held-out shapes, per-dtype tolerances, edge cases incl. non-contiguous and NaN/Inf, inputs unchanged, no aliasing, memoization, determinism) and `time_kernel` / `check_memoization` (sync, rotated buffers, L2 flush on CUDA). Validated on CPU, MPS and CUDA (H200, 2026-10-04): all tests pass; the timer resolves ~20 µs kernels at ~9% IQR, 0.2 ms at 1.5%. `make_inputs` gets a seeded CPU generator (generate on CPU, then `.to(device)`).
-- `tests/test_*.py` — all synthetic, no GPU, each runnable with `python3 tests/<file>.py`, named after the module they cover; `test_correctness_run.py` is the full reference→calibrate→verdict flow on fake servers; `test_kernels.py` also runs on MPS; `test_inject.py` injects failures into real traces and skips without data.
+- `tests/test_*.py` — all synthetic, no GPU, each runnable with `python3 tests/<file>.py`, named after the module they cover; `test_correctness_run.py` is the full reference→candidate→verdict flow on fake servers; `test_kernels.py` also runs on MPS; `test_inject.py` injects failures into real traces and skips without data.
 - `data/` is gitignored and local only: `data/inferencebench/` (public traces, `hf download aisa-group/InferenceBench-Trajectories --repo-type dataset --local-dir data/inferencebench`), `data/derived/` (cached Haiku/Sonnet outputs from the research phase — the only copy), `data/laya/`.
 
 ## History
@@ -59,11 +61,11 @@ the benchmark defines objective + correctness + validity only, checked end to en
 - **Cold start:** process launch → first correct token; weights on disk allowed, compile caches empty; warm-cache
   figure reported alongside.
 - **Correctness gate (quantization allowed, MLPerf-style: purely mathematical, original weights, no retraining/
-  distillation/pruning):** (1) primary: KL divergence vs the BF16 reference, teacher-forced on reference text over a
-  large varied set, threshold calibrated so FP8/INT8 pass and a deliberately degraded quant fails; (2) paired
-  flip test (McNemar) on mid-difficulty non-thinking tasks (MMLU-Pro, MATH-500, a unit-tested code set,
-  long-context retrieval) — drop any task the model aces; (3) output length ≥90% of reference; (4) consistency
-  (first token, single EOS, token count match the text). Reference runs in batch-invariant mode
+  distillation/pruning):** MLPerf's accuracy rule (decided 2026-10-04): (1) pooled task score ≥ 99% of the
+  BF16 reference's, over every item of MMLU-Pro, MATH, a unit-tested code set and long-context retrieval; (2) output
+  length ≥ 90% of reference; (3) consistency (first token, single EOS, token count match the text). Teacher-forced
+  KL divergence and per-task paired flips (McNemar) are reported as facts, not gated. Tiers: `dev` (~1.6k items) while
+  iterating, where the 99% line is within noise (~±0.7%); `full` (~18.6k, ~±0.2%) for final tests. Reference runs in batch-invariant mode
   (`VLLM_BATCH_INVARIANT=1` / SGLang `--enable-deterministic-inference`); the agent's server need not be deterministic.
 - **Validity:** noise bands per regime from repeated unchanged runs; clocks and engine/driver versions recorded;
   comparisons refused across hardware, versions, or corpus versions; MLPerf-style repeated-request audit (same
@@ -84,21 +86,20 @@ belong in their corpus builder, not here.
 ## Calibration (H200, 2026-10-04)
 Ran via inference-server's `lab/vm.py`: vLLM 0.30.0, torch 2.13 + CUDA 13.0, clocks locked 1980 MHz, 83 min, $6.75.
 Report and outputs are local only: `data/h200-run-20261004/REPORT.md`, `data/equiv/` (ref, candidates, `thresholds.json`).
-Thresholds from good = plain BF16 (no batch-invariant mode) + official FP8 (served with `VLLM_USE_DEEP_GEMM=0`: the
-image's nvcc 12.8 is too old for DeepGEMM), bad = official GPTQ-Int4: kl_mean 4.53e-3, kl_p99 0.067, flip_rate 0.147.
-Divergence separates them (Int4 is 3.2x over kl_mean, 3.3x over kl_p99). Flip tests do not: plain BF16 alone flips
-8.2% of MMLU-Pro answers against the batch-invariant reference, Int4 10.8%, and no task reaches significance
-(all p >= 0.14; Int4's score ratios are 0.972 MMLU-Pro, 0.982 MATH, below 0.99 but not significant at these sizes).
+Dev tier. Candidates: plain BF16 (no batch-invariant mode), official FP8 (served with `VLLM_USE_DEEP_GEMM=0`: the
+image's nvcc 12.8 is too old for DeepGEMM), official GPTQ-Int4. KL: BF16 3.7e-7, FP8 3.0e-3, Int4 1.4e-2 (clean
+separation). Per task, accuracy can't separate at this size: plain BF16 alone flips 8.2% of MMLU-Pro answers and
+loses 1.9% there; no task reaches significance. Pooled score ratio (the adopted MLPerf rule): BF16 1.0008, FP8
+1.0072, Int4 0.9847 (fails 0.99; McNemar p 0.049). The KL/flip-rate thresholds derived that day were superseded by
+the MLPerf policy.
 INT8 (`JunHowie/Qwen3-30B-A3B-GPTQ-Int8`) was skipped: vLLM 0.30 can't load act-order GPTQ MoE experts. Every
 consistency result is void: the client counted vLLM's role chunk as a fake first token (fixed on
 `fix/calibration-findings`). Repeat audit passes on the honest server and fails the `cache` canary.
 
 ## Next
-GPU (needs spend approval): re-run `candidate` for good_bf16, good_fp8 and bad_gptq_int4 with the fixed client so
-consistency is real (outputs are cached, so only divergence scoring and the 20-item probe re-run); add an INT8 good
-candidate vLLM can load (a compressed-tensors W8A8 checkpoint); optionally FP8 with DeepGEMM on (nvcc >= 12.9), the
-path a real engine would take. Open design question for the user: the raw flip-rate gate is dominated by
-nondeterminism; the paired net-loss test is the meaningful one but lacks power at ~500 items.
+GPU (needs spend approval): full-tier recalibration — reference on the full tier, then BF16, FP8, an INT8 that
+vLLM can load (compressed-tensors W8A8) and GPTQ-Int4 as candidates with the fixed client; check BF16/FP8/INT8 pass
+and Int4 fails the pooled 99% rule. Optionally FP8 with DeepGEMM on (nvcc >= 12.9).
 Engine side is merged in inference-server (#80): `prompt_logprobs` scoring; honest canaries now live in their
 `lab/canary.py`, applied from outside the engine. Awaiting the user's review there: branch `lab/heldout-guard` (held-out
 data nested under another field is refused; `Toolbox._record_heldout` writes top-level `config` + `metrics`) and

@@ -4,8 +4,7 @@
               item and scores its own outputs token by token. Saved to a directory.
   candidate   per change: the optimized server answers the same items and scores the reference's tokens; the gate
               compares. Writes the verdict and an inference-server lab-ledger `equiv` record.
-  calibrate   thresholds from candidate results of known-good (e.g. FP8, INT8) and known-bad (deliberately degraded)
-              quantizations.
+  verdict     re-judge saved candidate results under a policy, without a server.
 """
 from __future__ import annotations
 
@@ -19,7 +18,7 @@ from . import client
 from .checks import consistency, length_ratio
 from .divergence import Position, compare_positions, divergence_summary
 from .flips import flip_test
-from .gate import Thresholds, calibrate, evaluate, to_ledger_record
+from .gate import Thresholds, evaluate, to_ledger_record
 
 
 class Encoder(Protocol):
@@ -148,13 +147,3 @@ def verdict_file(result_path: str | Path, thresholds: Thresholds) -> dict:
     m = json.loads(Path(result_path).read_text())["result"]["metrics"]
     return evaluate(m.get("divergence"), {k[6:]: v for k, v in m.items() if k.startswith("flips:")},
                     m.get("length"), m.get("consistency"), thresholds)
-
-
-def calibrate_files(good: list[str], bad: list[str], out: str) -> Thresholds:
-    load = lambda p: json.loads(Path(p).read_text())["result"]["metrics"]
-    def item(m):
-        return {"divergence": m.get("divergence"), "flips": {k[6:]: v for k, v in m.items() if k.startswith("flips:")}}
-    th = calibrate([item(load(p)) for p in good], [item(load(p)) for p in bad],
-                   label=f"good={[Path(p).stem for p in good]} bad={[Path(p).stem for p in bad]}")
-    Path(out).write_text(json.dumps(asdict(th), indent=1))
-    return th

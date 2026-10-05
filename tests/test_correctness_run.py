@@ -1,5 +1,5 @@
-"""End-to-end gate flow against fake servers: reference -> candidates -> calibrate -> verdicts.
-A 'good' candidate (small symmetric churn, tiny logprob noise) must pass; a 'bad' one (systematic answer loss,
+"""End-to-end gate flow against fake servers: reference -> candidates -> verdicts under the default policy.
+A 'good' candidate (small two-way churn, tiny logprob noise) must pass; a 'bad' one (systematic answer loss,
 flattened distributions) must fail. Run: python tests/test_correctness_run.py"""
 from __future__ import annotations
 
@@ -43,8 +43,8 @@ def items(n=300):
 def answer(item_text: str, mode: str) -> str:
     k = int(item_text.split()[1]); is_mc = item_text.startswith("question")
     right = h("ref", k) % 10 < 6
-    if mode == "good" and h("churn", k) % 25 == 0:
-        right = not right                                  # symmetric churn: both directions
+    if mode == "good" and h("churn", k) % 25 < (1 if right else 2):
+        right = not right                                  # churn both ways, net gain (wrong items are fewer)
     if mode == "bad" and right and h("loss", k) % 3 == 0:
         right = False                                      # systematic loss
     if is_mc:
@@ -99,21 +99,18 @@ def server(mode):
 
 
 def test_gate_flow():
-    enc, its = Enc(), items()
+    enc, its = Enc(), items(3000)              # large n: churn averages out, as the 99% rule needs
     servers = {m: server(m) for m in ("ref", "good", "bad")}
     try:
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
             meta = run.reference(servers["ref"][1], "m", d / "ref", its, enc, top_k=5, div_n=60, concurrency=8)
             assert meta["n_sequences"] == 60
-            res = {}
-            for name, mode in (("good1", "good"), ("bad1", "bad"), ("good2", "good")):
-                res[name] = run.candidate(d / "ref", servers[mode][1], "m", d / f"{name}.json", enc, Thresholds(), concurrency=8)
-            th = run.calibrate_files([str(d / "good1.json")], [str(d / "bad1.json")], str(d / "th.json"))
-            good = run.candidate(d / "ref", servers["good"][1], "m", d / "good3.json", enc, th, concurrency=8)
-            bad = run.candidate(d / "ref", servers["bad"][1], "m", d / "bad2.json", enc, th, concurrency=8)
+            good = run.candidate(d / "ref", servers["good"][1], "m", d / "good.json", enc, Thresholds(), concurrency=8)
+            bad = run.candidate(d / "ref", servers["bad"][1], "m", d / "bad2.json", enc, Thresholds(), concurrency=8)
             assert good["passed"], good["reasons"]
-            assert not bad["passed"] and any("divergence" in r for r in bad["reasons"]) and any("flips:" in r for r in bad["reasons"]), bad["reasons"]
+            assert not bad["passed"] and any(r.startswith("accuracy:") for r in bad["reasons"]), bad["reasons"]
+            assert bad["metrics"]["divergence"]["kl_mean"] > good["metrics"]["divergence"]["kl_mean"]
             rec = json.loads((d / "bad2.json").read_text())["ledger_record"]
             assert rec["kind"] == "equiv" and rec["gates"]["consistency"]["passed"] is True
     finally:

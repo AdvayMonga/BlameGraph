@@ -15,7 +15,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-DATA = Path(__file__).resolve().parents[2] / "data" / "tasks"
+DATA = Path(__file__).resolve().parents[1] / "data" / "tasks"
 LETTERS = "ABCDEFGHIJ"
 
 
@@ -25,11 +25,13 @@ def _hub(repo: str, filename: str) -> Path:
 
 
 # ---------------------------------------------------------------- MMLU-Pro (multiple choice, A-J)
-def mmlu_pro(n: int = 500, seed: int = 0) -> list[dict]:
+def mmlu_pro(n: int | None = 500, seed: int = 0) -> list[dict]:
+    """n questions stratified by category (n // categories each); None = the whole test set."""
     import pandas as pd
     d = pd.read_parquet(_hub("TIGER-Lab/MMLU-Pro", "data/test-00000-of-00001.parquet"))
-    per_cat = max(1, n // d.category.nunique())
-    d = pd.concat([g.sample(min(len(g), per_cat), random_state=seed) for _, g in d.groupby("category")])
+    if n is not None:
+        per_cat = max(1, n // d.category.nunique())
+        d = pd.concat([g.sample(min(len(g), per_cat), random_state=seed) for _, g in d.groupby("category")])
     items = []
     for _, r in d.sort_values("question_id").iterrows():
         opts = "\n".join(f"({LETTERS[i]}) {o}" for i, o in enumerate(r.options))
@@ -50,19 +52,41 @@ def math500(n: int | None = None, seed: int = 0) -> list[dict]:
                                                                        "answer within \\boxed{}."}]} for r in rows]
 
 
-# ---------------------------------------------------------------- MBPP sanitized (code, scored by unit tests)
-def mbpp(seed: int = 0) -> list[dict]:
+_MATH_SUBJECTS = ("algebra", "counting_and_probability", "geometry", "intermediate_algebra", "number_theory",
+                  "prealgebra", "precalculus")
+
+
+def math_full() -> list[dict]:
+    """The full MATH test set (5,000); gold = the last \\boxed{} of the reference solution."""
     import pandas as pd
-    parts = [pd.read_parquet(_hub("google-research-datasets/mbpp", f"sanitized/{s}-00000-of-00001.parquet"))
+    from .scoring import extract_math
+    items = []
+    for sub in _MATH_SUBJECTS:
+        d = pd.read_parquet(_hub("EleutherAI/hendrycks_math", f"{sub}/test-00000-of-00001.parquet"))
+        for k, r in enumerate(d.itertuples()):
+            items.append({"id": f"math-{sub}-{k}", "task": "math", "gold": extract_math(r.solution), "max_tokens": 2048,
+                          "messages": [{"role": "user", "content": r.problem + "\n\nPlease reason step by step, and put "
+                                                                              "your final answer within \\boxed{}."}]})
+    return items
+
+
+# ---------------------------------------------------------------- MBPP (code, scored by unit tests)
+def mbpp(seed: int = 0, full: bool = False) -> list[dict]:
+    """Sanitized MBPP (427) or the full set (974), all splits."""
+    import pandas as pd
+    cfg = "full" if full else "sanitized"
+    parts = [pd.read_parquet(_hub("google-research-datasets/mbpp", f"{cfg}/{s}-00000-of-00001.parquet"))
              for s in ("test", "validation", "train", "prompt")]
     d = pd.concat(parts).drop_duplicates("task_id").sort_values("task_id")
     items = []
     for _, r in d.iterrows():
         tests = list(r.test_list)
-        msg = (f"You are an expert Python programmer. {r.prompt}\nYour code should pass these tests:\n\n"
+        prompt = r.text if full else r.prompt
+        imports = [l for l in (r.test_setup_code or "").splitlines() if l.strip()] if full else list(r.test_imports)
+        msg = (f"You are an expert Python programmer. {prompt}\nYour code should pass these tests:\n\n"
                + "\n".join(tests) + "\n\nReturn only the code in a single ```python block.")
         items.append({"id": f"mbpp-{r.task_id}", "task": "code", "messages": [{"role": "user", "content": msg}],
-                      "gold": {"imports": list(r.test_imports), "tests": tests}, "max_tokens": 1024})
+                      "gold": {"imports": imports, "tests": tests}, "max_tokens": 1024})
     return items
 
 
@@ -138,7 +162,12 @@ def score_item(item: dict, text: str) -> bool:
     return score(t, text, item["gold"])
 
 
-def load(tasks: tuple[str, ...] = ("mmlu_pro", "math", "code", "needle"), seed: int = 0) -> list[dict]:
-    makers = {"mmlu_pro": lambda: mmlu_pro(seed=seed), "math": lambda: math500(seed=seed), "code": lambda: mbpp(seed=seed),
-              "needle": lambda: needle(seed=seed)}
+def load(tasks: tuple[str, ...] = ("mmlu_pro", "math", "code", "needle"), seed: int = 0, tier: str = "dev") -> list[dict]:
+    """dev: MMLU-Pro 490 stratified, MATH-500, MBPP sanitized 427, needle 180 (~1.6k, for iteration).
+    full: MMLU-Pro 12,032, MATH 5,000, MBPP 974, needle 600 (~18.6k, for final tests)."""
+    full = tier == "full"
+    makers = {"mmlu_pro": lambda: mmlu_pro(n=None if full else 500, seed=seed),
+              "math": lambda: math_full() if full else math500(seed=seed),
+              "code": lambda: mbpp(seed=seed, full=full),
+              "needle": lambda: needle(per_length=200 if full else 60, seed=seed)}
     return [it for t in tasks for it in makers[t]()]
