@@ -7,11 +7,13 @@ import argparse
 import json
 import sys
 import time
+from pathlib import Path
 
 from . import suite
 from .workload import corpus_version
 
 MODEL = "Qwen/Qwen3-30B-A3B"
+CORPUS = Path(__file__).resolve().parents[1] / "corpus"
 
 
 def main():
@@ -20,7 +22,8 @@ def main():
     r = sub.add_parser("run")
     r.add_argument("regimes", help=f"comma-separated, or 'all': {', '.join(suite.REGIMES)}")
     r.add_argument("--url", required=True); r.add_argument("--model", default=MODEL)
-    r.add_argument("--corpus", help="inference-server corpus/ dir (default: synthetic prompts)")
+    r.add_argument("--corpus", default=str(CORPUS) if CORPUS.is_dir() else None,
+                   help="corpus dir (default: this repo's corpus/; synthetic prompts if absent)")
     r.add_argument("--split", choices=("seen", "heldout"), default="seen")
     r.add_argument("--tier", choices=tuple(suite.TIERS), default="short")
     r.add_argument("--seed", type=int, default=0); r.add_argument("--timeout", type=float, default=600.0)

@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from canaries.cheat_proxy import serve  # noqa: E402
 from fake_engine import make_server, spawn  # noqa: E402
-from regimes import suite, workload as W  # noqa: E402
+from regimes import runner, suite, workload as W  # noqa: E402
 from regimes.client import Request, send, wall_clock  # noqa: E402
 from regimes.runner import Limits, find_goodput, run_open, summarize  # noqa: E402
 
@@ -100,9 +100,10 @@ def test_workload_builders():
 
 def test_every_regime_runs_on_a_fake_engine():
     proc, url = spawn(slots=2, token_s=0.005, out_tokens=10)       # ~40 req/s capacity
-    saved, think = dict(suite.TIERS["short"]), suite.THINK_S
+    saved, think, lag = dict(suite.TIERS["short"]), suite.THINK_S, runner.MAX_CLIENT_LAG_S
     suite.TIERS["short"].update(probe_s=1.0, final_s=2.0)
     suite.THINK_S = 0.3
+    runner.MAX_CLIENT_LAG_S = 0.05      # wiring test; client precision is test_open_loop_keeps_its_schedule's job
     try:
         tight = Limits(ttft_s=0.25, tpot_s=0.05)                  # 1 s probes only see overload against a tight TTFT
         ctx = suite.Ctx(url, "m", min_requests=10, interactive=tight, conversational=tight)
@@ -112,7 +113,7 @@ def test_every_regime_runs_on_a_fake_engine():
             assert res["value"] is not None, (name, res)
     finally:
         suite.TIERS["short"].update(saved)
-        suite.THINK_S = think
+        suite.THINK_S, runner.MAX_CLIENT_LAG_S = think, lag
         proc.kill()
 
 

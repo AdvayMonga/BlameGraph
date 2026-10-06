@@ -5,7 +5,7 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 
-from logs.inferencebench import Run, Step
+from logs.inferencebench import Run
 
 SERVER_FILE = "start_server.sh"
 STUB_MARK = "has no engine configured"

@@ -1,5 +1,5 @@
-"""Workloads: the user's corpus (inference-server `corpus/`, real BurstGPT timing + WildChat text) and seeded
-schedules built from it. Trace format (their corpus/README.md): one request per line with `arrival_s`, `session_id`,
+"""Workloads: the corpus (`corpus/`, real BurstGPT timing + WildChat text; built by corpus/build_corpus.py) and seeded
+schedules built from it. Trace format (corpus/README.md): one request per line with `arrival_s`, `session_id`,
 `turn_index`, `prompt`, `max_tokens`, `build_prompt_tokens`, and `messages` on multi-turn requests.
 """
 from __future__ import annotations
@@ -31,6 +31,10 @@ def corpus(root: str | Path, cls: str, split: str = "seen") -> list[dict]:
     root = Path(root)
     man = json.loads((root / "manifest.json").read_text())
     return load_trace(root / man["classes"][cls][split], f"{cls}-{split}")
+
+
+def corpus_classes(root: str | Path) -> list[str]:
+    return list(json.loads((Path(root) / "manifest.json").read_text())["classes"])
 
 
 def corpus_version(root: str | Path | None) -> str | None:

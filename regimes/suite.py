@@ -30,14 +30,13 @@ from .client import Request, send, wall_clock
 from .runner import CONVERSATIONAL, INTERACTIVE, Limits, find_goodput, run_closed, run_open, summarize
 
 TIERS = {"short": {"probe_s": 30.0, "final_s": 60.0}, "full": {"probe_s": 60.0, "final_s": 600.0}}
-CLASSES = ("cold_start", "steady_interactive", "long_context", "spike")
 
 
 @dataclass
 class Ctx:
     url: str
     model: str
-    corpus: str | None = None          # inference-server corpus/ dir; None = synthetic prompts (tests, smoke runs)
+    corpus: str | None = None          # a corpus/ dir; None = synthetic prompts (tests, smoke runs)
     split: str = "seen"
     tier: str = "short"
     seed: int = 0
@@ -62,7 +61,7 @@ class Ctx:
             if self.corpus is None:
                 self._pools[cls] = W.synthetic(100, seed=self.seed, prefix=cls or "mix")
             else:
-                classes = [cls] if cls else CLASSES
+                classes = [cls] if cls else W.corpus_classes(self.corpus)
                 self._pools[cls] = [r for c in classes for r in W.corpus(self.corpus, c, self.split)]
         return self._pools[cls]
 

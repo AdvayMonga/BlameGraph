@@ -1,15 +1,33 @@
 # BlameGraph
 
-The referee side of the eval for autoresearch loops that optimize inference: correctness gate, adversarial canaries,
-integrity verdict and session feedback. The loop, its engine and its measurement live in the user's repo
-github.com/AdvayMonga/inference-server (custom engine, `lab/` environment, design in its `ENVIRONMENT.md`); don't
-duplicate what is there. See the parent `../CLAUDE.md` for coding guidelines.
+The environment for autoresearch loops that optimize LLM inference: the lab (agent loop, tools, ledger, sandbox,
+GPU VMs), the workload corpus and knowledge base, load regimes, the correctness gate, canaries, and the referee
+(integrity verdict, session feedback). Design in `ENVIRONMENT.md`. The engine under optimization is a separate repo,
+github.com/AdvayMonga/inference-server (engine + stack only since the 2026-10-06 split); the lab finds it via
+`LAB_ENGINE_REPO` (default `../inference-server`) and runs it with its own `.venv/bin/python`. See the parent
+`../CLAUDE.md` for coding guidelines.
 
 Hard rule from the user: the loop may receive **facts only, never heuristics or advice**. Integrity is a verdict
 (valid/invalid + reasons); self-consistency and methodology are researcher diagnostics, never fed to the agent.
 
 ## Layout
-Top-level packages, run from the repo root (no install step). Each folder with commands has its own `python -m`.
+Top-level packages, run from the repo root (no install step; `pyproject.toml` lists optional extras and holds the
+pytest/ruff config). Each folder with commands has its own `python -m`.
+- `lab/` — moved from inference-server 2026-10-06 (`lab/README.md`). `session.py` (the loop over a dollar budget),
+  `agent.py` (the one place a model is called; the agent's jailed shell gets the engine's python on PATH),
+  `tools.py` (metered tools: test, profile, ledger, budget, restore, note; bench/equiv/submit still
+  refuse until wired to `regimes`/`correctness`), `workspace.py` (exported engine copy + snapshots), `ledger.py`
+  (append-only JSONL, `lab/ledger/` gitignored), `budget.py`, `engine.py` (where the engine repo and its python
+  are), `safety/` (write surfaces, srt jail, grader: lint/tests run with the engine's python in the jail),
+  `profile.py` + `bundle.py` + `gpu.py` (profiler harness, staged into the pristine tree under `_harness/` so the
+  jail never opens this repo, which holds `.env` and the ledger), `canary.py` (honest regressions patched into
+  the engine's process), `vm.py` + `providers/` + `vm-setup.sh` (one GPU VM on Verda/Nebius/Crusoe; pushes both
+  trees, engine to `LAB_VM_DIR`, this repo to `LAB_VM_ENV_DIR`; `run --env` runs here), `corpus.py` +
+  `chat_template.py` (corpus loader, template fingerprint). Tests: `tests/test_lab_*.py` (pytest); the ones
+  that drive engine code skip unless the engine and its deps import (run them with the engine's python).
+- `corpus/` — frozen workload traces (BurstGPT timing, WildChat text), seen/heldout, hashed, `manifest.json`;
+  `build_corpus.py` / `fetch_traces.py` rebuild it; any change is a new `corpus_version`.
+- `knowledge/` — measured findings (one JSON each) + `evidence/`; seeded into the ledger as `finding` records.
 - `feedback/` — what each side gets after a session. `report.py`: `feedback(path)` → `{for_agent: {integrity, facts}, for_researcher: {assertions, blame}}`; `python -m feedback PATH [--run RUN_ID] [--agent-text]`. Accepts an InferenceBench run dir, a BlameGraph session ledger, or an inference-server lab ledger (detected from its first line). Integrity carries `evidence` per violated rule (rule, plain detail, concrete refs: hashes, measurement ids, offending values and limits).
   - `verdict.py` — integrity rules → `Verdict(valid, reasons, evidence, facts)`. Live mode (hash files on disk) or recorded mode (hashes from the submission event). Physical limits (`unphysical()`) are shown to the agent on purpose: they are hardware facts, not detection tricks.
   - `lab_verdict.py` — inference-server lab ledger → integrity + facts directly (snapshots stand in for configs; no ExperimentLog, so `for_researcher` is empty for lab ledgers). Assumed result shapes are in its docstring; their bench/equiv/submit tools don't write results yet. Submitted snapshot must have a completed seen-split bench, tests passed, and equiv with no failing record (retrying a statistical gate until it passes would let bad changes through).
@@ -29,7 +47,7 @@ Top-level packages, run from the repo root (no install step). Each folder with c
   (`verdict` re-judges saved results under the policy, no server).
 - `canaries/cheat_proxy.py` — cheat proxy in front of any OpenAI-compatible server (`truncate`, `early_eos`,
   `fake_first`, `drop`, `cache` (streamed and not), `inflate_usage`); `python -m canaries --upstream URL --cheat NAME`.
-- `validity/` — `repeat_audit.py`: repeated-request audit (MLPerf TEST04-style), judges decode time per token, not TTFT, so prefix caching passes and replayed answers fail; `python -m validity repeat --url URL`. `tier_agreement.py`: `tier_agreement(changes)`: Spearman, Kendall tau-b, bootstrap CI, out-of-band disagreements; short tier usable if n ≥ 8, rho ≥ 0.8, CI low ≥ 0.5. `holdout.py`: `HoldoutGuard` (Thresholdout query budget, state persisted atomically under a file lock, deterministic from seed) and `SealedSplit` (hash manifest, one logged unseal per corpus version). Keep sigma small relative to the threshold.
+- `validity/` — `roofline.py` (analytical decode ceiling, no GPU; to be generalized into physical limits), `repeat_audit.py`: repeated-request audit (MLPerf TEST04-style), judges decode time per token, not TTFT, so prefix caching passes and replayed answers fail; `python -m validity repeat --url URL`. `tier_agreement.py`: `tier_agreement(changes)`: Spearman, Kendall tau-b, bootstrap CI, out-of-band disagreements; short tier usable if n ≥ 8, rho ≥ 0.8, CI low ≥ 0.5. `holdout.py`: `HoldoutGuard` (Thresholdout query budget, state persisted atomically under a file lock, deterministic from seed) and `SealedSplit` (hash manifest, one logged unseal per corpus version). Keep sigma small relative to the threshold.
 - `kernels/` — kernel equivalence: `check_kernel` (seen + held-out shapes, per-dtype tolerances, edge cases incl. non-contiguous and NaN/Inf, inputs unchanged, no aliasing, memoization, determinism) and `time_kernel` / `check_memoization` (sync, rotated buffers, L2 flush on CUDA). Validated on CPU, MPS and CUDA (H200, 2026-10-04): all tests pass; the timer resolves ~20 µs kernels at ~9% IQR, 0.2 ms at 1.5%. `make_inputs` gets a seeded CPU generator (generate on CPU, then `.to(device)`).
 - `regimes/` — load generation: drives a live OpenAI-compatible server the eight ways it gets used, client-side.
   `client.py` (one streamed chat request: TTFT from *scheduled* send to first real token, TPOT = (E2E − TTFT)/(n − 1),
@@ -89,15 +107,12 @@ the benchmark defines objective + correctness + validity only, checked end to en
 - **Canaries:** honest regressions (slower kernel, KV leak, fewer admissions, slower startup) and adversarial
   cheats (cached answers, early EOS, silent drops, pre-clock work, benchmark-pattern detection); each must be flagged.
 
-## Overlap with inference-server (checked 2026-10-02)
-Exists there, don't rebuild: client-side open-loop measurement (`scripts/bench/replay_trace.py`, `bench_serving.py`),
-per-request rows, noise bands + significance, comparison refusal (`research/compare.py`), process-start accounting,
-corpus with seen/held-out + versioning (cold_start, steady_interactive, long_context, spike), sandbox/grader audit,
-lab ledger (`lab/ledger.py`, kinds test/equiv/bench/profile/submit/finding). Absent there (built here): output
-equivalence beyond fixed-prompt parity, quantization quality gate, flip tests, KL, adversarial canaries.
-Requirement on their side: the OpenAI shim returns `logprobs: None`; the divergence check needs `prompt_logprobs`
-(contract in `correctness/client.py`). Regimes missing from their corpus (short/long output, overload, shared prefix)
-belong in their corpus builder, not here.
+## The engine repo (inference-server, after the 2026-10-06 split)
+Holds only the engine and its stack: `src/` (engine, control plane), engine tests, `monitoring/`, and engine tools
+(`scripts/bench/tune_triton_launch.py`, `scripts/gpu_tests/checks.py`, `scripts/tools/smoke_custom.py`). The
+combined pre-split tree is tag `archive/pre-split` there. Its shim serves `prompt_logprobs` (contract in
+`correctness/client.py`). Everything that runs, measures or judges it lives here; the user builds the agent's tools
+(e.g. a knowledge tool) themselves, so don't add agent tools without asking.
 
 ## Calibration (H200, 2026-10-04)
 Ran via inference-server's `lab/vm.py`: vLLM 0.30.0, torch 2.13 + CUDA 13.0, clocks locked 1980 MHz, 83 min, $6.75.
