@@ -7,9 +7,10 @@ The environment that measures, and later grades, changes to the engine. Design i
 
 - The engine is a separate repo (github.com/AdvayMonga/inference-server). The lab finds it through
   `LAB_ENGINE_REPO` (default `../inference-server`) and runs its code, tests and lint with
-  `LAB_ENGINE_PYTHON` (default `$LAB_ENGINE_REPO/.venv/bin/python` when that repo is named, else this
-  interpreter). Nothing here imports the engine except the profiler harness and canaries, which run
-  in the engine's process.
+  `LAB_ENGINE_PYTHON` (default that repo's `.venv/bin/python` when it exists, else this interpreter; the
+  engine's venv needs its dev extras, `uv sync --extra dev`, for lint and tests). Nothing here imports the
+  engine except the profiler harness and canaries, which run in the engine's process: run `python -m
+  lab.profile` and `python -m lab.canary` with the engine's interpreter, from this directory.
 - In that repo, `src/inference_server/` is the only thing the agent may write (plus new `tests/test_*.py`).
 - Black-box tools (bench, later) launch the server with `python -m inference_server.server`,
   wait on `GET /health`, and talk to it over its OpenAI-compatible HTTP API.
@@ -101,13 +102,15 @@ commands either way:
     python -m lab.vm types                  # what the account can rent right now
     python -m lab.vm start                  # create (first time) or start, wait for ssh
     python -m lab.vm setup                  # lab/vm-setup.sh: venv, CUDA torch, Nsight, counter and clock checks
-    python -m lab.vm run --fetch lab/runs -- \
-        env BACKEND=custom-cuda python -m lab.profile --requests 8
+    python -m lab.vm run --env --fetch lab/runs -- \
+        env BACKEND=custom-cuda python -m lab.profile --requests 8      # --env: run in this repo's tree
+    python -m lab.vm run -- python scripts/gpu_tests/checks.py         # default: run in the engine's tree
     python -m lab.vm stop                   # ends all billing (Verda: deletes the VM and its disk)
 
 `run` rsyncs the working tree minus `.git` and everything `.gitignore` excludes (what is on disk
 here is what gets measured, secrets and weights stay home), runs the command in the repo dir with
-`.venv/bin` first on PATH, and brings `--fetch` (relative to the repo) back under `lab/runs/`. The
+the engine's `.venv/bin` first on PATH, and brings `--fetch` (relative to the dir it ran in) back under
+`lab/runs/`. Both trees are pushed: the engine to `LAB_VM_DIR`, this repo to `LAB_VM_ENV_DIR`. The
 VM is left running; `stop` is yours. Do not run `uv sync` on the box: it would put CPU torch back.
 
 Credentials never live in the repo. Verda: `VERDA_CLIENT_ID` and `VERDA_CLIENT_SECRET` (console >

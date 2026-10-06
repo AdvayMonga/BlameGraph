@@ -4,6 +4,7 @@ interpreter: <engine>/.venv/bin/python -m pytest tests/test_lab_profile.py tests
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 
 import pytest
@@ -13,6 +14,8 @@ from lab import engine
 _src = engine.repo() / "src"
 if _src.is_dir() and str(_src) not in sys.path:
     sys.path.insert(0, str(_src))
+# Hermetic: the grader runs lint and tests with this interpreter, not whatever venv sits next to the repo.
+os.environ.setdefault("LAB_ENGINE_PYTHON", sys.executable)
 
 
 def pytest_configure(config):

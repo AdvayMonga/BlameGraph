@@ -16,12 +16,12 @@ def repo() -> Path:
 
 
 def python() -> str:
-    """LAB_ENGINE_PYTHON, else LAB_ENGINE_REPO's .venv when one was named and has it, else this interpreter."""
+    """LAB_ENGINE_PYTHON, else the engine repo's .venv/bin/python when it exists, else this interpreter.
+    The engine's venv needs its dev extras (pytest, ruff): `uv sync --extra dev` there."""
     if os.environ.get("LAB_ENGINE_PYTHON"):
         return os.environ["LAB_ENGINE_PYTHON"]
-    named = os.environ.get("LAB_ENGINE_REPO")
-    venv_py = Path(named).expanduser() / ".venv" / "bin" / "python" if named else None
-    return str(venv_py) if venv_py and venv_py.exists() else sys.executable
+    venv_py = repo() / ".venv" / "bin" / "python"
+    return str(venv_py) if venv_py.exists() else sys.executable
 
 
 def venv(py: str | None = None) -> Path:
