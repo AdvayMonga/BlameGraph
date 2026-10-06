@@ -73,17 +73,29 @@ the benchmark defines objective + correctness + validity only, checked end to en
 - **Canaries:** honest regressions (slower kernel, KV leak, fewer admissions, slower startup) and adversarial
   cheats (cached answers, early EOS, silent drops, pre-clock work, benchmark-pattern detection); each must be flagged.
 
-## Overlap with inference-server (checked 2026-10-02)
-Exists there, don't rebuild: client-side open-loop measurement (`scripts/bench/replay_trace.py`, `bench_serving.py`),
-per-request rows, noise bands + significance, comparison refusal (`research/compare.py`), process-start accounting,
-corpus with seen/held-out + versioning (cold_start, steady_interactive, long_context, spike), sandbox/grader audit,
-lab ledger (`lab/ledger.py`, kinds test/equiv/bench/profile/submit/finding). Absent there (built here): output
-equivalence beyond fixed-prompt parity, quantization quality gate, flip tests, KL, adversarial canaries.
-Requirement on their side: the OpenAI shim returns `logprobs: None`; the divergence check needs `prompt_logprobs`
-(contract in `correctness/client.py`). Regimes missing from their corpus (short/long output, overload, shared prefix)
-belong in their corpus builder, not here.
+## Overlap with inference-server (checked 2026-10-05)
+Still there: corpus with seen/held-out + versioning (`corpus/`: cold_start, steady_interactive, long_context, spike),
+`scripts/bench/bench_serving.py` and other benches, the lab ledger (`lab/ledger.py`, kinds test/equiv/bench/profile/
+submit/finding; held-out guard looks everywhere since #96), honest canaries (`lab/canary.py`), `prompt_logprobs`
+scoring in the shim (contract in `correctness/client.py`), GPU venues via `lab/vm.py` (Verda, Nebius). Removed with
+their research loop: the open-loop trace replayer (`scripts/bench/replay_trace.py`), noise bands + comparison refusal
+(`research/compare.py`). So nothing currently replays the regimes or refuses mixed comparisons; where load generation
+lives now is the user's open decision. Regimes missing from their corpus (short/long output, overload, shared prefix)
+belong in their corpus builder.
 
-## Calibration (H200, 2026-10-04)
+## Full-tier recalibration (H200, Nebius, 2026-10-05)
+Policy confirmed, nothing tuned. 18,606 items, vLLM 0.30.0, concurrency 128, 3 h 40 min, ~$16.50. Local only:
+`data/h200-run-20261005/REPORT.md`, `data/equiv-full/`. Pooled score ratio: plain BF16 1.0000, FP8 (DeepGEMM off)
+1.0009, INT8 `nytopop/Qwen3-30B-A3B.w8a8` 0.9993, FP8 (DeepGEMM on, nvcc 13.0) 1.0034 — all PASS; GPTQ-Int4 0.9869
+FAIL (MMLU-Pro 0.9807, p = 3e-5). FP8/INT8 each lose and gain ~800 answers in balance: that churn is the realistic
+noise. Consistency clean on every run.
+Open: plain BF16 matched the batch-invariant reference exactly here (18,602/18,606 identical, KL 0.0), but on Verda at
+concurrency 32 it diverged on 466/490 MMLU-Pro answers (median 13% into the answer). Logs show both BF16 servers plain
+(non-invariant compile path, requests served by the BF16 server); the reference reproduced across both days and
+clouds (691/691 same-prompt answers identical). Differences: venue, driver 580.126 vs 580.173, concurrency 32 vs 128.
+Don't treat a BF16 rerun as a noise sample until resolved.
+
+## Calibration, dev tier (H200, Verda, 2026-10-04)
 Ran via inference-server's `lab/vm.py`: vLLM 0.30.0, torch 2.13 + CUDA 13.0, clocks locked 1980 MHz, 83 min, $6.75.
 Report and outputs are local only: `data/h200-run-20261004/REPORT.md`, `data/equiv/` (ref, candidates, `thresholds.json`).
 Dev tier. Candidates: plain BF16 (no batch-invariant mode), official FP8 (served with `VLLM_USE_DEEP_GEMM=0`: the
@@ -97,12 +109,8 @@ consistency result is void: the client counted vLLM's role chunk as a fake first
 `fix/calibration-findings`). Repeat audit passes on the honest server and fails the `cache` canary.
 
 ## Next
-GPU (needs spend approval): full-tier recalibration — reference on the full tier, then BF16, FP8, an INT8 that
-vLLM can load (compressed-tensors W8A8) and GPTQ-Int4 as candidates with the fixed client; check BF16/FP8/INT8 pass
-and Int4 fails the pooled 99% rule. Optionally FP8 with DeepGEMM on (nvcc >= 12.9).
-Engine side is merged in inference-server (#80): `prompt_logprobs` scoring; honest canaries now live in their
-`lab/canary.py`, applied from outside the engine. Awaiting the user's review there: branch `lab/heldout-guard` (held-out
-data nested under another field is refused; `Toolbox._record_heldout` writes top-level `config` + `metrics`) and
-`lab/knowledge-tool` (`knowledge` tool over `finding` records, seeded at run start). In their lab: wire `equiv` to
+GPU (needs spend approval): resolve the BF16 puzzle — plain BF16 on the dev tier at concurrency 32 and 128 on one
+VM (~20 min, ~$1.50).
+Their side: the user builds the agent's tools (not this repo; don't push tools there). In their lab: wire `equiv` to
 `python -m correctness candidate` once it can launch a candidate engine; `tiers.py` needs real short/full runs; missing
 corpus regimes are their call. README stays a few one-line feature bullets, not a dev doc.
