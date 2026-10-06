@@ -144,8 +144,11 @@ consistency result is void: the client counted vLLM's role chunk as a fake first
 `fix/calibration-findings`). Repeat audit passes on the honest server and fails the `cache` canary.
 
 ## Next
-GPU (needs spend approval): resolve the BF16 puzzle — plain BF16 on the dev tier at concurrency 32 and 128 on one
-VM (~20 min, ~$1.50).
-Their side: the user builds the agent's tools (not this repo; don't push tools there). In their lab: wire `equiv` to
-`python -m correctness candidate` once it can launch a candidate engine; `tiers.py` needs real short/full runs; missing
-corpus regimes are their call. README stays a few one-line feature bullets, not a dev doc.
+GPU (needs spend approval): resolve the BF16 puzzle (plain BF16 on the dev tier at concurrency 32 and 128 on one VM,
+~20 min, ~$1.50); first real run of `python -m regimes run all` against the engine and against vLLM.
+Here, now that the lab lives in this repo: wire the lab's `bench` tool to `regimes`, `equiv` to `python -m
+correctness candidate`, and `submit` to the held-out split + `validity/holdout.py`; lab `session.py --run` re-resolves
+`base` from HEAD rather than the run's original base (pre-existing; resuming after the engine moved would misaudit);
+`validity/tier_agreement.py` needs real short/full runs; `validity/roofline.py` wants generalizing to the H200 + MoE
+target. The agent's tool set (e.g. a knowledge tool) is the user's design: ask first. README stays a few one-line
+feature bullets, not a dev doc.
