@@ -31,7 +31,23 @@ Top-level packages, run from the repo root (no install step). Each folder with c
   `fake_first`, `drop`, `cache` (streamed and not), `inflate_usage`); `python -m canaries --upstream URL --cheat NAME`.
 - `validity/` — `repeat_audit.py`: repeated-request audit (MLPerf TEST04-style), judges decode time per token, not TTFT, so prefix caching passes and replayed answers fail; `python -m validity repeat --url URL`. `tier_agreement.py`: `tier_agreement(changes)`: Spearman, Kendall tau-b, bootstrap CI, out-of-band disagreements; short tier usable if n ≥ 8, rho ≥ 0.8, CI low ≥ 0.5. `holdout.py`: `HoldoutGuard` (Thresholdout query budget, state persisted atomically under a file lock, deterministic from seed) and `SealedSplit` (hash manifest, one logged unseal per corpus version). Keep sigma small relative to the threshold.
 - `kernels/` — kernel equivalence: `check_kernel` (seen + held-out shapes, per-dtype tolerances, edge cases incl. non-contiguous and NaN/Inf, inputs unchanged, no aliasing, memoization, determinism) and `time_kernel` / `check_memoization` (sync, rotated buffers, L2 flush on CUDA). Validated on CPU, MPS and CUDA (H200, 2026-10-04): all tests pass; the timer resolves ~20 µs kernels at ~9% IQR, 0.2 ms at 1.5%. `make_inputs` gets a seeded CPU generator (generate on CPU, then `.to(device)`).
-- `tests/test_*.py` — all synthetic, no GPU, each runnable with `python3 tests/<file>.py`, named after the module they cover; `test_correctness_run.py` is the full reference→candidate→verdict flow on fake servers; `test_kernels.py` also runs on MPS; `test_inject.py` injects failures into real traces and skips without data.
+- `regimes/` — load generation: drives a live OpenAI-compatible server the eight ways it gets used, client-side.
+  `client.py` (one streamed chat request: TTFT from *scheduled* send to first real token, TPOT = (E2E − TTFT)/(n − 1),
+  status ok / error (explicit HTTP rejection) / silent_drop / truncated / crash; corpus headers X-Session-Id,
+  X-Turn-Index, X-Trace-Id), `runner.py` (open loop: schedule dealt to 4 client processes on one shared start, each
+  request on a thread started 5 ms early, so p99 send lag stays ~1–3 ms; closed loop; `summarize`: p50/p99, failures,
+  attainment, valid only if no silent drop/truncation/crash and client lag p99 ≤ 10 ms; `find_goodput`: double then
+  bisect on ≥99% meeting both limits), `workload.py` (reads the user's inference-server `corpus/` in its own format —
+  BurstGPT timing, WildChat text — plus Poisson, trace replay with speed-up and peak-window crop, multi-turn
+  conversations rebuilt from stored histories under one shared system prompt; synthetic prompts when no corpus),
+  `suite.py` (the 8 regimes; probes ≥ `min_requests` (100) and tier length, then a confirmation at `final_s` backing
+  off 15% up to 5 times; shared-prefix runs score only the steady-state window; cold start launches a command with
+  fresh VLLM/inductor/Triton cache dirs, polls until "17 + 25" is answered "42", then relaunches for the warm figure).
+  Tiers: short (30 s probes, 60 s final), full (60 s probes, 600 s final). Probes must last well beyond the TTFT limit
+  or a short overload goes unseen; limits are settable per `Ctx` (MLPerf by default). CLI:
+  `python -m regimes run REGIME[,..]|all --url URL [--corpus DIR] [--split] [--tier] [--tokenizer] [--out]`,
+  `python -m regimes cold-start --url URL --cmd "..."`. Closed-loop runs can't detect a client bottleneck by lag.
+- `tests/test_*.py` — all synthetic, no GPU, each runnable with `python3 tests/<file>.py`, named after the module they cover; `test_correctness_run.py` is the full reference→candidate→verdict flow on fake servers; `test_kernels.py` also runs on MPS; `test_inject.py` injects failures into real traces and skips without data; `test_regimes.py` drives `tests/fake_engine.py` (fixed decode slots, run out of process) through every regime (~2.5 min).
 - `data/` is gitignored and local only: `data/inferencebench/` (public traces, `hf download aisa-group/InferenceBench-Trajectories --repo-type dataset --local-dir data/inferencebench`), `data/derived/` (cached Haiku/Sonnet outputs from the research phase — the only copy), `data/laya/`.
 
 ## History
