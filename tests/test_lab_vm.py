@@ -103,7 +103,8 @@ def test_crusoe_state_accepts_both_spellings(fake):
     assert vm.provider.get("t3c").state == "stopped"
 
 
-def test_run_pushes_runs_in_repo_dir_and_fetches(fake):
+def test_run_pushes_runs_in_repo_dir_and_fetches(fake, monkeypatch):
+    monkeypatch.setenv("LAB_ENGINE_REPO", str(labvm.engine.ENV_ROOT))     # any git checkout: its sha ships as LAB_GIT_SHA
     vm = labvm.VM(name="t4", user="u", remote_dir="~/repo")
     local = fake / "out"
     assert labvm.run(vm, "python -m lab.profile", fetch_dir="lab/runs", local=local) == 0
