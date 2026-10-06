@@ -1,5 +1,7 @@
 """Analytical roofline+ for LLM decode — offline ceiling, per-step breakdown,
-ranked lever menu, gap attribution. No GPU, no weights. See PLAN.md P0.
+ranked lever menu, gap attribution. No GPU, no weights.
+Moved from inference-server 2026-10-06 as-is: still hard-wired to Gemma E4B/E2B on A100 (dense weights, embedded
+measured anchors). Not yet generalized to the eval target (Qwen3-30B-A3B MoE, H200); not a limit check.
 
 The model: per decode step you (a) stream the dense weights from HBM once for the
 whole batch, (b) stream each sequence's KV cache, (c) do 2*N_params*B FLOP of math.

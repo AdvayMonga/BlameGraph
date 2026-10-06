@@ -30,6 +30,7 @@ from .client import Request, send, wall_clock
 from .runner import CONVERSATIONAL, INTERACTIVE, Limits, find_goodput, run_closed, run_open, summarize
 
 TIERS = {"short": {"probe_s": 30.0, "final_s": 60.0}, "full": {"probe_s": 60.0, "final_s": 600.0}}
+MAX_STRETCH = 4.0
 
 
 @dataclass
@@ -65,11 +66,26 @@ class Ctx:
                 self._pools[cls] = [r for c in classes for r in W.corpus(self.corpus, c, self.split)]
         return self._pools[cls]
 
+    def duration(self, rate: float, final: bool) -> float:
+        """Tier length, stretched to hold `min_requests` at `rate` but never past `MAX_STRETCH` x (a server that
+        needs longer than that is not worth measuring at that load)."""
+        base = self.final_s if final else self.probe_s
+        return min(max(base, self.min_requests / rate), base * MAX_STRETCH)
+
     def run_open(self, reqs):
         return run_open(self.url, self.model, reqs, self.timeout, self.count_tokens)
 
     def run_closed(self, reqs, c, duration):
         return run_closed(self.url, self.model, reqs, c, duration, self.timeout, self.count_tokens)
+
+
+def _cycle(order: list[dict], tag: str = ""):
+    """Requests built one at a time, cycling the pool: closed-loop runs consume only what they send."""
+    k = 0
+    while True:
+        for r in order:
+            yield W.to_request(r, rid=f"{r['id']}#{tag}{k}")
+            k += 1
 
 
 def _warmup(ctx: Ctx, pool: list[dict], n: int = 8):
@@ -107,7 +123,7 @@ def _goodput_regime(ctx: Ctx, name: str, objective: str, build, limits: Limits, 
     starts at the load that fills one probe. With `ramp_s`, the schedule starts that much early and only requests
     scheduled inside [ramp_s, ramp_s + duration] are scored, so multi-turn load is at steady state."""
     def measure(load, final):
-        duration = max(ctx.final_s if final else ctx.probe_s, ctx.min_requests / (load * per_unit))
+        duration = ctx.duration(load * per_unit, final)
         rows = ctx.run_open(build(load, duration + ramp_s))
         return summarize([r for r in rows if ramp_s <= r.scheduled_s < ramp_s + duration], limits, duration)
     load, final, probes = _search_and_confirm(measure, ctx.min_requests / (ctx.probe_s * per_unit))
@@ -118,8 +134,7 @@ def single_stream(ctx: Ctx) -> dict:
     pool = ctx.pool("steady_interactive")
     _warmup(ctx, pool)
     order = random.Random(ctx.seed).sample(pool, len(pool))
-    reqs = [W.to_request(r, rid=f"{r['id']}#{k}") for k, r in enumerate(order * 50)]
-    rows, elapsed = ctx.run_closed(reqs, 1, ctx.final_s)
+    rows, elapsed = ctx.run_closed(_cycle(order), 1, ctx.final_s)
     s = summarize(rows, ctx.interactive, elapsed)
     return _result("single_stream", "tpot_p99_s", s["tpot_p99_s"], "lower", s, ttft_p99_s=s["ttft_p99_s"])
 
@@ -131,8 +146,7 @@ def saturated(ctx: Ctx, max_concurrency: int = 512) -> dict:
     order = random.Random(ctx.seed).sample(pool, len(pool))
     levels, best, c, misses = [], None, 1, 0
     while c <= max_concurrency:
-        reqs = [W.to_request(r, rid=f"{r['id']}#{c}.{k}") for k, r in enumerate(order * 200)]
-        rows, elapsed = ctx.run_closed(reqs, c, ctx.probe_s)
+        rows, elapsed = ctx.run_closed(_cycle(order, f"c{c}"), c, ctx.probe_s)
         s = summarize(rows, ctx.conversational, elapsed)
         levels.append({"concurrency": c, **s})
         if not s["valid"]:
@@ -144,11 +158,14 @@ def saturated(ctx: Ctx, max_concurrency: int = 512) -> dict:
             if misses >= 2:
                 break
         c *= 2
-    final = None
-    if best is not None:
-        reqs = [W.to_request(r, rid=f"{r['id']}#f{k}") for k, r in enumerate(order * 500)]
-        rows, elapsed = ctx.run_closed(reqs, best["concurrency"], ctx.final_s)
+    final, best = None, None
+    passing = sorted((lv for lv in levels if lv["meets_limits"]), key=lambda lv: -lv["good_req_per_s"])
+    for cand in passing[:3]:                       # confirm at full length; a short probe can flatter a level
+        rows, elapsed = ctx.run_closed(_cycle(order, f"f{cand['concurrency']}"), cand["concurrency"], ctx.final_s)
         final = summarize(rows, ctx.conversational, elapsed)
+        if final["meets_limits"] or not final["valid"]:
+            best = cand
+            break
     ok = final is not None and final["meets_limits"] and final["valid"]
     return _result("saturated", "goodput_req_per_s", final["good_req_per_s"] if ok else None, "higher",
                    final or (levels[-1] if levels else None), concurrency=best and best["concurrency"], levels=levels)
@@ -209,16 +226,16 @@ def overload(ctx: Ctx, factor: float = 2.0, rate: float | None = None) -> dict:
     request either completes or is explicitly rejected: silent drops, truncated streams and no-response are invalid."""
     pool = ctx.pool("steady_interactive")
     _warmup(ctx, pool)
-    def measure(r, duration):
-        duration = max(duration, ctx.min_requests / r)
+    def measure(r, final):
+        duration = ctx.duration(r, final)
         return summarize(ctx.run_open(W.poisson(pool, r, duration, ctx.seed)), ctx.conversational, duration)
     found = None
     if rate is None:
-        found = find_goodput(lambda r: measure(r, ctx.probe_s), ctx.min_requests / ctx.probe_s)
+        found = find_goodput(lambda r: measure(r, False), ctx.min_requests / ctx.probe_s)
         rate = found["goodput"]
     if rate is None:
         return _result("overload", "good_req_per_s", None, "higher", found["probes"][-1] if found else None)
-    s = measure(rate * factor, ctx.final_s)
+    s = measure(rate * factor, True)
     return _result("overload", "good_req_per_s", s["good_req_per_s"], "higher", s, offered_req_per_s=rate * factor,
                    explicit_rejections=s["error"], base_goodput_req_per_s=rate)
 

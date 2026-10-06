@@ -4,7 +4,6 @@ schedules built from it. Trace format (corpus/README.md): one request per line w
 """
 from __future__ import annotations
 
-import json
 import random
 from pathlib import Path
 
@@ -14,33 +13,31 @@ WORDS = ("river stone lantern harbor meadow copper signal winter garden orbit le
          "marble violet engine summit falcon quiet number amber circuit island paper").split()
 
 
-def load_trace(path: str | Path, prefix: str | None = None) -> list[dict]:
-    """Raw trace records, each with a stable `id` (`<class>-<split>-<line>`)."""
-    path = Path(path)
-    prefix = prefix or f"{path.parent.name}-{path.stem}"
-    recs = []
-    for k, line in enumerate(path.read_text().splitlines()):
-        if line.strip():
-            r = json.loads(line)
-            r["id"] = f"{prefix}-{k}"
-            recs.append(r)
-    return recs
-
-
 def corpus(root: str | Path, cls: str, split: str = "seen") -> list[dict]:
-    root = Path(root)
-    man = json.loads((root / "manifest.json").read_text())
-    return load_trace(root / man["classes"][cls][split], f"{cls}-{split}")
+    """Records of one (class, split) through the verified loader (every trace hash is checked against the
+    manifest; a changed trace refuses), each with a stable `id` (`<class>-<split>-<line>`)."""
+    from lab.corpus import load_trace
+    _, reqs = load_trace(cls, split, Path(root))
+    out = []
+    for k, r in enumerate(reqs):
+        d = r.to_dict()
+        d["messages"] = r.messages
+        d["build_prompt_tokens"] = r.build_prompt_tokens
+        d["id"] = f"{cls}-{split}-{k}"
+        out.append(d)
+    return out
 
 
 def corpus_classes(root: str | Path) -> list[str]:
-    return list(json.loads((Path(root) / "manifest.json").read_text())["classes"])
+    from lab.corpus import load_manifest
+    return list(load_manifest(Path(root)).classes)
 
 
 def corpus_version(root: str | Path | None) -> str | None:
     if root is None:
         return None
-    return json.loads((Path(root) / "manifest.json").read_text()).get("corpus_version")
+    from lab.corpus import load_manifest
+    return load_manifest(Path(root)).corpus_version
 
 
 def messages(rec: dict) -> list[dict]:

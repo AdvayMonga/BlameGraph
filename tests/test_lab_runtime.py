@@ -108,14 +108,14 @@ def test_a_bash_only_violation_is_caught_at_session_end(cfg):
 def test_scratch_files_do_not_stop_the_run(cfg):
     def script(n, ws: Path):
         (ws / "lab/runs/x").mkdir(parents=True)
-        (ws / "lab/runs/x/trace.json").write_text("{}")
+        (ws / "lab/runs/x/trace.json").write_text("{" + " " * 6_000_000 + "}")   # a profile bundle: big, and not the agent's
         (ws / "notes.txt").write_text("thinking")
         yield ("call", "test")
         yield ("reply", AgentReply({"status": "stop", "note": None}, 0.1, 1, None))
     p = ScriptedProvider(script)
     out = session.run(cfg, p)
     assert out["stopped"] == "agent" and dict(p.outputs)["test"].startswith("PASS")
-    assert set(next(ledger.records(cfg.ledger_root, kind="test"))["result"]["scratch_left_out"]) == {"lab/runs/x/trace.json", "notes.txt"}
+    assert set(next(ledger.records(cfg.ledger_root, kind="test"))["result"]["scratch_left_out"]) == {"notes.txt"}
 
 
 def test_a_raising_provider_is_charged_at_the_cap_and_recorded(cfg):

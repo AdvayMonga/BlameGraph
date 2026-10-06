@@ -19,7 +19,8 @@ from lab.safety import jail
 from lab.safety.surfaces import ALWAYS_DENY, HIDDEN, may_write
 
 IGNORED = ("*/__pycache__/*", "__pycache__/*", "*.pyc", ".pytest_cache/*", "*/.pytest_cache/*",
-           ".ruff_cache/*", "*/.ruff_cache/*", "*.egg-info/*", ".DS_Store", "*/.DS_Store")
+           ".ruff_cache/*", "*/.ruff_cache/*", "*.egg-info/*", ".DS_Store", "*/.DS_Store",
+           "lab/runs/*")          # profile bundles the tool copies in for the agent to read; often > MAX_FILE_BYTES
 MAX_FILE_BYTES = 5_000_000
 HF_HUB = Path.home() / ".cache" / "huggingface" / "hub"   # weights only; the token beside it stays unreadable
 
