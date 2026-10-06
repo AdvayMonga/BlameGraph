@@ -1,9 +1,8 @@
 # experiments/ — the experiment ledger
 
-One JSON file per experiment. `scripts/premerge_check.py` reads these: a change to
-`src/inference_server/` cannot reach `main` unless a record here names its commit and every
-gate is green. The record type is `Experiment` in
-[`research/schemas.py`](../src/inference_server/research/schemas.py).
+One JSON file per experiment (the research loop's ledger, 2026-09; that loop and its `premerge_check.py` were
+removed on 2026-10-02, inference-server tag `archive/research-loop`). Kept as the evidence behind the findings that
+cite them. `ranker-bakeoff/` is the pre-registered hypothesis-ranking bake-off behind `kb-20260926-5dea54d0`.
 
 | field | meaning |
 |---|---|
