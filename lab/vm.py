@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -20,6 +21,7 @@ POLL_S = 5.0             # between state and ssh probes
 START_TIMEOUT_S = 900.0
 STOP_TIMEOUT_S = 600.0
 SSH_TIMEOUT_S = 300.0
+MAX_MINUTES = int(os.environ.get("LAB_VM_MAX_MINUTES", "180"))   # hard wall-clock cap on any VM session
 
 
 @dataclass(frozen=True)
@@ -75,8 +77,61 @@ def start(vm: VM) -> Record:
     return _wait(vm, "running", START_TIMEOUT_S)
 
 
+def _watchdog_file(vm: VM) -> Path:
+    return KNOWN_HOSTS_DIR / f"{vm.name}.watchdog"
+
+
+def arm(vm: VM, record: Record, minutes: int = MAX_MINUTES) -> None:
+    """Three layers against a VM left running: a detached local watchdog that calls the provider's stop at the
+    deadline (powering off from inside does not end billing on Nebius), an in-VM `shutdown -h` as a last resort,
+    and (in `run`) a `timeout` around the command. Re-arming replaces the previous deadline."""
+    disarm(vm)
+    deadline = time.time() + minutes * 60
+    KNOWN_HOSTS_DIR.mkdir(parents=True, exist_ok=True)
+    log = open(KNOWN_HOSTS_DIR / f"{vm.name}.watchdog.log", "a")
+    pid = _spawn_watchdog([sys.executable, "-m", "lab.vm", "watchdog", "--deadline", f"{deadline:.0f}"], log)
+    _watchdog_file(vm).write_text(f"{pid} {deadline:.0f}\n")
+    try:
+        ssh(vm, record, f"sudo shutdown -c >/dev/null 2>&1; sudo shutdown -h +{minutes} >/dev/null 2>&1 || true",
+            check=False, capture=True, timeout_s=30)
+    except subprocess.TimeoutExpired:
+        pass
+    print(f"[lab.vm] {vm.name} will be stopped by {time.strftime('%H:%M', time.localtime(deadline))} "
+          f"({minutes} min) unless re-armed or stopped first", file=sys.stderr)
+
+
+def _spawn_watchdog(argv: list[str], log) -> int:
+    """Detached, in its own session, so it outlives the shell that started it."""
+    proc = subprocess.Popen(argv, cwd=engine.ENV_ROOT, env=os.environ, stdin=subprocess.DEVNULL, stdout=log,
+                            stderr=log, start_new_session=True)
+    return proc.pid
+
+
+def disarm(vm: VM) -> None:
+    f = _watchdog_file(vm)
+    if f.exists():
+        try:
+            os.kill(int(f.read_text().split()[0]), signal.SIGTERM)
+        except (ProcessLookupError, ValueError, PermissionError):
+            pass
+        f.unlink()
+
+
+def watchdog(deadline: float) -> int:
+    """Sleep until `deadline` (epoch seconds), then stop the VM if it is still running."""
+    time.sleep(max(0.0, deadline - time.time()))
+    vm = VM()
+    record = vm.provider.get(vm.name)
+    if record is not None and record.state == "running":
+        print(f"[lab.vm watchdog] deadline reached: stopping {vm.name}", file=sys.stderr)
+        stop(vm)
+    _watchdog_file(vm).unlink(missing_ok=True)
+    return 0
+
+
 def stop(vm: VM) -> None:
-    """Ends GPU billing. Crusoe: stop, disk kept. Verda: delete instance and disk (its hibernate cannot be restored)."""
+    """Ends GPU billing. Crusoe/Nebius: stop, disk kept. Verda: delete instance and disk (its hibernate cannot be restored)."""
+    disarm(vm)
     record = vm.provider.get(vm.name)
     if record is None or record.state == "stopped":
         return
@@ -153,11 +208,13 @@ def local_sha() -> str | None:
 
 
 def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | None = None,
-        push_tree: bool = True, where: str = "engine") -> int:
+        push_tree: bool = True, where: str = "engine", keep: bool = False, minutes: int = MAX_MINUTES) -> int:
     """Start the VM if needed, push both trees, run `command` in the engine dir (or `where="env"`: this environment's)
-    with the engine's venv on PATH, fetch `fetch_dir` from that dir. Leaves the VM running."""
+    with the engine's venv on PATH under a `minutes` wall-clock timeout, fetch `fetch_dir` from that dir, then stop
+    the VM (`keep=True` leaves it running, with the watchdog armed)."""
     record = start(vm)
     wait_ssh(vm, record)
+    arm(vm, record, minutes)
     if push_tree:
         push(vm, record)
     sha = local_sha()
@@ -165,23 +222,41 @@ def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | Non
     t0 = time.monotonic()
     cwd = vm.env_dir if where == "env" else vm.remote_dir
     venv_bin = vm.remote_dir.replace("~", "$HOME", 1) + "/.venv/bin"      # no tilde expansion inside quotes
-    out = ssh(vm, record, f'cd {cwd} && {env}PATH="{venv_bin}:$PATH" {command}', check=False)
-    print(f"[lab.vm] exit {out.returncode} after {time.monotonic() - t0:.0f}s on {vm.name}",
-          file=sys.stderr)
+    try:
+        out = ssh(vm, record, f'cd {cwd} && {env}PATH="{venv_bin}:$PATH" timeout --signal=TERM --kill-after=60 '
+                              f'{minutes}m {command}', check=False, timeout_s=minutes * 60 + 300)
+        code = out.returncode
+    except subprocess.TimeoutExpired:
+        code = 124
+    print(f"[lab.vm] exit {code} after {time.monotonic() - t0:.0f}s on {vm.name}"
+          + (" (hit the wall-clock cap)" if code == 124 else ""), file=sys.stderr)
     if fetch_dir:
-        fetch(vm, record, fetch_dir, local or engine.ENV_ROOT / "lab" / "runs", base=cwd)
-    return out.returncode
+        try:
+            fetch(vm, record, fetch_dir, local or engine.ENV_ROOT / "lab" / "runs", base=cwd)
+        except ProviderError as e:
+            print(f"[lab.vm] fetch failed: {e}", file=sys.stderr)
+    if keep:
+        arm(vm, record, minutes)
+    else:
+        stop(vm)
+        print(f"[lab.vm] {vm.name} stopped (GPU billing ended; --keep leaves it running)", file=sys.stderr)
+    return code
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("(")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status", help="state, type and ip")
-    sub.add_parser("start", help="create or start, wait for ssh")
+    st = sub.add_parser("start", help="create or start, wait for ssh, arm the auto-stop")
+    st.add_argument("--minutes", type=int, default=MAX_MINUTES, help=f"auto-stop after this long (default {MAX_MINUTES})")
+    wd = sub.add_parser("watchdog", help="(internal) stop the VM at --deadline if still running")
+    wd.add_argument("--deadline", type=float, required=True)
     sub.add_parser("stop", help="end GPU billing; disk kept")
     sub.add_parser("types", help="what the account can rent right now")
     sub.add_parser("setup", help="run lab/vm-setup.sh on the VM (builds the engine's venv)")
-    r = sub.add_parser("run", help="push the tree, run a command in it, fetch an output dir")
+    r = sub.add_parser("run", help="push both trees, run a command under a wall-clock cap, fetch an output dir, stop")
+    r.add_argument("--keep", action="store_true", help="leave the VM running afterwards (watchdog stays armed)")
+    r.add_argument("--minutes", type=int, default=MAX_MINUTES, help=f"wall-clock cap for the command and the VM (default {MAX_MINUTES})")
     r.add_argument("--fetch", help="remote dir, relative to the repo, to bring back")
     r.add_argument("--local", help="where to put it (default lab/runs)")
     r.add_argument("--no-push", action="store_true")
@@ -201,8 +276,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "start":
         record = start(vm)
         wait_ssh(vm, record)
+        arm(vm, record, args.minutes)
         print(ssh_target(vm, record))
         return 0
+    if args.cmd == "watchdog":
+        return watchdog(args.deadline)
     if args.cmd == "stop":
         stop(vm)
         print(f"{vm.name}: {p.stop_word}d, GPU billing ended")
@@ -211,13 +289,13 @@ def main(argv: list[str] | None = None) -> int:
         print(p.types(), end="")
         return 0
     if args.cmd == "setup":
-        return run(vm, f"bash {vm.env_dir}/lab/vm-setup.sh {vm.remote_dir}")
+        return run(vm, f"bash {vm.env_dir}/lab/vm-setup.sh {vm.remote_dir}", keep=True)
     words = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not words:
         ap.error("run needs a command")
     return run(vm, " ".join(shlex.quote(w) for w in words), fetch_dir=args.fetch,
                local=Path(args.local) if args.local else None, push_tree=not args.no_push,
-               where="env" if args.env else "engine")
+               where="env" if args.env else "engine", keep=args.keep, minutes=args.minutes)
 
 
 if __name__ == "__main__":

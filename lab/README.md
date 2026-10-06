@@ -110,8 +110,15 @@ commands either way:
 `run` rsyncs the working tree minus `.git` and everything `.gitignore` excludes (what is on disk
 here is what gets measured, secrets and weights stay home), runs the command in the repo dir with
 the engine's `.venv/bin` first on PATH, and brings `--fetch` (relative to the dir it ran in) back under
-`lab/runs/`. Both trees are pushed: the engine to `LAB_VM_DIR`, this repo to `LAB_VM_ENV_DIR`. The
-VM is left running; `stop` is yours. Do not run `uv sync` on the box: it would put CPU torch back.
+`lab/runs/`. Both trees are pushed: the engine to `LAB_VM_DIR`, this repo to `LAB_VM_ENV_DIR`.
+Do not run `uv sync` on the box: it would put CPU torch back.
+
+**A VM is never left running by accident.** `run` stops the VM when its command ends (`--keep` leaves it up).
+Every session has a wall-clock cap, `LAB_VM_MAX_MINUTES` (default 180, `--minutes` per call): the command runs under
+`timeout`, a detached local watchdog calls the provider's stop at the deadline (`start` and `--keep` arm it; each `run`
+re-arms it; `stop` disarms it), and the VM schedules its own `shutdown -h` as a last resort. Powering off from inside
+does not end billing on Nebius, which is why the watchdog goes through the provider. A stopped VM still bills its
+disk; `stop` on Verda deletes the VM and disk outright. Cut an experiment short rather than extend the cap.
 
 Credentials never live in the repo. Verda: `VERDA_CLIENT_ID` and `VERDA_CLIENT_SECRET` (console >
 Keys > Cloud API credentials) in your shell. Nebius: `nebius profile create`. Crusoe: `crusoe config init`.

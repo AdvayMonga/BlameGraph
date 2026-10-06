@@ -58,8 +58,17 @@ def fake(tmp_path, monkeypatch):
     monkeypatch.setenv("LAB_VM_KEYFILE", str(tmp_path / "key.pub"))
     monkeypatch.setattr(labvm, "KNOWN_HOSTS_DIR", tmp_path / "kh")
     monkeypatch.setattr(labvm, "POLL_S", 0.0)
+    monkeypatch.setattr(labvm, "_spawn_watchdog", _fake_spawn)     # the watchdog: recorded, never spawned
     monkeypatch.setattr(labvm, "SSH_TIMEOUT_S", 0.05)
     return tmp_path
+
+
+SPAWNED: list = []
+
+
+def _fake_spawn(argv, log):
+    SPAWNED.append(argv)
+    return 4242
 
 
 def calls(tmp_path):
@@ -114,9 +123,15 @@ def test_run_pushes_runs_in_repo_dir_and_fetches(fake, monkeypatch):
     assert rsyncs[1][-1] == "u@10.0.0.7:~/BlameGraph/" and "--filter=:- .gitignore" in rsyncs[1]    # this environment
     assert rsyncs[2][-2] == "u@10.0.0.7:~/repo/lab/runs/"
     sshs = [c for c in log if c[0] == "ssh"]
-    cmd = sshs[-1][-1]
-    assert cmd.startswith("cd ~/repo && LAB_GIT_SHA=") and cmd.endswith('PATH="$HOME/repo/.venv/bin:$PATH" python -m lab.profile')
+    cmd = [c for c in sshs if c[-1].startswith("cd ")][-1][-1]
+    assert cmd.startswith("cd ~/repo && LAB_GIT_SHA=")
+    assert cmd.endswith('PATH="$HOME/repo/.venv/bin:$PATH" timeout --signal=TERM --kill-after=60 180m python -m lab.profile')
     assert any(a.startswith("UserKnownHostsFile=") and a.endswith("t4.known_hosts") for a in sshs[-1])
+    # the VM is stopped afterwards by default, and the auto-stop was armed on the way in
+    assert vm.provider.get("t4").state == "stopped"
+    assert any("shutdown -h +180" in c[-1] for c in sshs)
+    assert SPAWNED and SPAWNED[-1][-3:-1] == ["watchdog", "--deadline"]
+    assert not labvm._watchdog_file(vm).exists()                     # stop disarms it
 
 
 def test_run_in_the_environment_dir(fake):
@@ -124,9 +139,28 @@ def test_run_in_the_environment_dir(fake):
     assert labvm.run(vm, "python -m regimes run all --url http://localhost:8000", fetch_dir="out", local=fake / "o",
                      where="env") == 0
     log = calls(fake)
-    cmd = [c for c in log if c[0] == "ssh"][-1][-1]
-    assert cmd.startswith("cd ~/env && ") and 'PATH="$HOME/repo/.venv/bin:$PATH" python -m regimes' in cmd
+    cmd = [c for c in log if c[0] == "ssh" and c[-1].startswith("cd ")][-1][-1]
+    assert cmd.startswith("cd ~/env && ") and 'PATH="$HOME/repo/.venv/bin:$PATH" timeout --signal=TERM --kill-after=60 180m python -m regimes' in cmd
     assert [c for c in log if c[0] == "rsync"][-1][-2] == "u@10.0.0.7:~/env/out/"
+
+
+def test_keep_leaves_the_vm_running_with_the_watchdog_armed(fake):
+    vm = labvm.VM(name="t4k", user="u", remote_dir="~/repo")
+    assert labvm.run(vm, "true", keep=True, minutes=45) == 0
+    assert vm.provider.get("t4k").state == "running"
+    pid, deadline = labvm._watchdog_file(vm).read_text().split()
+    assert pid == "4242" and 0 < float(deadline) - labvm.time.time() <= 45 * 60 + 1
+    assert any("shutdown -h +45" in c[-1] for c in calls(fake) if c[0] == "ssh")
+    assert "45m true" in [c for c in calls(fake) if c[0] == "ssh" and c[-1].startswith("cd ")][-1][-1]
+
+
+def test_watchdog_stops_a_running_vm_at_its_deadline(fake, monkeypatch):
+    vm = labvm.VM(name="t4w")
+    labvm.start(vm)
+    assert vm.provider.get("t4w").state == "running"
+    monkeypatch.setenv("LAB_VM", "t4w")
+    assert labvm.watchdog(labvm.time.time() - 1) == 0
+    assert vm.provider.get("t4w").state == "stopped"
 
 
 def test_run_returns_the_remote_exit_code_and_still_fetches(fake, monkeypatch):
