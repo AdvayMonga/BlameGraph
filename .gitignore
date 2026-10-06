@@ -11,3 +11,7 @@ venv/
 .vscode/
 .idea/
 .vibe-wise/
+# lab state: the ledger and run outputs stay local
+lab/ledger/
+lab/runs/
+knowledge/evidence/benchmarks/results/

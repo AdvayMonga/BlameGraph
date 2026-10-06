@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from canaries.cheat_proxy import serve  # noqa: E402
 from fake_engine import make_server, spawn  # noqa: E402
-from regimes import suite, workload as W  # noqa: E402
+from regimes import runner, suite, workload as W  # noqa: E402
 from regimes.client import Request, send, wall_clock  # noqa: E402
 from regimes.runner import Limits, find_goodput, run_open, summarize  # noqa: E402
 
@@ -90,19 +90,31 @@ def test_workload_builders():
     assert [r.at_s for r in W.replay(trace, 2.0)][:3] == [0.0, 0.5, 1.0]
     lo, hi = W.peak_window(trace + [{"id": "b", "prompt": "p", "arrival_s": 500.0 + k / 10, "max_tokens": 8} for k in range(30)])
     assert lo < 500 < hi
+    from lab.corpus import CorpusError, TraceRequest, WorkloadClass, build_manifest, write_trace
     with tempfile.TemporaryDirectory() as d:
-        (Path(d) / "spike").mkdir()
-        (Path(d) / "spike" / "seen.jsonl").write_text("\n".join(json.dumps(t) for t in trace))
-        (Path(d) / "manifest.json").write_text(json.dumps({"corpus_version": "v1", "classes": {"spike": {"seen": "spike/seen.jsonl"}}}))
+        d = Path(d)
+        cls = {"spike": WorkloadClass("spike", "", 2000.0, None, 1.0, "spike/seen.jsonl", "spike/heldout.jsonl")}
+        for split in ("seen", "heldout"):
+            write_trace(d / "spike" / f"{split}.jsonl",
+                        [TraceRequest(float(k), f"s{k}", 0, f"p{k}", 8, build_prompt_tokens=3) for k in range(10)])
+        m = build_manifest(cls, d)
+        (d / "manifest.json").write_text(json.dumps(m.to_dict(), indent=2))
         recs = W.corpus(d, "spike")
-        assert len(recs) == 10 and recs[0]["id"] == "spike-seen-0" and W.corpus_version(d) == "v1"
+        assert len(recs) == 10 and recs[0]["id"] == "spike-seen-0" and recs[0]["build_prompt_tokens"] == 3
+        assert W.corpus_version(d) == m.corpus_version and W.corpus_classes(d) == ["spike"]
+        (d / "spike" / "seen.jsonl").write_text("{}\n")             # a changed trace refuses, it is a new version
+        try:
+            W.corpus(d, "spike"); raise AssertionError("tampered trace loaded")
+        except CorpusError:
+            pass
 
 
 def test_every_regime_runs_on_a_fake_engine():
     proc, url = spawn(slots=2, token_s=0.005, out_tokens=10)       # ~40 req/s capacity
-    saved, think = dict(suite.TIERS["short"]), suite.THINK_S
+    saved, think, lag = dict(suite.TIERS["short"]), suite.THINK_S, runner.MAX_CLIENT_LAG_S
     suite.TIERS["short"].update(probe_s=1.0, final_s=2.0)
     suite.THINK_S = 0.3
+    runner.MAX_CLIENT_LAG_S = 0.05      # wiring test; client precision is test_open_loop_keeps_its_schedule's job
     try:
         tight = Limits(ttft_s=0.25, tpot_s=0.05)                  # 1 s probes only see overload against a tight TTFT
         ctx = suite.Ctx(url, "m", min_requests=10, interactive=tight, conversational=tight)
@@ -112,7 +124,7 @@ def test_every_regime_runs_on_a_fake_engine():
             assert res["value"] is not None, (name, res)
     finally:
         suite.TIERS["short"].update(saved)
-        suite.THINK_S = think
+        suite.THINK_S, runner.MAX_CLIENT_LAG_S = think, lag
         proc.kill()
 
 

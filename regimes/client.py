@@ -6,8 +6,8 @@ reported separately as `lag_s`.
 """
 from __future__ import annotations
 
+import http.client
 import json
-import socket
 import time
 import urllib.error
 import urllib.request
@@ -27,7 +27,7 @@ class Request:
 @dataclass
 class Row:
     id: str
-    status: str                       # ok | error (explicit HTTP rejection) | silent_drop | truncated | crash
+    status: str                       # ok | error (explicit 4xx/503 rejection) | silent_drop | truncated | crash (5xx, no response)
     scheduled_s: float
     lag_s: float                      # actual send - scheduled send
     ttft_s: float | None = None
@@ -83,11 +83,13 @@ def send(url: str, model: str, req: Request, scheduled: float, clock, timeout: f
                         parts.append(text)
                     finish = ch.get("finish_reason") or finish
     except urllib.error.HTTPError as e:
-        row.status, row.http_status, row.detail = "error", e.code, e.read()[:200].decode("utf-8", "replace")
+        explicit = e.code < 500 or e.code == 503          # a deliberate rejection; other 5xx is the server failing
+        row.status, row.http_status = ("error" if explicit else "crash"), e.code
+        row.detail = e.read()[:200].decode("utf-8", "replace")
         row.e2e_s = clock() - scheduled
         return row
-    except (urllib.error.URLError, ConnectionError, socket.timeout, TimeoutError, json.JSONDecodeError) as e:
-        row.detail = f"{type(e).__name__}: {e}"[:200]
+    except (urllib.error.URLError, OSError, http.client.HTTPException, json.JSONDecodeError, ValueError) as e:
+        row.detail = f"{type(e).__name__}: {e}"[:200]   # includes a stream that dies mid-way (IncompleteRead)
         row.e2e_s = clock() - scheduled
         return row
     end = clock()
@@ -113,7 +115,7 @@ def recount(row: Row, count_tokens=None) -> Row:
     if count_tokens is not None:
         row.n_tokens = len(count_tokens(row.text)) if row.text else 0
     row.tpot_s = (row.e2e_s - row.ttft_s) / (row.n_tokens - 1) if row.ttft_s is not None and row.n_tokens > 1 else None
-    return row
+    return row                                    # a one-token answer has no TPOT and never meets the limits
 
 
 def wall_clock():

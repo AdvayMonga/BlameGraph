@@ -83,7 +83,10 @@ def _fire_all(url, model, reqs: list[Request], timeout: float, t0: float, lead_s
 
     def fire(i):
         _wait_until(clock, reqs[i].at_s)
-        rows[i] = send(url, model, reqs[i], reqs[i].at_s, clock, timeout)
+        try:
+            rows[i] = send(url, model, reqs[i], reqs[i].at_s, clock, timeout)
+        except Exception as e:                    # the client itself failed: still one row, never a lost request
+            rows[i] = Row(reqs[i].id, "crash", reqs[i].at_s, 0.0, detail=f"client {type(e).__name__}: {e}"[:200])
 
     threads = []
     for i, req in enumerate(reqs):
@@ -102,20 +105,25 @@ def _wait_until(clock, t: float, spin_s: float = 0.002):
         time.sleep(d - spin_s if d > spin_s + 0.001 else 0)
 
 
-def run_closed(url: str, model: str, requests: list[Request], concurrency: int, duration_s: float | None = None,
+def run_closed(url: str, model: str, requests, concurrency: int, duration_s: float | None = None,
                timeout: float = 600, count_tokens=None) -> tuple[list[Row], float]:
-    """`concurrency` clients take requests in order until the list (or `duration_s`) runs out.
-    Returns (rows, elapsed seconds). Each request's scheduled time is when its client became free."""
+    """`concurrency` clients take requests in order from `requests` (any iterable, consumed lazily) until it (or
+    `duration_s`) runs out. Returns (rows, elapsed seconds). A request's scheduled time is when its client became free."""
     clock = wall_clock()
-    lock, nxt, rows = threading.Lock(), [0], []
+    lock, it, rows = threading.Lock(), iter(requests), []
 
     def client():
         while True:
             with lock:
-                if nxt[0] >= len(requests) or (duration_s is not None and clock() >= duration_s):
+                if duration_s is not None and clock() >= duration_s:
                     return
-                req = requests[nxt[0]]; nxt[0] += 1
-            row = send(url, model, req, clock(), clock, timeout, count_tokens)
+                req = next(it, None)
+            if req is None:
+                return
+            try:
+                row = send(url, model, req, clock(), clock, timeout, count_tokens)
+            except Exception as e:
+                row = Row(req.id, "crash", clock(), 0.0, detail=f"client {type(e).__name__}: {e}"[:200])
             with lock:
                 rows.append(row)
 
@@ -141,7 +149,7 @@ def summarize(rows: list[Row], limits: Limits, elapsed_s: float | None = None) -
     ttft = [r.ttft_s for r in ok if r.ttft_s is not None]
     tpot = [r.tpot_s for r in ok if r.tpot_s is not None]
     meets = [r for r in ok if r.ttft_s is not None and r.ttft_s <= limits.ttft_s
-             and (r.tpot_s is None or r.tpot_s <= limits.tpot_s)]
+             and r.tpot_s is not None and r.tpot_s <= limits.tpot_s]
     lags = [r.lag_s for r in rows]
     span = elapsed_s if elapsed_s is not None else max((r.scheduled_s + (r.e2e_s or 0) for r in rows), default=0.0)
     counts = {s: sum(r.status == s for r in rows) for s in ("ok", "error", "silent_drop", "truncated", "crash")}
@@ -165,9 +173,12 @@ def summarize(rows: list[Row], limits: Limits, elapsed_s: float | None = None) -
     }
 
 
-def find_goodput(probe: Callable[[float], dict], start: float, max_probes: int = 10, rel_tol: float = 0.1) -> dict:
+def find_goodput(probe: Callable[[float], dict], start: float, max_probes: int = 10, rel_tol: float = 0.1,
+                 min_load: float | None = None) -> dict:
     """Highest load x with probe(x)["meets_limits"]: double from `start` until a probe fails, then bisect.
-    An invalid probe (client bottleneck, silent drops, crashes) stops the search. Returns {goodput, probes}."""
+    An invalid probe (client bottleneck, silent drops, crashes) stops the search, as does halving below
+    `min_load` (default start/16: a server that fails there has no goodput worth finding). Returns {goodput, probes}."""
+    min_load = start / 16 if min_load is None else min_load
     probes, lo, hi, x = [], 0.0, None, start
     for _ in range(max_probes):
         s = probe(x)
@@ -182,6 +193,8 @@ def find_goodput(probe: Callable[[float], dict], start: float, max_probes: int =
             x *= 2
         elif lo == 0.0:
             x = hi / 2
+            if x < min_load:
+                break
         elif (hi - lo) / hi <= rel_tol:
             break
         else:

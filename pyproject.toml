@@ -1,0 +1,30 @@
+[project]
+name = "blamegraph"
+version = "0.1.0"
+description = "The environment for autoresearch loops that optimize LLM inference: lab, workloads, load regimes, gates and referee"
+requires-python = ">=3.11"
+dependencies = []          # the referee and the regimes are stdlib; heavier pieces are extras
+
+[project.optional-dependencies]
+agents = ["claude-agent-sdk>=0.2.161"]                       # lab/agent.py: the Claude provider
+correctness = ["huggingface_hub", "pandas", "pyarrow", "transformers"]   # task sets, tokenizer
+corpus = ["pyarrow>=17"]                                      # corpus/fetch_traces.py reads WildChat shards
+kernels = ["torch>=2.4"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.16.9"]
+
+[tool.setuptools]
+packages = []
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+python_files = ["test_lab_*.py"]   # the lab's pytest suite; the other tests are scripts: python3 tests/<file>.py
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["lab/ledger", "lab/runs", "data"]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["F"]
