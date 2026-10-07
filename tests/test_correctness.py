@@ -105,7 +105,7 @@ def test_client_contract_against_fake_server():
     import json
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
-    from correctness.client import generate, score_tokens
+    from correctness.client import Api, NoLogprobs, generate, score_tokens
 
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -117,7 +117,7 @@ def test_client_contract_against_fake_server():
                 plp = [None] + [{str(t): {"logprob": -0.1}, str(t + 1): {"logprob": -2.5}} for t in body["prompt"][1:]]
                 out = {"choices": [{"text": "x", "prompt_logprobs": plp}]}
             else:
-                assert body["chat_template_kwargs"] == {"enable_thinking": False} and body["temperature"] == 0.0
+                assert body["chat_template_kwargs"] == {"enable_thinking": False} and body["temperature"] == 0.0  # from Api
                 out = {"choices": [{"message": {"content": "The answer is (C)."}, "finish_reason": "stop"}],
                        "usage": {"completion_tokens": 7}}
             data = json.dumps(out).encode()
@@ -129,9 +129,102 @@ def test_client_contract_against_fake_server():
     try:
         pos = score_tokens(url, "m", [5, 9, 11, 3], start=2, top_k=5)
         assert [p.token for p in pos] == [11, 3] and abs(pos[0].logprob + 0.1) < 1e-9 and len(pos[0].top) == 2
-        g = generate(url, "m", [{"role": "user", "content": "q"}])
+        api = Api("vllm", {"enable_thinking": False})
+        g = generate(url, "m", [{"role": "user", "content": "q"}], api=api)
         assert g["completion_tokens"] == 7 and score("mmlu_pro", g["text"], "C")
+        try:
+            score_tokens(url, "m", [5, 9, 11], start=1, api=Api("none"))
+            raise AssertionError("api none must refuse to score")
+        except NoLogprobs:
+            pass
     finally:
+        srv.shutdown()
+
+
+def test_verdict_is_three_valued():
+    ln = length_ratio([10], [10])
+    # under the line but the net loss is within churn: inconclusive, never a pass
+    churn = {"math": {"n": 1000, "lost": 40, "gained": 32, "ref_accuracy": 0.700, "cand_accuracy": 0.692}}
+    r = evaluate(None, churn, ln, CONS)
+    assert r["verdict"] == "inconclusive" and r["passed"] is False and r["gates"]["accuracy"]["passed"] is None
+    assert "within run-to-run churn" in r["reasons"][0] and len(r["gates"]["accuracy"]["evidence"]["score_ratio_ci95"]) == 2
+    # under the line and significant: fail
+    loss = {"math": {"n": 1000, "lost": 60, "gained": 10, "ref_accuracy": 0.700, "cand_accuracy": 0.650}}
+    assert evaluate(None, loss, ln, CONS)["verdict"] == "fail"
+    # unanswered items make even a good ratio inconclusive
+    good = {"math": {"n": 1000, "lost": 10, "gained": 10, "ref_accuracy": 0.7, "cand_accuracy": 0.7}}
+    r = evaluate(None, good, ln, CONS, unanswered=3)
+    assert r["verdict"] == "inconclusive" and "3 item(s) unanswered" in r["reasons"][0]
+    assert evaluate(None, good, ln, CONS)["verdict"] == "pass"
+    # no logprobs: divergence is a fact that says so, not a gate
+    assert evaluate(None, good, ln, CONS)["metrics"]["divergence"]["not_run"]
+
+
+def test_sglang_adapter_scores_tokens():
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from correctness.client import Api, score_tokens
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            assert self.path == "/generate" and body["return_logprob"] and body["logprob_start_len"] == 2
+            ids = body["input_ids"]
+            own = [[-0.1 * (i + 1), t, "x"] for i, t in enumerate(ids[2:])]
+            tops = [[[-0.05, t + 1, "y"], [-0.1 * (i + 1), t, "x"]] for i, t in enumerate(ids[2:])]
+            data = json.dumps({"text": "", "meta_info": {"input_token_logprobs": own, "input_top_logprobs": tops}}).encode()
+            self.send_response(200); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        pos = score_tokens(f"http://127.0.0.1:{srv.server_address[1]}", "m", [5, 9, 11, 3], start=2, top_k=5, api=Api("sglang"))
+        assert [p.token for p in pos] == [11, 3] and abs(pos[0].logprob + 0.1) < 1e-9 and pos[0].top == {12: -0.05, 11: -0.1}
+    finally:
+        srv.shutdown()
+
+
+def test_shed_requests_are_retried_and_persistent_errors_are_unanswered(monkeypatch=None):
+    import json
+    import tempfile
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from correctness import run as crun
+    seen = {}
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            q = json.loads(self.rfile.read(int(self.headers["Content-Length"])))["messages"][0]["content"]
+            seen[q] = seen.get(q, 0) + 1
+            if q == "shed" and seen[q] == 1:
+                self.send_response(429); self.send_header("Content-Length", "0"); self.end_headers(); return
+            if q == "broken":
+                self.send_response(500); self.send_header("Content-Length", "0"); self.end_headers(); return
+            data = json.dumps({"choices": [{"message": {"content": "The answer is (C)."}, "finish_reason": "stop"}],
+                               "usage": {"completion_tokens": 7}}).encode()
+            self.send_response(200); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    crun.RETRIES = 2
+    try:
+        items = [{"id": k, "messages": [{"role": "user", "content": k}], "max_tokens": 8} for k in ("ok", "shed", "broken")]
+        with tempfile.TemporaryDirectory() as d:
+            out = crun.collect(f"http://127.0.0.1:{srv.server_address[1]}", "m", items, Path(d) / "o.jsonl", 2)
+            assert out["shed"]["text"] and seen["shed"] == 2                # retried once, then answered
+            assert out["broken"].get("error", "").startswith("HTTPError") and out["broken"]["text"] == ""
+            again = crun.collect(f"http://127.0.0.1:{srv.server_address[1]}", "m", items, Path(d) / "o.jsonl", 2)
+            assert seen["ok"] == 1 and seen["broken"] == 2                  # resume: answered items skipped, errored ones retried
+            assert again["broken"].get("error")
+    finally:
+        crun.RETRIES = 6
         srv.shutdown()
 
 
@@ -145,8 +238,10 @@ def test_verdict_file_rejudges_saved_result():
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"result": saved}, f)
     assert verdict_file(f.name, Thresholds(min_score_ratio=0.98))["passed"]
-    strict = verdict_file(f.name, Thresholds())
-    assert not strict["passed"] and strict["reasons"][0].startswith("accuracy: pooled score ratio 0.9886")
+    strict = verdict_file(f.name, Thresholds())                   # 692/700 with 20 lost, 12 gained: not significant
+    assert strict["verdict"] == "inconclusive" and "pooled score ratio 0.9886" in strict["reasons"][0]
+    strict = verdict_file(f.name, Thresholds(alpha=0.5))
+    assert strict["verdict"] == "fail" and strict["reasons"][0].startswith("accuracy: pooled score ratio 0.9886")
 
 
 def test_stream_role_chunk_is_not_a_first_token():

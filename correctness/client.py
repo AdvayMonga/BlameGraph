@@ -1,20 +1,38 @@
 """Collect what the gate needs from an OpenAI-compatible server (stdlib only).
 
-Two calls, mirroring vLLM's API so one client serves the reference (vLLM, BF16, VLLM_BATCH_INVARIANT=1) and the
-candidate engine:
-  generate()       greedy chat completion, thinking off   -> text, completion token count (for flips and length)
-  score_tokens()   POST /v1/completions {prompt: [token ids], max_tokens: 1, prompt_logprobs: k}
-                   -> choices[0].prompt_logprobs: one entry per prompt token (first is null), each
-                      {"<token id>": {"logprob": float, ...}, ...} containing at least the actual token.
-A candidate server must implement score_tokens' contract for the divergence check. Verify field names on the
-first GPU run against the vLLM version in use.
+  generate()        greedy chat completion -> text, completion token count (for flips and length)
+  generate_stream() the same, streamed -> first real token text, full text (for consistency)
+  score_tokens()    teacher-forced scoring of a token sequence -> one Position per scored token
+                    (the token's own logprob and the top-k alternatives), through the engine's `Api`:
+    vllm    POST /v1/completions {prompt: [ids], max_tokens: 1, prompt_logprobs: k}; vLLM and engines that copy it
+    sglang  POST /generate {input_ids, return_logprob, logprob_start_len, top_logprobs_num}
+    none    the engine exposes no logprobs: score_tokens raises NoLogprobs and divergence is reported as not run
+`Api.chat_kwargs` (e.g. {"enable_thinking": false}) rides along as chat_template_kwargs on every chat request.
 """
 from __future__ import annotations
 
 import json
 import urllib.request
+from dataclasses import dataclass, field
 
 from .divergence import Position
+
+
+@dataclass(frozen=True)
+class Api:
+    name: str = "vllm"
+    chat_kwargs: dict = field(default_factory=dict)
+
+    @classmethod
+    def from_target(cls, server, target) -> "Api":
+        return cls(server.api, dict(target.chat_kwargs))
+
+
+class NoLogprobs(RuntimeError):
+    """The engine's API exposes no teacher-forced logprobs; the divergence check cannot run against it."""
+
+
+DEFAULT = Api()
 
 
 def _post(url: str, body: dict, timeout: float = 600) -> dict:
@@ -23,20 +41,25 @@ def _post(url: str, body: dict, timeout: float = 600) -> dict:
         return json.loads(r.read())
 
 
-def generate(base_url: str, model: str, messages: list[dict], max_tokens: int = 2048) -> dict:
-    """Greedy, thinking off. Returns {"text", "completion_tokens", "finish_reason"}."""
-    out = _post(f"{base_url.rstrip('/')}/v1/chat/completions", {
-        "model": model, "messages": messages, "max_tokens": max_tokens, "temperature": 0.0, "top_p": 1.0,
-        "chat_template_kwargs": {"enable_thinking": False}})
+def _chat_body(api: Api, model: str, messages: list[dict], max_tokens: int) -> dict:
+    body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": 0.0, "top_p": 1.0}
+    if api.chat_kwargs:
+        body["chat_template_kwargs"] = dict(api.chat_kwargs)
+    return body
+
+
+def generate(base_url: str, model: str, messages: list[dict], max_tokens: int = 2048, api: Api = DEFAULT) -> dict:
+    """Greedy. Returns {"text", "completion_tokens", "finish_reason"}."""
+    out = _post(f"{base_url.rstrip('/')}/v1/chat/completions", _chat_body(api, model, messages, max_tokens))
     ch = out["choices"][0]
     return {"text": ch["message"]["content"] or "", "completion_tokens": (out.get("usage") or {}).get("completion_tokens"),
             "finish_reason": ch.get("finish_reason")}
 
 
-def generate_stream(base_url: str, model: str, messages: list[dict], max_tokens: int = 2048) -> dict:
+def generate_stream(base_url: str, model: str, messages: list[dict], max_tokens: int = 2048,
+                    api: Api = DEFAULT) -> dict:
     """Same request, streamed. Returns {"first_token_text": first non-role chunk's text, "text": full text}."""
-    body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": 0.0, "top_p": 1.0,
-            "stream": True, "chat_template_kwargs": {"enable_thinking": False}}
+    body = {**_chat_body(api, model, messages, max_tokens), "stream": True}
     req = urllib.request.Request(f"{base_url.rstrip('/')}/v1/chat/completions", data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     first, parts = None, []
@@ -54,9 +77,16 @@ def generate_stream(base_url: str, model: str, messages: list[dict], max_tokens:
     return {"first_token_text": first, "text": "".join(parts)}
 
 
-def score_tokens(base_url: str, model: str, token_ids: list[int], start: int, top_k: int = 20) -> list[Position]:
+def score_tokens(base_url: str, model: str, token_ids: list[int], start: int, top_k: int = 20,
+                 api: Api = DEFAULT) -> list[Position]:
     """Teacher-forced scoring of token_ids[start:] given everything before it (start >= 1).
     Returns one Position per scored token: the token's own logprob and the top-k alternatives."""
+    if api.name == "none":
+        raise NoLogprobs("the engine's API exposes no teacher-forced logprobs")
+    if api.name == "sglang":
+        return _score_sglang(base_url, token_ids, start, top_k)
+    if api.name != "vllm":
+        raise ValueError(f"unknown logprobs api {api.name!r}; one of vllm, sglang, none")
     out = _post(f"{base_url.rstrip('/')}/v1/completions", {
         "model": model, "prompt": token_ids, "max_tokens": 1, "temperature": 0.0, "prompt_logprobs": top_k})
     plp = out["choices"][0].get("prompt_logprobs")
@@ -70,4 +100,25 @@ def score_tokens(base_url: str, model: str, token_ids: list[int], start: int, to
             raise RuntimeError(f"prompt_logprobs at position {i} does not include the actual token {tok}")
         top = dict(sorted(entry.items(), key=lambda kv: -kv[1])[:top_k])
         positions.append(Position(token=tok, logprob=entry[tok], top=top))
+    return positions
+
+
+def _score_sglang(base_url: str, token_ids: list[int], start: int, top_k: int) -> list[Position]:
+    """SGLang's native /generate: input_token_logprobs[i] = [logprob, token_id, text] for prompt position i
+    (from logprob_start_len), input_top_logprobs[i] = the top-k [logprob, token_id, text] at that position."""
+    out = _post(f"{base_url.rstrip('/')}/generate", {
+        "input_ids": token_ids, "sampling_params": {"max_new_tokens": 1, "temperature": 0.0},
+        "return_logprob": True, "logprob_start_len": start, "top_logprobs_num": top_k})
+    meta = out.get("meta_info") or {}
+    own, tops = meta.get("input_token_logprobs"), meta.get("input_top_logprobs")
+    if own is None:
+        raise RuntimeError("server returned no input_token_logprobs; the divergence check needs teacher-forced scoring")
+    positions = []
+    for j, i in enumerate(range(start, len(token_ids))):
+        lp, tok = own[j][0], own[j][1]
+        if tok != token_ids[i]:
+            raise RuntimeError(f"input_token_logprobs at position {i} is for token {tok}, expected {token_ids[i]}")
+        top = {int(t[1]): float(t[0]) for t in (tops[j] if tops and j < len(tops) and tops[j] else [])}
+        top[tok] = float(lp)
+        positions.append(Position(token=tok, logprob=float(lp), top=dict(sorted(top.items(), key=lambda kv: -kv[1])[:top_k])))
     return positions

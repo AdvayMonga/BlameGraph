@@ -13,6 +13,13 @@ Hard rule from the user: the loop may receive **facts only, never heuristics or 
 ## Layout
 Top-level packages, run from the repo root (no install step; `pyproject.toml` lists optional extras and holds the
 pytest/ruff config). Each folder with commands has its own `python -m`.
+- `targets/<name>.toml` + `lab/target.py` — **the target spec** (since 2026-10-06): model + chat kwargs, engine
+  (repo, python, launch command with `{port}`, health path, env, logprobs `api` vllm|sglang|none, write surface,
+  add-only globs, test and lint commands), reference server + its outputs dir, MLPerf latency limits, correctness
+  tasks and policy, corpus dir. Selected by `LAB_TARGET` or `--target`; `target.load()` raises `NoTarget` otherwise.
+  Nothing defaults to the user's engine or to Qwen3; `targets/inference-server.toml` is the committed example and
+  what `tests/conftest.py` points at. Surfaces, grader commands, `lab/engine.py`, and the `correctness`,
+  `regimes`, `validity` CLIs all read it.
 - `lab/` — moved from inference-server 2026-10-06 (`lab/README.md`). `session.py` (the loop over a dollar budget),
   `agent.py` (the one place a model is called; the agent's jailed shell gets the engine's python on PATH),
   `tools.py` (metered tools: test, profile, ledger, budget, restore, note; bench/equiv/submit still
@@ -38,14 +45,19 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
 - `diagnostics/` — researcher-only, never fed to the agent. `assertions.py` (code-checkable assertions), `inject.py` (failure injectors), `blame.py` (found×kept×executed), `noise.py` (comparable observations + noise floor), `claims_audit.py` (claims audit on InferenceBench traces), `exploration.py` (knobs varied).
 - `correctness/` — correctness gate. `divergence.py` (teacher-forced KL / top-1 agreement / ref-token
   logprob shift, top-k or full logits), `flips.py` (paired flip test, exact one-sided McNemar), `checks.py` (length
-  ratio, consistency), `gate.py` (`evaluate` → verdict; gates = pooled accuracy ≥ 99% of reference, length,
-  consistency; divergence and per-task flips are reported facts; `to_ledger_record` → lab ledger `equiv` record),
+  ratio, consistency), `gate.py` (`evaluate` → three-valued verdict pass|fail|inconclusive; gates = pooled
+  accuracy ≥ 99% of reference, length, consistency; a ratio under the line FAILS only if the net loss is
+  significant (McNemar p < alpha 0.01), else INCONCLUSIVE, because a non-deterministic engine churns ~1 point at
+  the dev tier; unanswered items (shed/errored after retries) → inconclusive; 95% CI on the ratio is a fact;
+  divergence and per-task flips are facts; `to_ledger_record` → lab ledger `equiv` record),
   `scoring.py` (MMLU-Pro letters, MATH `\boxed{}`), `tasks.py` (loaders from the Hub into `data/tasks/`; tier `dev`
   ~1.6k = MMLU-Pro 490 stratified, MATH-500, MBPP sanitized 427, needle 180; tier `full` ~18.6k = MMLU-Pro 12,032,
   MATH 5,000 (gold = last `\boxed{}` of the solution), MBPP full 974, needle 600; code scored by running unit tests
-  in a limited subprocess; needle = synthetic retrieval at ~4k/12k/24k tokens), `client.py` (vLLM-style `generate`,
-  `generate_stream`, `score_tokens` via `prompt_logprobs`), `run.py` (`reference` once per model/hardware/tier,
-  `candidate` per change, `verdict_file`). CLI: `python -m correctness reference [--tier dev|full]|candidate|verdict`
+  in a limited subprocess; needle = synthetic retrieval at ~4k/12k/24k tokens), `client.py` (`Api(name, chat_kwargs)`: `generate`,
+  `generate_stream`, `score_tokens` with adapters vllm (`prompt_logprobs`), sglang (native `/generate`
+  `input_token_logprobs`), none (raises `NoLogprobs`; divergence reported as not run)), `run.py` (`reference` once
+  per model/hardware/tier, `candidate` per change; 429/503 retried with backoff, items still failing are
+  "unanswered" and never scored as wrong; scoring runs at a quarter of the generation concurrency; `verdict_file`). CLI: `python -m correctness reference [--tier dev|full]|candidate|verdict`
   (`verdict` re-judges saved results under the policy, no server).
 - `canaries/cheat_proxy.py` — cheat proxy in front of any OpenAI-compatible server (`truncate`, `early_eos`,
   `fake_first`, `drop`, `cache` (streamed and not), `inflate_usage`); `python -m canaries --upstream URL --cheat NAME`.

@@ -43,6 +43,7 @@ class Ctx:
     seed: int = 0
     timeout: float = 600.0
     count_tokens: object = None        # reference tokenizer's encode, to re-count output tokens; None = server usage
+    chat_kwargs: dict = field(default_factory=dict)   # the target's chat_template_kwargs
     min_requests: int = 100            # a probe runs until it holds this many: 99% of fewer means little
     interactive: Limits = INTERACTIVE  # MLPerf limits; probes must last well beyond the TTFT limit to see overload
     conversational: Limits = CONVERSATIONAL
@@ -73,10 +74,19 @@ class Ctx:
         return min(max(base, self.min_requests / rate), base * MAX_STRETCH)
 
     def run_open(self, reqs):
-        return run_open(self.url, self.model, reqs, self.timeout, self.count_tokens)
+        return run_open(self.url, self.model, reqs, self.timeout, self.count_tokens, chat_kwargs=self.chat_kwargs)
 
     def run_closed(self, reqs, c, duration):
-        return run_closed(self.url, self.model, reqs, c, duration, self.timeout, self.count_tokens)
+        return run_closed(self.url, self.model, reqs, c, duration, self.timeout, self.count_tokens,
+                          chat_kwargs=self.chat_kwargs)
+
+    @classmethod
+    def from_target(cls, t, url: str, **kw) -> "Ctx":
+        """A Ctx for the target: its model, chat kwargs, corpus and limits; `kw` overrides (tier, split, seed...)."""
+        from .runner import Limits
+        return cls(url, t.model, str(t.corpus_dir) if t.corpus_dir.is_dir() else None, chat_kwargs=t.chat_kwargs,
+                   interactive=Limits(t.interactive.ttft_s, t.interactive.tpot_s),
+                   conversational=Limits(t.conversational.ttft_s, t.conversational.tpot_s), **kw)
 
 
 def _cycle(order: list[dict], tag: str = ""):
@@ -89,7 +99,8 @@ def _cycle(order: list[dict], tag: str = ""):
 
 
 def _warmup(ctx: Ctx, pool: list[dict], n: int = 8):
-    run_closed(ctx.url, ctx.model, [W.to_request(r, max_tokens=32) for r in pool[:n]], 4, None, ctx.timeout)
+    run_closed(ctx.url, ctx.model, [W.to_request(r, max_tokens=32) for r in pool[:n]], 4, None, ctx.timeout,
+               chat_kwargs=ctx.chat_kwargs)
 
 
 def _result(name, objective, value, direction, summary, **extra) -> dict:

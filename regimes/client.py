@@ -47,11 +47,12 @@ class Row:
 
 
 def send(url: str, model: str, req: Request, scheduled: float, clock, timeout: float = 600,
-         count_tokens=None, trace_prefix: str = "bg") -> Row:
+         count_tokens=None, trace_prefix: str = "bg", chat_kwargs: dict | None = None) -> Row:
     """POST req as a streamed chat completion; `clock()` is the run clock and `scheduled` the intended send time."""
     body = {"model": model, "messages": req.messages, "max_tokens": req.max_tokens, "temperature": 0.0,
-            "stream": True, "stream_options": {"include_usage": True},
-            "chat_template_kwargs": {"enable_thinking": False}}
+            "stream": True, "stream_options": {"include_usage": True}}
+    if chat_kwargs:
+        body["chat_template_kwargs"] = dict(chat_kwargs)
     headers = {"Content-Type": "application/json", "X-Trace-Id": f"{trace_prefix}-{req.id}"}
     if req.session_id is not None:
         headers["X-Session-Id"] = str(req.session_id)
