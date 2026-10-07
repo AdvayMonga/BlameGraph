@@ -36,3 +36,8 @@ min_length_ratio = 0.90
 
 [corpus]
 dir = "corpus"
+
+[validation]                                 # python -m lab.validate: known-good must PASS, known-bad must FAIL
+good = { fp8 = "vllm serve Qwen/Qwen3-30B-A3B-FP8 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}", int8 = "vllm serve nytopop/Qwen3-30B-A3B.w8a8 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}" }
+bad = { int4 = "vllm serve Qwen/Qwen3-30B-A3B-GPTQ-Int4 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}" }
+env = { fp8 = { VLLM_USE_DEEP_GEMM = "0" } }   # per-candidate env (the Verda image's nvcc is too old for DeepGEMM)

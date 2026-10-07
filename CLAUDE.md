@@ -41,6 +41,11 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   shutdown, because a stalled session once billed 12 h for 3.5 h of work), `corpus.py` +
   `chat_template.py` (corpus loader, template fingerprint). Tests: `tests/test_lab_*.py` (pytest); the ones
   that drive engine code skip unless the engine and its deps import (run them with the engine's python).
+- `lab/validate.py` — `python -m lab.validate --target T`: serves the target's reference and writes its outputs, judges
+  each `[validation]` good/bad launch (good must pass, bad must fail: the gate separates on *this* model and GPU), and
+  measures each regime's run-to-run band from repeated reference runs into `knowledge/noise/<regime>.json` (which
+  `submit` reads). Exit 0 only if both hold. Needs a GPU for a real target; tested on fakes. `lab/LEDGER.md` is the
+  record-format spec: the environment's public interface.
 - `corpus/` — frozen workload traces (BurstGPT timing, WildChat text), seen/heldout, hashed, `manifest.json`;
   `build_corpus.py` / `fetch_traces.py` rebuild it; any change is a new `corpus_version`.
 - `knowledge/` — measured findings (one JSON each) + `evidence/`; seeded into the ledger as `finding` records.
@@ -167,7 +172,11 @@ consistency result is void: the client counted vLLM's role chunk as a fake first
 ## Next
 GPU (needs spend approval): resolve the BF16 puzzle (plain BF16 on the dev tier at concurrency 32 and 128 on one VM,
 ~20 min, ~$1.50); first real run of `python -m regimes run all` against the engine and against vLLM.
-Here: the validation command (does the gate separate known-good from known-bad on *this* model and GPU; noise bands per regime); a session-format doc. lab `session.py --run` re-resolves
+GPU, with approval (and the auto-stop armed): `python -m lab.validate --target targets/inference-server.toml`
+(reference, FP8/INT8 good, Int4 bad, noise bands for all 8 regimes; ~3-4 h), then a first `python -m lab.session
+--task ...` dry run with a tiny budget. Both engine branches from the 2026-10-06 report (`integ/gpu-session-5`,
+`engine/gpu-validated`) were judged by the old gate: re-judge with `python -m correctness verdict` on their saved
+results before deciding anything. lab `session.py --run` re-resolves
 `base` from HEAD rather than the run's original base (pre-existing; resuming after the engine moved would misaudit);
 `validity/tier_agreement.py` needs real short/full runs; `validity/roofline.py` wants generalizing to the H200 + MoE
 target. The agent's tool set (e.g. a knowledge tool) is the user's design: ask first. README stays a few one-line

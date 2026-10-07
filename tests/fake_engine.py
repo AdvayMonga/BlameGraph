@@ -14,7 +14,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, queue_limit: int | None = None,
-                port: int = 0) -> ThreadingHTTPServer:
+                port: int = 0, wrong_every: int = 0) -> ThreadingHTTPServer:
+    """`wrong_every` = N: every Nth multiple-choice answer is wrong (a known-bad candidate for the gate)."""
+    counter = [0]
     sem, lock, waiting = threading.Semaphore(slots), threading.Lock(), [0]
 
     class H(BaseHTTPRequestHandler):
@@ -45,8 +47,10 @@ def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, qu
             if not body.get("stream"):
                 last = body["messages"][-1]["content"]
                 n = min(out_tokens, body.get("max_tokens") or out_tokens)
-                text = ("42" if "17 + 25" in last else "The answer is (C)." if "pick one" in last
-                        else " ".join(f"t{i}" for i in range(n)))
+                counter[0] += 1
+                wrong = wrong_every and counter[0] % wrong_every == 0
+                text = ("42" if "17 + 25" in last else ("The answer is (B)." if wrong else "The answer is (C).")
+                        if "pick one" in last else " ".join(f"t{i}" for i in range(n)))
                 time.sleep(token_s * n)
                 return self._json({"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
                                    "usage": {"completion_tokens": n}})
@@ -104,7 +108,8 @@ if __name__ == "__main__":
     ap.add_argument("--port", type=int, required=True); ap.add_argument("--delay", type=float, default=0.0)
     ap.add_argument("--slots", type=int, default=4); ap.add_argument("--token-s", type=float, default=0.002)
     ap.add_argument("--out-tokens", type=int, default=20); ap.add_argument("--queue-limit", type=int)
+    ap.add_argument("--wrong-every", type=int, default=0)
     a = ap.parse_args()
     time.sleep(a.delay)                      # stands in for loading weights and compiling
-    make_server(a.slots, a.token_s, a.out_tokens, a.queue_limit, a.port)
+    make_server(a.slots, a.token_s, a.out_tokens, a.queue_limit, a.port, a.wrong_every)
     threading.Event().wait()
