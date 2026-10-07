@@ -11,16 +11,11 @@ from typing import Any
 
 from lab import engine, ledger
 from lab.agent import ToolSpec
+from lab.evaltools import EvalTools
 from lab.safety import grader
 
-NOT_WIRED = {
-    "bench": "the eval harness is not connected yet; nothing can be scored",
-    "equiv": "output equivalence is not wired yet",
-    "submit": "submit refuses until the eval harness is wired; nothing can become a win yet",
-}
 
-
-class Toolbox:
+class Toolbox(EvalTools):
     """Bound to one session: knows the workspace, the budget, the ledger root and the run."""
 
     def __init__(self, session: Any):
@@ -28,10 +23,13 @@ class Toolbox:
         self.violation: str | None = None
 
     # -- plumbing ------------------------------------------------------------------------
-    def _record(self, kind: str, tool: str, args: dict, result: dict, snapshot, usd: float = 0.0) -> dict:
+    def _record(self, kind: str, tool: str, args: dict, result: dict, snapshot, usd: float = 0.0,
+                config: dict | None = None) -> dict:
         body = {"kind": kind, "run": self.s.run_id, "session": self.s.session_id, "tool": tool,
                 "args": args, "snapshot": snapshot.id, "snapshot_blob": snapshot.blob,
                 "patch": snapshot.patch, "result": result, "cost": {"usd": usd}}
+        if config:
+            body["config"] = config
         return ledger.append(body, self.s.ledger_root)
 
     def _record_heldout(self, kind: str, tool: str, args: dict, config: dict, metrics: dict, snapshot,
@@ -121,14 +119,6 @@ class Toolbox:
         self._record("note", "note", args, {"text": args["text"]}, snap)
         return "noted"
 
-    def _refused(self, name: str):
-        def fn(args: dict) -> str:
-            snap = self._audited(name, args)
-            self._record(name if name in ledger.KINDS else "note", name, args,
-                         {"verdict": "refused", "reason": NOT_WIRED[name]}, snap)
-            return f"{name} refused: {NOT_WIRED[name]}"
-        return fn
-
     def specs(self) -> list[ToolSpec]:
         obj = {"type": "object", "properties": {}}
         return [
@@ -147,10 +137,18 @@ class Toolbox:
                      {"type": "object", "required": ["snapshot"], "properties": {"snapshot": {"type": "string"}}}, self.restore),
             ToolSpec("note", "Leave a note for the human running the lab. It is recorded and changes nothing.",
                      {"type": "object", "required": ["text"], "properties": {"text": {"type": "string"}}}, self.note),
-            ToolSpec("equiv", "Output equivalence of your change against the base.", obj, self._refused("equiv")),
-            ToolSpec("bench", "Benchmark your change on the seen split.", obj, self._refused("bench")),
-            ToolSpec("submit", "Submit your change for scoring on the held-out split. The only thing that can "
-                     "produce a win.", obj, self._refused("submit")),
+            ToolSpec("bench", "Serve your current workspace (pristine copy, jailed) and measure it under the load "
+                     "regimes on the seen split. Returns one headline number per regime, raw.",
+                     {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}},
+                                                       "tier": {"type": "string", "enum": ["short", "full"]}}}, self.bench),
+            ToolSpec("equiv", "Serve your current workspace and run the correctness gate against the reference "
+                     "model. Returns pass, fail or inconclusive with every metric. tier=full is required before submit.",
+                     {"type": "object", "properties": {"tier": {"type": "string", "enum": ["dev", "full"]}}}, self.equiv),
+            ToolSpec("submit", "Measure your current workspace on the held-out split at the full tier and compare it "
+                     "with the base. Needs a passing full-tier equiv and a seen bench on this snapshot. The only "
+                     "thing that can produce a win. Returns one aggregate per regime.",
+                     {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}}}},
+                     self.submit),
         ]
 
 

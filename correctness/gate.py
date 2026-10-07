@@ -58,7 +58,10 @@ def evaluate(divergence: dict | None = None, flips: dict[str, dict] | None = Non
         acc["unanswered"] = unanswered
         r, lo, hi = acc["score_ratio"], *acc["score_ratio_ci95"]
         where = f"pooled score ratio {r:.4f} (95% CI {lo:.4f}..{hi:.4f}; {acc['cand_correct']} vs {acc['ref_correct']} correct of {acc['n']})"
-        if unanswered:
+        if not acc["ref_correct"]:
+            gate("accuracy", None, f"inconclusive: the reference answered 0 of {acc['n']} items correctly; "
+                 "the task set says nothing about this model", acc)
+        elif unanswered:
             gate("accuracy", None, f"inconclusive: {unanswered} item(s) unanswered (shed or errored after retries); "
                  f"{where} over the answered ones", acc)
         elif r >= th.min_score_ratio:

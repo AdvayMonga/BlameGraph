@@ -185,9 +185,10 @@ def run_lint(tree: Path) -> Run:
     return Run(proc.returncode == 0, proc.returncode, (proc.stdout + proc.stderr)[-5000:])
 
 
-def jailed(tree: Path, argv: list[str], *, timeout_s: float, env_extra: dict | None = None,
-           domains: list[str] = ()) -> subprocess.CompletedProcess:
-    """Run `argv` in `tree` as agent code: wiped env, jail around the tree and a private tmp, weights read-only."""
+def _jail_argv(tree: Path, argv: list[str], env_extra: dict | None, domains, local_binding: bool = False,
+               tag: str = "") -> tuple[list[str], dict, Path]:
+    """The wrapped argv, env and private tmp for running `argv` in `tree` as agent code: wiped env, jail around the
+    tree and the tmp, weights read-only."""
     tmp = Path(tempfile.mkdtemp(prefix="jail-")).resolve()   # short: srt's sockets live here
     env = {"PATH": _engine_path(), "HOME": str(Path.home()), "TMPDIR": str(tmp),
            "PYTHONPATH": str(tree / "src") + os.pathsep + str(tree),
@@ -195,10 +196,25 @@ def jailed(tree: Path, argv: list[str], *, timeout_s: float, env_extra: dict | N
            "HF_HOME": str(tmp / "hf-home"), "HF_HUB_CACHE": str(HF_HUB), "HF_HUB_OFFLINE": "1",
            **(env_extra or {})}
     config = jail.settings([tree.resolve(), tmp], engine.venv(), list(domains),
-                           readonly=[HF_HUB] if HF_HUB.exists() else [], python=engine.python())
+                           readonly=[HF_HUB] if HF_HUB.exists() else [], python=engine.python(),
+                           local_binding=local_binding)
+    return jail.wrap(config, tree.with_suffix(f"{tag}.srt.json"), argv), env, tmp
+
+
+def jailed_popen(tree: Path, argv: list[str], *, env_extra: dict | None = None, stdout=None, stderr=None,
+                 local_binding: bool = True) -> tuple[subprocess.Popen, Path]:
+    """A long-running jailed process (a served engine) in its own session; returns (proc, tmp dir to remove)."""
+    wrapped, env, tmp = _jail_argv(tree, argv, env_extra, (), local_binding, tag=".serve")
+    proc = subprocess.Popen(wrapped, cwd=tree, env=env, stdout=stdout, stderr=stderr, start_new_session=True)
+    return proc, tmp
+
+
+def jailed(tree: Path, argv: list[str], *, timeout_s: float, env_extra: dict | None = None,
+           domains: list[str] = ()) -> subprocess.CompletedProcess:
+    """Run `argv` in `tree` as agent code: wiped env, jail around the tree and a private tmp, weights read-only."""
+    wrapped, env, tmp = _jail_argv(tree, argv, env_extra, domains)
     try:
-        return subprocess.run(jail.wrap(config, tree.with_suffix(".srt.json"), argv), cwd=tree,
-                              env=env, capture_output=True, text=True, timeout=timeout_s)
+        return subprocess.run(wrapped, cwd=tree, env=env, capture_output=True, text=True, timeout=timeout_s)
     except subprocess.TimeoutExpired as e:     # a hung suite is a failed run, recorded like any other
         out = (e.stdout or b"")
         return subprocess.CompletedProcess(argv, -9, out.decode(errors="replace") if isinstance(out, bytes) else out,

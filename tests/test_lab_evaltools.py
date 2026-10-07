@@ -1,0 +1,152 @@
+"""bench, equiv and submit end to end: the agent's tiny engine repo launches tests/fake_engine.py as its server."""
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from lab import ledger, target
+from lab.budget import Budget
+from lab.session import Session
+from lab.tools import Toolbox
+from lab.workspace import Workspace
+from regimes import suite
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lab_fixtures import make_repo  # noqa: E402
+
+FAKE = Path(__file__).resolve().parent / "fake_engine.py"
+
+
+class Enc:
+    def encode(self, text):
+        return [hash(w) % 1000 + 1 for w in text.split()]
+
+    def chat_ids(self, messages):
+        return self.encode(" ".join(m["content"] for m in messages))
+
+
+def _target(tmp_path: Path, repo: Path, ref_dir: Path) -> Path:
+    t = tmp_path / "fake.toml"
+    t.write_text(f'''
+[model]
+name = "fake"
+chat_kwargs = {{ }}
+[engine]
+repo = "{repo}"
+python = "{sys.executable}"
+api = "vllm"
+launch = "python {FAKE} --port {{port}} --slots 4 --token-s 0.002 --out-tokens 6"
+health = "/health"
+startup_timeout_s = 30
+write = ["src/inference_server/*"]
+add_only = ["tests/test_*.py"]
+test = "python -m pytest -q -p no:cacheprovider"
+lint = "python -m ruff check ."
+[reference]
+api = "vllm"
+launch = "python {FAKE} --port {{port}}"
+dir = "{ref_dir}"
+[limits]
+interactive = {{ ttft_s = 0.25, tpot_s = 0.05 }}
+conversational = {{ ttft_s = 0.25, tpot_s = 0.05 }}
+[corpus]
+dir = "{tmp_path / 'no-corpus'}"
+''')
+    return t
+
+
+def _reference(url: str, out: Path, n: int = 40):
+    from correctness import run as crun
+    items = [{"id": f"mc-{k}", "task": "mmlu_pro", "gold": "C", "max_tokens": 6,
+              "messages": [{"role": "user", "content": f"question {k} pick one"}]} for k in range(n)]
+    crun.reference(url, "fake", out, items, Enc(), top_k=3, div_n=8, concurrency=4)
+
+
+@pytest.fixture
+def lab(tmp_path, monkeypatch):
+    monkeypatch.setenv("LAB_NO_JAIL", "1")
+    repo = make_repo(tmp_path)
+    # a reference from the same fake engine, dev and full tiers
+    import socket
+    s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
+    proc = subprocess.Popen([sys.executable, str(FAKE), "--port", str(port)])
+    try:
+        import time
+        import urllib.request
+        for _ in range(100):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1); break
+            except OSError:
+                time.sleep(0.1)
+        _reference(f"http://127.0.0.1:{port}", tmp_path / "ref")
+        _reference(f"http://127.0.0.1:{port}", tmp_path / "ref-full")
+    finally:
+        proc.kill()
+    spec = _target(tmp_path, repo, tmp_path / "ref")
+    monkeypatch.setenv("LAB_TARGET", str(spec))
+    monkeypatch.setenv("LAB_ENGINE_REPO", str(repo))
+    monkeypatch.setenv("LAB_ENGINE_PYTHON", sys.executable)
+    target._cache.clear()
+    ws = Workspace(repo, "HEAD", tmp_path / "ws", tmp_path / "ledger"); ws.create()
+    run_dir = tmp_path / "run"; run_dir.mkdir()
+    s = Session("r1", "r1-s1", run_dir, ws, Budget.resume(5.0, "r1", tmp_path / "ledger"), tmp_path / "ledger")
+    s.encoder = Enc()
+    tb = Toolbox(s)
+    tb.serve_jailed = False
+    tb.bench_default_regimes = ("single_stream",)
+    saved, think = dict(suite.TIERS["short"]), suite.THINK_S
+    suite.TIERS["short"].update(probe_s=1.0, final_s=1.5)
+    suite.TIERS["full"].update(probe_s=1.0, final_s=1.5)
+    suite.THINK_S = 0.3
+    yield tb, s
+    suite.TIERS["short"].update(saved); suite.TIERS["full"].update(probe_s=60.0, final_s=600.0); suite.THINK_S = think
+    target._cache.clear()
+
+
+def test_bench_serves_and_measures(lab):
+    tb, s = lab
+    out = json.loads(tb.bench({"regimes": ["single_stream"]}))
+    assert out["split"] == "seen" and out["metrics"]["single_stream"]["valid"]
+    assert out["metrics"]["single_stream"]["value"] is not None
+    rec = next(ledger.records(s.ledger_root, kind="bench"))
+    assert rec["config"] == {"split": "seen", "tier": "short"} and rec["result"]["verdict"] == "ok"
+    assert rec["result"]["ready_s"] is not None and (s.run_dir / "serve-bench.log").exists()
+
+
+def test_equiv_judges_against_the_reference(lab):
+    tb, s = lab
+    out = json.loads(tb.equiv({}))
+    assert out["verdict"] == "pass", out["reasons"]
+    assert out["metrics"]["accuracy"]["unanswered"] == 0 and "kl_mean" in out["metrics"]["divergence"]
+    rec = next(ledger.records(s.ledger_root, kind="equiv"))
+    assert rec["result"]["passed"] is True and rec["result"]["tier"] == "dev"
+
+
+def test_submit_needs_full_equiv_and_a_bench_then_records_one_aggregate_per_metric(lab):
+    tb, s = lab
+    assert tb.submit({}).startswith("submit refused: no full-tier equiv")
+    assert json.loads(tb.equiv({"tier": "full"}))["verdict"] == "pass"
+    assert tb.submit({}).startswith("submit refused: no completed seen-split bench")
+    tb.bench({"regimes": ["single_stream"]})
+    out = json.loads(tb.submit({}))
+    assert out["split"] == "heldout" and set(out["metrics"]) == {"single_stream"}
+    m = out["metrics"]["single_stream"]
+    assert set(m) == {"base", "new", "delta_pct", "band_pct", "verdict"} and m["verdict"] == "unknown_band"
+    rec = next(r for r in ledger.records(s.ledger_root, kind="submit") if r.get("config", {}).get("split") == "heldout")
+    assert "result" not in rec and rec["metrics"] == out["metrics"]        # the ledger's held-out shape, nothing else
+    state = json.loads((s.ledger_root / "holdout_state.json").read_text())
+    assert state["n_queries"] == 1 and (s.run_dir / "base-heldout-full.json").exists()
+
+
+def test_tools_refuse_cleanly_when_the_engine_does_not_start(lab, monkeypatch):
+    tb, s = lab
+    t = target.load()
+    broken = target.Server("python -c 'import sys; sys.exit(3)'", {}, "/health", "vllm", 5.0)
+    monkeypatch.setattr(target, "load", lambda path=None: t.__class__(**{**t.__dict__, "engine": broken}))
+    assert tb.bench({}).startswith("bench failed: engine did not start")
+    rec = list(ledger.records(s.ledger_root, kind="bench"))[-1]
+    assert rec["result"]["verdict"] == "error"
