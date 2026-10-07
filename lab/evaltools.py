@@ -19,8 +19,8 @@ from pathlib import Path
 from lab import ledger, serve, target
 from validity.holdout import HoldoutGuard, Refused
 
-NOISE_DIR = target.ENV_ROOT / "knowledge" / "noise"      # per-regime bands, when measured: {"<regime>": band_pct}
 HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT = 100, 2.0, 0.5
+BENCH_TIER = "short"          # the seen-split tier submit compares against (base is measured at the same tier)
 
 
 def _regimes(args: dict, default: tuple[str, ...]) -> list[str]:
@@ -46,12 +46,15 @@ def headline(results: list[dict]) -> dict:
                           "valid": r["valid"], "invalid_reasons": r["invalid_reasons"]} for r in results}
 
 
-def noise_band_pct(regime: str) -> float | None:
-    """The measured run-to-run band for a regime, if `knowledge/noise/<regime>.json` holds one."""
-    p = NOISE_DIR / f"{regime}.json"
+def noise_band_pct(regime: str, t: target.Target | None = None) -> float | None:
+    """The measured run-to-run band for a regime from `knowledge/noise/<regime>.json`, only if it was measured on
+    this target's engine (a band from another engine or model says nothing about this one)."""
+    p = target.noise_dir() / f"{regime}.json"
     if not p.exists():
         return None
     d = json.loads(p.read_text())
+    if t is not None and (d.get("target") != t.name or d.get("server") != "engine"):
+        return None
     return d.get("band_pct")
 
 
@@ -96,6 +99,12 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
     return facts
 
 
+def _why(e: BaseException) -> str:
+    if isinstance(e, serve.NotReady):
+        return f"engine did not start: {e}"
+    return f"{type(e).__name__}: {e}"[:500]
+
+
 class EvalTools:
     """Mixin for lab.tools.Toolbox: needs self.s (session), self._audited, self._pristine, self._record,
     self._record_heldout."""
@@ -112,8 +121,8 @@ class EvalTools:
             with serve.Served(tree, t.engine, log=self.s.run_dir / "serve-bench.log",
                               jailed=self.serve_jailed) as srv:
                 results = run_regimes(srv.url, t, names, "seen", tier, self.seed)
-        except serve.NotReady as e:
-            result = {"verdict": "error", "reason": f"engine did not start: {e}", "seconds": time.monotonic() - t0}
+        except Exception as e:                      # a tool never crashes the session: the failure is the record
+            result = {"verdict": "error", "reason": _why(e), "seconds": time.monotonic() - t0}
             self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier})
             return f"bench failed: {result['reason']}"
         result = {"verdict": "ok", "metrics": headline(results), "regimes": results, "tier": tier,
@@ -126,8 +135,8 @@ class EvalTools:
         snap = self._audited("equiv", args)
         t = target.load()
         tier = args.get("tier") or "dev"
-        ref = self.reference_dir(t, tier)
-        if ref is None or not (ref / "outputs.jsonl").exists():
+        ref = t.reference_dir_for(tier)
+        if not target.reference_complete(ref):
             self._record("equiv", "equiv", args, {"verdict": "refused", "reason": f"no {tier}-tier reference outputs; "
                          "run `python -m correctness reference` for this target first"}, snap)
             return "equiv refused: no reference outputs for this target"
@@ -141,10 +150,11 @@ class EvalTools:
                                      Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio),
                                      concurrency=self.equiv_concurrency, api=client.Api(t.engine.api, t.chat_kwargs),
                                      config={"tier": tier})
-        except serve.NotReady as e:
-            self._record("equiv", "equiv", args, {"verdict": "error", "reason": f"engine did not start: {e}"}, snap)
-            return f"equiv failed: engine did not start: {e}"
-        record = {"verdict": res["verdict"], "passed": res["passed"], "reasons": res["reasons"], "gates": res["gates"],
+        except Exception as e:
+            self._record("equiv", "equiv", args, {"verdict": "error", "reason": _why(e)}, snap, config={"split": "seen", "tier": tier})
+            return f"equiv failed: {_why(e)}"
+        passed = {"pass": True, "fail": False}.get(res["verdict"])     # inconclusive is None: neither passing nor failing
+        record = {"verdict": res["verdict"], "passed": passed, "reasons": res["reasons"], "gates": res["gates"],
                   "metrics": res["metrics"], "thresholds": res["thresholds"], "tier": tier}
         self._record("equiv", "equiv", args, record, snap, config={"split": "seen", "tier": tier})
         return json.dumps({"snapshot": snap.id, "tier": tier, "verdict": res["verdict"], "reasons": res["reasons"],
@@ -162,39 +172,41 @@ class EvalTools:
             self._record("submit", "submit", args, {"verdict": "refused", "reason": f"{why}; run equiv with tier=full first"}, snap)
             return f"submit refused: {why}"
         benches = [r for r in mine if r["kind"] == "bench" and (r.get("result") or {}).get("verdict") == "ok"
-                   and (r.get("config") or {}).get("split") == "seen"]
+                   and (r.get("config") or {}).get("split") == "seen" and (r.get("config") or {}).get("tier") == BENCH_TIER]
         if not benches:
-            self._record("submit", "submit", args, {"verdict": "refused", "reason": "no completed seen-split bench on this snapshot"}, snap)
-            return "submit refused: no completed seen-split bench on this snapshot"
+            why = f"no completed {BENCH_TIER}-tier seen-split bench on this snapshot"
+            self._record("submit", "submit", args, {"verdict": "refused", "reason": why}, snap)
+            return f"submit refused: {why}"
         seen = benches[-1]["result"]["metrics"]
-        names = [n for n in _regimes(args, tuple(seen)) if n in seen]
-        base = self.base_heldout(t, names)
-        tree = self._pristine()
         try:
+            names = [n for n in _regimes(args, tuple(seen)) if n in seen]
+            base = self.base_heldout(t, names)
+            base_seen = self.base_seen(t, names)
+            guard = self.holdout_guard()
+            tree = self._pristine()
             with serve.Served(tree, t.engine, log=self.s.run_dir / "serve-submit.log", jailed=self.serve_jailed) as srv:
                 results = run_regimes(srv.url, t, names, "heldout", "full", self.seed)
-        except serve.NotReady as e:
-            self._record("submit", "submit", args, {"verdict": "error", "reason": f"engine did not start: {e}"}, snap)
-            return f"submit failed: engine did not start: {e}"
-        new = headline(results)
-        base_seen = self.base_seen(t, names)
-        guard = self.holdout_guard()
-        metrics = {}
-        for n in names:
-            held_d, seen_d = delta_pct(base.get(n, {}), new[n]), delta_pct(base_seen.get(n, {}), seen[n])
-            if held_d is not None and seen_d is not None:
-                try:   # Thresholdout: the held-out delta is reported only when it disagrees with the seen one
-                    held_d = guard.query(seen_d, held_d)["value"]
-                except Refused as e:
-                    self._record("submit", "submit", args, {"verdict": "refused", "reason": str(e)}, snap)
-                    return f"submit refused: {e}"
-            metrics[n] = aggregate(base.get(n, {}), held_d, new[n].get("better", "higher"), noise_band_pct(n))
+            new = headline(results)
+            metrics, better = {}, {}
+            for n in names:
+                held_d, seen_d = delta_pct(base.get(n, {}), new[n]), delta_pct(base_seen.get(n, {}), seen[n])
+                # Thresholdout: a held-out delta is reported only through the guard, and only when it disagrees
+                # with the seen one. Without a seen delta to compare, nothing held-out is reported at all.
+                held_d = guard.query(seen_d, held_d)["value"] if held_d is not None and seen_d is not None else None
+                better[n] = new[n].get("better", "higher")
+                metrics[n] = aggregate(base.get(n, {}), held_d, better[n], noise_band_pct(n, t))
+        except Refused as e:
+            self._record("submit", "submit", args, {"verdict": "refused", "reason": str(e)}, snap)
+            return f"submit refused: {e}"
+        except Exception as e:
+            self._record("submit", "submit", args, {"verdict": "error", "reason": _why(e)}, snap)
+            return f"submit failed: {_why(e)}"
         rec = self._record_heldout("submit", "submit", args, {"tier": "full"}, metrics, snap)
         out = {"snapshot": snap.id, "split": "heldout", "tier": "full", "metrics": metrics, "record": rec["id"]}
         task = getattr(self.s, "task", None)
         if task is not None:                       # the task's own win condition, applied to these aggregates
             from lab.task import score
-            out["score"] = score(metrics, task)
+            out["score"] = score(metrics, task, better)
         return json.dumps(out, indent=1)
 
     # -- support ------------------------------------------------------------------------
@@ -202,11 +214,6 @@ class EvalTools:
     seed = 0
     equiv_concurrency = 16
     serve_jailed = True
-
-    def reference_dir(self, t: target.Target, tier: str) -> Path | None:
-        if t.reference_dir is None:
-            return None
-        return t.reference_dir if tier == "dev" else t.reference_dir.with_name(t.reference_dir.name + "-full")
 
     def encoder(self, t: target.Target):
         from correctness.run import HFEncoder
@@ -235,4 +242,4 @@ class EvalTools:
         return self._base_measure(t, names, "heldout", "full")
 
     def base_seen(self, t, names):
-        return self._base_measure(t, names, "seen", "short")
+        return self._base_measure(t, names, "seen", BENCH_TIER)

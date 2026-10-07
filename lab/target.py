@@ -10,6 +10,11 @@ from pathlib import Path
 
 ENV_ROOT = Path(__file__).resolve().parents[1]
 TARGETS_DIR = ENV_ROOT / "targets"
+NOISE_DIR = ENV_ROOT / "knowledge" / "noise"       # per-regime run-to-run bands, written by lab.validate, read by submit
+
+
+def noise_dir() -> Path:
+    return NOISE_DIR
 
 
 class NoTarget(RuntimeError):
@@ -58,6 +63,17 @@ class Target:
     @property
     def name(self) -> str:
         return self.path.stem
+
+    def reference_dir_for(self, tier: str) -> Path | None:
+        """The reference outputs for a tier: `reference.dir` for dev, `<reference.dir>-full` for full."""
+        if self.reference_dir is None:
+            return None
+        return self.reference_dir if tier == "dev" else self.reference_dir.with_name(self.reference_dir.name + "-full")
+
+
+def reference_complete(ref_dir: Path | None) -> bool:
+    """`reference()` writes meta.json last; its presence means the outputs and sequences are all there."""
+    return ref_dir is not None and (ref_dir / "meta.json").exists()
 
 
 def _server(d: dict | None) -> Server | None:

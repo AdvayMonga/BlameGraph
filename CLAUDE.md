@@ -41,12 +41,17 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   shutdown, because a stalled session once billed 12 h for 3.5 h of work), `corpus.py` +
   `chat_template.py` (corpus loader, template fingerprint). Tests: `tests/test_lab_*.py` (pytest); the ones
   that drive engine code skip unless the engine and its deps import (run them with the engine's python).
+- `lab/validate.py` — `python -m lab.validate --target T`: serves the target's reference and writes its outputs, judges
+  each `[validation]` good/bad launch (good must pass, bad must fail: the gate separates on *this* model and GPU), and
+  measures each regime's run-to-run band from repeated reference runs into `knowledge/noise/<regime>.json` (which
+  `submit` reads). Exit 0 only if both hold. Needs a GPU for a real target; tested on fakes. `lab/LEDGER.md` is the
+  record-format spec: the environment's public interface.
 - `corpus/` — frozen workload traces (BurstGPT timing, WildChat text), seen/heldout, hashed, `manifest.json`;
   `build_corpus.py` / `fetch_traces.py` rebuild it; any change is a new `corpus_version`.
 - `knowledge/` — measured findings (one JSON each) + `evidence/`; seeded into the ledger as `finding` records.
 - `feedback/` — what each side gets after a session. `report.py`: `feedback(path)` → `{for_agent: {integrity, facts}, for_researcher: {assertions, blame}}` (lab ledgers: `lab_feedback`, `for_agent.facts = {harness}` only, `for_researcher.activity` holds the derived facts); `python -m feedback PATH [--run RUN_ID] [--agent-text]`. Accepts an InferenceBench run dir, a BlameGraph session ledger, or an inference-server lab ledger (detected from its first line). Integrity carries `evidence` per violated rule (rule, plain detail, concrete refs: hashes, measurement ids, offending values and limits).
   - `verdict.py` — integrity rules → `Verdict(valid, reasons, evidence, facts)`. Live mode (hash files on disk) or recorded mode (hashes from the submission event). Physical limits (`unphysical()`) are shown to the agent on purpose: they are hardware facts, not detection tricks.
-  - `lab_verdict.py` — inference-server lab ledger → integrity + facts directly (snapshots stand in for configs; no ExperimentLog, so `for_researcher` is empty for lab ledgers). Assumed result shapes are in its docstring; their bench/equiv/submit tools don't write results yet. Submitted snapshot must have a completed seen-split bench, tests passed, and equiv with no failing record (retrying a statistical gate until it passes would let bad changes through).
+  - `lab_verdict.py` — lab ledger → integrity + derived activity facts (snapshots stand in for configs; no ExperimentLog, so assertions/blame are None for lab ledgers). Record shapes are in `lab/LEDGER.md`; `gain()` reads submit aggregates (improved / regressed / within_band). Submitted snapshot must have a completed short-tier seen bench, tests passed, a passing equiv and no failing equiv (inconclusive is neither; retrying a statistical gate until it passes would let bad changes through).
   - `claim_facts.py` — claim-vs-evidence facts from ledger `claim` text (regex, no LLM): unrecorded numbers, contradicted speedups, verification words with no matching record, unknown record ids. Facts only; never part of the verdict (their lab/README rule).
 - `logs/` — reading sessions. `session.py`: the session format (append-only JSONL events: session_start, config, launch, measure, submission; grader hashes). `inferencebench.py` (trace loader) and `reconstruct.py` (experiment-log reconstruction: configs, launches, evals, observations, stale/warm/standard flags; regex-only number parsing). `to_experiment.py`: session → `ExperimentLog`, so assertions/blame run on loop sessions.
 - `diagnostics/` — researcher-only, never fed to the agent. `assertions.py` (code-checkable assertions), `inject.py` (failure injectors), `blame.py` (found×kept×executed), `noise.py` (comparable observations + noise floor), `claims_audit.py` (claims audit on InferenceBench traces), `exploration.py` (knobs varied).
@@ -167,7 +172,11 @@ consistency result is void: the client counted vLLM's role chunk as a fake first
 ## Next
 GPU (needs spend approval): resolve the BF16 puzzle (plain BF16 on the dev tier at concurrency 32 and 128 on one VM,
 ~20 min, ~$1.50); first real run of `python -m regimes run all` against the engine and against vLLM.
-Here: the validation command (does the gate separate known-good from known-bad on *this* model and GPU; noise bands per regime); a session-format doc. lab `session.py --run` re-resolves
+GPU, with approval (and the auto-stop armed): `python -m lab.validate --target targets/inference-server.toml`
+(reference, FP8/INT8 good, Int4 bad, noise bands for all 8 regimes; ~3-4 h), then a first `python -m lab.session
+--task ...` dry run with a tiny budget. Both engine branches from the 2026-10-06 report (`integ/gpu-session-5`,
+`engine/gpu-validated`) were judged by the old gate: re-judge with `python -m correctness verdict` on their saved
+results before deciding anything. lab `session.py --run` re-resolves
 `base` from HEAD rather than the run's original base (pre-existing; resuming after the engine moved would misaudit);
 `validity/tier_agreement.py` needs real short/full runs; `validity/roofline.py` wants generalizing to the H200 + MoE
 target. The agent's tool set (e.g. a knowledge tool) is the user's design: ask first. README stays a few one-line

@@ -174,14 +174,20 @@ def candidate(ref_dir: str | Path, url: str, model: str, out_path: str | Path, e
             div["sequences_unscored"] = len(unscored)
     except client.NoLogprobs as e:
         div, unscored = None, [str(e)]
-    # consistency, on a streamed probe of the first items
-    probe = []
+    # consistency, on a streamed probe of the first items; a shed or errored probe is counted, not fatal
+    probe, probe_errors = [], []
     for it in items[:probe_n]:
-        s = client.generate_stream(url, model, it["messages"], it.get("max_tokens", 2048), api)
+        try:
+            s = _retrying(client.generate_stream, url, model, it["messages"], it.get("max_tokens", 2048), api)
+        except Exception as e:
+            probe_errors.append(f"{it['id']}: {type(e).__name__}: {e}"[:200])
+            continue
         probe.append({**s, "reported_tokens": answered.get(it["id"], {}).get("completion_tokens")
                       if (answered.get(it["id"], {}).get("text") == s["text"]) else None})
-    cons = consistency(probe, encoder.encode)
+    cons = consistency(probe, encoder.encode) if probe else None
     result = evaluate(div, flips, length, cons, thresholds, unanswered=len(unanswered))
+    if probe_errors:
+        result["metrics"]["consistency_probe_errors"] = probe_errors[:5]
     result["metrics"]["unanswered"] = {"n": len(unanswered), "of": len(items),
                                        "examples": dict(list(unanswered.items())[:5])}
     if unscored:

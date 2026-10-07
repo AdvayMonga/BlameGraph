@@ -130,7 +130,9 @@ def test_submit_needs_full_equiv_and_a_bench_then_records_one_aggregate_per_metr
     tb, s = lab
     assert tb.submit({}).startswith("submit refused: no full-tier equiv")
     assert json.loads(tb.equiv({"tier": "full"}))["verdict"] == "pass"
-    assert tb.submit({}).startswith("submit refused: no completed seen-split bench")
+    assert tb.submit({}).startswith("submit refused: no completed short-tier seen-split bench")
+    tb.bench({"regimes": ["single_stream"], "tier": "full"})            # the wrong tier does not count
+    assert tb.submit({}).startswith("submit refused: no completed short-tier seen-split bench")
     tb.bench({"regimes": ["single_stream"]})
     out = json.loads(tb.submit({}))
     assert out["split"] == "heldout" and set(out["metrics"]) == {"single_stream"}
@@ -140,6 +142,40 @@ def test_submit_needs_full_equiv_and_a_bench_then_records_one_aggregate_per_metr
     assert "result" not in rec and rec["metrics"] == out["metrics"]        # the ledger's held-out shape, nothing else
     state = json.loads((s.ledger_root / "holdout_state.json").read_text())
     assert state["n_queries"] == 1 and (s.run_dir / "base-heldout-full.json").exists()
+
+
+def test_inconclusive_equiv_is_neither_passing_nor_failing(lab, monkeypatch):
+    from correctness import run as crun
+    tb, s = lab
+    real = crun.candidate
+
+    def inconclusive(*a, **kw):
+        res = real(*a, **kw)
+        res["verdict"], res["passed"] = "inconclusive", False
+        return res
+    monkeypatch.setattr(crun, "candidate", inconclusive)
+    assert json.loads(tb.equiv({}))["verdict"] == "inconclusive"
+    rec = list(ledger.records(s.ledger_root, kind="equiv"))[-1]
+    assert rec["result"]["passed"] is None                              # lab_verdict counts neither pass nor fail
+    from feedback.lab_verdict import passed
+    assert passed(rec) is None
+
+
+def test_submit_reports_no_heldout_delta_without_a_seen_delta(lab, monkeypatch, tmp_path):
+    from lab import evaltools
+    tb, s = lab
+    tb.equiv({"tier": "full"}); tb.bench({"regimes": ["single_stream"]})
+    monkeypatch.setattr(evaltools.EvalTools, "base_seen", lambda self, t, names: {})   # no seen baseline at all
+    out = json.loads(tb.submit({}))
+    m = out["metrics"]["single_stream"]
+    assert m["delta_pct"] is None and m["new"] is None and m["verdict"] == "unknown"     # nothing held-out leaks
+    # a noise band from another target is ignored
+    nd = tmp_path / "noise2"; nd.mkdir()
+    (nd / "single_stream.json").write_text(json.dumps({"band_pct": 1.0, "target": "other", "server": "engine"}))
+    monkeypatch.setattr(target, "NOISE_DIR", nd)
+    assert evaltools.noise_band_pct("single_stream", target.load()) is None
+    (nd / "single_stream.json").write_text(json.dumps({"band_pct": 1.0, "target": target.load().name, "server": "engine"}))
+    assert evaltools.noise_band_pct("single_stream", target.load()) == 1.0
 
 
 def test_submit_scores_the_task(lab, tmp_path):

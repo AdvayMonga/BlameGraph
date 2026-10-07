@@ -21,8 +21,9 @@ METRIC_WORDS = r"ttft|tpot|itl|latency|throughput|goodput|p50|p90|p99|speedup|de
 VERIFY_RE = re.compile(r"\b(verified|tested|pass(?:es|ed)?|equivalent|faster|speed-?up)\b", re.I)
 NEG_RE = re.compile(r"(\bnot|\bnever|\bno|n't|\bwithout)\W+(\w+\W+)?$", re.I)
 KINDS_OF = {"verified": ("test", "equiv", "bench"), "tested": ("test",), "passes": ("test", "equiv"),
-            "equivalent": ("equiv",), "faster": ("bench",), "speedup": ("bench",)}
-SHOWS = {"test": "passed lint and tests", "equiv": "passed", "bench": "has a metric with verdict 'win'"}
+            "equivalent": ("equiv",), "faster": ("submit",), "speedup": ("submit",)}   # only submit compares
+SHOWS = {"test": "passed lint and tests", "equiv": "passed", "bench": "completed with a valid measurement",
+         "submit": "has a regime with verdict 'improved'"}
 
 
 def _text(c) -> str:
@@ -62,7 +63,9 @@ def _recorded(recs: list[dict]) -> list[float]:
 
 def _supports(r: dict, named: set[str]) -> bool:
     if r["kind"] == "bench":
-        return any(m.get("verdict") == "win" for k, m in metrics(r).items() if not named or k in named)
+        return any(m.get("valid") is True for k, m in metrics(r).items() if not named or k in named)
+    if r["kind"] == "submit":
+        return any(m.get("verdict") == "improved" for k, m in metrics(r).items() if not named or k in named)
     return passed(r) is True
 
 

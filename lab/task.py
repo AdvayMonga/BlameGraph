@@ -58,11 +58,15 @@ def gain_pct(agg: dict, better: str) -> float | None:
     return d if better == "higher" else -d
 
 
+LOWER_IS_BETTER = ("single_stream", "cold_start")     # fallback when the caller cannot pass the measured direction
+
+
 def score(metrics: dict, task: Task, better: dict | None = None) -> dict:
-    """From a submit record's metrics ({regime: {base, new, delta_pct, band_pct, verdict}}): per-regime gains, the
-    combined objective, constraint checks, and whether this is a win."""
+    """From a submit record's metrics ({regime: {base, new, delta_pct, band_pct, verdict}}) and each regime's
+    measured direction (`better`, as submit reports it): per-regime gains, the combined objective, constraint
+    checks, and whether this is a win."""
     from regimes import suite
-    better = better or {n: ("lower" if n in ("single_stream", "cold_start") else "higher") for n in suite.REGIMES}
+    better = {**{n: ("lower" if n in LOWER_IS_BETTER else "higher") for n in suite.REGIMES}, **(better or {})}
     gains, verdicts, missing = {}, {}, []
     for r in task.regimes:
         agg = metrics.get(r)
