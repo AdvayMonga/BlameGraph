@@ -88,8 +88,8 @@ def arm(vm: VM, record: Record, minutes: int = MAX_MINUTES) -> None:
     disarm(vm)
     deadline = time.time() + minutes * 60
     KNOWN_HOSTS_DIR.mkdir(parents=True, exist_ok=True)
-    log = open(KNOWN_HOSTS_DIR / f"{vm.name}.watchdog.log", "a")
-    pid = _spawn_watchdog([sys.executable, "-m", "lab.vm", "watchdog", "--deadline", f"{deadline:.0f}"], log)
+    with open(KNOWN_HOSTS_DIR / f"{vm.name}.watchdog.log", "a") as log:
+        pid = _spawn_watchdog([sys.executable, "-m", "lab.vm", "watchdog", "--deadline", f"{deadline:.0f}"], log)
     _watchdog_file(vm).write_text(f"{pid} {deadline:.0f}\n")
     try:
         ssh(vm, record, f"sudo shutdown -c >/dev/null 2>&1; sudo shutdown -h +{minutes} >/dev/null 2>&1 || true",
@@ -111,7 +111,9 @@ def disarm(vm: VM) -> None:
     f = _watchdog_file(vm)
     if f.exists():
         try:
-            os.kill(int(f.read_text().split()[0]), signal.SIGTERM)
+            pid = int(f.read_text().split()[0])
+            if pid != os.getpid():                 # the watchdog itself calls stop(): it must not kill itself
+                os.kill(pid, signal.SIGTERM)
         except (ProcessLookupError, ValueError, PermissionError):
             pass
         f.unlink()
@@ -208,10 +210,13 @@ def local_sha() -> str | None:
 
 
 def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | None = None,
-        push_tree: bool = True, where: str = "engine", keep: bool = False, minutes: int = MAX_MINUTES) -> int:
+        push_tree: bool = True, where: str = "engine", keep: bool | None = None, minutes: int = MAX_MINUTES) -> int:
     """Start the VM if needed, push both trees, run `command` in the engine dir (or `where="env"`: this environment's)
     with the engine's venv on PATH under a `minutes` wall-clock timeout, fetch `fetch_dir` from that dir, then stop
-    the VM (`keep=True` leaves it running, with the watchdog armed)."""
+    the VM. `keep=True` leaves it running with the watchdog armed; `keep=None` keeps it only where stop would delete
+    the disk (Verda), since a rebuilt VM re-downloads the weights: there the wall-clock cap is the guard."""
+    if keep is None:
+        keep = bool(getattr(vm.provider, "stop_deletes", False))
     record = start(vm)
     wait_ssh(vm, record)
     arm(vm, record, minutes)
@@ -255,7 +260,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("types", help="what the account can rent right now")
     sub.add_parser("setup", help="run lab/vm-setup.sh on the VM (builds the engine's venv)")
     r = sub.add_parser("run", help="push both trees, run a command under a wall-clock cap, fetch an output dir, stop")
-    r.add_argument("--keep", action="store_true", help="leave the VM running afterwards (watchdog stays armed)")
+    r.add_argument("--keep", dest="keep", action="store_true", default=None,
+                   help="leave the VM running afterwards (watchdog stays armed); the default where stop deletes the disk")
+    r.add_argument("--stop", dest="keep", action="store_false", help="stop afterwards even where that deletes the disk")
     r.add_argument("--minutes", type=int, default=MAX_MINUTES, help=f"wall-clock cap for the command and the VM (default {MAX_MINUTES})")
     r.add_argument("--fetch", help="remote dir, relative to the repo, to bring back")
     r.add_argument("--local", help="where to put it (default lab/runs)")

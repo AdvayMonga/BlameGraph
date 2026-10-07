@@ -158,9 +158,21 @@ def test_watchdog_stops_a_running_vm_at_its_deadline(fake, monkeypatch):
     vm = labvm.VM(name="t4w")
     labvm.start(vm)
     assert vm.provider.get("t4w").state == "running"
+    labvm.KNOWN_HOSTS_DIR.mkdir(parents=True, exist_ok=True)
+    labvm._watchdog_file(vm).write_text(f"{os.getpid()} 0\n")      # the armed file names the watchdog itself
     monkeypatch.setenv("LAB_VM", "t4w")
-    assert labvm.watchdog(labvm.time.time() - 1) == 0
-    assert vm.provider.get("t4w").state == "stopped"
+    assert labvm.watchdog(labvm.time.time() - 1) == 0               # must not SIGTERM itself on the way
+    assert vm.provider.get("t4w").state == "stopped" and not labvm._watchdog_file(vm).exists()
+
+
+def test_run_keeps_the_vm_where_stop_would_delete_the_disk(fake, monkeypatch):
+    vm = labvm.VM(name="t4d", user="u", remote_dir="~/repo")
+    monkeypatch.setattr(type(vm.provider), "stop_deletes", True, raising=False)
+    assert labvm.run(vm, "true") == 0
+    assert vm.provider.get("t4d").state == "running" and labvm._watchdog_file(vm).exists()
+    monkeypatch.setattr(type(vm.provider), "stop_deletes", False)   # the fake cannot delete; the forced path is plain stop
+    assert labvm.run(vm, "true", keep=False) == 0
+    assert vm.provider.get("t4d").state == "stopped"
 
 
 def test_run_returns_the_remote_exit_code_and_still_fetches(fake, monkeypatch):

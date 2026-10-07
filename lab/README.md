@@ -113,7 +113,9 @@ the engine's `.venv/bin` first on PATH, and brings `--fetch` (relative to the di
 `lab/runs/`. Both trees are pushed: the engine to `LAB_VM_DIR`, this repo to `LAB_VM_ENV_DIR`.
 Do not run `uv sync` on the box: it would put CPU torch back.
 
-**A VM is never left running by accident.** `run` stops the VM when its command ends (`--keep` leaves it up).
+**A VM is never left running by accident.** `run` stops the VM when its command ends (`--keep` leaves it up;
+on Verda, where stop deletes the disk and a rebuilt VM re-downloads the weights, `run` keeps it by default and
+`--stop` forces the delete).
 Every session has a wall-clock cap, `LAB_VM_MAX_MINUTES` (default 180, `--minutes` per call): the command runs under
 `timeout`, a detached local watchdog calls the provider's stop at the deadline (`start` and `--keep` arm it; each `run`
 re-arms it; `stop` disarms it), and the VM schedules its own `shutdown -h` as a last resort. Powering off from inside
