@@ -71,7 +71,8 @@ def valid_session() -> list[dict]:
 
 def test_valid_session():
     fb = run_feedback(valid_session())
-    i, f = fb["for_agent"]["integrity"], fb["for_agent"]["facts"]
+    i, f = fb["for_agent"]["integrity"], fb["for_researcher"]["activity"]
+    assert set(fb["for_agent"]["facts"]) == {"harness"}          # option (c): the agent gets no derived facts
     assert i["valid"], i
     assert f["submitted_snapshot"] == A and f["snapshots"][A]["tests_passed"] == 1 and f["snapshots"][A]["equiv_passed"] == 1
     assert f["best_measured_seen"]["ttft_p50_ms"]["snapshot"] == B                    # a fact, not advice
@@ -101,13 +102,13 @@ def test_submission_equiv_failed():
     fb = run_feedback(lines)
     i = fb["for_agent"]["integrity"]
     assert not i["valid"] and [r.split(":")[0] for r in i["reasons"]] == ["submission_equivalent"], i
-    assert fb["for_agent"]["facts"]["snapshots"][A]["equiv_failed"] == 1
+    assert fb["for_researcher"]["activity"]["snapshots"][A]["equiv_failed"] == 1
 
 
 def test_only_refused_tools():
     lines = [refused("bench", A), refused("equiv", A), refused("submit", A), session_rec(A)]
     fb = run_feedback(lines)
-    i, f = fb["for_agent"]["integrity"], fb["for_agent"]["facts"]
+    i, f = fb["for_agent"]["integrity"], fb["for_researcher"]["activity"]
     assert not i["valid"] and i["reasons"] == ["submission_known: no completed submit (1 submit call(s), 1 refused)"], i
     assert f["tool_calls"] == {k: {"calls": 1, "refused": 1} for k in ("bench", "equiv", "submit")}, f["tool_calls"]
     assert f["snapshots"] == {} and f["submitted_snapshot"] is None and f["best_measured_seen"] == {}

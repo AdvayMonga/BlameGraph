@@ -7,8 +7,13 @@ github.com/AdvayMonga/inference-server (engine + stack only since the 2026-10-06
 `LAB_ENGINE_REPO` (default `../inference-server`) and runs it with its own `.venv/bin/python`. See the parent
 `../CLAUDE.md` for coding guidelines.
 
-Hard rule from the user: the loop may receive **facts only, never heuristics or advice**. Integrity is a verdict
-(valid/invalid + reasons); self-consistency and methodology are researcher diagnostics, never fed to the agent.
+Hard rule from the user: the loop may receive **facts only, never heuristics or advice**. Decided 2026-10-06
+("option c"): at the start of every session the agent gets the integrity verdict with its evidence, the raw ledger
+(the `ledger` tool, unfiltered) and only the facts it cannot derive from that ledger (`lab/evaltools.harness_facts`:
+the limits, tiers, policy, noise bands, corpus version the referee measures against). Nothing derived from the
+records (counts, best measured, claims vs evidence) goes to the agent; that is `for_researcher.activity`.
+The task (`lab/task.py`, `--task task.toml`: goal, objective regimes, constraints) is stated in full in the brief,
+and a submit returns its `score` under that task: the win condition is known, never inferred.
 
 ## Layout
 Top-level packages, run from the repo root (no install step; `pyproject.toml` lists optional extras and holds the
@@ -39,7 +44,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
 - `corpus/` — frozen workload traces (BurstGPT timing, WildChat text), seen/heldout, hashed, `manifest.json`;
   `build_corpus.py` / `fetch_traces.py` rebuild it; any change is a new `corpus_version`.
 - `knowledge/` — measured findings (one JSON each) + `evidence/`; seeded into the ledger as `finding` records.
-- `feedback/` — what each side gets after a session. `report.py`: `feedback(path)` → `{for_agent: {integrity, facts}, for_researcher: {assertions, blame}}`; `python -m feedback PATH [--run RUN_ID] [--agent-text]`. Accepts an InferenceBench run dir, a BlameGraph session ledger, or an inference-server lab ledger (detected from its first line). Integrity carries `evidence` per violated rule (rule, plain detail, concrete refs: hashes, measurement ids, offending values and limits).
+- `feedback/` — what each side gets after a session. `report.py`: `feedback(path)` → `{for_agent: {integrity, facts}, for_researcher: {assertions, blame}}` (lab ledgers: `lab_feedback`, `for_agent.facts = {harness}` only, `for_researcher.activity` holds the derived facts); `python -m feedback PATH [--run RUN_ID] [--agent-text]`. Accepts an InferenceBench run dir, a BlameGraph session ledger, or an inference-server lab ledger (detected from its first line). Integrity carries `evidence` per violated rule (rule, plain detail, concrete refs: hashes, measurement ids, offending values and limits).
   - `verdict.py` — integrity rules → `Verdict(valid, reasons, evidence, facts)`. Live mode (hash files on disk) or recorded mode (hashes from the submission event). Physical limits (`unphysical()`) are shown to the agent on purpose: they are hardware facts, not detection tricks.
   - `lab_verdict.py` — inference-server lab ledger → integrity + facts directly (snapshots stand in for configs; no ExperimentLog, so `for_researcher` is empty for lab ledgers). Assumed result shapes are in its docstring; their bench/equiv/submit tools don't write results yet. Submitted snapshot must have a completed seen-split bench, tests passed, and equiv with no failing record (retrying a statistical gate until it passes would let bad changes through).
   - `claim_facts.py` — claim-vs-evidence facts from ledger `claim` text (regex, no LLM): unrecorded numbers, contradicted speedups, verification words with no matching record, unknown record ids. Facts only; never part of the verdict (their lab/README rule).
@@ -162,7 +167,7 @@ consistency result is void: the client counted vLLM's role chunk as a fake first
 ## Next
 GPU (needs spend approval): resolve the BF16 puzzle (plain BF16 on the dev tier at concurrency 32 and 128 on one VM,
 ~20 min, ~$1.50); first real run of `python -m regimes run all` against the engine and against vLLM.
-Here: feedback (option c) after every session; the task format; the validation command. lab `session.py --run` re-resolves
+Here: the validation command (does the gate separate known-good from known-bad on *this* model and GPU; noise bands per regime); a session-format doc. lab `session.py --run` re-resolves
 `base` from HEAD rather than the run's original base (pre-existing; resuming after the engine moved would misaudit);
 `validity/tier_agreement.py` needs real short/full runs; `validity/roofline.py` wants generalizing to the H200 + MoE
 target. The agent's tool set (e.g. a knowledge tool) is the user's design: ask first. README stays a few one-line

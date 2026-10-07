@@ -142,6 +142,19 @@ def test_submit_needs_full_equiv_and_a_bench_then_records_one_aggregate_per_metr
     assert state["n_queries"] == 1 and (s.run_dir / "base-heldout-full.json").exists()
 
 
+def test_submit_scores_the_task(lab, tmp_path):
+    from lab.task import Task
+    tb, s = lab
+    t = tmp_path / "task.toml"
+    t.write_text('[task]\ngoal = "g"\n[objective]\nregimes = ["single_stream"]\n')
+    s.task = Task.parse(t)
+    tb.equiv({"tier": "full"}); tb.bench({"regimes": ["single_stream"]})
+    out = json.loads(tb.submit({}))
+    sc = out["score"]
+    assert set(sc["gains_pct"]) == {"single_stream"} and sc["win"] is False       # no noise band yet: unknown_band
+    assert sc["verdicts"]["single_stream"] == "unknown_band" and sc["missing_regimes"] == []
+
+
 def test_tools_refuse_cleanly_when_the_engine_does_not_start(lab, monkeypatch):
     tb, s = lab
     t = target.load()

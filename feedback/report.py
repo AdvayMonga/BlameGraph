@@ -107,10 +107,7 @@ def feedback(path: str | Path, scenario: str | None = None, run_id: str | None =
     lab = lab_verdict.ledger_file(p)
     if lab:
         run_id, recs = lab_verdict.load(lab, run_id)
-        integrity, f = lab_verdict.integrity(recs), lab_verdict.facts(recs)
-        f["claims"] = claim_facts(recs)   # facts only: claims never decide the verdict (lab/README.md)
-        return {"session": str(p), "run": run_id, "scenario": None, "for_agent": {"integrity": integrity, "facts": f},
-                "for_researcher": {"assertions": None, "blame": None}}   # both need an InferenceBench-style log
+        return lab_feedback(recs, run_id, str(p))
     if (p / "trace.jsonl").exists():
         run = load_run(p)
         log = build_log(run)
@@ -139,6 +136,19 @@ def feedback(path: str | Path, scenario: str | None = None, run_id: str | None =
     }
 
 
+def lab_feedback(recs: list[dict], run_id: str | None, source: str, harness: dict | None = None) -> dict:
+    """The split for a lab ledger (decided 2026-10-06, "option c"): the agent gets the integrity verdict with its
+    evidence, the raw ledger (it already has it, through the `ledger` tool) and only facts it cannot derive from
+    that ledger: `harness`, the parameters the referee measured against. Everything derivable from the records
+    (activity counts, best measured, claims vs evidence) is the researcher's."""
+    integrity = lab_verdict.integrity(recs)
+    activity = lab_verdict.facts(recs)
+    activity["claims"] = claim_facts(recs)   # facts only: claims never decide the verdict (lab/README.md)
+    return {"session": source, "run": run_id, "scenario": None,
+            "for_agent": {"integrity": integrity, "facts": {"harness": harness or {}}},
+            "for_researcher": {"activity": activity, "assertions": None, "blame": None}}
+
+
 def render_for_agent(fb: dict) -> str:
     """Plain-text rendering of the agent-facing half. Same facts, nothing added."""
     a = fb["for_agent"]; i = a["integrity"]; f = a["facts"]
@@ -149,5 +159,5 @@ def render_for_agent(fb: dict) -> str:
         e = ev.pop(r.split(":")[0], None)   # a rule's evidence goes under its first reason
         if e:
             lines += [f"      {e['detail']}"] + [f"      {k}: {json.dumps(v)}" for k, v in e.items() if k not in ("rule", "detail")]
-    lines += [f"{k}: {v}" for k, v in f.items()]
+    lines += [f"{k}: {json.dumps(v, default=str) if isinstance(v, (dict, list)) else v}" for k, v in f.items()]
     return "\n".join(lines)

@@ -10,9 +10,10 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lab import agent, engine, ledger
+from lab import agent, engine, ledger, target
 from lab.budget import Budget, BudgetExceeded
 from lab.safety import grader
+from lab.task import Task
 from lab.tools import Toolbox, clean_pristine
 from lab.workspace import Workspace
 
@@ -30,12 +31,14 @@ class Session:
     budget: Budget
     ledger_root: Path
     profile_runner: object = None          # None: lab.tools.default_profile_runner
+    task: Task | None = None
 
 
 @dataclass
 class RunConfig:
     goal: str
     budget_usd: float
+    task: Task | None = None              # the objective and constraints; `goal` is its text when given
     repo: Path = field(default_factory=engine.repo)     # the engine; the agent's workspace is exported from it
     base: str = "HEAD"
     runs_dir: Path = engine.ENV_ROOT / "lab" / "runs"
@@ -48,12 +51,28 @@ class RunConfig:
     extra: dict = field(default_factory=dict)
 
 
+def referee(s: Session) -> dict:
+    """What the agent gets from the referee at the start of every session: the integrity verdict on this run so
+    far, with evidence, and the harness facts it cannot read off its ledger. Nothing judged, nothing advised."""
+    from feedback.report import lab_feedback
+    from lab.evaltools import harness_facts
+    recs = list(ledger.records(s.ledger_root, run=s.run_id))
+    try:
+        facts = harness_facts(target.load(), s.ledger_root)
+    except Exception as e:                  # a missing corpus or reference is itself a fact
+        facts = {"unavailable": f"{type(e).__name__}: {e}"}
+    return lab_feedback(recs, s.run_id, str(s.ledger_root), facts)["for_agent"]
+
+
 def brief(cfg: RunConfig, s: Session, snapshot_id: str, n: int) -> str:
     tail = list(ledger.records(s.ledger_root, run=s.run_id))[-30:]
-    return (f"Goal: {cfg.goal}\n\n"
+    head = cfg.task.brief() if cfg.task else f"Goal: {cfg.goal}"
+    return (f"{head}\n\n"
             f"Run {s.run_id}, session {n}. Budget: ${s.budget.remaining_usd:.2f} of ${s.budget.cap_usd:.2f} left.\n"
             f"Workspace snapshot: {snapshot_id}. Base commit: {cfg.base}.\n\n"
-            f"Last records of this run ({len(tail)}):\n" + "\n".join(json.dumps(r) for r in tail))
+            f"Referee (this run so far):\n{json.dumps(referee(s), default=str)}\n\n"
+            f"Last records of this run ({len(tail)}; the ledger tool has all of them):\n"
+            + "\n".join(json.dumps(r) for r in tail))
 
 
 def _resolve(repo: Path, ref: str) -> str:
@@ -78,7 +97,7 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
         if budget.remaining_usd < MIN_SESSION_USD:
             summary["stopped"] = "budget"
             break
-        s = Session(run_id, f"{run_id}-s{n}", run_dir, ws, budget, cfg.ledger_root)
+        s = Session(run_id, f"{run_id}-s{n}", run_dir, ws, budget, cfg.ledger_root, task=cfg.task)
         tools = Toolbox(s)
         snap = ws.snapshot()
         spec = agent.AgentSpec(system=SYSTEM, prompt=brief(cfg, s, snap.id, n), workspace=ws.path,
@@ -127,7 +146,8 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m lab.session")
-    ap.add_argument("--goal", required=True)
+    ap.add_argument("--goal", help="plain goal text (or give --task)")
+    ap.add_argument("--task", help="task spec TOML: goal, objective regimes, constraints (lab/task.py)")
     ap.add_argument("--budget", type=float, required=True, help="dollars for the whole run")
     ap.add_argument("--base", default="HEAD")
     ap.add_argument("--run", help="resume this run id")
@@ -135,7 +155,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--session-usd", type=float, default=5.0)
     ap.add_argument("--provider")
     a = ap.parse_args(argv)
-    out = run(RunConfig(goal=a.goal, budget_usd=a.budget, base=a.base, run_id=a.run,
+    task = Task.parse(a.task) if a.task else None
+    if not task and not a.goal:
+        ap.error("give --task or --goal")
+    out = run(RunConfig(goal=task.goal if task else a.goal, budget_usd=a.budget, task=task, base=a.base, run_id=a.run,
                         max_sessions=a.max_sessions, session_usd=a.session_usd, provider=a.provider))
     print(json.dumps(out, indent=1))
     return 0
