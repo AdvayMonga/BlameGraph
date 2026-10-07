@@ -50,7 +50,7 @@ good = {{ same = "python {FAKE} --port {{port}} --out-tokens 6" }}
 bad = {{ wrong4 = "python {FAKE} --port {{port}} --out-tokens 6 --wrong-every 4" }}
 ''')
     monkeypatch.setenv("LAB_TARGET", str(t)); monkeypatch.setenv("LAB_ENGINE_PYTHON", sys.executable)
-    monkeypatch.setattr(validate, "NOISE_DIR", tmp_path / "noise")
+    monkeypatch.setattr(target, "NOISE_DIR", tmp_path / "noise")
     target._cache.clear()
     saved = dict(suite.TIERS["short"]); suite.TIERS["short"].update(probe_s=1.0, final_s=1.5)
     yield target.load()
@@ -68,4 +68,5 @@ def test_validate_separates_and_measures_bands(spec, tmp_path, monkeypatch):
     assert rep["gate_separates"] is True
     noise = json.loads((tmp_path / "noise" / "single_stream.json").read_text())
     assert noise["runs"] == 2 and noise["band_pct"] is not None and rep["bands_measured"] is True
+    assert noise["server"] == "engine" and noise["target"] == spec.name
     assert (tmp_path / "ref" / "outputs.jsonl").exists() and (tmp_path / "out" / "report.json").exists()

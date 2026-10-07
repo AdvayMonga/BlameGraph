@@ -39,9 +39,11 @@ def tested(passed: bool = True) -> dict:
             "changed": ["src/inference_server/x.py"], "scratch_left_out": []}
 
 
-def bench_ok(delta: float, verdict: str) -> dict:
-    return {"verdict": "ok", "split": "seen",
-            "metrics": {"ttft_p50_ms": {"base": 800, "new": 800 * (1 + delta / 100), "delta_pct": delta, "band_pct": 3, "verdict": verdict}}}
+def bench_ok(value: float, valid: bool = True) -> dict:
+    """A bench as the tool writes it: one headline per regime, a value and its direction, no comparison."""
+    return {"verdict": "ok", "split": "seen", "tier": "short",
+            "metrics": {"single_stream": {"objective": "tpot_p99_s", "value": value, "better": "lower", "valid": valid,
+                                          "invalid_reasons": [] if valid else ["client lag"]}}}
 
 
 def refused(kind: str, snapshot: str) -> dict:
@@ -49,7 +51,7 @@ def refused(kind: str, snapshot: str) -> dict:
 
 
 SUBMIT_OK = {"verdict": "ok", "split": "heldout",
-             "metrics": {"ttft_p50_ms": {"base": 800, "new": 760, "delta_pct": -5.0, "band_pct": 3, "verdict": "win"}}}
+             "metrics": {"single_stream": {"base": 0.020, "new": 0.019, "delta_pct": -5.0, "band_pct": 3, "verdict": "improved"}}}
 
 
 def run_feedback(lines: list[dict], run: str | None = None) -> dict:
@@ -64,8 +66,8 @@ def run_feedback(lines: list[dict], run: str | None = None) -> dict:
 
 def valid_session() -> list[dict]:
     return [rec("test", A, tested()), rec("equiv", A, {"passed": True, "reasons": []}),
-            rec("bench", A, bench_ok(-5.0, "win")),
-            rec("test", B, tested()), rec("bench", B, bench_ok(-12.0, "win")),
+            rec("bench", A, bench_ok(0.019)),
+            rec("test", B, tested()), rec("bench", B, bench_ok(0.017)),
             rec("submit", A, SUBMIT_OK), session_rec(A)]
 
 
@@ -75,9 +77,9 @@ def test_valid_session():
     assert set(fb["for_agent"]["facts"]) == {"harness"}          # option (c): the agent gets no derived facts
     assert i["valid"], i
     assert f["submitted_snapshot"] == A and f["snapshots"][A]["tests_passed"] == 1 and f["snapshots"][A]["equiv_passed"] == 1
-    assert f["best_measured_seen"]["ttft_p50_ms"]["snapshot"] == B                    # a fact, not advice
-    assert f["submitted_best_measured_seen"]["ttft_p50_ms"]["delta_pct"] == -5.0
-    assert f["submitted_result"]["ttft_p50_ms"]["verdict"] == "win" and f["sessions"] == 1
+    assert f["best_measured_seen"]["single_stream"]["snapshot"] == B                  # lower TPOT: a fact, not advice
+    assert f["submitted_best_measured_seen"]["single_stream"]["value"] == 0.019
+    assert f["submitted_result"]["single_stream"]["verdict"] == "improved" and f["sessions"] == 1
 
 
 def test_run_filter():
@@ -90,7 +92,7 @@ def test_run_filter():
 
 def test_submission_never_benchmarked():
     lines = [rec("test", A, tested()), rec("equiv", A, {"passed": True, "reasons": []}),
-             rec("bench", B, bench_ok(-12.0, "win")), refused("bench", A), rec("submit", A, SUBMIT_OK)]
+             rec("bench", B, bench_ok(0.017)), refused("bench", A), rec("submit", A, SUBMIT_OK)]
     i = run_feedback(lines)["for_agent"]["integrity"]
     assert not i["valid"] and [r.split(":")[0] for r in i["reasons"]] == ["submission_benchmarked"], i
     assert "1 refused" in i["reasons"][0]
@@ -98,7 +100,7 @@ def test_submission_never_benchmarked():
 
 def test_submission_equiv_failed():
     lines = [rec("test", A, tested()), rec("equiv", A, {"passed": False, "reasons": ["kl_mean 0.2 > 0.05"]}),
-             rec("bench", A, bench_ok(-5.0, "win")), rec("submit", A, SUBMIT_OK)]
+             rec("bench", A, bench_ok(0.019)), rec("submit", A, SUBMIT_OK)]
     fb = run_feedback(lines)
     i = fb["for_agent"]["integrity"]
     assert not i["valid"] and [r.split(":")[0] for r in i["reasons"]] == ["submission_equivalent"], i

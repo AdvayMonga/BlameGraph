@@ -5,8 +5,9 @@
 1. Serves the target's reference and writes the reference outputs (`correctness reference`) to reference.dir.
 2. Serves each launch in the target's [validation] good and bad tables, judges it (`correctness candidate`), and
    checks the gate separates them: every good must PASS, every bad must FAIL (inconclusive counts as neither).
-3. Serves the reference again and runs the chosen regimes `noise_runs` times on the seen split, short tier, to
-   measure each regime's run-to-run band; writes knowledge/noise/<regime>.json, which `submit` reads.
+3. Serves the target's *engine* (the base commit, from its repo) and runs the chosen regimes `noise_runs` times on
+   the seen split, short tier, to measure each regime's run-to-run band on the thing submit will judge; writes
+   knowledge/noise/<regime>.json (tagged with the target and `server: engine`), which `submit` reads.
 Exit status 0 only if the gate separated and every band was measured. Nothing here is jailed: these are the
 operator's own launches, not the agent's.
 
@@ -26,8 +27,6 @@ from pathlib import Path
 
 from lab import serve, target
 
-NOISE_DIR = target.ENV_ROOT / "knowledge" / "noise"
-
 
 def band_pct(values: list[float]) -> float | None:
     """Run-to-run band as a percent of the mean: 2 x sample sd / mean (one value: None)."""
@@ -39,11 +38,11 @@ def band_pct(values: list[float]) -> float | None:
 
 def write_noise(regime: str, values: list[float], t: target.Target, extra: dict | None = None) -> dict:
     from regimes.workload import corpus_version
-    NOISE_DIR.mkdir(parents=True, exist_ok=True)
+    target.noise_dir().mkdir(parents=True, exist_ok=True)
     d = {"regime": regime, "band_pct": band_pct(values), "values": values, "runs": len(values), "model": t.model,
-         "target": t.name, "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,
+         "target": t.name, "server": "engine", "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,
          "measured_at": time.strftime("%Y-%m-%dT%H:%M:%S"), **(extra or {})}
-    (NOISE_DIR / f"{regime}.json").write_text(json.dumps(d, indent=1) + "\n")
+    (target.noise_dir() / f"{regime}.json").write_text(json.dumps(d, indent=1) + "\n")
     return d
 
 
@@ -60,9 +59,9 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
     report: dict = {"target": t.name, "model": t.model, "tier": tier, "candidates": {}, "noise": {}, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
     if t.reference is None or t.reference_dir is None:
         raise SystemExit("the target has no [reference] launch and dir")
-    ref_dir = t.reference_dir if tier == "dev" else t.reference_dir.with_name(t.reference_dir.name + "-full")
-    # 1. reference
-    if not (ref_dir / "outputs.jsonl").exists():
+    ref_dir = t.reference_dir_for(tier)
+    # 1. reference (meta.json is written last: its absence means an interrupted run, redone from the cached answers)
+    if not target.reference_complete(ref_dir):
         with serve.Served(target.ENV_ROOT, t.reference, log=log_dir / "serve-reference.log", jailed=False) as srv:
             api = client.Api.from_target(t.reference, t)
             crun.reference(srv.url, t.model, ref_dir, tasks.load(t.tasks, tier=tier), enc, api=api)
@@ -81,10 +80,10 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
     bads = [c for c in report["candidates"].values() if c["kind"] == "bad"]
     report["gate_separates"] = (bool(goods) and bool(bads) and all(c["verdict"] == "pass" for c in goods)
                                 and all(c["verdict"] == "fail" for c in bads))
-    # 3. noise bands from repeated unchanged runs of the reference
+    # 3. noise bands from repeated unchanged runs of the engine itself (what submit compares against)
     names = regimes or list(suite.REGIMES)
     if noise_runs > 0 and names:
-        with serve.Served(target.ENV_ROOT, t.reference, log=log_dir / "serve-noise.log", jailed=False) as srv:
+        with serve.Served(t.engine_repo, t.engine, log=log_dir / "serve-noise.log", jailed=False) as srv:
             values: dict[str, list] = {n: [] for n in names}
             for k in range(noise_runs):
                 ctx = suite.Ctx.from_target(t, srv.url, split="seen", tier="short", seed=k)

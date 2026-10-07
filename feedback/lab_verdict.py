@@ -76,11 +76,12 @@ def metrics(r: dict) -> dict:
 
 
 def gain(m: dict) -> float | None:
-    """Improvement in percent from a metric's verdict and delta_pct; None when either is missing."""
+    """Improvement in percent from a submit aggregate's verdict and delta_pct (improved / regressed / within_band
+    / unknown_band); None when there is no comparison (a bench metric carries a value, not a delta)."""
     d, v = m.get("delta_pct"), m.get("verdict")
     if not isinstance(d, (int, float)) or not v:
         return None
-    return abs(d) if v == "win" else -abs(d) if v == "loss" else 0.0
+    return abs(d) if v == "improved" else -abs(d) if v == "regressed" else 0.0 if v == "within_band" else None
 
 
 def submitted(recs: list[dict]) -> dict | None:
@@ -88,12 +89,24 @@ def submitted(recs: list[dict]) -> dict | None:
     return next((r for r in reversed(recs) if r["kind"] == "submit" and not refused(r) and passed(r)), None)
 
 
+def _score(m: dict) -> float | None:
+    """What makes one bench metric better than another: a gain when it carries a comparison, else its value in the
+    direction the regime reports (`better`: higher | lower)."""
+    g = gain(m)
+    if g is not None:
+        return g
+    v = m.get("value")
+    if not isinstance(v, (int, float)) or m.get("valid") is False:
+        return None
+    return -v if m.get("better") == "lower" else v
+
+
 def _best(snaps: dict, only: str | None = None) -> dict:
     best: dict[str, tuple] = {}
     for sid, s in snaps.items():
         for b in s["benches"] if only in (None, sid) else ():
             for name, m in b["metrics"].items():
-                g = gain(m)
+                g = _score(m)
                 if b["split"] == "seen" and g is not None and (name not in best or g > best[name][0]):
                     best[name] = (g, {"snapshot": sid, "record": b["record"], **m})
     return {k: v[1] for k, v in best.items()}
