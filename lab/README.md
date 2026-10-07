@@ -20,9 +20,11 @@ copy it, change the engine section (and the reference if the model changes), and
   engine's venv needs its dev extras, `uv sync --extra dev`, for lint and tests). Nothing here imports the
   engine except the profiler harness and canaries, which run in the engine's process: run `python -m
   lab.profile` and `python -m lab.canary` with the engine's interpreter, from this directory.
-- In that repo, `src/inference_server/` is the only thing the agent may write (plus new `tests/test_*.py`).
-- Black-box tools (bench, later) launch the server with `python -m inference_server.server`,
-  wait on `GET /health`, and talk to it over its OpenAI-compatible HTTP API.
+- The target's write surface is the only thing the agent may write (for inference-server: `src/inference_server/`
+  plus new `tests/test_*.py`).
+- Black-box tools (bench, equiv, submit) serve the agent's pristine copy with the target's launch command, inside
+  the jail (`lab/serve.py`: free localhost port, the target's env, ready when `health` answers 200, torn down with
+  its process group), and talk to it over its OpenAI-compatible HTTP API.
 - White-box tools (profile) build the backend and scheduler in process, because torch.profiler
   has to live in the process it traces. Profiling never gates anything.
 - Engine instrumentation the lab reads: `TIMELINE_DIR` turns on the event timeline
@@ -81,7 +83,9 @@ with the referee's rights, snapshot the workspace and write the ledger on every 
 | `budget` | dollars left |
 | `restore` | workspace back to a snapshot id (`base` resets) |
 | `note` | a note for the human; recorded, changes nothing |
-| `equiv`, `bench`, `submit` | refuse with the reason until the eval harness is wired |
+| `bench` | serve the pristine copy and run the load regimes (`regimes/`) on the seen split, short tier; one headline per regime, raw (`args.regimes`, `args.tier`) |
+| `equiv` | serve it and run the correctness gate (`correctness/`) against the target's reference outputs; pass, fail or inconclusive with every metric; `tier=full` uses `<reference.dir>-full` |
+| `submit` | the only thing that can produce a win. Needs a passing full-tier equiv and a seen bench on this snapshot. Measures the held-out split at the full tier, measures the base commit the same way (once per run, cached outside the jail), and records one aggregate per regime (base, new, delta %, noise band %, verdict improved/regressed/within_band/unknown_band) through the Thresholdout guard (`validity/holdout.py`, state in `lab/ledger/holdout_state.json`, seed `LAB_HOLDOUT_SEED`): the held-out numbers themselves never reach the ledger. Noise bands come from `knowledge/noise/<regime>.json` when measured |
 
 A session ends when the agent says `stop`, its per-session cap is spent, or it times out. The
 run ends on budget, on `stop`, or on a write-surface violation (the one hard rule). Model cost

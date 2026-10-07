@@ -22,8 +22,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `regimes`, `validity` CLIs all read it.
 - `lab/` — moved from inference-server 2026-10-06 (`lab/README.md`). `session.py` (the loop over a dollar budget),
   `agent.py` (the one place a model is called; the agent's jailed shell gets the engine's python on PATH),
-  `tools.py` (metered tools: test, profile, ledger, budget, restore, note; bench/equiv/submit still
-  refuse until wired to `regimes`/`correctness`), `workspace.py` (exported engine copy + snapshots), `ledger.py`
+  `tools.py` (metered tools: test, profile, ledger, budget, restore, note) + `evaltools.py` (bench → `regimes` on
+  the seen split; equiv → `correctness` candidate vs the target's reference; submit → held-out full tier vs the
+  base commit, one aggregate per regime through the Thresholdout guard; all three serve the pristine tree via
+  `serve.py`, jailed with local binding allowed), `workspace.py` (exported engine copy + snapshots), `ledger.py`
   (append-only JSONL, `lab/ledger/` gitignored), `budget.py`, `engine.py` (where the engine repo and its python
   are), `safety/` (write surfaces, srt jail, grader: lint/tests run with the engine's python in the jail),
   `profile.py` + `bundle.py` + `gpu.py` (profiler harness, staged into the pristine tree under `_harness/` so the
@@ -160,8 +162,7 @@ consistency result is void: the client counted vLLM's role chunk as a fake first
 ## Next
 GPU (needs spend approval): resolve the BF16 puzzle (plain BF16 on the dev tier at concurrency 32 and 128 on one VM,
 ~20 min, ~$1.50); first real run of `python -m regimes run all` against the engine and against vLLM.
-Here, now that the lab lives in this repo: wire the lab's `bench` tool to `regimes`, `equiv` to `python -m
-correctness candidate`, and `submit` to the held-out split + `validity/holdout.py`; lab `session.py --run` re-resolves
+Here: feedback (option c) after every session; the task format; the validation command. lab `session.py --run` re-resolves
 `base` from HEAD rather than the run's original base (pre-existing; resuming after the engine moved would misaudit);
 `validity/tier_agreement.py` needs real short/full runs; `validity/roofline.py` wants generalizing to the H200 + MoE
 target. The agent's tool set (e.g. a knowledge tool) is the user's design: ask first. README stays a few one-line

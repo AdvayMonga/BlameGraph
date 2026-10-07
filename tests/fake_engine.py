@@ -27,8 +27,29 @@ def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, qu
             line = b"data: " + (obj if isinstance(obj, bytes) else json.dumps(obj).encode()) + b"\n\n"
             self.wfile.write(f"{len(line):x}\r\n".encode() + line + b"\r\n"); self.wfile.flush()
 
+        def do_GET(self):
+            data = b'{"ok": true}'
+            self.send_response(200); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+
+        def _json(self, obj, status=200):
+            data = json.dumps(obj).encode()
+            self.send_response(status); self.send_header("Content-Length", str(len(data))); self.end_headers()
+            self.wfile.write(data)
+
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if self.path.endswith("/v1/completions"):        # teacher-forced scoring, vLLM-shaped: deterministic
+                ids = body["prompt"]
+                plp = [None] + [{str(t): {"logprob": -0.1 - (t % 7) / 100}, str(t + 1): {"logprob": -2.0}} for t in ids[1:]]
+                return self._json({"choices": [{"text": "", "prompt_logprobs": plp}]})
+            if not body.get("stream"):
+                last = body["messages"][-1]["content"]
+                n = min(out_tokens, body.get("max_tokens") or out_tokens)
+                text = ("42" if "17 + 25" in last else "The answer is (C)." if "pick one" in last
+                        else " ".join(f"t{i}" for i in range(n)))
+                time.sleep(token_s * n)
+                return self._json({"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+                                   "usage": {"completion_tokens": n}})
             with lock:
                 if queue_limit is not None and waiting[0] >= queue_limit:
                     data = b'{"error": "overloaded"}'

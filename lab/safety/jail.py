@@ -23,15 +23,17 @@ def required() -> bool:
 
 
 def settings(writable: list[Path], venv: Path, domains: list[str],
-             readonly: tuple[Path, ...] | list[Path] = (), python: str | None = None) -> dict:
+             readonly: tuple[Path, ...] | list[Path] = (), python: str | None = None,
+             local_binding: bool = False) -> dict:
     """Write only `writable`; read nothing under home but it, `readonly`, `venv` and the interpreter; reach `domains`.
-    `python` is the interpreter that will run inside (the engine's); default this one."""
+    `python` is the interpreter that will run inside (the engine's); default this one. `local_binding` lets the
+    jailed process listen on localhost (a served engine); everything else stays unreachable."""
     # A venv's python is a symlink to the base interpreter, which uv keeps under home.
     interpreter = {Path(sys.base_prefix).resolve(), Path(python or sys.executable).resolve().parent.parent}
     return {
         "network": {"allowedDomains": list(domains), "deniedDomains": [],
                     "allowUnixSockets": [], "allowAllUnixSockets": False,
-                    "allowLocalBinding": False},
+                    "allowLocalBinding": local_binding},
         "filesystem": {
             "denyRead": [str(Path.home())],
             "allowRead": [str(p) for p in [*writable, *readonly, venv, *sorted(interpreter)]],
