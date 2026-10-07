@@ -75,6 +75,27 @@ def aggregate(base: dict, delta: float | None, better: str, band_pct: float | No
     return {"base": b, "new": b * (1 + delta / 100), "delta_pct": delta, "band_pct": band_pct, "verdict": verdict}
 
 
+def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
+    """What the referee measures against: the parameters the agent cannot read off its ledger. Facts, not advice."""
+    from regimes import suite
+    from regimes.workload import corpus_version
+    facts = {
+        "model": t.model, "reference": t.reference.launch if t.reference else None,
+        "latency_limits": {"interactive": t.interactive.__dict__, "conversational": t.conversational.__dict__},
+        "goodput_attainment": 0.99,
+        "tiers": {k: dict(v) for k, v in suite.TIERS.items()},
+        "correctness": {"policy": f"pooled task score >= {t.min_score_ratio} of the reference, length >= {t.min_length_ratio}, "
+                        f"consistent streams; under the line fails only when the net loss is significant",
+                        "tasks": list(t.tasks)},
+        "noise_bands_pct": {n: noise_band_pct(n) for n in suite.REGIMES},
+        "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,
+    }
+    if ledger_root and (Path(ledger_root) / "holdout_state.json").exists():
+        st = json.loads((Path(ledger_root) / "holdout_state.json").read_text())
+        facts["heldout_queries_left"] = st.get("budget_left")
+    return facts
+
+
 class EvalTools:
     """Mixin for lab.tools.Toolbox: needs self.s (session), self._audited, self._pristine, self._record,
     self._record_heldout."""
@@ -169,8 +190,12 @@ class EvalTools:
                     return f"submit refused: {e}"
             metrics[n] = aggregate(base.get(n, {}), held_d, new[n].get("better", "higher"), noise_band_pct(n))
         rec = self._record_heldout("submit", "submit", args, {"tier": "full"}, metrics, snap)
-        return json.dumps({"snapshot": snap.id, "split": "heldout", "tier": "full", "metrics": metrics,
-                           "record": rec["id"]}, indent=1)
+        out = {"snapshot": snap.id, "split": "heldout", "tier": "full", "metrics": metrics, "record": rec["id"]}
+        task = getattr(self.s, "task", None)
+        if task is not None:                       # the task's own win condition, applied to these aggregates
+            from lab.task import score
+            out["score"] = score(metrics, task)
+        return json.dumps(out, indent=1)
 
     # -- support ------------------------------------------------------------------------
     bench_default_regimes = ("single_stream", "saturated", "bursty")

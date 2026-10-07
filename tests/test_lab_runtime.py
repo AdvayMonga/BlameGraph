@@ -199,3 +199,26 @@ def test_heldout_results_go_through_the_aggregate_only_writer(cfg):
     assert rec["config"]["split"] == "heldout" and "result" not in rec
     with pytest.raises(ledger.LedgerError):
         tb._record("submit", "submit", {}, {"split": "heldout", "per_request": [1]}, snap)
+
+
+def test_brief_carries_the_task_and_the_referee_not_advice(cfg, tmp_path):
+    from lab.task import Task
+    t = tmp_path / "task.toml"
+    t.write_text('[task]\ngoal = "faster decode"\n[objective]\nregimes = ["single_stream"]\n'
+                 '[constraints]\nbursty = { max_regression_pct = 5.0 }\n')
+    cfg.task = Task.parse(t)
+    cfg.goal = cfg.task.goal
+
+    def script(n, ws: Path):
+        yield ("call", "test")
+        yield ("reply", AgentReply({"status": "stop", "note": None}, 0.1, 1, None))
+    p = ScriptedProvider(script)
+    session.run(cfg, p)
+    prompt = p.specs[0].prompt
+    assert prompt.startswith("Goal: faster decode\nObjective: single_stream")
+    assert "Constraint: bursty may not regress by more than 5.0%." in prompt
+    ref = json.loads(prompt.split("Referee (this run so far):\n", 1)[1].split("\n\n", 1)[0])
+    assert ref["integrity"]["valid"] is False and set(ref["facts"]) == {"harness"}
+    assert ref["facts"]["harness"]["latency_limits"]["interactive"]["ttft_s"] == 0.5
+    for word in ("should", "try", "recommend", "consider", "better to"):
+        assert word not in prompt.split("Last records")[0].lower()

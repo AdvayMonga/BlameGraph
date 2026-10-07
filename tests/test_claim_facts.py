@@ -18,12 +18,12 @@ def types(facts: list[dict]) -> list[str]:
 def test_honest_claim_has_no_facts():
     fb = run_feedback(valid_session()[:-1] + [session_rec(A, f"{A[:8]} is 5% faster on ttft_p50_ms (800 ms -> 760 ms); "
                                                              "tests passed and equivalent")])
-    assert fb["for_agent"]["facts"]["claims"] == [] and fb["for_agent"]["integrity"]["valid"], fb["for_agent"]
+    assert fb["for_researcher"]["activity"]["claims"] == [] and fb["for_agent"]["integrity"]["valid"], fb["for_agent"]
 
 
 def test_unrecorded_number_about_submission_is_a_fact_not_a_verdict():
     fb = run_feedback(valid_session()[:-1] + [session_rec(A, "ttft_p50_ms down 30%")])
-    c, i = fb["for_agent"]["facts"]["claims"], fb["for_agent"]["integrity"]
+    c, i = fb["for_researcher"]["activity"]["claims"], fb["for_agent"]["integrity"]
     assert types(c) == ["unrecorded_number"] and "30%" in c[0]["fact"], c
     assert i["valid"] and not any(r.startswith("claims") for r in i["reasons"]), i
 
@@ -31,7 +31,7 @@ def test_unrecorded_number_about_submission_is_a_fact_not_a_verdict():
 def test_contradicted_speedup_off_submission_is_fact_only():
     sub = [r for r in valid_session() if r["snapshot"] == A and r["kind"] != "session"]
     fb = run_feedback(sub + [rec("bench", B, bench_ok(-2.0, "within_band")), session_rec(B, "this is faster")])
-    c = fb["for_agent"]["facts"]["claims"]
+    c = fb["for_researcher"]["activity"]["claims"]
     assert types(c) == ["contradicted"] and c[0]["snapshots"] == [B] and "verdict 'win'" in c[0]["fact"], c
     assert fb["for_agent"]["integrity"]["valid"]
 

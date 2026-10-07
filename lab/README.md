@@ -67,7 +67,8 @@ A held-out record (`config.split == "heldout"`) carries no `raw` and one aggrega
 
 ## Runtime
 
-    python -m lab.session --goal "cut decode step time on the steady_interactive class" --budget 20
+    python -m lab.session --task task.toml --budget 20      # or --goal "free text" with no objective
+    # task.toml: [task] goal; [objective] regimes = [...], combine = "min"|"mean"; [constraints] <regime> = { max_regression_pct }
 
 One loop: while dollars remain, a fresh agent session gets the goal, the budget left, the last
 ledger records and the tools, and is free. Its shell and file tools run inside the srt jail on an
@@ -86,6 +87,11 @@ with the referee's rights, snapshot the workspace and write the ledger on every 
 | `bench` | serve the pristine copy and run the load regimes (`regimes/`) on the seen split, short tier; one headline per regime, raw (`args.regimes`, `args.tier`) |
 | `equiv` | serve it and run the correctness gate (`correctness/`) against the target's reference outputs; pass, fail or inconclusive with every metric; `tier=full` uses `<reference.dir>-full` |
 | `submit` | the only thing that can produce a win. Needs a passing full-tier equiv and a seen bench on this snapshot. Measures the held-out split at the full tier, measures the base commit the same way (once per run, cached outside the jail), and records one aggregate per regime (base, new, delta %, noise band %, verdict improved/regressed/within_band/unknown_band) through the Thresholdout guard (`validity/holdout.py`, state in `lab/ledger/holdout_state.json`, seed `LAB_HOLDOUT_SEED`): the held-out numbers themselves never reach the ledger. Noise bands come from `knowledge/noise/<regime>.json` when measured |
+
+Every session opens with the task in full, the referee's verdict on the run so far (integrity, with the evidence
+behind each broken rule) and the harness facts the agent cannot read off its ledger (latency limits, tiers,
+correctness policy, noise bands, corpus version, held-out queries left), then the last records. Nothing in it is
+derived from the agent's own records and nothing is advice; the `ledger` tool has every record, unfiltered.
 
 A session ends when the agent says `stop`, its per-session cap is spent, or it times out. The
 run ends on budget, on `stop`, or on a write-surface violation (the one hard rule). Model cost
