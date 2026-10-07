@@ -1,0 +1,38 @@
+# The target: what is being optimized, how to run it, and what it is judged against.
+# Select with LAB_TARGET=targets/inference-server.toml (or --target). Nothing defaults to this file.
+
+[model]
+name = "Qwen/Qwen3-30B-A3B"                 # served model name, and the reference tokenizer
+chat_kwargs = { enable_thinking = false }    # chat_template_kwargs sent with every chat request (model-specific)
+max_model_len = 32768
+
+[engine]
+repo = "../inference-server"                 # relative to this repo; LAB_ENGINE_REPO overrides
+python = ".venv/bin/python"                  # relative to repo; LAB_ENGINE_PYTHON overrides
+api = "vllm"                                 # logprobs adapter for the divergence check: vllm | sglang | none
+launch = "python -m uvicorn inference_server.server:app --host 127.0.0.1 --port {port}"
+health = "/health"                           # GET on the server; ready at 200
+startup_timeout_s = 1800
+env = { BACKEND = "custom-cuda", MODEL_NAME = "Qwen/Qwen3-30B-A3B", MAX_BATCH_SIZE = "32", CONTEXT_WINDOW = "32768" }
+write = ["src/inference_server/*"]           # what the agent may add, modify or delete
+add_only = ["tests/test_*.py"]               # what it may add but never change
+test = "python -m pytest -q -p no:cacheprovider -m 'not heavy and not needs_host'"
+lint = "python -m ruff check ."
+
+[reference]                                  # the unmodified model the correctness gate compares against
+api = "vllm"
+launch = "vllm serve Qwen/Qwen3-30B-A3B --dtype bfloat16 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}"
+env = { VLLM_BATCH_INVARIANT = "1" }
+dir = "data/equiv/ref"                       # where `python -m correctness reference` wrote its outputs
+
+[limits]                                     # MLPerf Llama-3.1-8B latency limits, checked at p99
+interactive = { ttft_s = 0.5, tpot_s = 0.030 }
+conversational = { ttft_s = 2.0, tpot_s = 0.100 }
+
+[correctness]
+tasks = ["mmlu_pro", "math", "code", "needle"]
+min_score_ratio = 0.99                       # MLPerf: >= 99% of the reference's pooled task score
+min_length_ratio = 0.90
+
+[corpus]
+dir = "corpus"

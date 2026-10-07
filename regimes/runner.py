@@ -31,20 +31,21 @@ CONVERSATIONAL = Limits(2.0, 0.100)   # MLPerf Llama-3.1-8B conversational, chec
 
 
 def run_open(url: str, model: str, requests: list[Request], timeout: float = 600, count_tokens=None,
-             procs: int = 4) -> list[Row]:
+             procs: int = 4, chat_kwargs: dict | None = None) -> list[Row]:
     """Fire each request at its `at_s`; returns one row per request in input order. The schedule is dealt
     round-robin to `procs` client processes on one shared start time, so parsing many concurrent streams can't
     starve the sender of interpreter time (the per-request lag check would void the run)."""
     order = sorted(range(len(requests)), key=lambda i: requests[i].at_s)
     procs = max(1, min(procs, len(requests)))
     if procs == 1:
-        rows = dict(zip(order, _fire_all(url, model, [requests[i] for i in order], timeout, time.perf_counter())))
+        rows = dict(zip(order, _fire_all(url, model, [requests[i] for i in order], timeout, time.perf_counter(),
+                                         chat_kwargs=chat_kwargs)))
     else:
         ctx = mp.get_context("spawn")
         ready, results, go, t0 = ctx.Queue(), ctx.Queue(), ctx.Event(), ctx.Value("d", 0.0)
         slices = [order[k::procs] for k in range(procs)]
         workers = [ctx.Process(target=_worker, args=(k, url, model, [requests[i] for i in sl], timeout, ready, go,
-                                                     t0, results), daemon=True) for k, sl in enumerate(slices)]
+                                                     t0, results, chat_kwargs), daemon=True) for k, sl in enumerate(slices)]
         for w in workers:
             w.start()
         try:
@@ -69,13 +70,14 @@ def run_open(url: str, model: str, requests: list[Request], timeout: float = 600
     return [recount(rows[i], count_tokens) for i in range(len(requests))]
 
 
-def _worker(k, url, model, reqs, timeout, ready, go, t0, results):
+def _worker(k, url, model, reqs, timeout, ready, go, t0, results, chat_kwargs=None):
     ready.put(k)
     go.wait()
-    results.put((k, _fire_all(url, model, reqs, timeout, t0.value)))
+    results.put((k, _fire_all(url, model, reqs, timeout, t0.value, chat_kwargs=chat_kwargs)))
 
 
-def _fire_all(url, model, reqs: list[Request], timeout: float, t0: float, lead_s: float = 0.005) -> list[Row]:
+def _fire_all(url, model, reqs: list[Request], timeout: float, t0: float, lead_s: float = 0.005,
+              chat_kwargs: dict | None = None) -> list[Row]:
     """reqs in schedule order, each on its own thread started `lead_s` early so it is awake at its send time.
     t0 is the shared perf_counter start (CLOCK_MONOTONIC is system-wide, so processes agree on it)."""
     clock = lambda: time.perf_counter() - t0
@@ -84,7 +86,7 @@ def _fire_all(url, model, reqs: list[Request], timeout: float, t0: float, lead_s
     def fire(i):
         _wait_until(clock, reqs[i].at_s)
         try:
-            rows[i] = send(url, model, reqs[i], reqs[i].at_s, clock, timeout)
+            rows[i] = send(url, model, reqs[i], reqs[i].at_s, clock, timeout, chat_kwargs=chat_kwargs)
         except Exception as e:                    # the client itself failed: still one row, never a lost request
             rows[i] = Row(reqs[i].id, "crash", reqs[i].at_s, 0.0, detail=f"client {type(e).__name__}: {e}"[:200])
 
@@ -106,7 +108,7 @@ def _wait_until(clock, t: float, spin_s: float = 0.002):
 
 
 def run_closed(url: str, model: str, requests, concurrency: int, duration_s: float | None = None,
-               timeout: float = 600, count_tokens=None) -> tuple[list[Row], float]:
+               timeout: float = 600, count_tokens=None, chat_kwargs: dict | None = None) -> tuple[list[Row], float]:
     """`concurrency` clients take requests in order from `requests` (any iterable, consumed lazily) until it (or
     `duration_s`) runs out. Returns (rows, elapsed seconds). A request's scheduled time is when its client became free."""
     clock = wall_clock()
@@ -121,7 +123,7 @@ def run_closed(url: str, model: str, requests, concurrency: int, duration_s: flo
             if req is None:
                 return
             try:
-                row = send(url, model, req, clock(), clock, timeout, count_tokens)
+                row = send(url, model, req, clock(), clock, timeout, count_tokens, chat_kwargs=chat_kwargs)
             except Exception as e:
                 row = Row(req.id, "crash", clock(), 0.0, detail=f"client {type(e).__name__}: {e}"[:200])
             with lock:

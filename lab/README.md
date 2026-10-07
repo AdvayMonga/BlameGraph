@@ -3,6 +3,15 @@
 The environment that measures, and later grades, changes to the engine. Design in
 `ENVIRONMENT.md` at the repo root.
 
+## The target
+
+Everything about *what* is being optimized lives in one TOML file, `targets/<name>.toml`, selected with
+`LAB_TARGET` (or `--target`): the model and its chat kwargs, the engine repo, interpreter, launch command, health
+path, env, logprobs API, write surface and test/lint commands, the reference server, the latency limits, the
+correctness tasks and policy, and the corpus. Nothing defaults; without a target every command stops and lists
+`targets/`. `targets/inference-server.toml` is the committed example. To point the environment at another engine,
+copy it, change the engine section (and the reference if the model changes), and run the validation command.
+
 ## Contract with the engine
 
 - The engine is a separate repo (github.com/AdvayMonga/inference-server). The lab finds it through

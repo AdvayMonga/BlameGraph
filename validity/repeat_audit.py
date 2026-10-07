@@ -16,12 +16,14 @@ PROMPTS = [f"Write a short paragraph about {t}." for t in (
     "comets", "bridges", "forests", "salt", "clocks", "bread", "wind", "maps", "copper", "snow")]
 
 
-def stream_timed(base_url: str, model: str, prompt: str, api: str = "chat", max_tokens: int = 128) -> dict:
+def stream_timed(base_url: str, model: str, prompt: str, api: str = "chat", max_tokens: int = 128,
+                 chat_kwargs: dict | None = None) -> dict:
     """One streamed greedy request -> {ttft_s, tpot_s, e2e_s, n_tokens}; a token is a chunk with non-empty text."""
     chat = api == "chat"
     body = {"model": model, "max_tokens": max_tokens, "temperature": 0.0, "stream": True}
-    body.update({"messages": [{"role": "user", "content": prompt}], "chat_template_kwargs": {"enable_thinking": False}}
-                if chat else {"prompt": prompt})
+    body.update({"messages": [{"role": "user", "content": prompt}]} if chat else {"prompt": prompt})
+    if chat and chat_kwargs:
+        body["chat_template_kwargs"] = dict(chat_kwargs)
     req = urllib.request.Request(f"{base_url.rstrip('/')}/v1/{'chat/completions' if chat else 'completions'}",
                                  data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
     t0, ttft, n = time.perf_counter(), None, 0
@@ -45,11 +47,11 @@ def _decode(c: dict) -> float:
 
 
 def repeat_audit(base_url: str, model: str, requests: list[str], repeats: int = 3, threshold: float = 0.10,
-                 api: str = "chat", max_tokens: int = 128) -> dict:
+                 api: str = "chat", max_tokens: int = 128, chat_kwargs: dict | None = None) -> dict:
     """Send each prompt once then `repeats` more times; fail if repeats decode > threshold + noise faster, or instantly."""
     rows, tpot_r, e2e_r, ttft_r, firsts, instant = [], [], [], [], [], 0
     for i, p in enumerate(requests):
-        calls = [stream_timed(base_url, model, p, api, max_tokens) for _ in range(repeats + 1)]
+        calls = [stream_timed(base_url, model, p, api, max_tokens, chat_kwargs) for _ in range(repeats + 1)]
         rows += [{"request": i, "call": k, **c} for k, c in enumerate(calls)]
         first, again = calls[0], calls[1:]
         if not first["tpot_s"]:

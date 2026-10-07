@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
 
-from lab import engine
+from lab import engine, target
 from lab.safety import jail
 from lab.safety.surfaces import ALWAYS_DENY, HIDDEN, may_write
 
@@ -165,10 +165,23 @@ def diff(repo: Path, base: str, tree: Path, result: Audit) -> str:
     return "".join(out)
 
 
+def _argv(command: str) -> list[str]:
+    """A target command, `python` meaning the engine's interpreter."""
+    import shlex
+    words = shlex.split(command)
+    if words and words[0] in ("python", "python3"):
+        words[0] = engine.python()
+    return words
+
+
+def _engine_path() -> str:
+    return str(Path(engine.python()).parent) + os.pathsep + os.environ["PATH"]
+
+
 def run_lint(tree: Path) -> Run:
-    """The same `ruff check .` the engine's CI runs, with the engine's ruff; static, so it needs no jail."""
-    proc = subprocess.run([engine.python(), "-m", "ruff", "check", "."], cwd=tree,
-                          capture_output=True, text=True)
+    """The target's lint command, with the engine's python first on PATH; static, so it needs no jail."""
+    proc = subprocess.run(_argv(target.load().lint), cwd=tree, capture_output=True, text=True,
+                          env={**os.environ, "PATH": _engine_path()})
     return Run(proc.returncode == 0, proc.returncode, (proc.stdout + proc.stderr)[-5000:])
 
 
@@ -176,7 +189,7 @@ def jailed(tree: Path, argv: list[str], *, timeout_s: float, env_extra: dict | N
            domains: list[str] = ()) -> subprocess.CompletedProcess:
     """Run `argv` in `tree` as agent code: wiped env, jail around the tree and a private tmp, weights read-only."""
     tmp = Path(tempfile.mkdtemp(prefix="jail-")).resolve()   # short: srt's sockets live here
-    env = {"PATH": os.environ["PATH"], "HOME": str(Path.home()), "TMPDIR": str(tmp),
+    env = {"PATH": _engine_path(), "HOME": str(Path.home()), "TMPDIR": str(tmp),
            "PYTHONPATH": str(tree / "src") + os.pathsep + str(tree),
            "PYTHONDONTWRITEBYTECODE": "1",
            "HF_HOME": str(tmp / "hf-home"), "HF_HUB_CACHE": str(HF_HUB), "HF_HUB_OFFLINE": "1",
@@ -196,6 +209,5 @@ def jailed(tree: Path, argv: list[str], *, timeout_s: float, env_extra: dict | N
 
 def run_tests(tree: Path, timeout_s: float = 1800) -> Run:
     """The fast suite on a pristine tree, inside the jail: its code is the agent's."""
-    proc = jailed(tree, [engine.python(), "-m", "pytest", "-q", "-p", "no:cacheprovider",
-                         "-m", "not heavy and not needs_host"], timeout_s=timeout_s)
+    proc = jailed(tree, _argv(target.load().test), timeout_s=timeout_s)
     return Run(proc.returncode == 0, proc.returncode, (proc.stdout + proc.stderr)[-5000:])

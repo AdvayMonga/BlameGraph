@@ -1,40 +1,51 @@
-"""python -m correctness reference --url URL --out DIR [--tier dev|full] [--tasks mmlu_pro,math,code,needle]
-python -m correctness candidate --ref DIR --url URL --out FILE.json [--thresholds FILE]
-python -m correctness verdict A.json [B.json ...] [--thresholds FILE]   (re-judge saved results, no server)"""
+"""python -m correctness reference --url URL --out DIR [--tier dev|full] [--tasks a,b] [--target T]
+python -m correctness candidate --url URL --out FILE.json [--ref DIR] [--api vllm|sglang|none] [--target T]
+python -m correctness verdict A.json [B.json ...] [--target T]   (re-judge saved results, no server)
+The model, chat kwargs, tasks, reference dir, logprobs API and policy come from the target spec ($LAB_TARGET)."""
 from __future__ import annotations
 
 import argparse
 import json
 
-MODEL = "Qwen/Qwen3-30B-A3B"
+from lab import target
 
 
 def main():
     ap = argparse.ArgumentParser(prog="correctness", description="correctness gate against live servers")
+    target.add_argument(ap)
     sub = ap.add_subparsers(dest="step", required=True)
     r = sub.add_parser("reference"); r.add_argument("--url", required=True); r.add_argument("--out", required=True)
-    r.add_argument("--model", default=MODEL); r.add_argument("--tasks", default="mmlu_pro,math,code,needle")
+    r.add_argument("--tasks", help="comma-separated (default: the target's)")
     r.add_argument("--tier", choices=("dev", "full"), default="dev", help="dev: ~1.6k items; full: ~18.6k, for final tests")
     r.add_argument("--div-n", type=int, default=400); r.add_argument("--concurrency", type=int, default=16)
-    c = sub.add_parser("candidate"); c.add_argument("--ref", required=True); c.add_argument("--url", required=True)
-    c.add_argument("--out", required=True); c.add_argument("--model", default=MODEL); c.add_argument("--thresholds")
+    c = sub.add_parser("candidate"); c.add_argument("--url", required=True); c.add_argument("--out", required=True)
+    c.add_argument("--ref", help="reference outputs dir (default: the target's reference.dir)")
+    c.add_argument("--api", choices=("vllm", "sglang", "none"), help="logprobs API (default: the target's engine.api)")
     c.add_argument("--concurrency", type=int, default=16)
-    v = sub.add_parser("verdict"); v.add_argument("results", nargs="+"); v.add_argument("--thresholds")
+    v = sub.add_parser("verdict"); v.add_argument("results", nargs="+")
     a = ap.parse_args()
-    from correctness import run, tasks
+    t = target.load(a.target)
+    from correctness import client, run, tasks
     from correctness.gate import Thresholds
+    th = Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio)
+    enc = lambda: run.HFEncoder(t.model, t.chat_kwargs)
     if a.step == "reference":
-        print(json.dumps(run.reference(a.url, a.model, a.out, tasks.load(tuple(a.tasks.split(",")), tier=a.tier), run.HFEncoder(a.model),
-                                       div_n=a.div_n, concurrency=a.concurrency), indent=1))
+        api = client.Api.from_target(t.reference, t) if t.reference else client.Api("vllm", t.chat_kwargs)
+        names = tuple(a.tasks.split(",")) if a.tasks else t.tasks
+        meta = run.reference(a.url, t.model, a.out, tasks.load(names, tier=a.tier), enc(), div_n=a.div_n,
+                             concurrency=a.concurrency, api=api)
+        print(json.dumps(meta, indent=1))
     elif a.step == "candidate":
-        th = Thresholds(**json.loads(open(a.thresholds).read())) if a.thresholds else None
-        res = run.candidate(a.ref, a.url, a.model, a.out, run.HFEncoder(a.model), th, concurrency=a.concurrency)
-        print("PASS" if res["passed"] else "FAIL", *res["reasons"], sep="\n  ")
+        ref = a.ref or (str(t.reference_dir) if t.reference_dir else None)
+        if not ref:
+            ap.error("no reference dir: pass --ref or set reference.dir in the target")
+        api = client.Api(a.api or t.engine.api, t.chat_kwargs)
+        res = run.candidate(ref, a.url, t.model, a.out, enc(), th, concurrency=a.concurrency, api=api)
+        print(res["verdict"].upper(), *res["reasons"], sep="\n  ")
     else:
-        th = Thresholds(**json.loads(open(a.thresholds).read())) if a.thresholds else Thresholds()
         for path in a.results:
             res = run.verdict_file(path, th)
-            print(path, "PASS" if res["passed"] else "FAIL", *res["reasons"], sep="\n  ")
+            print(path, res["verdict"].upper(), *res["reasons"], sep="\n  ")
 
 
 if __name__ == "__main__":
