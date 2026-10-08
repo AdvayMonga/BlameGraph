@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import dataclasses
 import json
 import logging
+import os
 import random
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -44,6 +48,54 @@ def _profiler(device: str) -> torch.profiler.profile:
     return torch.profiler.profile(activities=acts, experimental_config=config)
 
 
+@contextlib.contextmanager
+def _cuda_range(device: str):
+    """cudaProfilerStart/Stop around the window: nsys --capture-range=cudaProfilerApi and ncu --profile-from-start off
+    record only inside it."""
+    on = device.startswith("cuda")
+    if on:
+        torch.cuda.profiler.start()
+    try:
+        yield None
+    finally:
+        if on:
+            torch.cuda.synchronize()
+            torch.cuda.profiler.stop()
+
+
+def _allow_ptrace() -> None:
+    """Let any process of ours read this one: under Yama ptrace_scope 1 only ancestors may, and py-spy is a child."""
+    if sys.platform.startswith("linux"):
+        import ctypes
+        ctypes.CDLL(None).prctl(0x59616D61, ctypes.c_ulong(-1), 0, 0, 0)    # PR_SET_PTRACER, PR_SET_PTRACER_ANY
+
+
+async def _sampled(sched: ContinuousBatchScheduler, prompts: list[list[int]], max_tokens: int, out: Path,
+                   pyspy: tuple[str, float, int]) -> tuple[list, int]:
+    """Repeat the workload for `seconds` while py-spy samples this process; one stack dump halfway. (results, rounds)"""
+    exe, seconds, rate = pyspy
+    _allow_ptrace()
+    pid = str(os.getpid())
+    with open(out / "pyspy-record.log", "w") as log:
+        rec = subprocess.Popen([exe, "record", "--pid", pid, "--duration", str(int(seconds)), "--rate", str(rate),
+                                "--format", "speedscope", "--output", str(out / "pyspy.speedscope.json"),
+                                "--nonblocking"], stdout=log, stderr=log)
+
+    async def dump():
+        await asyncio.sleep(seconds / 2)
+        d = await asyncio.to_thread(subprocess.run, [exe, "dump", "--pid", pid, "--nonblocking"],
+                                    capture_output=True, text=True)
+        (out / "pyspy-dump.txt").write_text(d.stdout + d.stderr)
+    dumper = asyncio.create_task(dump())
+    results, rounds, end = [], 0, time.monotonic() + seconds
+    while time.monotonic() < end:
+        results += await _fire(sched, prompts, max_tokens, f"profile{rounds}")
+        rounds += 1
+    await dumper
+    await asyncio.to_thread(rec.wait, seconds + 60)
+    return results, rounds
+
+
 async def _fire(sched: ContinuousBatchScheduler, prompts: list[list[int]], max_tokens: int,
                 session: str) -> list:
     loop = asyncio.get_running_loop()
@@ -53,8 +105,10 @@ async def _fire(sched: ContinuousBatchScheduler, prompts: list[list[int]], max_t
 
 
 async def run(backend: InferenceBackend, settings: Settings, prompts: list[list[int]],
-              max_tokens: int, out: Path, warmup: int = 1) -> Path:
-    """Profile `prompts` through the served scheduler config on `backend`; return the bundle directory."""
+              max_tokens: int, out: Path, warmup: int = 1, profiler: str = "torch",
+              pyspy: tuple[str, float, int] | None = None) -> Path:
+    """Profile `prompts` through the served scheduler config on `backend`; return the bundle directory.
+    `profiler`: torch (torch.profiler trace), cuda-range (window marked for nsys/ncu), pyspy (`pyspy` = exe, s, Hz)."""
     out = bundle.new_dir(out)
     device = backend.device_str
     timeline = Timeline(out)
@@ -66,20 +120,25 @@ async def run(backend: InferenceBackend, settings: Settings, prompts: list[list[
             await _fire(sched, prompts[:warmup], max_tokens, "warmup")
         timeline.event("profile_window", state="begin")
         sampler.start()
-        t0 = time.time()
-        with _profiler(device) as prof:
-            results = await _fire(sched, prompts, max_tokens, "profile")
+        t0, rounds = time.time(), 1
+        if profiler == "pyspy":
+            results, rounds = await _sampled(sched, prompts, max_tokens, out, pyspy)
+        else:
+            with (_profiler(device) if profiler == "torch" else _cuda_range(device)) as prof:
+                results = await _fire(sched, prompts, max_tokens, "profile")
         t1 = time.time()
         timeline.event("profile_window", state="end")
     finally:
         sampler.stop()
         await sched.stop()
-    prof.export_chrome_trace(str(out / "trace.json"))
+    if profiler == "torch":
+        prof.export_chrome_trace(str(out / "trace.json"))
     bundle.write_json(out / "memory.json", bundle.device_memory(device))
     bundle.write_json(out / "stats.json", sched.stats())
     failed = sum(isinstance(r, BaseException) for r in results)
     bundle.write_json(out / "meta.json", bundle.meta(device, settings, prompts, max_tokens, t0, t1,
-                                                     failed=failed, warmup=warmup))
+                                                     failed=failed, warmup=warmup, profiler=profiler,
+                                                     rounds=rounds))
     return out
 
 
@@ -93,6 +152,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-tokens", type=int, default=32)
     ap.add_argument("--warmup", type=int, default=1)
     ap.add_argument("--out", default="lab/runs")
+    ap.add_argument("--profiler", choices=("torch", "cuda-range", "pyspy"), default="torch",
+                    help="torch: torch.profiler trace; cuda-range: mark the window for nsys/ncu; pyspy: sample with py-spy")
+    ap.add_argument("--seconds", type=float, default=20.0, help="pyspy: how long to sample under load")
+    ap.add_argument("--rate", type=int, default=100, help="pyspy: samples per second")
+    ap.add_argument("--pyspy-bin", default="py-spy")
     args = ap.parse_args(argv)
 
     # The served configuration, from the same env the server reads; only the workload is ours.
@@ -106,8 +170,8 @@ def main(argv: list[str] | None = None) -> int:
         prompts = [tok.encode_chat(t) for t in json.loads(Path(args.prompts).read_text())]
     else:
         prompts = synthetic_prompts(args.requests, args.prompt_len)
-    out = asyncio.run(run(backend, settings, prompts, args.max_tokens, Path(args.out),
-                          warmup=args.warmup))
+    out = asyncio.run(run(backend, settings, prompts, args.max_tokens, Path(args.out), warmup=args.warmup,
+                          profiler=args.profiler, pyspy=(args.pyspy_bin, args.seconds, args.rate)))
     print(out)
     return 0
 

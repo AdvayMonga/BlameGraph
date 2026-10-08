@@ -27,13 +27,16 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `regimes`, `validity` CLIs all read it.
 - `lab/` — moved from inference-server 2026-10-06 (`lab/README.md`). `session.py` (the loop over a dollar budget),
   `agent.py` (the one place a model is called; the agent's jailed shell gets the engine's python on PATH),
-  `tools.py` (metered tools: test, profile, ledger, budget, restore, note) + `evaltools.py` (bench → `regimes` on
+  `tools.py` (metered tools: test, profile, ledger, budget, restore, note; every record's `cost` has wall seconds, and
+  GPU tools charge them at `LAB_GPU_USD_PER_HOUR` / the target's `[cost] gpu_usd_per_hour` to the run's budget) +
+  `proftools.py` (trace = nsys, kernel = ncu, hostprof = py-spy, each wrapping lab.profile's workload in the jail
+  with validated args) + `evaltools.py` (bench → `regimes` on
   the seen split; equiv → `correctness` candidate vs the target's reference; submit → held-out full tier vs the
   base commit, one aggregate per regime through the Thresholdout guard; all three serve the pristine tree via
   `serve.py`, jailed with local binding allowed), `workspace.py` (exported engine copy + snapshots), `ledger.py`
   (append-only JSONL, `lab/ledger/` gitignored), `budget.py`, `engine.py` (where the engine repo and its python
   are), `safety/` (write surfaces, srt jail, grader: lint/tests run with the engine's python in the jail),
-  `profile.py` + `bundle.py` + `gpu.py` (profiler harness, staged into the pristine tree under `_harness/` so the
+  `profile.py` (`--profiler torch|cuda-range|pyspy`) + `bundle.py` + `gpu.py` (profiler harness, staged into the pristine tree under `_harness/` so the
   jail never opens this repo, which holds `.env` and the ledger), `canary.py` (honest regressions patched into
   the engine's process), `vm.py` + `providers/` + `vm-setup.sh` (one GPU VM on Verda/Nebius/Crusoe; pushes both
   trees, engine to `LAB_VM_DIR`, this repo to `LAB_VM_ENV_DIR`; `run --env` runs here; `run` stops the VM when done
