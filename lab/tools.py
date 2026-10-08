@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from lab import engine, ledger
+from lab import corpus, engine, ledger, target
 from lab.agent import ToolSpec
 from lab.evaltools import EvalTools
 from lab.safety import grader
@@ -73,10 +73,20 @@ class Toolbox(EvalTools):
         snap = self._audited("profile", args)
         tree = self._pristine()
         out = tree / "lab" / "runs"
-        stage_harness(tree)
-        argv = [engine.python(), "-m", "lab.profile", "--requests", str(args.get("requests", 8)),
-                "--prompt-len", str(args.get("prompt_len", 64)), "--max-tokens", str(args.get("max_tokens", 32)),
-                "--out", str(out)]
+        harness = stage_harness(tree)
+        n = int(args.get("requests", 8))
+        argv = [engine.python(), "-m", "lab.profile", "--requests", str(n),
+                "--max-tokens", str(args.get("max_tokens", 32)), "--out", str(out)]
+        if args.get("synthetic"):
+            argv += ["--synthetic", "--prompt-len", str(args.get("prompt_len", 64))]
+        else:   # sampled out here: the jail holds no corpus, and the verified loader needs the held-out split too
+            t = target.load()
+            w = corpus.sample(args.get("corpus_class") or DEFAULT_CORPUS_CLASS, "seen", int(args.get("seed", 0)), n,
+                              t.corpus_dir)
+            (harness / "workload.json").write_text(json.dumps(w))
+            argv += ["--workload", str(harness / "workload.json")]
+            if t.chat_kwargs.get("enable_thinking"):
+                argv.append("--enable-thinking")
         t0 = time.monotonic()
         proc = (self.s.profile_runner or default_profile_runner)(tree, argv)
         bundles = sorted(out.glob("*")) if out.exists() else []
@@ -124,9 +134,12 @@ class Toolbox(EvalTools):
         return [
             ToolSpec("test", "Lint and run the test suite on a pristine copy of your current workspace, "
                      "inside the referee's jail. Returns pass/fail and the tail of the output.", obj, self.test),
-            ToolSpec("profile", "Run the engine on a synthetic workload under the profiler and store the raw "
-                     "bundle (event timeline, chrome trace, memory, provenance) in the ledger.",
-                     {"type": "object", "properties": {"requests": {"type": "integer"}, "prompt_len": {"type": "integer"},
+            ToolSpec("profile", "Run the engine under the profiler on requests sampled from a seen corpus class (or "
+                     "synthetic token ids) and store the raw bundle (event timeline, chrome trace, op and kernel "
+                     "tables, memory, provenance) in the ledger.",
+                     {"type": "object", "properties": {"corpus_class": {"type": "string"}, "seed": {"type": "integer"},
+                                                       "synthetic": {"type": "boolean"}, "requests": {"type": "integer"},
+                                                       "prompt_len": {"type": "integer"},
                                                        "max_tokens": {"type": "integer"}}}, self.profile),
             ToolSpec("ledger", "Read past records: every tool call in this and earlier runs, with snapshots and results.",
                      {"type": "object", "properties": {"kind": {"type": "string"}, "session": {"type": "string"},
@@ -154,6 +167,7 @@ class Toolbox(EvalTools):
 
 HARNESS = ("__init__.py", "profile.py", "bundle.py", "gpu.py")     # all lab.profile imports from the environment
 HARNESS_DIR = "_harness"
+DEFAULT_CORPUS_CLASS = "steady_interactive"   # targets name no corpus class of their own
 
 
 def stage_harness(tree: Path) -> Path:
