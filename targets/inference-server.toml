@@ -19,6 +19,9 @@ add_only = ["tests/test_*.py"]               # what it may add but never change
 test = "python -m pytest -q -p no:cacheprovider -m 'not heavy and not needs_host'"
 lint = "python -m ruff check ."
 
+[engine.telemetry]                           # per-request traces (lab/TRACE.md); not read by any tool yet
+dir_env = "TELEMETRY_DIR"                    # the lab sets this to a fresh dir per launch: <run_id>.sqlite lands there
+
 [reference]                                  # the unmodified model the correctness gate compares against
 api = "vllm"
 launch = "vllm serve Qwen/Qwen3-30B-A3B --dtype bfloat16 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}"
