@@ -302,3 +302,15 @@ def test_a_base_that_will_not_serve_is_briefed_as_a_fact(lab, monkeypatch, tmp_p
     session.run(cfg, p)
     assert "not measured; engine did not start" in p.specs[0].prompt
     assert next(ledger.records(cfg.ledger_root, kind="baseline"))["result"]["verdict"] == "error"
+
+
+def test_bench_defaults_follow_the_task():
+    from types import SimpleNamespace
+    from lab.evaltools import EvalTools
+    from lab.task import Task
+    tb = EvalTools()
+    tb.s = SimpleNamespace(task=None)
+    assert tb.bench_defaults() == EvalTools.bench_default_regimes
+    tb.s.task = Task("g", ("long_prompt_short_output",), constraints={"single_stream": {"max_regression_pct": 5},
+                                                                     "long_prompt_short_output": {"max_regression_pct": 1}})
+    assert tb.bench_defaults() == ("long_prompt_short_output", "single_stream")
