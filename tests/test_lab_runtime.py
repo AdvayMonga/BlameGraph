@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -43,7 +44,8 @@ def cfg(tmp_path, monkeypatch):
     monkeypatch.setenv("LAB_NO_JAIL", "1")
     repo = make_repo(tmp_path)
     return RunConfig(goal="make speed() faster", budget_usd=2.0, repo=repo, base="HEAD",
-                     runs_dir=tmp_path / "runs", ledger_root=tmp_path / "ledger", max_sessions=5)
+                     runs_dir=tmp_path / "runs", ledger_root=tmp_path / "ledger", max_sessions=5,
+                     baseline=False)      # the base is measured in tests/test_lab_evaltools.py, on the fake engine
 
 
 def test_a_session_edits_tests_notes_and_stops(cfg):
@@ -221,5 +223,29 @@ def test_brief_carries_the_task_and_the_referee_not_advice(cfg, tmp_path):
     ref = json.loads(prompt.split("Referee (this run so far):\n", 1)[1].split("\n\n", 1)[0])
     assert ref["integrity"]["valid"] is False and set(ref["facts"]) == {"harness"}
     assert ref["facts"]["harness"]["latency_limits"]["interactive"]["ttft_s"] == 0.5
-    for word in ("should", "try", "recommend", "consider", "better to"):
-        assert word not in prompt.split("Last records")[0].lower()
+    assert "Baseline: not measured in this run." in prompt and "Last session of this run:\nnone" in prompt
+    assert not ADVICE.search(prompt.split("Last session")[0])
+
+
+ADVICE = re.compile(r"\b(should|try|tries|recommend\w*|consider\w*|best|first|cheapest|avoid\w*|prefer\w*|tips?)\b",
+                    re.IGNORECASE)
+
+
+def test_system_prompt_is_generated_from_the_target_and_tools_and_advises_nothing(cfg):
+    from lab import target
+
+    def script(n, ws: Path):
+        yield ("reply", AgentReply({"status": "stop", "note": None}, 0.1, 1, None))
+    p = ScriptedProvider(script)
+    session.run(cfg, p)
+    spec, t = p.specs[0], target.load()
+    system = spec.system
+    for tool in spec.tools:
+        assert f"- `{tool.name}`: {tool.description}" in system
+    assert {x.name for x in spec.tools} >= {"test", "profile", "ledger", "budget", "restore", "note", "bench",
+                                            "equiv", "submit"}
+    for glob in t.write + t.add_only:
+        assert f"`{glob}`" in system
+    assert t.model in system and t.engine_repo.name in system and "`stop`" in system and "`note`" in system
+    assert "{" not in system.replace(t.engine.launch, "").replace(json.dumps(t.engine.env), "")   # all filled
+    assert not ADVICE.search(system), ADVICE.search(system)
