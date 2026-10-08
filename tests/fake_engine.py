@@ -54,6 +54,9 @@ def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, qu
                 text = ("42" if "17 + 25" in last else ("The answer is (B)." if wrong else "The answer is (C).")
                         if "pick one" in last else " ".join(f"t{i}" for i in range(n)))
                 time.sleep(token_s * n)
+                if os.environ.get("TELEMETRY_DIR"):
+                    with lock, open(os.path.join(os.environ["TELEMETRY_DIR"], "requests.jsonl"), "a") as f:
+                        f.write(json.dumps({"trace_id": self.headers.get("X-Trace-Id"), "tokens_out": n}) + "\n")
                 return self._json({"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
                                    "usage": {"completion_tokens": n}})
             with lock:

@@ -100,12 +100,15 @@ def lab(tmp_path, monkeypatch):
     tb = Toolbox(s)
     tb.serve_jailed = False
     tb.bench_default_regimes = ("single_stream",)
-    saved, think = dict(suite.TIERS["short"]), suite.THINK_S
+    from regimes import runner
+    saved, think, lag = dict(suite.TIERS["short"]), suite.THINK_S, runner.MAX_CLIENT_LAG_S
+    runner.MAX_CLIENT_LAG_S = 0.05      # wiring tests on a shared laptop; client precision has its own test
     suite.TIERS["short"].update(probe_s=1.0, final_s=1.5)
     suite.TIERS["full"].update(probe_s=1.0, final_s=1.5)
     suite.THINK_S = 0.3
     yield tb, s
     suite.TIERS["short"].update(saved); suite.TIERS["full"].update(probe_s=60.0, final_s=600.0); suite.THINK_S = think
+    runner.MAX_CLIENT_LAG_S = lag
     target._cache.clear()
 
 
@@ -136,6 +139,8 @@ def test_bench_keeps_passive_data_as_blobs(lab):
     assert all(j["engine"] and j["engine"]["tokens_out"] == 6 for j in joined)      # every request has its engine row
     assert not (s.run_dir / "pristine" / serve.TELEMETRY_SUBDIR).exists()          # moved out of the served tree
     assert not list(s.run_dir.glob("passive-*"))                                     # scratch emptied into blobs
+    contract = json.loads((s.ledger_root / a["telemetry"] / "contract.json").read_text())
+    assert contract["valid"] is False and contract["errors"]      # checked on collection; the fake's rows don't conform
 
 
 def test_equiv_judges_against_the_reference(lab):
@@ -148,6 +153,9 @@ def test_equiv_judges_against_the_reference(lab):
     from lab import artifacts
     rows = artifacts.load(rec, s.ledger_root)["client_rows"]
     assert len(rows) == 40 and all("text" not in r for r in rows)
+    from correctness.run import TRACE_PREFIX
+    joined = artifacts.joined(rec, s.ledger_root, prefix=TRACE_PREFIX)
+    assert all(j["engine"] for j in joined)                    # every gate request has its engine row (X-Trace-Id)
 
 
 def test_submit_keeps_heldout_passive_data_out_of_the_ledger(lab):

@@ -25,6 +25,12 @@ def store(work: Path, root: Path) -> dict:
     def blob(name: str, suffix: str = "") -> str | None:
         p = Path(work) / name
         return ledger.put_blob(p, root, suffix) if p.exists() else None
+    tel = Path(work) / "telemetry"
+    if tel.is_dir() and any(tel.iterdir()):       # the request-trace contract check travels with the data (lab/TRACE.md)
+        from lab.trace_contract import validate
+        rep = validate(tel)
+        (tel / "contract.json").write_text(json.dumps({"valid": rep.valid, "errors": rep.errors[:50],
+                                                       "rows": len(rep.rows), "files": rep.files}, default=str))
     out = {"device": blob("device"), "telemetry": blob("telemetry"), "client_rows": blob(ROWS, ".jsonl"),
            "serve_log": blob("serve.log", ".log")}
     shutil.rmtree(work, ignore_errors=True)
@@ -36,7 +42,7 @@ def telemetry_rows(d: Path | None) -> list[dict]:
     if d is None:
         return []
     rows = []
-    for p in sorted(Path(d).rglob("*.sqlite")):
+    for p in sorted(Path(d).glob("*.sqlite")):          # top level only: the timeline lives in timeline/
         con = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
         con.row_factory = sqlite3.Row
         try:
@@ -45,7 +51,7 @@ def telemetry_rows(d: Path | None) -> list[dict]:
             pass
         finally:
             con.close()
-    for p in sorted(Path(d).rglob("*.jsonl")):
+    for p in sorted(Path(d).glob("*.jsonl")):
         rows += [r for r in map(json.loads, p.read_text().splitlines()) if isinstance(r, dict) and "trace_id" in r]
     return rows
 

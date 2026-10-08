@@ -20,7 +20,7 @@ test = "python -m pytest -q -p no:cacheprovider -m 'not heavy and not needs_host
 lint = "python -m ruff check ."
 
 [engine.telemetry]                           # optional: engine-native files serve collects after teardown
-env = { TELEMETRY_DIR = "{dir}", TIMELINE_DIR = "{dir}" }   # per-request SQLite rows, events.jsonl
+env = { TELEMETRY_DIR = "{dir}", TIMELINE_DIR = "{dir}/timeline" }   # request rows (lab/TRACE.md); events.jsonl apart
 
 [reference]                                  # the unmodified model the correctness gate compares against
 api = "vllm"

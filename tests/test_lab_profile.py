@@ -135,7 +135,7 @@ async def test_cuda_range_window_writes_no_torch_trace(tmp_path, stub_backend_cl
     out = await profile.run(stub_backend_cls(), Settings(max_batch_size=2), profile.synthetic_prompts(2, 4), max_tokens=2,
                             out=tmp_path, profiler="cuda-range")
     assert not (out / "trace.json").exists()
-    assert json.loads((out / "meta.json").read_text())["profiler"] == "cuda-range"
+    assert json.loads((out / "meta.json").read_text())["profiler"]["kind"] == "cuda-range"
 
 
 FAKE_PYSPY = r'''#!/usr/bin/env python3
@@ -162,4 +162,4 @@ async def test_pyspy_samples_this_process_under_a_repeated_workload(tmp_path, st
     assert dump == ["dump", "--pid", str(os.getpid()), "--nonblocking"]
     assert (out / "pyspy.speedscope.json").exists() and "MainThread" in (out / "pyspy-dump.txt").read_text()
     meta = json.loads((out / "meta.json").read_text())
-    assert meta["profiler"] == "pyspy" and meta["rounds"] >= 1 and meta["failed"] == 0
+    assert meta["profiler"]["kind"] == "pyspy" and meta["rounds"] >= 1 and meta["failed"] == 0
