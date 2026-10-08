@@ -17,7 +17,16 @@ from lab.proftools import ProfTools
 from lab.safety import grader
 
 # Tools that occupy the GPU: their wall time is charged at the venue's rate. The rest cost $0.
-GPU_TOOLS = frozenset({"profile", "trace", "kernel", "hostprof", "bench", "equiv", "submit"})
+GPU_TOOLS = frozenset({"profile", "trace", "kernel", "hostprof", "bench", "equiv", "submit", "baseline"})
+
+
+def _drop_links(root: Path) -> None:
+    """Remove symlinks the jailed run left in its output: copied outside the jail they would read anything."""
+    if root.is_symlink():
+        raise PermissionError(f"{root.name}: output is a symlink")
+    for p in root.rglob("*"):
+        if p.is_symlink():
+            p.unlink()
 
 
 class Toolbox(EvalTools, ProfTools):
@@ -77,6 +86,7 @@ class Toolbox(EvalTools, ProfTools):
     def _keep(self, src: Path) -> tuple[str, str]:
         """`src` into the ledger as a blob, and a copy in the workspace: the ledger is outside the jail, so the agent
         could not read it there. Returns (blob, workspace-relative copy)."""
+        _drop_links(src)
         blob = ledger.put_blob(src, self.s.ledger_root)
         visible = Path("lab") / "runs" / Path(blob).name
         dest = self.s.workspace.path / visible

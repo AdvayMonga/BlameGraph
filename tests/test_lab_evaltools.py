@@ -277,6 +277,7 @@ def test_baseline_is_measured_once_per_run_and_briefed_with_one_ledger_record(la
     assert calls == [(["single_stream"], "seen")]
     base = list(ledger.records(cfg.ledger_root, kind="baseline"))
     assert len(base) == 1 and base[0]["result"]["verdict"] == "ok"
+    assert base[0]["cost"]["seconds"] > 0 and "rate_known" in base[0]["cost"]
     assert base[0]["config"] == {"split": "seen", "tier": "short", "commit": session._resolve(cfg.repo, "HEAD")}
     assert (tmp_path / "runs" / "rb" / "base-seen-short.json").exists()      # the cache submit compares against
     first, second = (sp.prompt for sp in p.specs)

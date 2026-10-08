@@ -53,7 +53,7 @@ def _schema(**extra) -> dict:
 
 
 def _head(path: Path | None) -> str:
-    return path.read_text(errors="replace")[:SUMMARY_CHARS] if path and path.is_file() else ""
+    return path.read_text(errors="replace")[:SUMMARY_CHARS] if path and path.is_file() and not path.is_symlink() else ""
 
 
 class ProfTools:
@@ -113,6 +113,7 @@ class ProfTools:
         proc = T.default_profile_runner(tree, argv, read=read)
         log = proc.stdout + proc.stderr
         commands = [argv]
+        T._drop_links(out)
         if post and proc.returncode == 0:
             pargv, dest = post(exe, out)
             commands.append(pargv)
@@ -121,6 +122,7 @@ class ProfTools:
                 dest.write_text(p.stdout)
             log += p.stderr if dest else p.stdout + p.stderr
             proc = p if p.returncode else proc
+            T._drop_links(out)
         found = sorted(out.glob(summary))
         head = _head(found[-1] if found else None)
         blob, visible = self._keep(out) if any(p.is_file() for p in out.rglob("*")) else ("", "")
