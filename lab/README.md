@@ -58,6 +58,13 @@ the window's batch sizes happen outside it. Writes one bundle directory per run,
                    (`profiler_on`: every number was taken under the profiler), GPU clock state and throttle reasons at
                    window start and end, timeline events written/dropped, per-request outcomes and token counts
 
+`--profiler` picks what wraps the measured window: `torch` (default, `trace.json`), `cuda-range`
+(cudaProfilerStart/Stop around it, no torch trace, for an outer `nsys --capture-range=cudaProfilerApi` or
+`ncu --profile-from-start off`), or `pyspy` (`--pyspy-bin`, `--seconds`, `--rate`: the workload repeats for
+`--seconds` while py-spy samples this process without stopping it; adds `pyspy.speedscope.json`, `pyspy-dump.txt`
+taken halfway, `pyspy-record.log`). For `pyspy` the process lets its own children ptrace it
+(`PR_SET_PTRACER_ANY`), since Yama's default only lets ancestors.
+
 ## Ledger
 
 `lab/ledger.py`: one JSON line per tool call in `lab/ledger/ledger.jsonl`, the raw knowledge base.
@@ -93,6 +100,9 @@ with the referee's rights, snapshot the workspace and write the ledger on every 
 |---|---|
 | `test` | lint and the fast suite on a pristine two-commit copy of the workspace, jailed |
 | `profile` | `lab.profile` on the pristine copy, jailed, on `args.corpus_class` (default `steady_interactive`, seen split, `args.seed`) or `args.synthetic`; the bundle goes into the ledger as a blob |
+| `trace` | `nsys profile` around `lab.profile --profiler cuda-range` (window only), then `nsys stats` (kernel, CUDA API, memcpy, NVTX tables as CSV), both jailed; `.nsys-rep` + CSVs as a blob |
+| `kernel` | `ncu --kernel-name regex:<kernel_regex> --launch-skip N --launch-count N --set basic\|full` around the same workload, then `ncu --import --csv --page raw`; `.ncu-rep` + `metrics.csv` as a blob |
+| `hostprof` | `lab.profile --profiler pyspy`: py-spy record (speedscope) for `seconds` under the repeated workload plus one `py-spy dump`; the bundle as a blob |
 | `ledger` | read records (this run and earlier ones) |
 | `budget` | dollars left |
 | `restore` | workspace back to a snapshot id (`base` resets) |
@@ -100,6 +110,38 @@ with the referee's rights, snapshot the workspace and write the ledger on every 
 | `bench` | serve the pristine copy and run the load regimes (`regimes/`) on the seen split, short tier; one headline per regime, raw (`args.regimes`, `args.tier`) |
 | `equiv` | serve it and run the correctness gate (`correctness/`) against the target's reference outputs; pass, fail or inconclusive with every metric; `tier=full` uses `<reference.dir>-full` |
 | `submit` | the only thing that can produce a win. Needs a passing full-tier equiv and a seen bench on this snapshot. Measures the held-out split at the full tier, measures the base commit the same way (once per run, cached outside the jail), and records one aggregate per regime (base, new, delta %, noise band %, verdict improved/regressed/within_band/unknown_band) through the Thresholdout guard (`validity/holdout.py`, state in `lab/ledger/holdout_state.json`, seed `LAB_HOLDOUT_SEED`): the held-out numbers themselves never reach the ledger. Noise bands come from `knowledge/noise/<regime>.json` when measured |
+
+`trace`, `kernel` and `hostprof` take integers in fixed ranges (`requests` 1-256, `prompt_len` 1-32768,
+`max_tokens` 1-4096, `launch_count` 1-64, `launch_skip` 0-100000, `seconds` 1-300, `rate` 1-1000), `set` from
+basic/full, and a `kernel_regex` of at most 200 regex characters (no spaces, quotes, `;`, `&`, backticks, `/` or
+`$(`); nothing else reaches the command line, which is an argv list, never a shell. The instrument is resolved on the
+referee's PATH (refused, and recorded as a refusal, when absent) and its directory is added to the jail's read list.
+The workload is lab.profile's in-process scheduler and backend, so these tools see the engine's kernels and host
+code but not the HTTP front end.
+
+### Cost
+
+Every tool record's `cost` has `seconds`, the wall time of the call. Tools that occupy the GPU also charge those
+seconds at the venue's rate to the run's budget (`budget.charge`), so `budget` and the next session's cap reflect
+them, and record `gpu_seconds`, `usd_per_hour` and `rate_known`. The rate is `LAB_GPU_USD_PER_HOUR`, else the
+target's `[cost] gpu_usd_per_hour`, else 0 with `rate_known: false` (no provider module knows a price offline; Verda's
+`python -m lab.vm status` shows the live `$/h`). A GPU tool is refused once the budget is spent and a rate is set.
+Only tool time is charged: the VM also bills while the model thinks between calls, which the budget does not see.
+
+| tool | GPU | charged | typical wall time per call (estimates until measured on the H200) |
+|---|---|---|---|
+| `test` | no | $0 | CPU lint and suite |
+| `ledger`, `budget` | no | $0 (pure reads, write no record) | milliseconds |
+| `restore`, `note` | no | $0 | under a second |
+| `profile` | yes | seconds × rate | 2-5 min: engine start plus the workload |
+| `trace` | yes | seconds × rate | 3-6 min: engine start, workload, report export, `nsys stats` |
+| `kernel` | yes | seconds × rate | 5-20 min: each profiled launch is replayed once per metric pass (`full` has the most) |
+| `hostprof` | yes | seconds × rate | 2-4 min plus `seconds` |
+| `bench` | yes | seconds × rate | 5-10 min per regime at tier short, 15-25 at full, plus ~2 min engine start |
+| `equiv` | yes | seconds × rate | ~10 min at tier dev, 30-60 at full |
+| `submit` | yes | seconds × rate | 15-25 min per regime (held-out, full tier), plus the base commit measured once per run |
+
+The same estimates are in each tool's description, stated as facts about cost, with the configured rate.
 
 Every session opens with the task in full, the referee's verdict on the run so far (integrity, with the evidence
 behind each broken rule) and the harness facts the agent cannot read off its ledger (latency limits, tiers,

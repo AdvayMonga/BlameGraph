@@ -128,3 +128,38 @@ def test_main_needs_an_explicit_workload_source():
 def test_synthetic_prompts_are_deterministic():
     assert profile.synthetic_prompts(2, 5) == profile.synthetic_prompts(2, 5)
     assert profile.synthetic_prompts(2, 5) != profile.synthetic_prompts(2, 5, seed=1)
+
+
+@pytest.mark.asyncio
+async def test_cuda_range_window_writes_no_torch_trace(tmp_path, stub_backend_cls):
+    out = await profile.run(stub_backend_cls(), Settings(max_batch_size=2), profile.synthetic_prompts(2, 4), max_tokens=2,
+                            out=tmp_path, profiler="cuda-range")
+    assert not (out / "trace.json").exists()
+    assert json.loads((out / "meta.json").read_text())["profiler"] == "cuda-range"
+
+
+FAKE_PYSPY = r'''#!/usr/bin/env python3
+import json, sys
+a = sys.argv[1:]
+open(LOG, "a").write(json.dumps(a) + "\n")
+if a[0] == "record":
+    open(a[a.index("--output") + 1], "w").write("{}")
+else:
+    print("Thread 1 (active): MainThread")
+'''
+
+
+@pytest.mark.asyncio
+async def test_pyspy_samples_this_process_under_a_repeated_workload(tmp_path, stub_backend_cls):
+    import os
+    exe = tmp_path / "py-spy"
+    exe.write_text(FAKE_PYSPY.replace("LOG, ", f"{str(tmp_path / 'calls.log')!r}, "))
+    exe.chmod(0o755)
+    out = await profile.run(stub_backend_cls(), Settings(max_batch_size=2), profile.synthetic_prompts(2, 4), max_tokens=2,
+                            out=tmp_path / "b", profiler="pyspy", pyspy=(str(exe), 0.5, 50))
+    rec, dump = [json.loads(line) for line in (tmp_path / "calls.log").read_text().splitlines()]
+    assert rec[:3] == ["record", "--pid", str(os.getpid())] and "--nonblocking" in rec and "speedscope" in rec
+    assert dump == ["dump", "--pid", str(os.getpid()), "--nonblocking"]
+    assert (out / "pyspy.speedscope.json").exists() and "MainThread" in (out / "pyspy-dump.txt").read_text()
+    meta = json.loads((out / "meta.json").read_text())
+    assert meta["profiler"] == "pyspy" and meta["rounds"] >= 1 and meta["failed"] == 0

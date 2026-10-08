@@ -186,7 +186,7 @@ def run_lint(tree: Path) -> Run:
 
 
 def _jail_argv(tree: Path, argv: list[str], env_extra: dict | None, domains, local_binding: bool = False,
-               tag: str = "") -> tuple[list[str], dict, Path]:
+               tag: str = "", read: list[Path] = ()) -> tuple[list[str], dict, Path]:
     """The wrapped argv, env and private tmp for running `argv` in `tree` as agent code: wiped env, jail around the
     tree and the tmp, weights read-only."""
     tmp = Path(tempfile.mkdtemp(prefix="jail-")).resolve()   # short: srt's sockets live here
@@ -196,7 +196,7 @@ def _jail_argv(tree: Path, argv: list[str], env_extra: dict | None, domains, loc
            "HF_HOME": str(tmp / "hf-home"), "HF_HUB_CACHE": str(HF_HUB), "HF_HUB_OFFLINE": "1",
            **(env_extra or {})}
     config = jail.settings([tree.resolve(), tmp], engine.venv(), list(domains),
-                           readonly=[HF_HUB] if HF_HUB.exists() else [], python=engine.python(),
+                           readonly=([HF_HUB] if HF_HUB.exists() else []) + list(read), python=engine.python(),
                            local_binding=local_binding)
     return jail.wrap(config, tree.with_suffix(f"{tag}.srt.json"), argv), env, tmp
 
@@ -210,9 +210,10 @@ def jailed_popen(tree: Path, argv: list[str], *, env_extra: dict | None = None, 
 
 
 def jailed(tree: Path, argv: list[str], *, timeout_s: float, env_extra: dict | None = None,
-           domains: list[str] = ()) -> subprocess.CompletedProcess:
-    """Run `argv` in `tree` as agent code: wiped env, jail around the tree and a private tmp, weights read-only."""
-    wrapped, env, tmp = _jail_argv(tree, argv, env_extra, domains)
+           domains: list[str] = (), read: list[Path] = ()) -> subprocess.CompletedProcess:
+    """Run `argv` in `tree` as agent code: wiped env, jail around the tree and a private tmp, weights and `read`
+    read-only."""
+    wrapped, env, tmp = _jail_argv(tree, argv, env_extra, domains, read=read)
     try:
         return subprocess.run(wrapped, cwd=tree, env=env, capture_output=True, text=True, timeout=timeout_s)
     except subprocess.TimeoutExpired as e:     # a hung suite is a failed run, recorded like any other
