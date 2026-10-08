@@ -7,16 +7,20 @@ from outside the jail (lab/serve.py), measures it with the environment's own ins
            snapshot, measures the held-out split at the full tier, compares with the base commit measured the same
            way, and records one aggregate per metric through the Thresholdout guard (the held-out numbers
            themselves never reach the ledger). Verdict per metric: improved | regressed | within_band | unknown_band.
+
+Each also keeps the run's passive data (lab/artifacts.py): bench and equiv as ledger blobs under `result.artifacts`,
+submit only under `<run>/heldout-private/`, outside the ledger and the jail.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import tempfile
 import time
 from pathlib import Path
 
-from lab import ledger, serve, target
+from lab import artifacts, ledger, serve, target
 from validity.holdout import HoldoutGuard, Refused
 
 HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT = 100, 2.0, 0.5
@@ -34,10 +38,18 @@ def _regimes(args: dict, default: tuple[str, ...]) -> list[str]:
     return list(want)
 
 
-def run_regimes(url: str, t: target.Target, names: list[str], split: str, tier: str, seed: int) -> list[dict]:
+def run_regimes(url: str, t: target.Target, names: list[str], split: str, tier: str, seed: int,
+                rows: list | None = None) -> list[dict]:
+    """Each regime's result; with `rows`, every measured client row is appended to it, tagged with its regime."""
     from regimes import suite
-    ctx = suite.Ctx.from_target(t, url, split=split, tier=tier, seed=seed)
-    return [suite.REGIMES[n](ctx) for n in names]
+    ctx = suite.Ctx.from_target(t, url, split=split, tier=tier, seed=seed, rows=rows)
+    out = []
+    for n in names:
+        k = len(rows) if rows is not None else 0
+        out.append(suite.REGIMES[n](ctx))
+        for r in (rows or [])[k:]:
+            r["regime"] = n
+    return out
 
 
 def headline(results: list[dict]) -> dict:
@@ -99,6 +111,14 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
     return facts
 
 
+def equiv_rows(out: Path) -> list[dict]:
+    """The gate's per-item client rows (id, completion_tokens, finish_reason, error), without generated text."""
+    p = out.with_suffix(".outputs.jsonl")
+    if not p.exists():
+        return []
+    return [{k: v for k, v in json.loads(x).items() if k != "text"} for x in p.read_text().splitlines() if x.strip()]
+
+
 def _why(e: BaseException) -> str:
     if isinstance(e, serve.NotReady):
         return f"engine did not start: {e}"
@@ -117,16 +137,18 @@ class EvalTools:
         tier = args.get("tier") or "short"
         tree = self._pristine()
         t0 = time.monotonic()
+        work, rows = self._work("bench"), []
         try:
             with serve.Served(tree, t.engine, log=self.s.run_dir / "serve-bench.log",
-                              jailed=self.serve_jailed) as srv:
-                results = run_regimes(srv.url, t, names, "seen", tier, self.seed)
+                              jailed=self.serve_jailed, artifacts=work) as srv:
+                results = run_regimes(srv.url, t, names, "seen", tier, self.seed, rows)
         except Exception as e:                      # a tool never crashes the session: the failure is the record
-            result = {"verdict": "error", "reason": _why(e), "seconds": time.monotonic() - t0}
+            result = {"verdict": "error", "reason": _why(e), "seconds": time.monotonic() - t0,
+                      "artifacts": self._store(work, rows)}
             self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier})
             return f"bench failed: {result['reason']}"
         result = {"verdict": "ok", "metrics": headline(results), "regimes": results, "tier": tier,
-                  "seconds": time.monotonic() - t0, "ready_s": srv.ready_s}
+                  "seconds": time.monotonic() - t0, "ready_s": srv.ready_s, "artifacts": self._store(work, rows)}
         self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier})
         return json.dumps({"snapshot": snap.id, "split": "seen", "tier": tier, "metrics": result["metrics"]}, indent=1)
 
@@ -144,18 +166,23 @@ class EvalTools:
         from correctness.gate import Thresholds
         tree = self._pristine()
         out = self.s.run_dir / "equiv" / f"{snap.id}-{tier}.json"
+        work = self._work("equiv")
         try:
-            with serve.Served(tree, t.engine, log=self.s.run_dir / "serve-equiv.log", jailed=self.serve_jailed) as srv:
+            with serve.Served(tree, t.engine, log=self.s.run_dir / "serve-equiv.log", jailed=self.serve_jailed,
+                              artifacts=work) as srv:
                 res = crun.candidate(ref, srv.url, t.model, out, self.encoder(t),
                                      Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio),
                                      concurrency=self.equiv_concurrency, api=client.Api(t.engine.api, t.chat_kwargs),
                                      config={"tier": tier})
         except Exception as e:
-            self._record("equiv", "equiv", args, {"verdict": "error", "reason": _why(e)}, snap, config={"split": "seen", "tier": tier})
+            self._record("equiv", "equiv", args, {"verdict": "error", "reason": _why(e),
+                                                  "artifacts": self._store(work, equiv_rows(out))},
+                         snap, config={"split": "seen", "tier": tier})
             return f"equiv failed: {_why(e)}"
         passed = {"pass": True, "fail": False}.get(res["verdict"])     # inconclusive is None: neither passing nor failing
         record = {"verdict": res["verdict"], "passed": passed, "reasons": res["reasons"], "gates": res["gates"],
-                  "metrics": res["metrics"], "thresholds": res["thresholds"], "tier": tier}
+                  "metrics": res["metrics"], "thresholds": res["thresholds"], "tier": tier,
+                  "artifacts": self._store(work, equiv_rows(out))}
         self._record("equiv", "equiv", args, record, snap, config={"split": "seen", "tier": tier})
         return json.dumps({"snapshot": snap.id, "tier": tier, "verdict": res["verdict"], "reasons": res["reasons"],
                            "metrics": res["metrics"]}, indent=1, default=str)
@@ -184,8 +211,14 @@ class EvalTools:
             base_seen = self.base_seen(t, names)
             guard = self.holdout_guard()
             tree = self._pristine()
-            with serve.Served(tree, t.engine, log=self.s.run_dir / "serve-submit.log", jailed=self.serve_jailed) as srv:
-                results = run_regimes(srv.url, t, names, "heldout", "full", self.seed)
+            # held-out passive data stays operator-only: never a blob, never in the record, never inside the jail
+            private, rows = self.s.run_dir / "heldout-private" / f"{snap.id}-{time.strftime('%Y%m%dT%H%M%S')}", []
+            try:
+                with serve.Served(tree, t.engine, log=self.s.run_dir / "serve-submit.log", jailed=self.serve_jailed,
+                                  artifacts=private) as srv:
+                    results = run_regimes(srv.url, t, names, "heldout", "full", self.seed, rows)
+            finally:
+                artifacts.write_rows(private, rows)
             new = headline(results)
             metrics, better = {}, {}
             for n in names:
@@ -218,6 +251,14 @@ class EvalTools:
     def encoder(self, t: target.Target):
         from correctness.run import HFEncoder
         return getattr(self.s, "encoder", None) or HFEncoder(t.model, t.chat_kwargs)
+
+    def _work(self, tool: str) -> Path:
+        """A scratch dir outside the jail for one served run's passive data; emptied into blobs by `_store`."""
+        return Path(tempfile.mkdtemp(prefix=f"passive-{tool}-", dir=self.s.run_dir))
+
+    def _store(self, work: Path, rows: list[dict]) -> dict:
+        artifacts.write_rows(work, rows)
+        return artifacts.store(work, self.s.ledger_root)
 
     def holdout_guard(self) -> HoldoutGuard:
         seed = os.environ.get("LAB_HOLDOUT_SEED") or f"{self.s.ledger_root}"
