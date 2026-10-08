@@ -144,6 +144,9 @@ class Toolbox(EvalTools, ProfTools):
         return "noted"
 
     def specs(self) -> list[ToolSpec]:
+        """What each tool does, returns and costs; never when or how to use it."""
+        from regimes import suite
+        from lab.evaltools import HOLDOUT_BUDGET
         obj = {"type": "object", "properties": {}}
         rate, known = gpu_rate()
         free = " Costs no GPU time ($0)."
@@ -151,44 +154,63 @@ class Toolbox(EvalTools, ProfTools):
         def gpu(t: str) -> str:
             return (f" Costs GPU time: ~{t} per call, charged at ${rate:g}/h." if known else
                     f" Costs GPU time: ~{t} per call; no GPU rate is configured on this host, so it is charged $0.")
+        short, full = suite.TIERS["short"], suite.TIERS["full"]
+        windows = (f"one engine start plus, per regime, a {short['final_s']:.0f} s measurement window at tier short or "
+                   f"{full['final_s']:.0f} s at full, plus {short['probe_s']:.0f} s / {full['probe_s']:.0f} s probes for "
+                   f"regimes that search for a load")
         return [
-            ToolSpec("test", "Lint and run the test suite on a pristine copy of your current workspace, "
-                     "inside the referee's jail. Returns pass/fail and the tail of the output." + free, obj, self.test),
-            ToolSpec("profile", "Run the engine under the profiler on requests sampled from a seen corpus class (or "
-                     "synthetic token ids) and store the raw bundle (event timeline, chrome trace, op and kernel "
-                     "tables, memory, provenance) in the ledger." + gpu("2-5 min (engine start plus the workload)"),
+            ToolSpec("test", "Lint and run the test suite on a pristine copy of your current workspace, inside the "
+                     "referee's jail. Returns PASS or FAIL, lint and test status, and the tail of each output." + free,
+                     obj, self.test),
+            ToolSpec("profile", "Run the engine in process under the profiler, jailed, on `requests` sampled from a seen "
+                     "corpus class (`corpus_class`, default steady_interactive; `seed`) or on synthetic token ids "
+                     "(`synthetic`, `prompt_len`); `max_tokens` default 32. Stores the raw bundle (event timeline, chrome "
+                     "trace, op and kernel tables, memory, GPU samples, provenance) in the ledger and copies it into your "
+                     "workspace under lab/runs/, left out of your change. Returns the bundle path and its file names."
+                     + gpu("2-5 min (engine start plus the workload)"),
                      {"type": "object", "properties": {"corpus_class": {"type": "string"}, "seed": {"type": "integer"},
                                                        "synthetic": {"type": "boolean"}, "requests": {"type": "integer"},
                                                        "prompt_len": {"type": "integer"},
                                                        "max_tokens": {"type": "integer"}}}, self.profile),
-            ToolSpec("ledger", "Read past records: every tool call in this and earlier runs, with snapshots and "
-                     "results." + free,
+            ToolSpec("ledger", "Read records of this and earlier runs: every tool call, session and baseline, with "
+                     "snapshots and results. Filters: `kind`, `session`, `snapshot`, `tool`. Returns the `last` N "
+                     "matches (default 20) as JSON lines." + free,
                      {"type": "object", "properties": {"kind": {"type": "string"}, "session": {"type": "string"},
                                                        "snapshot": {"type": "string"}, "tool": {"type": "string"},
                                                        "last": {"type": "integer"}}}, self.ledger_tool),
-            ToolSpec("budget", "Dollars left in this run. Every record's `cost` holds the measured seconds and "
-                     "dollars of that call." + free, obj, self.budget),
-            ToolSpec("restore", "Put the workspace back to a snapshot id from the ledger ('base' resets it)." + free,
+            ToolSpec("budget", "Returns the run's dollar cap, spent and remaining. Every record's `cost` holds the "
+                     "measured seconds and dollars of that call." + free, obj, self.budget),
+            ToolSpec("restore", "Put the workspace back to a snapshot id from the ledger ('base' resets it to the base "
+                     "commit). Returns the snapshot restored." + free,
                      {"type": "object", "required": ["snapshot"], "properties": {"snapshot": {"type": "string"}}}, self.restore),
             ToolSpec("note", "Leave a note for the human running the lab. It is recorded and changes nothing." + free,
                      {"type": "object", "required": ["text"], "properties": {"text": {"type": "string"}}}, self.note),
-            ToolSpec("bench", "Serve your current workspace (pristine copy, jailed) and measure it under the load "
-                     "regimes on the seen split. Returns one headline number per regime, raw."
-                     + gpu("5-10 min per regime at tier short and 15-25 min at tier full, plus ~2 min engine start"),
+            ToolSpec("bench", "Serve a pristine copy of your current workspace (jailed) and measure it under load "
+                     f"regimes on the seen split. `regimes`: default {_names(self.bench_default_regimes)}; 'all'; or "
+                     f"any of {_names(suite.REGIMES)}. `tier`: short (default) or full. Returns one headline per regime "
+                     f"(objective, value, direction, validity), raw. Takes {windows}." + gpu("5-25 min per regime"),
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}},
                                                        "tier": {"type": "string", "enum": ["short", "full"]}}}, self.bench),
             ToolSpec("equiv", "Serve your current workspace and run the correctness gate against the reference "
-                     "model. Returns pass, fail or inconclusive with every metric. tier=full is required before submit."
-                     + gpu("10 min at tier dev and 30-60 min at tier full"),
+                     "model's outputs at `tier` dev (default) or full. Returns pass, fail or inconclusive with every "
+                     "metric. submit requires a passing full-tier equiv on the snapshot. Takes one engine start plus "
+                     "generating the tier's task set." + gpu("10 min at tier dev and 30-60 min at tier full"),
                      {"type": "object", "properties": {"tier": {"type": "string", "enum": ["dev", "full"]}}}, self.equiv),
             ToolSpec("submit", "Measure your current workspace on the held-out split at the full tier and compare it "
-                     "with the base. Needs a passing full-tier equiv and a seen bench on this snapshot. The only "
-                     "thing that can produce a win. Returns one aggregate per regime."
-                     + gpu("15-25 min per regime, plus the base commit measured the same way once per run"),
+                     "with the base commit measured the same way. Needs a passing full-tier equiv and a completed "
+                     "short-tier seen bench on this snapshot. `regimes`: default those of that bench. The only thing "
+                     "that can produce a win. Returns one aggregate per regime (base, new, delta %, noise band %, "
+                     "verdict) and, with a task, its score. Takes one engine start plus a held-out full-tier "
+                     f"measurement per regime, the base commit's held-out measurement once per run, and up to one of the "
+                     f"{HOLDOUT_BUDGET} held-out queries per regime." + gpu("15-25 min per regime"),
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}}}},
                      self.submit),
             *self.prof_specs(gpu),
         ]
+
+
+def _names(names) -> str:
+    return ", ".join(f"`{n}`" for n in names)
 
 
 HARNESS = ("__init__.py", "profile.py", "bundle.py", "gpu.py")     # all lab.profile imports from the environment
