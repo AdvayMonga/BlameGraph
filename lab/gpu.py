@@ -1,12 +1,15 @@
-"""NVIDIA GPU state and samples through nvidia-smi. Everything here returns None where there is no nvidia-smi."""
+"""NVIDIA GPU state and samples through nvidia-smi (or DCGM). Everything here returns None where there is no nvidia-smi."""
 
 from __future__ import annotations
 
 import csv
 import functools
 import io
+import json
 import shutil
 import subprocess
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -18,6 +21,10 @@ SAMPLE = ("timestamp", "utilization.gpu", "utilization.memory", "clocks.sm", "cl
 REASONS = ("clocks_event_reasons.active", "clocks_throttle_reasons.active")   # the field's name on newer, older drivers
 APP_CLOCKS = ("clocks.applications.graphics", "clocks.applications.memory")   # locked clocks are not queryable here
 MISSING = ("[N/A]", "[Not Supported]", "N/A")
+# DCGM field ids -> names: profiling counters (not coarse), then power, clocks and throttle reasons.
+DCGM_FIELDS = {1002: "sm_active", 1003: "sm_occupancy", 1004: "tensor_active", 1005: "dram_active",
+               1009: "pcie_tx_bytes", 1010: "pcie_rx_bytes", 155: "power_w", 100: "sm_clock_mhz",
+               101: "mem_clock_mhz", 112: "throttle_reasons"}
 
 
 def available() -> bool:
@@ -105,3 +112,52 @@ class Sampler:
             self._proc = None
         self.path.write_text(add_epoch(self._raw.read_text()))
         self._raw.unlink()
+
+
+class DeviceSampler(Sampler):
+    """Samples for a whole served window into `dir`: `samples.csv` (each tool line prefixed `<epoch_s>,`) and
+    `meta.json` (source, fields, coarse). DCGM profiling fields when `dcgmi` is on PATH, else nvidia-smi with
+    throttle reasons; `{"available": false}` with neither."""
+
+    def __init__(self, dir: Path, interval_ms: int = 100):
+        super().__init__(Path(dir) / "samples.csv", interval_ms)
+        self.source = "dcgm" if shutil.which("dcgmi") else "nvidia-smi" if available() else None
+        self.fields = (list(DCGM_FIELDS.values()) if self.source == "dcgm"
+                       else [*SAMPLE, *([reasons_field()] if reasons_field() else [])] if self.source else [])
+
+    def start(self) -> bool:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.source is None:
+            return False
+        argv = (["dcgmi", "dmon", "-i", "0", "-d", str(self.interval_ms), "-e", ",".join(map(str, DCGM_FIELDS))]
+                if self.source == "dcgm" else
+                ["nvidia-smi", f"--query-gpu={','.join(self.fields)}", "--format=csv,nounits",
+                 "-lms", str(self.interval_ms), "-i", "0"])
+        self._file = open(self.path, "w")
+        self._proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        self._reader = threading.Thread(target=self._stamp, args=(self._proc, self._file), daemon=True)
+        self._reader.start()
+        return True
+
+    @staticmethod
+    def _stamp(proc, out) -> None:
+        for line in proc.stdout:
+            out.write(f"{time.time():.3f},{line.rstrip()}\n")
+
+    def stop(self) -> None:
+        meta = {"available": self.source is not None}
+        if self.source:
+            meta.update(source=self.source, coarse=self.source == "nvidia-smi", fields=self.fields,
+                        interval_ms=self.interval_ms, line="<epoch_s>,<raw tool output line>")
+            if self._proc is not None and self._proc.poll() is not None:
+                meta["exited"] = self._proc.returncode       # the tool died mid-window (e.g. no DCGM host engine)
+            if self._proc is not None:
+                self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill(); self._proc.wait()
+                self._reader.join(timeout=5)            # drain before closing the file it writes
+                self._file.close()
+                self._proc = None
+        (self.path.parent / "meta.json").write_text(json.dumps(meta, indent=1))
