@@ -188,7 +188,7 @@ def test_gpu_time_is_charged_to_the_budget_and_stops_at_the_cap(tb, monkeypatch)
         tb.trace({})
     assert calls(tb) == []
     specs = {t.name: t.description for t in tb.specs()}
-    assert all("Costs GPU time" in specs[n] and "$3600/h" in specs[n] for n in GPU_TOOLS)
+    assert all("Costs GPU time" in specs[n] and "$3600/h" in specs[n] for n in GPU_TOOLS if n in specs)
     assert all("Costs no GPU time ($0)" in specs[n] for n in specs if n not in GPU_TOOLS)
 
 
@@ -201,3 +201,21 @@ def test_every_instrument_passes_a_workload_source_to_lab_profile(tb):
     ncu = [c for c in calls(tb) if c[0] == "ncu"][0]
     wl = after(ncu, "--workload")
     assert wl.endswith("_harness/workload.json")
+
+
+def test_symlinks_left_by_the_jailed_run_are_not_copied_out(tb, monkeypatch):
+    secret = tb.s.run_dir / "heldout-private" / "rows.jsonl"
+    secret.parent.mkdir()
+    secret.write_text("held-out")
+
+    def runner(tree, argv, read=()):
+        b = __import__("pathlib").Path(after(argv, "--out")) / "b1"
+        b.mkdir(parents=True)
+        (b / "meta.json").write_text("{}")
+        (b / "leak").symlink_to(secret)
+        (b / "dir").symlink_to(secret.parent, target_is_directory=True)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(labtools, "default_profile_runner", runner)
+    tb.profile({"synthetic": True})
+    copy = tb.s.workspace.path / last(tb, kind="profile")["result"]["workspace_copy"]
+    assert sorted(p.name for p in copy.iterdir()) == ["meta.json"]

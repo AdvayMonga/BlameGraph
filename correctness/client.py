@@ -35,8 +35,9 @@ class NoLogprobs(RuntimeError):
 DEFAULT = Api()
 
 
-def _post(url: str, body: dict, timeout: float = 600) -> dict:
-    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+def _post(url: str, body: dict, timeout: float = 600, trace_id: str | None = None) -> dict:
+    headers = {"Content-Type": "application/json", **({"X-Trace-Id": trace_id} if trace_id else {})}
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
 
@@ -48,9 +49,11 @@ def _chat_body(api: Api, model: str, messages: list[dict], max_tokens: int) -> d
     return body
 
 
-def generate(base_url: str, model: str, messages: list[dict], max_tokens: int = 2048, api: Api = DEFAULT) -> dict:
-    """Greedy. Returns {"text", "completion_tokens", "finish_reason"}."""
-    out = _post(f"{base_url.rstrip('/')}/v1/chat/completions", _chat_body(api, model, messages, max_tokens))
+def generate(base_url: str, model: str, messages: list[dict], max_tokens: int = 2048, api: Api = DEFAULT,
+             trace_id: str | None = None) -> dict:
+    """Greedy. Returns {"text", "completion_tokens", "finish_reason"}. `trace_id` rides as X-Trace-Id."""
+    out = _post(f"{base_url.rstrip('/')}/v1/chat/completions", _chat_body(api, model, messages, max_tokens),
+                trace_id=trace_id)
     ch = out["choices"][0]
     return {"text": ch["message"]["content"] or "", "completion_tokens": (out.get("usage") or {}).get("completion_tokens"),
             "finish_reason": ch.get("finish_reason")}

@@ -33,3 +33,12 @@ def test_absent_telemetry_is_none(tmp_path):
     artifacts.write_rows(work, [])
     a = artifacts.store(work, tmp_path / "ledger")
     assert a["telemetry"] is None and a["device"] is None and artifacts.joined({"result": {"artifacts": a}}, tmp_path / "ledger") == []
+
+
+def test_timeline_events_are_not_read_as_request_rows(tmp_path):
+    from lab import artifacts
+    d = tmp_path / "telemetry"; (d / "timeline").mkdir(parents=True)
+    (d / "requests.jsonl").write_text(json.dumps({"trace_id": "bg-1", "tokens_out": 3}) + "\n")
+    (d / "timeline" / "events.jsonl").write_text(json.dumps({"kind": "finish", "trace_id": "bg-1", "step": 4}) + "\n")
+    rows = artifacts.telemetry_rows(d)
+    assert rows == [{"trace_id": "bg-1", "tokens_out": 3}]
