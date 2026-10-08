@@ -28,7 +28,9 @@ copy it, change the engine section (and the reference if the model changes), and
 - White-box tools (profile) build the backend and scheduler in process, because torch.profiler
   has to live in the process it traces. Profiling never gates anything.
 - Engine instrumentation the lab reads: `TIMELINE_DIR` turns on the event timeline
-  (`src/inference_server/timeline.py`), `TELEMETRY_DIR` the per-request rows.
+  (`src/inference_server/timeline.py`), `TELEMETRY_DIR` the per-request rows. The target names them in
+  `[engine.telemetry] env` with `{dir}`; serve points them at `lab-telemetry/` in the served tree and collects what
+  appeared there after teardown. Optional: without the section nothing is collected.
 
 ## Tools
 

@@ -1,13 +1,15 @@
 """A fake OpenAI-compatible streaming engine with a fixed number of decode slots, for the regime tests.
 
 Requests wait for a free slot (so queueing raises TTFT), then stream one token per `token_s`. With `queue_limit`, a
-request arriving to a full queue gets an explicit 503. Run standalone for the cold-start test:
+request arriving to a full queue gets an explicit 503. With $TELEMETRY_DIR set, each streamed request appends
+{trace_id, tokens_out} to `requests.jsonl` there, like an engine's own per-request rows. Run standalone:
   python tests/fake_engine.py --port N [--delay S]
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -74,6 +76,9 @@ def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, qu
                     self._chunk({"choices": [{"index": 0, "delta": {"content": t}}]})
                 self._chunk({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
                 self._chunk({"choices": [], "usage": {"completion_tokens": len(text)}})
+                if os.environ.get("TELEMETRY_DIR"):
+                    with lock, open(os.path.join(os.environ["TELEMETRY_DIR"], "requests.jsonl"), "a") as f:
+                        f.write(json.dumps({"trace_id": self.headers.get("X-Trace-Id"), "tokens_out": len(text)}) + "\n")
                 self._chunk(b"[DONE]")
                 self.wfile.write(b"0\r\n\r\n"); self.wfile.flush()
             finally:

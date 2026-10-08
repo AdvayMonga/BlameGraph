@@ -20,7 +20,7 @@ Top-level packages, run from the repo root (no install step; `pyproject.toml` li
 pytest/ruff config). Each folder with commands has its own `python -m`.
 - `targets/<name>.toml` + `lab/target.py` — **the target spec** (since 2026-10-06): model + chat kwargs, engine
   (repo, python, launch command with `{port}`, health path, env, logprobs `api` vllm|sglang|none, write surface,
-  add-only globs, test and lint commands), reference server + its outputs dir, MLPerf latency limits, correctness
+  add-only globs, test and lint commands, optional `[engine.telemetry] env` with `{dir}`), reference server + its outputs dir, MLPerf latency limits, correctness
   tasks and policy, corpus dir. Selected by `LAB_TARGET` or `--target`; `target.load()` raises `NoTarget` otherwise.
   Nothing defaults to the user's engine or to Qwen3; `targets/inference-server.toml` is the committed example and
   what `tests/conftest.py` points at. Surfaces, grader commands, `lab/engine.py`, and the `correctness`,
@@ -30,7 +30,11 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `tools.py` (metered tools: test, profile, ledger, budget, restore, note) + `evaltools.py` (bench → `regimes` on
   the seen split; equiv → `correctness` candidate vs the target's reference; submit → held-out full tier vs the
   base commit, one aggregate per regime through the Thresholdout guard; all three serve the pristine tree via
-  `serve.py`, jailed with local binding allowed), `workspace.py` (exported engine copy + snapshots), `ledger.py`
+  `serve.py`, jailed with local binding allowed; every serve also keeps its passive data, `artifacts.py`: device
+  samples via `gpu.DeviceSampler` (DCGM if `dcgmi`, else nvidia-smi), engine telemetry files from `{dir}`, all
+  client rows, the serve log; bench/equiv as ledger blobs under `result.artifacts`, submit only in
+  `<run>/heldout-private/`, never in the ledger; `artifacts.joined` joins client rows to engine rows by trace id),
+  `workspace.py` (exported engine copy + snapshots), `ledger.py`
   (append-only JSONL, `lab/ledger/` gitignored), `budget.py`, `engine.py` (where the engine repo and its python
   are), `safety/` (write surfaces, srt jail, grader: lint/tests run with the engine's python in the jail),
   `profile.py` + `bundle.py` + `gpu.py` (profiler harness, staged into the pristine tree under `_harness/` so the

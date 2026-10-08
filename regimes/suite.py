@@ -47,7 +47,9 @@ class Ctx:
     min_requests: int = 100            # a probe runs until it holds this many: 99% of fewer means little
     interactive: Limits = INTERACTIVE  # MLPerf limits; probes must last well beyond the TTFT limit to see overload
     conversational: Limits = CONVERSATIONAL
+    rows: list | None = None           # when a list, every measured row lands here (no text), tagged with its call
     _pools: dict = field(default_factory=dict)
+    _calls: int = 0
 
     @property
     def probe_s(self) -> float:
@@ -74,11 +76,22 @@ class Ctx:
         return min(max(base, self.min_requests / rate), base * MAX_STRETCH)
 
     def run_open(self, reqs):
-        return run_open(self.url, self.model, reqs, self.timeout, self.count_tokens, chat_kwargs=self.chat_kwargs)
+        started = time.time()
+        return self._keep(run_open(self.url, self.model, reqs, self.timeout, self.count_tokens,
+                                   chat_kwargs=self.chat_kwargs), started)
 
     def run_closed(self, reqs, c, duration):
-        return run_closed(self.url, self.model, reqs, c, duration, self.timeout, self.count_tokens,
-                          chat_kwargs=self.chat_kwargs)
+        started = time.time()
+        rows, elapsed = run_closed(self.url, self.model, reqs, c, duration, self.timeout, self.count_tokens,
+                                   chat_kwargs=self.chat_kwargs)
+        return self._keep(rows, started), elapsed
+
+    def _keep(self, rows, started: float):
+        """Rows into the sink: `call` numbers the run_open/run_closed call, `call_started_at` is its epoch start."""
+        if self.rows is not None:
+            self.rows.extend({"call": self._calls, "call_started_at": started, **r.to_dict()} for r in rows)
+            self._calls += 1
+        return rows
 
     @classmethod
     def from_target(cls, t, url: str, **kw) -> "Ctx":

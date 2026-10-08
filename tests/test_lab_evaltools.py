@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from lab import ledger, target
+from lab import ledger, serve, target
 from lab.budget import Budget
 from lab.session import Session
 from lab.tools import Toolbox
@@ -46,6 +46,8 @@ write = ["src/inference_server/*"]
 add_only = ["tests/test_*.py"]
 test = "python -m pytest -q -p no:cacheprovider"
 lint = "python -m ruff check ."
+[engine.telemetry]
+env = {{ TELEMETRY_DIR = "{{dir}}" }}
 [reference]
 api = "vllm"
 launch = "python {FAKE} --port {{port}}"
@@ -117,6 +119,25 @@ def test_bench_serves_and_measures(lab):
     assert rec["result"]["ready_s"] is not None and (s.run_dir / "serve-bench.log").exists()
 
 
+def test_bench_keeps_passive_data_as_blobs(lab):
+    from lab import artifacts, gpu
+    tb, s = lab
+    tb.bench({"regimes": ["single_stream"]})
+    rec = next(ledger.records(s.ledger_root, kind="bench"))
+    a = rec["result"]["artifacts"]
+    assert set(a) == {"device", "telemetry", "client_rows", "serve_log"}
+    assert all((s.ledger_root / p).exists() for p in a.values())
+    back = artifacts.load(rec, s.ledger_root)
+    assert back["device"]["available"] == gpu.available()
+    rows = back["client_rows"]
+    assert len(rows) == rec["result"]["regimes"][0]["summary"]["n"] and {r["regime"] for r in rows} == {"single_stream"}
+    assert "text" not in rows[0]
+    joined = artifacts.joined(rec, s.ledger_root)
+    assert all(j["engine"] and j["engine"]["tokens_out"] == 6 for j in joined)      # every request has its engine row
+    assert not (s.run_dir / "pristine" / serve.TELEMETRY_SUBDIR).exists()          # moved out of the served tree
+    assert not list(s.run_dir.glob("passive-*"))                                     # scratch emptied into blobs
+
+
 def test_equiv_judges_against_the_reference(lab):
     tb, s = lab
     out = json.loads(tb.equiv({}))
@@ -124,6 +145,23 @@ def test_equiv_judges_against_the_reference(lab):
     assert out["metrics"]["accuracy"]["unanswered"] == 0 and "kl_mean" in out["metrics"]["divergence"]
     rec = next(ledger.records(s.ledger_root, kind="equiv"))
     assert rec["result"]["passed"] is True and rec["result"]["tier"] == "dev"
+    from lab import artifacts
+    rows = artifacts.load(rec, s.ledger_root)["client_rows"]
+    assert len(rows) == 40 and all("text" not in r for r in rows)
+
+
+def test_submit_keeps_heldout_passive_data_out_of_the_ledger(lab):
+    tb, s = lab
+    tb.equiv({"tier": "full"}); tb.bench({"regimes": ["single_stream"]})
+    before = {p.name for p in (s.ledger_root / "blobs").iterdir()}
+    json.loads(tb.submit({}))
+    rec = next(r for r in ledger.records(s.ledger_root, kind="submit") if r.get("config", {}).get("split") == "heldout")
+    assert rec.keys() - ledger.WRITER_FIELDS <= ledger.HELDOUT_FIELDS and "artifacts" not in json.dumps(rec)
+    assert {p.name for p in (s.ledger_root / "blobs").iterdir()} == before          # no held-out blob of any kind
+    private = list((s.run_dir / "heldout-private").iterdir())
+    assert len(private) == 1 and (private[0] / "client_rows.jsonl").read_text().strip()
+    assert (private[0] / "telemetry" / "requests.jsonl").exists() and (private[0] / "device" / "meta.json").exists()
+    assert not (s.run_dir / "pristine" / serve.TELEMETRY_SUBDIR).exists()
 
 
 def test_submit_needs_full_equiv_and_a_bench_then_records_one_aggregate_per_metric(lab):
@@ -199,3 +237,4 @@ def test_tools_refuse_cleanly_when_the_engine_does_not_start(lab, monkeypatch):
     assert tb.bench({}).startswith("bench failed: engine did not start")
     rec = list(ledger.records(s.ledger_root, kind="bench"))[-1]
     assert rec["result"]["verdict"] == "error"
+    assert rec["result"]["artifacts"]["telemetry"] is None and rec["result"]["artifacts"]["serve_log"]   # no section: skipped
