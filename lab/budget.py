@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,3 +39,17 @@ class Budget:
     @staticmethod
     def gpu_usd(seconds: float, price_per_hour: float) -> float:
         return seconds / 3600.0 * price_per_hour
+
+
+def gpu_rate() -> tuple[float, bool]:
+    """(USD per GPU-hour, known): LAB_GPU_USD_PER_HOUR, else the target's [cost] gpu_usd_per_hour, else (0, False)."""
+    raw = os.environ.get("LAB_GPU_USD_PER_HOUR")
+    if raw is None:
+        from lab import target
+        raw = (target.load().raw.get("cost") or {}).get("gpu_usd_per_hour")
+    if raw is None:
+        return 0.0, False
+    rate = float(raw)
+    if rate < 0:
+        raise ValueError("the GPU rate is never negative")
+    return rate, True
