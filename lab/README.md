@@ -70,8 +70,12 @@ A held-out record (`config.split == "heldout"`) carries no `raw` and one aggrega
     python -m lab.session --task task.toml --budget 20      # or --goal "free text" with no objective
     # task.toml: [task] goal; [objective] regimes = [...], combine = "min"|"mean"; [constraints] <regime> = { max_regression_pct }
 
-One loop: while dollars remain, a fresh agent session gets the goal, the budget left, the last
-ledger records and the tools, and is free. Its shell and file tools run inside the srt jail on an
+One loop: once per run, before the first session, the base commit is measured under `bench`'s default regimes
+(seen split, short tier; the same cache `submit` compares against) and recorded as a `baseline` record
+(`RunConfig.baseline=False` skips it). Then, while dollars remain, a fresh agent session gets a system prompt
+generated from the target spec and the tool specs (`lab/prompts/system.md` is its template: target, write surface,
+each tool with what it does, returns and costs, budget mechanics, how a session ends), the brief, and the tools,
+and is free. Its shell and file tools run inside the srt jail on an
 exported copy of the engine (no git history, held-out data removed); it may write
 `src/inference_server/` and add `tests/test_*.py`, nothing else. The lab's own tools run out here
 with the referee's rights, snapshot the workspace and write the ledger on every call:
@@ -90,7 +94,8 @@ with the referee's rights, snapshot the workspace and write the ledger on every 
 
 Every session opens with the task in full, the referee's verdict on the run so far (integrity, with the evidence
 behind each broken rule) and the harness facts the agent cannot read off its ledger (latency limits, tiers,
-correctness policy, noise bands, corpus version, held-out queries left), then the last records. Nothing in it is
+correctness policy, noise bands, corpus version, held-out queries left), then the baseline's headline numbers (or
+why the base could not be measured) and only the last `session` record of the run. Nothing in it is
 derived from the agent's own records and nothing is advice; the `ledger` tool has every record, unfiltered.
 
 A session ends when the agent says `stop`, its per-session cap is spent, or it times out. The

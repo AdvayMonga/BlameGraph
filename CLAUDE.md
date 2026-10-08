@@ -13,7 +13,11 @@ Hard rule from the user: the loop may receive **facts only, never heuristics or 
 the limits, tiers, policy, noise bands, corpus version the referee measures against). Nothing derived from the
 records (counts, best measured, claims vs evidence) goes to the agent; that is `for_researcher.activity`.
 The task (`lab/task.py`, `--task task.toml`: goal, objective regimes, constraints) is stated in full in the brief,
-and a submit returns its `score` under that task: the win condition is known, never inferred.
+and a submit returns its `score` under that task: the win condition is known, never inferred. The system prompt is
+generated per session (`session.system_prompt`: template `lab/prompts/system.md` filled from the target spec and the
+ToolSpec descriptions, which state what each tool does, returns and costs, never when to use it). The brief is the
+task, budget, referee, a BASELINE (the base commit under bench's defaults, measured once per run, `baseline` ledger
+kind; `RunConfig.baseline=False` skips it) and only the run's last `session` record.
 
 ## Layout
 Top-level packages, run from the repo root (no install step; `pyproject.toml` lists optional extras and holds the

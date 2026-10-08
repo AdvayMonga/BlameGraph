@@ -7,6 +7,9 @@ from outside the jail (lab/serve.py), measures it with the environment's own ins
            snapshot, measures the held-out split at the full tier, compares with the base commit measured the same
            way, and records one aggregate per metric through the Thresholdout guard (the held-out numbers
            themselves never reach the ledger). Verdict per metric: improved | regressed | within_band | unknown_band.
+
+`baseline` is not a tool: the run measures its base commit under bench's defaults once, before the first session,
+in the same cache submit compares against.
 """
 
 from __future__ import annotations
@@ -237,6 +240,21 @@ class EvalTools:
                 have.update(headline(run_regimes(srv.url, t, missing, split, tier, self.seed)))
             cache.write_text(json.dumps(have, indent=1))
         return have
+
+    def baseline(self, commit: str) -> dict:
+        """The base commit under bench's defaults (seen split, short tier), once per run: a `baseline` record."""
+        have = next(ledger.records(self.s.ledger_root, run=self.s.run_id, kind="baseline"), None)
+        if have:
+            return have
+        names = list(self.bench_default_regimes)
+        try:
+            seen = self.base_seen(target.load(), names)
+            result = {"verdict": "ok", "metrics": {n: seen[n] for n in names}}
+        except Exception as e:                      # no GPU or a base that will not serve is itself the fact
+            result = {"verdict": "error", "reason": _why(e)}
+        return ledger.append({"kind": "baseline", "run": self.s.run_id, "session": self.s.session_id,
+                              "config": {"split": "seen", "tier": BENCH_TIER, "commit": commit},
+                              "result": result, "cost": {"usd": 0.0}}, self.s.ledger_root)
 
     def base_heldout(self, t, names):
         return self._base_measure(t, names, "heldout", "full")

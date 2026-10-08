@@ -120,36 +120,63 @@ class Toolbox(EvalTools):
         return "noted"
 
     def specs(self) -> list[ToolSpec]:
+        """What each tool does, returns and costs; never when or how to use it."""
+        from regimes import suite
+        from lab.evaltools import HOLDOUT_BUDGET
         obj = {"type": "object", "properties": {}}
+        short, full = suite.TIERS["short"], suite.TIERS["full"]
+        windows = (f", per regime, a {short['final_s']:.0f} s measurement window at tier short or {full['final_s']:.0f} s "
+                   f"at full, plus {short['probe_s']:.0f} s / {full['probe_s']:.0f} s probes for regimes that search "
+                   f"for a load")
         return [
-            ToolSpec("test", "Lint and run the test suite on a pristine copy of your current workspace, "
-                     "inside the referee's jail. Returns pass/fail and the tail of the output.", obj, self.test),
-            ToolSpec("profile", "Run the engine on a synthetic workload under the profiler and store the raw "
-                     "bundle (event timeline, chrome trace, memory, provenance) in the ledger.",
+            ToolSpec("test", "Lint and run the test suite on a pristine copy of your current workspace, inside the "
+                     "referee's jail. Returns PASS or FAIL, lint and test status, and the tail of each output. "
+                     "Costs the lint and test wall-clock time.", obj, self.test),
+            ToolSpec("profile", "Run the engine in process on a synthetic workload (`requests`, `prompt_len`, "
+                     "`max_tokens`; defaults 8, 64, 32) under the profiler, jailed. Stores the raw bundle (event "
+                     "timeline, chrome trace, memory, provenance) in the ledger and copies it into your workspace "
+                     "under lab/runs/, left out of your change. Returns the bundle path and its file names. Costs a "
+                     "model load plus the workload's wall-clock time.",
                      {"type": "object", "properties": {"requests": {"type": "integer"}, "prompt_len": {"type": "integer"},
                                                        "max_tokens": {"type": "integer"}}}, self.profile),
-            ToolSpec("ledger", "Read past records: every tool call in this and earlier runs, with snapshots and results.",
+            ToolSpec("ledger", "Read records of this and earlier runs: every tool call, session and baseline, with "
+                     "snapshots and results. Filters: `kind`, `session`, `snapshot`, `tool`. Returns the `last` N "
+                     "matches (default 20) as JSON lines. Costs nothing.",
                      {"type": "object", "properties": {"kind": {"type": "string"}, "session": {"type": "string"},
                                                        "snapshot": {"type": "string"}, "tool": {"type": "string"},
                                                        "last": {"type": "integer"}}}, self.ledger_tool),
-            ToolSpec("budget", "Dollars left in this run.", obj, self.budget),
-            ToolSpec("restore", "Put the workspace back to a snapshot id from the ledger ('base' resets it).",
+            ToolSpec("budget", "Returns the run's dollar cap, spent and remaining. Costs nothing.", obj, self.budget),
+            ToolSpec("restore", "Put the workspace back to a snapshot id from the ledger ('base' resets it to the base "
+                     "commit). Returns the snapshot restored. Costs nothing.",
                      {"type": "object", "required": ["snapshot"], "properties": {"snapshot": {"type": "string"}}}, self.restore),
-            ToolSpec("note", "Leave a note for the human running the lab. It is recorded and changes nothing.",
+            ToolSpec("note", "Leave a note for the human running the lab. It is recorded and changes nothing. "
+                     "Costs nothing.",
                      {"type": "object", "required": ["text"], "properties": {"text": {"type": "string"}}}, self.note),
-            ToolSpec("bench", "Serve your current workspace (pristine copy, jailed) and measure it under the load "
-                     "regimes on the seen split. Returns one headline number per regime, raw.",
+            ToolSpec("bench", "Serve a pristine copy of your current workspace (jailed) and measure it under load "
+                     f"regimes on the seen split. `regimes`: default {_names(self.bench_default_regimes)}; 'all'; or "
+                     f"any of {_names(suite.REGIMES)}. `tier`: short (default) or full. Returns one headline per regime "
+                     f"(objective, value, direction, validity), raw. Costs one engine start plus{windows}.",
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}},
                                                        "tier": {"type": "string", "enum": ["short", "full"]}}}, self.bench),
             ToolSpec("equiv", "Serve your current workspace and run the correctness gate against the reference "
-                     "model. Returns pass, fail or inconclusive with every metric. tier=full is required before submit.",
+                     "model's outputs at `tier` dev (default) or full. Returns pass, fail or inconclusive with every "
+                     "metric. submit requires a passing full-tier equiv on the snapshot. Costs one engine start plus "
+                     "generating the tier's task set.",
                      {"type": "object", "properties": {"tier": {"type": "string", "enum": ["dev", "full"]}}}, self.equiv),
             ToolSpec("submit", "Measure your current workspace on the held-out split at the full tier and compare it "
-                     "with the base. Needs a passing full-tier equiv and a seen bench on this snapshot. The only "
-                     "thing that can produce a win. Returns one aggregate per regime.",
+                     "with the base commit measured the same way. Needs a passing full-tier equiv and a completed "
+                     "short-tier seen bench on this snapshot. `regimes`: default those of that bench. The only thing "
+                     "that can produce a win. Returns one aggregate per regime (base, new, delta %, noise band %, "
+                     "verdict) and, with a task, its score. Costs one engine start plus a held-out full-tier "
+                     f"measurement per regime, the base commit's held-out measurement once per run, and up to one of the "
+                     f"{HOLDOUT_BUDGET} held-out queries per regime.",
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}}}},
                      self.submit),
         ]
+
+
+def _names(names) -> str:
+    return ", ".join(f"`{n}`" for n in names)
 
 
 HARNESS = ("__init__.py", "profile.py", "bundle.py", "gpu.py")     # all lab.profile imports from the environment
