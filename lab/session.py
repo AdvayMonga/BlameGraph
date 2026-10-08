@@ -69,14 +69,14 @@ def referee(s: Session) -> dict:
 def system_prompt(t: target.Target, spec: agent.AgentSpec) -> str:
     """The system prompt from the target spec and the tool specs: what is there and what it costs, nothing advised."""
     from lab.evaltools import HOLDOUT_BUDGET
-    from lab.safety.surfaces import ALWAYS_DENY, HIDDEN
+    from lab.safety.surfaces import ALWAYS_DENY
 
     def globs(g):
         return ", ".join(f"`{x}`" for x in g) or "nothing"
     return SYSTEM.format(
         target=t.name, model=t.model, engine=t.engine_repo.name, launch=t.engine.launch,
         env=json.dumps(t.engine.env), write=globs(t.write), add_only=globs(t.add_only), deny=globs(ALWAYS_DENY),
-        hidden=globs(HIDDEN), tools="\n".join(f"- `{x.name}`: {x.description}" for x in spec.tools),
+        tools="\n".join(f"- `{x.name}`: {x.description}" for x in spec.tools),
         session_usd=spec.max_budget_usd, max_turns=spec.max_turns, timeout_s=spec.timeout_s,
         min_session_usd=MIN_SESSION_USD, holdout=HOLDOUT_BUDGET)
 

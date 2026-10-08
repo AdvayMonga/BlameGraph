@@ -9,14 +9,13 @@ Write surface
 - Add, modify or delete: {write}.
 - Add, never change: {add_only}.
 - Refused even inside those globs: {deny}.
-- Removed from your workspace: {hidden}.
 - Any other write is refused. A workspace holding a write outside this surface ends the run.
 
 Lab tools. Each runs outside your sandbox, snapshots your workspace, and writes a ledger record.
 {tools}
 
 Budget
-- The run has a dollar cap. Dollars are charged for model usage, from the provider's accounting, when a session ends; lab tools charge none.
+- The run has a dollar cap. Dollars are charged for model usage, from the provider's accounting, when a session ends, and for each lab tool's GPU time at the configured rate when the call ends; every record's `cost` holds that call's seconds and dollars.
 - This session is capped at ${session_usd:.2f}, {max_turns} turns and {timeout_s:.0f} s of wall-clock time; lab tool time counts toward the wall clock.
 - No new session starts with less than ${min_session_usd:.2f} left in the run.
 - Each regime a `submit` measures draws up to one query from a held-out query budget of {holdout} shared by every run on this ledger.
