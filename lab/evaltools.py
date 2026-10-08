@@ -287,6 +287,7 @@ class EvalTools:
         if have:
             return have
         names = list(self.bench_default_regimes)
+        self._t0 = time.monotonic()
         try:
             seen = self.base_seen(target.load(), names)
             result = {"verdict": "ok", "metrics": {n: seen[n] for n in names}}
@@ -294,7 +295,7 @@ class EvalTools:
             result = {"verdict": "error", "reason": _why(e)}
         return ledger.append({"kind": "baseline", "run": self.s.run_id, "session": self.s.session_id,
                               "config": {"split": "seen", "tier": BENCH_TIER, "commit": commit},
-                              "result": result, "cost": {"usd": 0.0}}, self.s.ledger_root)
+                              "result": result, "cost": self._cost("baseline")}, self.s.ledger_root)
 
     def base_heldout(self, t, names):
         return self._base_measure(t, names, "heldout", "full")

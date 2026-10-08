@@ -30,7 +30,9 @@ copy it, change the engine section (and the reference if the model changes), and
 - Engine instrumentation the lab reads: `TIMELINE_DIR` turns on the event timeline
   (`src/inference_server/timeline.py`), `TELEMETRY_DIR` the per-request rows. The target names them in
   `[engine.telemetry] env` with `{dir}`; serve points them at `lab-telemetry/` in the served tree and collects what
-  appeared there after teardown. Optional: without the section nothing is collected.
+  appeared there after teardown. Optional: without the section nothing is collected. The rows follow the
+  engine-agnostic request-trace contract in `lab/TRACE.md` (a dir of `*.sqlite` or `*.jsonl` + meta, keyed by
+  `X-Trace-Id`); check a dir with `python -m lab.trace_contract DIR`.
 
 ## Tools
 

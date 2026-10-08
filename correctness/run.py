@@ -50,6 +50,7 @@ def _jsonl_read(path: Path) -> list[dict]:
     return [json.loads(l) for l in Path(path).read_text().splitlines() if l.strip()] if Path(path).exists() else []
 
 
+TRACE_PREFIX = "eq"          # X-Trace-Id of a gate request: eq-<item id>, so equiv rows join engine telemetry
 RETRIES = 6                 # a 429/503 (the server shedding under the gate's load) is retried with backoff
 
 
@@ -75,7 +76,8 @@ def collect(url: str, model: str, items: list[dict], out: Path, concurrency: int
 
     def one(it):
         try:
-            g = _retrying(client.generate, url, model, it["messages"], it.get("max_tokens", 2048), api)
+            g = _retrying(client.generate, url, model, it["messages"], it.get("max_tokens", 2048), api,
+                          trace_id=f"{TRACE_PREFIX}-{it['id']}")
         except Exception as e:                      # a failed request is a recorded fact, not a crash
             g = {"text": "", "completion_tokens": None, "finish_reason": None, "error": f"{type(e).__name__}: {e}"[:200]}
         return {"id": it["id"], **g}

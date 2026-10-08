@@ -191,7 +191,7 @@ async def run(backend: InferenceBackend, settings: Settings, prompts: list[list[
         device, settings, prompts, max_tokens, t0, t1, failed=done["errors"] + done["empty"], outcomes=done,
         warmup={"requests": warmup, "concurrent": True, "prompts": "random ids at the window's prompt lengths",
                 "max_tokens": max_tokens, "wall_s": w1 - w0},
-        profiler_on=profiler == "torch", profiler=prof_config if profiler == "torch" else {"kind": profiler},
+        profiler_on=profiler == "torch", profiler={"kind": profiler, **(prof_config if profiler == "torch" else {})},
         rounds=rounds, gpu={"window_start": gpu0, "window_end": gpu1}, timeline=timeline.stats(), workload=source))
     return out
 
