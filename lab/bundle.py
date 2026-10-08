@@ -16,10 +16,9 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from torch.autograd import DeviceType
 
-from lab import gpu
-
-FILES = ("events.jsonl", "trace.json", "memory.json", "stats.json", "meta.json")
+FILES = ("events.jsonl", "trace.json", "ops.json", "memory.json", "stats.json", "meta.json")
 
 
 def new_dir(root: str | Path) -> Path:
@@ -61,11 +60,49 @@ def device_memory(device: str) -> dict:
     return out
 
 
+def device_peaks(device: str) -> dict | None:
+    """Allocator high-water marks since the last reset; CUDA only (MPS keeps no peak)."""
+    if not (device.startswith("cuda") and torch.cuda.is_available()):
+        return None
+    s = torch.cuda.memory_stats()
+    return {"allocated_bytes": s.get("allocated_bytes.all.peak", 0), "reserved_bytes": s.get("reserved_bytes.all.peak", 0)}
+
+
+def reset_peaks(device: str) -> None:
+    if device.startswith("cuda") and torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+
+
+def ops_table(prof: Any, top: int = 200) -> dict:
+    """prof.key_averages() as rows (times in us), sorted by self device time then self CPU time; top N plus totals."""
+    rows = [{"name": a.key, "count": a.count, "self_cpu_us": a.self_cpu_time_total, "cpu_us": a.cpu_time_total,
+             "self_device_us": a.self_device_time_total, "device_us": a.device_time_total}
+            for a in prof.key_averages()]
+    rows.sort(key=lambda r: (r["self_device_us"], r["self_cpu_us"]), reverse=True)
+    return {"sort": "self_device_us, self_cpu_us", "ops_total": len(rows), "top": rows[:top],
+            "totals": {"self_cpu_us": sum(r["self_cpu_us"] for r in rows),
+                       "self_device_us": sum(r["self_device_us"] for r in rows)}}
+
+
+def kernels_table(events: Any) -> dict | None:
+    """CUDA kernels aggregated by name (times in us), by total time; None when the trace has no CUDA activity."""
+    agg: dict[str, list[float]] = {}
+    for e in events:
+        if e.device_type == DeviceType.CUDA:
+            agg.setdefault(e.name, []).append(e.time_range.elapsed_us())
+    if not agg:
+        return None
+    rows = [{"name": k, "count": len(v), "total_us": sum(v), "mean_us": sum(v) / len(v), "max_us": max(v)}
+            for k, v in agg.items()]
+    rows.sort(key=lambda r: r["total_us"], reverse=True)
+    return {"kernels": rows, "total_us": sum(r["total_us"] for r in rows), "launches": sum(r["count"] for r in rows)}
+
+
 def meta(device: str, settings: Any, prompts: list[list[int]], max_tokens: int, t0: float,
          t1: float, **extra: Any) -> dict:
     """A number is a fact about a config, so the engine settings travel with every bundle."""
     return {"git_sha": git_sha(), "torch": torch.__version__, "python": sys.version.split()[0],
-            "platform": platform.platform(), "device": device, "gpu": gpu.query(),
+            "platform": platform.platform(), "device": device,
             "settings": asdict(settings),
             "workload_hash": workload_hash(prompts, max_tokens), "requests": len(prompts),
             "max_tokens": max_tokens, "window": {"start": t0, "end": t1, "wall_s": t1 - t0},

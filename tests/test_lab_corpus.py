@@ -24,6 +24,7 @@ from lab.corpus import (
     load_manifest,
     load_trace,
     read_trace,
+    sample,
     write_trace,
 )
 
@@ -224,6 +225,18 @@ def test_missing_trace_is_refused(tmp_path):
     (tmp_path / "long_context" / "heldout.jsonl").unlink()
     with pytest.raises(CorpusError, match="missing"):
         load_manifest(tmp_path)
+
+
+def test_sample_is_seeded_and_carries_its_provenance(tmp_path):
+    m = _mini_corpus(tmp_path)
+    write_trace(tmp_path / "cold_start" / "seen.jsonl", [TraceRequest(0.0, f"s{i}", 0, f"p{i}", 64) for i in range(5)])
+    m = build_manifest(m.classes, tmp_path)
+    (tmp_path / "manifest.json").write_text(json.dumps(m.to_dict(), indent=2) + "\n")
+    w = sample("cold_start", "seen", 3, 4, tmp_path)
+    assert w == sample("cold_start", "seen", 3, 4, tmp_path) and len(set(w["source"]["lines"])) == 4
+    assert w["source"] == {"kind": "corpus", "class": "cold_start", "split": "seen", "seed": 3,
+                           "corpus_version": m.corpus_version, "lines": w["source"]["lines"]}
+    assert w["messages"][0] == [{"role": "user", "content": f"p{w['source']['lines'][0]}"}]
 
 
 def test_trace_round_trip(tmp_path):

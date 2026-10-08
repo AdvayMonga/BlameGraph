@@ -32,18 +32,29 @@ copy it, change the engine section (and the reference if the model changes), and
 
 ## Tools
 
-    python -m lab.profile --backend custom-mps --requests 8 --max-tokens 32 --out lab/runs
+    python -m lab.profile --backend custom-mps --corpus-class steady_interactive --requests 8 --max-tokens 32 --out lab/runs
 
 The engine configuration comes from the same env vars the server reads (`MAX_BATCH_SIZE`,
 `PREFILL_MODE`, ...), so a profile measures what is served; `--backend` and `--model` override
-`BACKEND` and `MODEL_NAME`. Writes one bundle directory per run, raw files only:
+`BACKEND` and `MODEL_NAME`. The workload is explicit, one of: `--corpus-class NAME` (`--split`, `--seed`,
+`--requests`: sampled through the verified loader, chat-templated with the engine's tokenizer, thinking off
+unless `--enable-thinking`), `--workload FILE` (the same, pre-sampled by `lab.corpus.sample`; the `profile`
+tool uses it because the jail holds no corpus), `--prompts FILE` or `--synthetic` (random ids of `--prompt-len`).
+Output length is `--max-tokens` for every request. Before the window, `--warmup` requests (default: as many as
+the window) at the window's prompt lengths with random ids are fired together, so compiles and graph captures for
+the window's batch sizes happen outside it. Writes one bundle directory per run, raw files only:
 
     events.jsonl   engine event timeline: scheduler decisions and phases, per step
     trace.json     torch.profiler chrome trace; phase ranges carry the step id
-    memory.json    device allocator stats and peak host RSS
-    gpu.csv        nvidia-smi samples at 100 ms (CUDA hosts only)
-    stats.json     the scheduler's own counters at the end of the run
-    meta.json      git sha, torch, device, clock state, engine settings, workload hash, window
+    ops.json       prof.key_averages() by self device then self CPU time: top 200 and totals (us)
+    kernels.json   CUDA kernels by name: count, total, mean, max (us); only when there was CUDA activity
+    memory.json    window peak (reset at window start) and lifetime peak (CUDA), allocator snapshots at window
+                   start and end, peak host RSS (lifetime)
+    gpu.csv        nvidia-smi samples at 100 ms with an `epoch_s` column, throttle reasons when the driver has them (CUDA hosts only)
+    stats.json     the scheduler's counters at window start and end, and their difference
+    meta.json      git sha, torch, device, engine settings, workload source and hash, window, warmup, profiler config
+                   (`profiler_on`: every number was taken under the profiler), GPU clock state and throttle reasons at
+                   window start and end, timeline events written/dropped, per-request outcomes and token counts
 
 ## Ledger
 
@@ -79,7 +90,7 @@ with the referee's rights, snapshot the workspace and write the ledger on every 
 | tool | does |
 |---|---|
 | `test` | lint and the fast suite on a pristine two-commit copy of the workspace, jailed |
-| `profile` | `lab.profile` on the pristine copy, jailed; the bundle goes into the ledger as a blob |
+| `profile` | `lab.profile` on the pristine copy, jailed, on `args.corpus_class` (default `steady_interactive`, seen split, `args.seed`) or `args.synthetic`; the bundle goes into the ledger as a blob |
 | `ledger` | read records (this run and earlier ones) |
 | `budget` | dollars left |
 | `restore` | workspace back to a snapshot id (`base` resets) |
@@ -122,7 +133,7 @@ commands either way:
     python -m lab.vm start                  # create (first time) or start, wait for ssh
     python -m lab.vm setup                  # lab/vm-setup.sh: venv, CUDA torch, Nsight, counter and clock checks
     python -m lab.vm run --env --fetch lab/runs -- \
-        env BACKEND=custom-cuda python -m lab.profile --requests 8      # --env: run in this repo's tree
+        env BACKEND=custom-cuda python -m lab.profile --corpus-class steady_interactive --requests 8      # --env: run in this repo's tree
     python -m lab.vm run -- python scripts/gpu_tests/checks.py         # default: run in the engine's tree
     python -m lab.vm stop                   # ends all billing (Verda: deletes the VM and its disk)
 

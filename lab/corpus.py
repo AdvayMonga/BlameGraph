@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -186,3 +187,12 @@ def load_trace(class_name: str, split: str,
     if class_name not in m.classes:
         raise CorpusError(f"unknown workload class {class_name!r}; have {sorted(m.classes)}")
     return m, read_trace(corpus_dir / m.classes[class_name].trace_file(split))
+
+
+def sample(class_name: str, split: str, seed: int, n: int, corpus_dir: Path = CORPUS_DIR) -> dict[str, Any]:
+    """`n` requests of one (class, split) drawn without replacement by `seed`: chat messages plus their provenance."""
+    m, reqs = load_trace(class_name, split, corpus_dir)
+    lines = random.Random(seed).sample(range(len(reqs)), n)
+    return {"source": {"kind": "corpus", "class": class_name, "split": split, "seed": seed,
+                       "corpus_version": m.corpus_version, "lines": lines},
+            "messages": [reqs[i].chat_messages() for i in lines]}

@@ -34,7 +34,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   (append-only JSONL, `lab/ledger/` gitignored), `budget.py`, `engine.py` (where the engine repo and its python
   are), `safety/` (write surfaces, srt jail, grader: lint/tests run with the engine's python in the jail),
   `profile.py` + `bundle.py` + `gpu.py` (profiler harness, staged into the pristine tree under `_harness/` so the
-  jail never opens this repo, which holds `.env` and the ledger), `canary.py` (honest regressions patched into
+  jail never opens this repo, which holds `.env` and the ledger; the tool samples its seen-split corpus workload out here, `corpus.sample`, and stages it as `_harness/workload.json`; window-only memory peaks and scheduler counters, warmup sized to the window, op/kernel tables), `canary.py` (honest regressions patched into
   the engine's process), `vm.py` + `providers/` + `vm-setup.sh` (one GPU VM on Verda/Nebius/Crusoe; pushes both
   trees, engine to `LAB_VM_DIR`, this repo to `LAB_VM_ENV_DIR`; `run --env` runs here; `run` stops the VM when done
   unless `--keep`, and every session is capped by `LAB_VM_MAX_MINUTES` via `timeout` + a local watchdog + in-VM
