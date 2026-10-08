@@ -192,7 +192,8 @@ def test_cli_parses(monkeypatch, cfg):
 def test_heldout_results_go_through_the_aggregate_only_writer(cfg):
     from lab.tools import Toolbox
     snap = type("Snap", (), {"id": "x", "blob": "blobs/a", "patch": "blobs/b"})()
-    sess = type("S", (), {"run_id": "r", "session_id": "s", "ledger_root": cfg.ledger_root})()
+    from lab.budget import Budget
+    sess = type("S", (), {"run_id": "r", "session_id": "s", "ledger_root": cfg.ledger_root, "budget": Budget(1.0)})()
     tb = Toolbox(sess)
     m = {"ttft_p50_ms": {"base": 800, "new": 700, "delta_pct": -12.5, "band_pct": 3, "verdict": "win"}}
     rec = tb._record_heldout("submit", "submit", {}, {"class": "steady_interactive"}, m, snap)
