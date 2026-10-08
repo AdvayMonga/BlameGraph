@@ -2,7 +2,6 @@
 turns, manifest. Run: python tests/test_workloads.py"""
 from __future__ import annotations
 
-import gzip
 import json
 import sys
 import tempfile
@@ -21,6 +20,10 @@ FILES: dict[str, Path] = {}
 
 def fake_download(url, md5=None):
     return FILES[url.rsplit("/", 1)[1]]
+
+
+for _mod in (mlperf_deepseek_r1, mlperf_gpt_oss_120b, mlperf_llama2_70b, mlperf_llama3_1_8b, mlperf_mixtral_8x7b):
+    _mod.download = fake_download           # each module bound the name at import; no test touches the network
 
 
 def put(name, writer):
@@ -123,8 +126,6 @@ def test_fetch_manifest():
 
 
 if __name__ == "__main__":
-    for mod in (mlperf_deepseek_r1, mlperf_gpt_oss_120b, mlperf_llama2_70b, mlperf_llama3_1_8b, mlperf_mixtral_8x7b):
-        mod.download = fake_download        # each module bound the name at import
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
             fn()

@@ -108,8 +108,19 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   fresh VLLM/inductor/Triton cache dirs, polls until "17 + 25" is answered "42", then relaunches for the warm figure).
   Tiers: short (30 s probes, 60 s final), full (60 s probes, 600 s final). Probes must last well beyond the TTFT limit
   or a short overload goes unseen; limits are settable per `Ctx` (MLPerf by default). CLI:
-  `python -m regimes run REGIME[,..]|all --url URL [--corpus DIR] [--split] [--tier] [--tokenizer] [--out]`,
+  `python -m regimes run REGIME[,..]|all --url URL [--corpus DIR | --workload FILE] [--split] [--tier] [--tokenizer] [--out]`
+  (`--workload`: a `workloads/` file is one pool for every regime; bursty is refused, no arrival times),
   `python -m regimes cold-start --url URL --cmd "..."`. Closed-loop runs can't detect a client bottleneck by lag.
+- `workloads/` — frontier benchmark request data, researcher-only (never reaches the agent: nothing in `lab/` reads
+  it), for manual runs: overfitting checks on data the agent never saw, the corpus's missing shapes, engine vs
+  vLLM/SGLang on identical requests. One module per benchmark, docstring = source, sizes, output limit, MLPerf
+  latency limits: `mlperf_llama3_1_8b` (CNN/DM 13,368), `mlperf_llama2_70b` (OpenOrca 24,576), `mlperf_mixtral_8x7b`
+  (15k; GSM8K as 6-turn few-shot), `mlperf_deepseek_r1` (4,388 reasoning), `mlperf_gpt_oss_120b` (perf 6,396 + acc
+  4,395), `sharegpt` (58,659 conversations). `python -m workloads fetch all|NAME [--tokenizer]` →
+  `data/workloads/<name>.jsonl` + `manifest.json` (source URL, md5, sha256, limits, MLPerf commit). Fetched on demand,
+  no token: MLPerf files from the public `inference.mlcommons-storage.org` bucket (`metadata/<name>.uri` + `.md5`),
+  ShareGPT from the Hub. Not re-hosted (GPQA asks not to be; ShareGPT's license is unclear). Chat templates are
+  stripped. Llama-3.1-405B (404 on the bucket) and edge-agentic (tool-call transcripts) are not imported.
 - `tests/test_*.py` — all synthetic, no GPU, each runnable with `python3 tests/<file>.py`, named after the module they cover; `test_correctness_run.py` is the full reference→candidate→verdict flow on fake servers; `test_kernels.py` also runs on MPS; `test_inject.py` injects failures into real traces and skips without data; `test_regimes.py` drives `tests/fake_engine.py` (fixed decode slots, run out of process) through every regime (~2.5 min).
 - `data/` is gitignored and local only: `data/inferencebench/` (public traces, `hf download aisa-group/InferenceBench-Trajectories --repo-type dataset --local-dir data/inferencebench`), `data/derived/` (cached Haiku/Sonnet outputs from the research phase — the only copy), `data/laya/`, `data/tasks/` (correctness task sets), `data/equiv*/` and `data/h200-run-*/` (GPU run outputs and reports), `data/archive/research-loop/runs/` (the removed research loop's run panels and temp worktrees, Sept 2026), `data/notes/` (the user's notes). Live lab state is `lab/ledger/` and `lab/runs/`, also gitignored. Findings with evidence go in `knowledge/` (committed), never in `data/`.
 

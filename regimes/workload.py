@@ -4,6 +4,7 @@ schedules built from it. Trace format (corpus/README.md): one request per line w
 """
 from __future__ import annotations
 
+import json
 import random
 from pathlib import Path
 
@@ -26,6 +27,11 @@ def corpus(root: str | Path, cls: str, split: str = "seen") -> list[dict]:
         d["id"] = f"{cls}-{split}-{k}"
         out.append(d)
     return out
+
+
+def workload_file(path: str | Path) -> list[dict]:
+    """Records of a `python -m workloads` file (frontier benchmark data): same record shape, no classes or splits."""
+    return [json.loads(x) for x in Path(path).read_text().splitlines() if x.strip()]
 
 
 def corpus_classes(root: str | Path) -> list[str]:
