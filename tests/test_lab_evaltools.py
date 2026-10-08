@@ -238,3 +238,58 @@ def test_tools_refuse_cleanly_when_the_engine_does_not_start(lab, monkeypatch):
     rec = list(ledger.records(s.ledger_root, kind="bench"))[-1]
     assert rec["result"]["verdict"] == "error"
     assert rec["result"]["artifacts"]["telemetry"] is None and rec["result"]["artifacts"]["serve_log"]   # no section: skipped
+
+
+class TwoSessions:
+    """Continues once, then stops; keeps each session's spec."""
+    name = "scripted"
+
+    def __init__(self):
+        self.specs = []
+
+    def run(self, spec):
+        from lab.agent import AgentReply
+        self.specs.append(spec)
+        return AgentReply({"status": "continue" if len(self.specs) == 1 else "stop", "note": None}, 0.1, 1, None)
+
+
+def test_baseline_is_measured_once_per_run_and_briefed_with_one_ledger_record(lab, monkeypatch, tmp_path):
+    from lab import evaltools, session
+    tb, s = lab
+    monkeypatch.setattr(evaltools.EvalTools, "bench_default_regimes", ("single_stream",))
+    monkeypatch.setattr(evaltools.EvalTools, "serve_jailed", False)
+    calls = []
+    real = evaltools.run_regimes
+    monkeypatch.setattr(evaltools, "run_regimes", lambda *a, **kw: calls.append(a[2:4]) or real(*a, **kw))
+    cfg = session.RunConfig(goal="g", budget_usd=2.0, repo=s.workspace.repo, runs_dir=tmp_path / "runs",
+                            ledger_root=tmp_path / "led", run_id="rb", max_sessions=2)
+    p = TwoSessions()
+    assert session.run(cfg, p)["sessions"] == 2
+    session.run(cfg, TwoSessions())                       # resumed: still the same baseline
+    assert calls == [(["single_stream"], "seen")]
+    base = list(ledger.records(cfg.ledger_root, kind="baseline"))
+    assert len(base) == 1 and base[0]["result"]["verdict"] == "ok"
+    assert base[0]["config"] == {"split": "seen", "tier": "short", "commit": session._resolve(cfg.repo, "HEAD")}
+    assert (tmp_path / "runs" / "rb" / "base-seen-short.json").exists()      # the cache submit compares against
+    first, second = (sp.prompt for sp in p.specs)
+    for prompt in (first, second):
+        line = prompt.split("Baseline (", 1)[1].split("\n")[1]
+        assert json.loads(line)["single_stream"]["value"] == base[0]["result"]["metrics"]["single_stream"]["value"]
+    assert "Last session of this run:\nnone" in first
+    last = json.loads(second.split("Last session of this run:\n", 1)[1].split("\n")[0])
+    assert last["kind"] == "session" and last["session"] == "rb-s1"
+    assert second.count('"id": "ev-') == 1                # one ledger record, nothing else inlined
+
+
+def test_a_base_that_will_not_serve_is_briefed_as_a_fact(lab, monkeypatch, tmp_path):
+    from lab import session
+    tb, s = lab
+    t = target.load()
+    broken = target.Server("python -c 'import sys; sys.exit(3)'", {}, "/health", "vllm", 5.0)
+    monkeypatch.setattr(target, "load", lambda path=None: t.__class__(**{**t.__dict__, "engine": broken}))
+    cfg = session.RunConfig(goal="g", budget_usd=2.0, repo=s.workspace.repo, runs_dir=tmp_path / "runs",
+                            ledger_root=tmp_path / "led", run_id="rx", max_sessions=1)
+    p = TwoSessions()
+    session.run(cfg, p)
+    assert "not measured; engine did not start" in p.specs[0].prompt
+    assert next(ledger.records(cfg.ledger_root, kind="baseline"))["result"]["verdict"] == "error"

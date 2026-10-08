@@ -1,4 +1,5 @@
-"""The one loop: while budget remains, start a session with the goal, the ledger and the tools, and record what it did."""
+"""The one loop: measure the base once, then while budget remains, start a session with the task, the baseline and the
+tools, and record what it did."""
 
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from lab.task import Task
 from lab.tools import Toolbox, clean_pristine
 from lab.workspace import Workspace
 
-SYSTEM = (Path(__file__).parent / "prompts" / "system.md").read_text()
+SYSTEM = (Path(__file__).parent / "prompts" / "system.md").read_text()      # a template, filled by system_prompt
 MIN_SESSION_USD = 0.25
 
 
@@ -48,6 +49,7 @@ class RunConfig:
     max_turns: int = 200
     session_usd: float = 5.0              # per-session cap handed to the provider
     provider: str | None = None
+    baseline: bool = True                 # measure the base commit once per run before the first session
     extra: dict = field(default_factory=dict)
 
 
@@ -64,15 +66,42 @@ def referee(s: Session) -> dict:
     return lab_feedback(recs, s.run_id, str(s.ledger_root), facts)["for_agent"]
 
 
+def system_prompt(t: target.Target, spec: agent.AgentSpec) -> str:
+    """The system prompt from the target spec and the tool specs: what is there and what it costs, nothing advised."""
+    from lab.evaltools import HOLDOUT_BUDGET
+    from lab.safety.surfaces import ALWAYS_DENY
+
+    def globs(g):
+        return ", ".join(f"`{x}`" for x in g) or "nothing"
+    return SYSTEM.format(
+        target=t.name, model=t.model, engine=t.engine_repo.name, launch=t.engine.launch,
+        env=json.dumps(t.engine.env), write=globs(t.write), add_only=globs(t.add_only), deny=globs(ALWAYS_DENY),
+        tools="\n".join(f"- `{x.name}`: {x.description}" for x in spec.tools),
+        session_usd=spec.max_budget_usd, max_turns=spec.max_turns, timeout_s=spec.timeout_s,
+        min_session_usd=MIN_SESSION_USD, holdout=HOLDOUT_BUDGET)
+
+
+def _baseline(s: Session) -> str:
+    b = next(ledger.records(s.ledger_root, run=s.run_id, kind="baseline"), None)
+    if b is None:
+        return "Baseline: not measured in this run."
+    c, r = b["config"], b["result"]
+    head = f"Baseline (base commit {c['commit']}, {c['split']} split, {c['tier']} tier, record {b['id']})"
+    if r["verdict"] != "ok":
+        return f"{head}: not measured; {r['reason']}"
+    return f"{head}:\n{json.dumps(r['metrics'])}"
+
+
 def brief(cfg: RunConfig, s: Session, snapshot_id: str, n: int) -> str:
-    tail = list(ledger.records(s.ledger_root, run=s.run_id))[-30:]
+    last = [r for r in ledger.records(s.ledger_root, run=s.run_id, kind="session")][-1:]
     head = cfg.task.brief() if cfg.task else f"Goal: {cfg.goal}"
     return (f"{head}\n\n"
             f"Run {s.run_id}, session {n}. Budget: ${s.budget.remaining_usd:.2f} of ${s.budget.cap_usd:.2f} left.\n"
             f"Workspace snapshot: {snapshot_id}. Base commit: {cfg.base}.\n\n"
             f"Referee (this run so far):\n{json.dumps(referee(s), default=str)}\n\n"
-            f"Last records of this run ({len(tail)}; the ledger tool has all of them):\n"
-            + "\n".join(json.dumps(r) for r in tail))
+            f"{_baseline(s)}\n\n"
+            f"Last session of this run:\n{json.dumps(last[0]) if last else 'none'}\n\n"
+            "Every record of this and earlier runs is readable with the `ledger` tool.")
 
 
 def _resolve(repo: Path, ref: str) -> str:
@@ -92,6 +121,8 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
     done = sum(1 for _ in ledger.records(cfg.ledger_root, run=run_id, kind="session"))
     base_files = grader.base_files(cfg.repo, base)
     summary = {"run": run_id, "base": base, "sessions": 0, "stopped": None, "spent_usd": budget.spent_usd}
+    if cfg.baseline:
+        Toolbox(Session(run_id, f"{run_id}-baseline", run_dir, ws, budget, cfg.ledger_root, task=cfg.task)).baseline(base)
 
     for n in range(done + 1, done + cfg.max_sessions + 1):
         if budget.remaining_usd < MIN_SESSION_USD:
@@ -100,10 +131,11 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
         s = Session(run_id, f"{run_id}-s{n}", run_dir, ws, budget, cfg.ledger_root, task=cfg.task)
         tools = Toolbox(s)
         snap = ws.snapshot()
-        spec = agent.AgentSpec(system=SYSTEM, prompt=brief(cfg, s, snap.id, n), workspace=ws.path,
+        spec = agent.AgentSpec(system="", prompt=brief(cfg, s, snap.id, n), workspace=ws.path,
                                scratch=run_dir / "scratch" / s.session_id, tools=tools.specs(),
                                base_files=base_files, max_turns=cfg.max_turns,
                                max_budget_usd=min(cfg.session_usd, budget.remaining_usd))
+        spec.system = system_prompt(target.load(), spec)
         t0 = time.monotonic()
         try:
             reply = provider.run(spec)
