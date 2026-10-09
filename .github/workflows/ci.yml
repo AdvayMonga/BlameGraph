@@ -43,7 +43,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: pip install pandas
+      - run: pip install pandas pyarrow
       - name: Script tests
         run: |
           set -e

@@ -8,6 +8,7 @@ dependencies = []          # the referee and the regimes are stdlib; heavier pie
 [project.optional-dependencies]
 agents = ["claude-agent-sdk>=0.2.161"]                       # lab/agent.py: the Claude provider
 correctness = ["huggingface_hub", "pandas", "pyarrow", "transformers"]   # task sets, tokenizer
+workloads = ["huggingface_hub", "pandas", "pyarrow"]                # python -m workloads fetch
 corpus = ["pyarrow>=17"]                                      # corpus/fetch_traces.py reads WildChat shards
 kernels = ["torch>=2.4"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.16.9"]
