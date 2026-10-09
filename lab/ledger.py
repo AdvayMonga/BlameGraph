@@ -1,4 +1,4 @@
-"""ledger: append-only record of every tool call, the raw knowledge base (format: lab/README.md)."""
+"""ledger: append-only record of every tool call (format: lab/LEDGER.md)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from typing import Any, Iterator
 
 SCHEMA = 1
 ROOT = Path(__file__).resolve().parents[1] / "lab" / "ledger"
-KINDS = {"test", "equiv", "bench", "profile", "submit", "finding", "session", "note", "baseline"}
+KINDS = {"test", "equiv", "bench", "profile", "submit", "session", "note", "baseline", "noise"}
 WRITER_FIELDS = {"id", "at", "schema"}
 # A held-out record is one aggregate per metric and nothing else: these fields, scalar values.
 HELDOUT_FIELDS = {"kind", "config", "metrics", "run", "session", "snapshot", "snapshot_blob", "patch",
@@ -170,22 +170,23 @@ def records(root: Path = ROOT, **match: Any) -> Iterator[dict]:
             yield r
 
 
-def seed(knowledge: Path, root: Path = ROOT) -> int:
-    """Import hand-written findings as `finding` records, whole and unchanged. A changed file seeds again."""
+def merge(src: Path, root: Path = ROOT) -> int:
+    """Records and blobs of another ledger dir (one fetched from a VM) that `root` lacks, in their order; returns
+    the records added. Record ids and blob names are unique, so merging twice adds nothing."""
     with _lock(root):
-        done = {(r.get("source"), r.get("content_sha")) for r in records(root, kind="finding")}
-        n = 0
-        for p in sorted(Path(knowledge).glob("*.json")):
-            raw = p.read_bytes()
-            key = (f"{Path(knowledge).name}/{p.name}", hashlib.sha256(raw).hexdigest())
-            if key in done:
+        have = {r["id"] for r in records(root)}
+        new = [r for r in records(src) if r["id"] not in have]
+        for p in sorted((Path(src) / "blobs").iterdir()) if (Path(src) / "blobs").is_dir() else []:
+            dest = Path(root) / "blobs" / p.name
+            if dest.exists() or ".tmp-" in p.name:
                 continue
-            record = {"kind": "finding", "author": "human", "source": key[0],
-                      "content_sha": key[1], "claim": json.loads(raw)}
-            _check(record)
-            _write(_stamp(record), root)
-            n += 1
-    return n
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            tmp = dest.with_name(dest.name + f".tmp-{os.getpid()}")
+            shutil.copytree(p, tmp) if p.is_dir() else shutil.copyfile(p, tmp)
+            os.replace(tmp, dest)
+        for r in new:                      # blobs first: a record never names a blob that is not there yet
+            _write(r, root)
+    return len(new)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -196,8 +197,7 @@ def main(argv: list[str] | None = None) -> int:
     for k in ("kind", "session", "snapshot"):
         ls.add_argument(f"--{k}")
     sub.add_parser("show", help="pretty-print one record").add_argument("id")
-    sub.add_parser("seed", help="import knowledge/*.json").add_argument(
-        "--knowledge", type=Path, default=ROOT.parents[1] / "knowledge")
+    sub.add_parser("merge", help="add another ledger dir's new records and blobs").add_argument("src", type=Path)
     a = ap.parse_args(argv)
 
     if a.cmd == "list":
@@ -211,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(json.dumps(hit, indent=1))
     else:
-        print(f"seeded {seed(a.knowledge, a.root)} findings")
+        print(f"merged {merge(a.src, a.root)} records")
     return 0
 
 
