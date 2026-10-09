@@ -196,7 +196,7 @@ class Toolbox(EvalTools, ProfTools):
             ToolSpec("note", "Leave a note for the human running the lab. It is recorded and changes nothing." + free,
                      {"type": "object", "required": ["text"], "properties": {"text": {"type": "string"}}}, self.note),
             ToolSpec("bench", "Serve a pristine copy of your current workspace (jailed) and measure it under load "
-                     f"regimes on the seen split. `regimes`: default {_names(self.bench_default_regimes)}; 'all'; or "
+                     f"regimes on the seen split. `regimes`: default {_names(self.bench_defaults())}; 'all'; or "
                      f"any of {_names(suite.REGIMES)}. `tier`: short (default) or full. Returns one headline per regime "
                      f"(objective, value, direction, validity), raw. Takes {windows}." + gpu("5-25 min per regime"),
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}},

@@ -135,7 +135,7 @@ class EvalTools:
     def bench(self, args: dict) -> str:
         snap = self._audited("bench", args)
         t = target.load()
-        names = _regimes(args, self.bench_default_regimes)
+        names = _regimes(args, self.bench_defaults())
         tier = args.get("tier") or "short"
         tree = self._pristine()
         t0 = time.monotonic()
@@ -245,7 +245,12 @@ class EvalTools:
         return json.dumps(out, indent=1)
 
     # -- support ------------------------------------------------------------------------
-    bench_default_regimes = ("single_stream", "saturated", "bursty")
+    bench_default_regimes = ("single_stream", "saturated", "bursty")      # when the session has no task
+
+    def bench_defaults(self) -> tuple[str, ...]:
+        """The task's objective and constrained regimes, so a default bench measures what submit scores."""
+        task = getattr(self.s, "task", None)
+        return tuple(dict.fromkeys((*task.regimes, *task.constraints))) if task else self.bench_default_regimes
     seed = 0
     equiv_concurrency = 16
     serve_jailed = True
@@ -286,7 +291,7 @@ class EvalTools:
         have = next(ledger.records(self.s.ledger_root, run=self.s.run_id, kind="baseline"), None)
         if have:
             return have
-        names = list(self.bench_default_regimes)
+        names = list(self.bench_defaults())
         self._t0 = time.monotonic()
         try:
             seen = self.base_seen(target.load(), names)

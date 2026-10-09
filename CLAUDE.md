@@ -16,7 +16,7 @@ The task (`lab/task.py`, `--task task.toml`: goal, objective regimes, constraint
 and a submit returns its `score` under that task: the win condition is known, never inferred. The system prompt is
 generated per session (`session.system_prompt`: template `lab/prompts/system.md` filled from the target spec and the
 ToolSpec descriptions, which state what each tool does, returns and costs, never when to use it). The brief is the
-task, budget, referee, a BASELINE (the base commit under bench's defaults, measured once per run, `baseline` ledger
+task, budget, referee, a BASELINE (the base commit under bench's defaults = the task's objective + constrained regimes, measured once per run, `baseline` ledger
 kind; `RunConfig.baseline=False` skips it) and only the run's last `session` record.
 
 ## Layout
