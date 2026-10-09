@@ -61,8 +61,12 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   measures each regime's run-to-run band from repeated reference runs into `knowledge/noise/<regime>.json` (which
   `submit` reads). Exit 0 only if both hold. Needs a GPU for a real target; tested on fakes. `lab/LEDGER.md` is the
   record-format spec: the environment's public interface.
-- `lab/RUNTIME.md` — design, not built (2026-10-08): controller (laptop: ledger, referee, secrets) and worker (GPU
-  VM: jails, clients, profilers) behind a job interface; trust zones and rules; why srt cannot jail GPU code on Linux.
+- `lab/RUNTIME.md` — design (2026-10-08): controller (laptop: ledger, referee, secrets) and worker (GPU VM: jails,
+  clients, profilers) behind a job interface; trust zones and rules; why srt cannot jail GPU code on Linux.
+- `lab/worker.py` — the job interface, built for the measured jobs: `test`, `measure`, `equiv`, `profile` take input
+  trees + JSON args, write an out dir, return JSON; the tools call `self.worker`. `LAB_WORKER=local` (default, in
+  process) or `ssh` (the `lab.vm` VM): inputs by content hash, re-hashed on the worker before every job; GpuBusy,
+  Contaminated, NotReady, ValueError cross intact. Remote is tested through a local shell, not yet over SSH.
 - `lab/TRACE.md` + `lab/trace_contract.py` — the request-trace contract: per-request engine rows (trace_id = the
   client's `X-Trace-Id`, `arrival_ts` epoch s, `*_s` monotonic durations, TPOT = (E2E − TTFT)/(n − 1)) in a dir of
   `*.sqlite` (`requests` + `meta`) or `*.jsonl` + `<stem>.meta.json`, with schema version and drop counts;

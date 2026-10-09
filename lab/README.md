@@ -165,6 +165,10 @@ bridge; image from `python -m lab.safety.container build`, which `vm-setup.sh` r
 sandbox-runtime (`npm install -g @anthropic-ai/sandbox-runtime`); `LAB_JAIL` picks one. `LAB_NO_JAIL=1` waives
 the jail for tests and a box you trust. The agent's own CLI still runs under srt (`lab/RUNTIME.md`).
 
+The GPU work behind `test`, `profile`, `trace`, `kernel`, `hostprof`, `bench`, `equiv` and `submit` runs as worker
+jobs (`lab/worker.py`). `LAB_WORKER=local` (default) runs them in process; `LAB_WORKER=ssh` runs them on the VM
+`lab.vm` names (start it and run `python -m lab.vm setup` first), shipping each tree by content hash.
+
 ## Canaries
 
     python -m lab.canary slow_decode,kv_leak --port 8000

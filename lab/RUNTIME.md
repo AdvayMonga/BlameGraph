@@ -2,8 +2,9 @@
 
 Design, 2026-10-08. Decided with the user: the lab splits into a controller and a worker; no separate
 measurement VM (cost); NVIDIA only for now; the jail on Linux is a container with the NVIDIA runtime (option A
-below). Built: the container jail (`lab/safety/container.py`). Not built: the split. Open decisions are marked
-**Decide**.
+below). Built: the container jail (`lab/safety/container.py`), GPU exclusivity during measurements, and the
+measured jobs behind the worker interface (`lab/worker.py`). Not built: the agent on the worker (its container, the
+API proxy) and the agent-side jobs. Open decisions are marked **Decide**.
 
 ## Why
 
@@ -119,6 +120,15 @@ JSON, raw files with hashes, and hardware facts (device, driver, clocks).
 
 Transport now: SSH from the controller, one worker. Transport later: a queue. The job list does not change.
 
+Built (2026-10-09, `lab/worker.py`): `test`, `measure` (bench, submit and the base share it), `equiv` and `profile`
+(all four instruments). The tools keep the policy, the ledger and the budget and call `self.worker`; `LAB_WORKER`
+picks `local` (default: in process, as before) or `ssh` (the VM `lab.vm` names, started and set up beforehand).
+Over SSH each input tree goes by content hash, at most once per worker (`has`, `put`), and the worker re-hashes a
+fresh copy right before every job, refusing a mismatch. The job's out dir comes back as a tar; GpuBusy,
+Contaminated, NotReady and ValueError are raised again on the controller. equiv ships the snapshot's earlier
+answers with the job, so calling it again never re-rolls the gate. Tested through a local shell with the same CLI;
+not yet over SSH to a VM. `agent`, `exec`, `snapshot`, `restore` and `facts` come with the agent container.
+
 ## What moves where
 
 - Controller: `session`, `agent` (SDK side), the tool front ends in `tools`/`evaltools`/`proftools` (policy,
@@ -148,7 +158,7 @@ database, still append-only.
 ## Order
 
 1. ~~Decide the jail~~ (A) and build it. Done, minus the GPU check.
-2. Without a GPU: the job interface with a local transport, the snapshot round trip and rule 3, the API proxy,
-   and the container jail's network, filesystem and freeze behaviour on any Linux box (Docker locally).
+2. Without a GPU: ~~the job interface with a local transport, the snapshot round trip and rule 3~~ (done for the
+   measured jobs); next the agent container with its freeze, and the API proxy.
 3. With a GPU (spend approval): `--gpus` and the profilers inside the container, then a first `lab.session`
    dry run with a tiny budget.
