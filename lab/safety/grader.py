@@ -15,7 +15,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 
 from lab import engine, target
-from lab.safety import jail
+from lab.safety import container, jail
 from lab.safety.surfaces import ALWAYS_DENY, HIDDEN, may_write
 
 IGNORED = ("*/__pycache__/*", "__pycache__/*", "*.pyc", ".pytest_cache/*", "*/.pytest_cache/*",
@@ -186,35 +186,59 @@ def run_lint(tree: Path) -> Run:
 
 
 def _jail_argv(tree: Path, argv: list[str], env_extra: dict | None, domains, local_binding: bool = False,
-               tag: str = "", read: list[Path] = ()) -> tuple[list[str], dict, Path]:
+               tag: str = "", read: list[Path] = (), port: int | None = None
+               ) -> tuple[list[str], dict, Path, str | None]:
     """The wrapped argv, env and private tmp for running `argv` in `tree` as agent code: wiped env, jail around the
-    tree and the tmp, weights read-only."""
+    tree and the tmp, weights read-only. The last item names the container when the container jail is used."""
     tmp = Path(tempfile.mkdtemp(prefix="jail-")).resolve()   # short: srt's sockets live here
     env = {"PATH": _engine_path(), "HOME": str(Path.home()), "TMPDIR": str(tmp),
            "PYTHONPATH": str(tree / "src") + os.pathsep + str(tree),
            "PYTHONDONTWRITEBYTECODE": "1",
            "HF_HOME": str(tmp / "hf-home"), "HF_HUB_CACHE": str(HF_HUB), "HF_HUB_OFFLINE": "1",
            **(env_extra or {})}
-    config = jail.settings([tree.resolve(), tmp], engine.venv(), list(domains),
-                           readonly=([HF_HUB] if HF_HUB.exists() else []) + list(read), python=engine.python(),
-                           local_binding=local_binding)
+    readonly = ([HF_HUB] if HF_HUB.exists() else []) + list(read)
+    if jail.backend() == "container":
+        if not container.available():
+            if jail.required():
+                raise jail.JailMissing(f"no container jail: needs docker and the {container.IMAGE} image "
+                                       "(python -m lab.safety.container build), or LAB_NO_JAIL=1 on a box you trust")
+            return argv, env, tmp, None
+        if domains:
+            raise ValueError("the container jail has no network")
+        name = container.new_name()
+        container.give([tree.resolve(), tmp])
+        wrapped = container.argv(name, tree, argv, {**env, "HOME": str(tmp)}, [tree.resolve(), tmp],
+                                 [engine.venv(), *readonly], engine.python(), bridge_port=port)
+        cli_env = {k: os.environ[k] for k in ("PATH", "HOME", "DOCKER_HOST", "DOCKER_CONFIG") if k in os.environ}
+        return wrapped, cli_env, tmp, name
+    config = jail.settings([tree.resolve(), tmp], engine.venv(), list(domains), readonly=readonly,
+                           python=engine.python(), local_binding=local_binding)
     # srt sets TMPDIR to a dir that does not exist inside bwrap (nsys and ncu then refuse to start): restate ours.
-    return jail.wrap(config, tree.with_suffix(f"{tag}.srt.json"), ["env", f"TMPDIR={tmp}", *argv]), env, tmp
+    return jail.wrap(config, tree.with_suffix(f"{tag}.srt.json"), ["env", f"TMPDIR={tmp}", *argv]), env, tmp, None
 
 
 def jailed_popen(tree: Path, argv: list[str], *, env_extra: dict | None = None, stdout=None, stderr=None,
-                 local_binding: bool = True) -> tuple[subprocess.Popen, Path]:
-    """A long-running jailed process (a served engine) in its own session; returns (proc, tmp dir to remove)."""
-    wrapped, env, tmp = _jail_argv(tree, argv, env_extra, (), local_binding, tag=".serve")
+                 local_binding: bool = True, port: int | None = None):
+    """A long-running jailed process (a served engine) in its own session, reachable on the host's 127.0.0.1:`port`.
+    Returns (proc, tmp dir to remove, stop): `stop` removes what lives outside proc's process group."""
+    wrapped, env, tmp, name = _jail_argv(tree, argv, env_extra, (), local_binding, tag=".serve", port=port)
     proc = subprocess.Popen(wrapped, cwd=tree, env=env, stdout=stdout, stderr=stderr, start_new_session=True)
-    return proc, tmp
+    if name is None:
+        return proc, tmp, lambda: None
+    bridge = container.Bridge(port, tmp / container.BRIDGE) if port else None
+
+    def stop() -> None:
+        container.remove(name)
+        if bridge:
+            bridge.stop()
+    return proc, tmp, stop
 
 
 def jailed(tree: Path, argv: list[str], *, timeout_s: float, env_extra: dict | None = None,
            domains: list[str] = (), read: list[Path] = ()) -> subprocess.CompletedProcess:
     """Run `argv` in `tree` as agent code: wiped env, jail around the tree and a private tmp, weights and `read`
     read-only."""
-    wrapped, env, tmp = _jail_argv(tree, argv, env_extra, domains, read=read)
+    wrapped, env, tmp, name = _jail_argv(tree, argv, env_extra, domains, read=read)
     try:
         return subprocess.run(wrapped, cwd=tree, env=env, capture_output=True, text=True, timeout=timeout_s)
     except subprocess.TimeoutExpired as e:     # a hung suite is a failed run, recorded like any other
@@ -222,6 +246,8 @@ def jailed(tree: Path, argv: list[str], *, timeout_s: float, env_extra: dict | N
         return subprocess.CompletedProcess(argv, -9, out.decode(errors="replace") if isinstance(out, bytes) else out,
                                            f"timed out after {timeout_s:.0f}s")
     finally:
+        if name:
+            container.remove(name)
         shutil.rmtree(tmp, ignore_errors=True)
 
 

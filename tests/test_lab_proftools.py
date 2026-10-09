@@ -13,6 +13,7 @@ import pytest
 from lab import ledger, proftools
 from lab import tools as labtools
 from lab.budget import Budget, BudgetExceeded
+from lab.safety import container, jail
 from lab.session import Session
 from lab.tools import GPU_TOOLS, Toolbox
 from lab.workspace import Workspace
@@ -39,6 +40,8 @@ INSTRUMENTS = ("nsys", "ncu", "py-spy")
 @pytest.fixture
 def tb(tmp_path, monkeypatch):
     monkeypatch.setenv("LAB_NO_JAIL", "1")
+    monkeypatch.setattr(jail, "available", lambda: False)        # the fake instruments log outside any jail
+    monkeypatch.setattr(container, "available", lambda: False)
     monkeypatch.setenv("LAB_GPU_USD_PER_HOUR", "3600")          # $1 per second: the charge equals the seconds
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()

@@ -159,8 +159,11 @@ A session ends when the agent says `stop`, its per-session cap is spent, or it t
 run ends on budget, on `stop`, or on a write-surface violation (the one hard rule). Model cost
 comes from the provider's own accounting; `LAB_MODEL` picks the model, `LAB_AGENT_PROVIDER` the
 provider (only `claude` today, through the Agent SDK CLI; `lab/agent.py` is the seam for others).
-The jail is sandbox-runtime (`npm install -g @anthropic-ai/sandbox-runtime`); `LAB_NO_JAIL=1`
-waives it for tests and a box you trust.
+Agent code runs jailed. On Linux the jail is a container (`lab/safety/container.py`: NVIDIA runtime, no
+network, read-only root, non-root user, no capabilities; a served engine's port reaches the host through a socket
+bridge; image from `python -m lab.safety.container build`, which `vm-setup.sh` runs). Elsewhere it is
+sandbox-runtime (`npm install -g @anthropic-ai/sandbox-runtime`); `LAB_JAIL` picks one. `LAB_NO_JAIL=1` waives
+the jail for tests and a box you trust. The agent's own CLI still runs under srt (`lab/RUNTIME.md`).
 
 ## Canaries
 

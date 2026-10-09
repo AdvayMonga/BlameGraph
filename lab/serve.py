@@ -59,6 +59,7 @@ class Served:
         self.log_offset = 0
         self.proc: subprocess.Popen | None = None
         self.tmp: Path | None = None
+        self.stop_jail = None
         self.started_at: float | None = None
         self.ready_s: float | None = None
 
@@ -74,7 +75,8 @@ class Served:
         out = open(self.log, "ab") if self.log else subprocess.DEVNULL
         self.started_at = time.monotonic()
         if self.jailed:
-            self.proc, self.tmp = grader.jailed_popen(self.tree, argv, env_extra=self.env_extra, stdout=out, stderr=out)
+            self.proc, self.tmp, self.stop_jail = grader.jailed_popen(self.tree, argv, env_extra=self.env_extra,
+                                                                      stdout=out, stderr=out, port=self.port)
         else:
             self.proc = subprocess.Popen(argv, cwd=self.tree, env={**os.environ, **self.env_extra}, stdout=out,
                                          stderr=out, start_new_session=True)
@@ -113,6 +115,8 @@ class Served:
                     os.killpg(self.proc.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+        if self.stop_jail:
+            self.stop_jail()
         if self.tmp:
             shutil.rmtree(self.tmp, ignore_errors=True)
         if self.artifacts:
