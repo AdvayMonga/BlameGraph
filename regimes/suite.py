@@ -38,6 +38,7 @@ class Ctx:
     url: str
     model: str
     corpus: str | None = None          # a corpus/ dir; None = synthetic prompts (tests, smoke runs)
+    workload: str | None = None        # a workloads/ JSONL file instead of the corpus: every regime draws from all of it
     split: str = "seen"
     tier: str = "short"
     seed: int = 0
@@ -61,8 +62,12 @@ class Ctx:
 
     def pool(self, cls: str | None = None) -> list[dict]:
         """Corpus records of one class (None = every class) for this split."""
+        if self.workload is not None:
+            cls = "workload"
         if cls not in self._pools:
-            if self.corpus is None:
+            if self.workload is not None:
+                self._pools[cls] = W.workload_file(self.workload)
+            elif self.corpus is None:
                 self._pools[cls] = W.synthetic(100, seed=self.seed, prefix=cls or "mix")
             else:
                 classes = [cls] if cls else W.corpus_classes(self.corpus)
@@ -197,6 +202,9 @@ def saturated(ctx: Ctx, max_concurrency: int = 512) -> dict:
 
 def bursty(ctx: Ctx) -> dict:
     """The spike trace replayed at `speed` x its real rate (burst shape kept); short tier crops to the peak window."""
+    if ctx.workload is not None:
+        return {**_result("bursty", "speedup", None, "higher", None),
+                "invalid_reasons": ["a --workload file has no arrival times to replay"]}
     trace = ctx.pool("spike")
     _warmup(ctx, trace)
     window = W.peak_window(trace) if ctx.tier == "short" else None
@@ -235,10 +243,13 @@ def shared_prefix_multi_turn(ctx: Ctx) -> dict:
     pool = ctx.pool(None)
     system = W.shared_system_prompt(seed=ctx.seed)
     _warmup(ctx, pool)
-    if ctx.corpus is None:                         # synthetic records have no histories: make two-turn ones
+    if ctx.corpus is None and ctx.workload is None:   # synthetic records have no histories: make two-turn ones
         pool = [{**r, "messages": [{"role": "user", "content": r["prompt"]}, {"role": "assistant", "content": "ok"},
                                    {"role": "user", "content": "go on"}]} for r in pool]
     convs = W.conversations(pool, MAX_TURNS)
+    if not convs:
+        return {**_result("shared_prefix_multi_turn", "goodput_sessions_per_s", None, "higher", None),
+                "invalid_reasons": ["no multi-turn conversations in the workload"]}
     turns = sum(len(c) for c in convs) / len(convs)
     build = lambda rate, dur: W.sessions(pool, rate, dur, ctx.seed, think_s=THINK_S, system=system, max_turns=MAX_TURNS)
     return _goodput_regime(ctx, "shared_prefix_multi_turn", "goodput_sessions_per_s", build, ctx.conversational, turns,

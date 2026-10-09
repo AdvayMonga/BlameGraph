@@ -128,6 +128,40 @@ def test_every_regime_runs_on_a_fake_engine():
         proc.kill()
 
 
+def test_every_regime_runs_from_a_workload_file():
+    """A `python -m workloads` file stands in for the corpus: one pool for every regime; bursty has no arrival times."""
+    recs = [{"id": f"w-{k}", "prompt": f"question {k}", "max_tokens": 16, "build_prompt_tokens": 3, "subset": "s"}
+            for k in range(30)]
+    recs += [{"id": f"c-{k}", "max_tokens": 16, "subset": "multi", "messages": [
+        {"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}, {"role": "user", "content": "c"}]}
+        for k in range(10)]
+    path = Path(tempfile.mkdtemp()) / "w.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in recs))
+    proc, url = spawn(slots=2, token_s=0.005, out_tokens=10)
+    saved, think, lag = dict(suite.TIERS["short"]), suite.THINK_S, runner.MAX_CLIENT_LAG_S
+    suite.TIERS["short"].update(probe_s=1.0, final_s=2.0)
+    suite.THINK_S = 0.3
+    runner.MAX_CLIENT_LAG_S = 0.05
+    try:
+        tight = Limits(ttft_s=0.25, tpot_s=0.05)
+        ctx = suite.Ctx(url, "m", workload=str(path), min_requests=10, interactive=tight, conversational=tight)
+        assert len(ctx.pool("spike")) == len(ctx.pool(None)) == 40
+        for name, fn in suite.REGIMES.items():
+            res = fn(ctx, max_concurrency=8) if name == "saturated" else fn(ctx)
+            if name == "bursty":
+                assert not res["valid"] and "arrival times" in res["invalid_reasons"][0], res
+            else:
+                assert res["regime"] == name and res["valid"] and res["value"] is not None, (name, res)
+        no_convs = Path(tempfile.mkdtemp()) / "single.jsonl"
+        no_convs.write_text("".join(json.dumps(r) + "\n" for r in recs[:30]))
+        res = suite.shared_prefix_multi_turn(suite.Ctx(url, "m", workload=str(no_convs), min_requests=10))
+        assert not res["valid"] and "multi-turn" in res["invalid_reasons"][0], res
+    finally:
+        suite.TIERS["short"].update(saved)
+        suite.THINK_S, runner.MAX_CLIENT_LAG_S = think, lag
+        proc.kill()
+
+
 def test_cold_start_measures_launch_to_correct_token():
     port = _free_port()
     cmd = f"{sys.executable} {Path(__file__).resolve().parent / 'fake_engine.py'} --port {port} --delay 0.5"
