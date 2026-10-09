@@ -83,9 +83,11 @@ def test_committed_corpus_verifies_and_every_class_is_non_empty():
 @needs_raw
 @pytest.mark.needs_host
 def test_committed_corpus_is_what_the_builder_produces(tmp_path):
-    """Provenance: the data on disk came from build_corpus.py at the default seed from the
+    """Provenance: the data on disk came from build_corpus.py at the secret seed (corpus/.seed) from the
     pinned raw inputs, byte for byte. A changed input or class table is a new version."""
-    rebuilt = bc.build_corpus(tmp_path)
+    if not (CORPUS_DIR / ".seed").exists():
+        pytest.skip("no corpus/.seed: pull it with `python -m store pull --corpus`")
+    rebuilt = bc.build_corpus(tmp_path, int((CORPUS_DIR / ".seed").read_text()))
     committed = load_manifest(CORPUS_DIR)
     assert rebuilt.files == committed.files
     assert rebuilt.corpus_version == committed.corpus_version

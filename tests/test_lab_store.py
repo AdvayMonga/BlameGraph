@@ -63,9 +63,9 @@ def test_push_then_pull_restores_everything(lab, tmp_path):
     remote = DirRemote(tmp_path / "bucket")
     corpus = tmp_path / "corpus"; (corpus / "c1").mkdir(parents=True)
     (corpus / "manifest.json").write_text(json.dumps({"corpus_version": "v9"}))
-    (corpus / "c1" / "heldout.jsonl").write_text('{"secret": 1}\n')
+    (corpus / "c1" / "heldout.jsonl").write_text('{"secret": 1}\n'); (corpus / ".seed").write_text("42\n")
     out = sync.push(root, remote, runs=runs, corpus=corpus)
-    assert out["blobs"] == 3 and out["guard"] == 1 and out["heldout_private"] == 1 and out["corpus"] == 1
+    assert out["blobs"] == 3 and out["guard"] == 1 and out["heldout_private"] == 1 and out["corpus"] == 2
     assert sync.push(root, remote, runs=runs, corpus=corpus) == {"ledger_bytes": 0, "blobs": 0, "guard": 0,
                                                                 "heldout_private": 0, "corpus": 0}
     keys = remote.keys("")
@@ -77,7 +77,8 @@ def test_push_then_pull_restores_everything(lab, tmp_path):
     (tmp_path / "corpus2").mkdir(); (tmp_path / "corpus2" / "manifest.json").write_text(json.dumps({"corpus_version": "v9"}))
     got = sync.pull(fresh, remote, blobs=True, corpus=tmp_path / "corpus2")
     assert (fresh / "ledger.jsonl").read_bytes() == (root / "ledger.jsonl").read_bytes()
-    assert got["blobs"] == 3 and got["guard"] == 1 and got["corpus"] == 1
+    assert got["blobs"] == 3 and got["guard"] == 1 and got["corpus"] == 2
+    assert (tmp_path / "corpus2" / ".seed").read_text() == "42\n"
     assert sorted(p.name for p in (fresh / "blobs").iterdir()) == sorted(p.name for p in (root / "blobs").iterdir())
     assert (tmp_path / "corpus2" / "c1" / "heldout.jsonl").read_text() == '{"secret": 1}\n'
 

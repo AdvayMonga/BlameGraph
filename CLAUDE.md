@@ -1,7 +1,7 @@
 # BlameGraph
 
 The environment for autoresearch loops that optimize LLM inference: the lab (agent loop, tools, ledger, sandbox,
-GPU VMs), the workload corpus and knowledge base, load regimes, the correctness gate, canaries, and the referee
+GPU VMs), the workload corpus, the data store, load regimes, the correctness gate, canaries, and the referee
 (integrity verdict, session feedback). Design in `ENVIRONMENT.md`. The engine under optimization is a separate repo,
 github.com/AdvayMonga/inference-server (engine + stack only since the 2026-10-06 split); the lab finds it via
 `LAB_ENGINE_REPO` (default `../inference-server`) and runs it with its own `.venv/bin/python`. See the parent
@@ -12,6 +12,9 @@ Hard rule from the user: the loop may receive **facts only, never heuristics or 
 (the `ledger` tool, unfiltered) and only the facts it cannot derive from that ledger (`lab/evaltools.harness_facts`:
 the limits, tiers, policy, noise bands, corpus version the referee measures against). Nothing derived from the
 records (counts, best measured, claims vs evidence) goes to the agent; that is `for_researcher.activity`.
+Decided 2026-10-09: no knowledge base of beliefs, hand-written or the agent's (a belief bounded by its evidence is a
+measurement row; anything more is a generalization). `knowledge/` was removed (tag `archive/knowledge-base`); the
+agent reads raw data only, through `ledger` and `query` (read-only SQL over every run, `store/index.py`).
 The task (`lab/task.py`, `--task task.toml`: goal, objective regimes, constraints) is stated in full in the brief,
 and a submit returns its `score` under that task: the win condition is known, never inferred. The system prompt is
 generated per session (`session.system_prompt`: template `lab/prompts/system.md` filled from the target spec and the
@@ -31,7 +34,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `regimes`, `validity` CLIs all read it.
 - `lab/` — moved from inference-server 2026-10-06 (`lab/README.md`). `session.py` (the loop over a dollar budget),
   `agent.py` (the one place a model is called; the agent's jailed shell gets the engine's python on PATH),
-  `tools.py` (metered tools: test, profile, ledger, budget, restore, note; every record's `cost` has wall seconds, and
+  `tools.py` (metered tools: test, profile, ledger, query, budget, restore, note; every record's `cost` has wall seconds, and
   GPU tools charge them at `LAB_GPU_USD_PER_HOUR` / the target's `[cost] gpu_usd_per_hour` to the run's budget) +
   `proftools.py` (trace = nsys, kernel = ncu, hostprof = py-spy, each wrapping lab.profile's workload in the jail
   with validated args) + `evaltools.py` (bench → `regimes` on
@@ -42,19 +45,21 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   client rows, the serve log; bench/equiv as ledger blobs under `result.artifacts`, submit only in
   `<run>/heldout-private/`, never in the ledger; `artifacts.joined` joins client rows to engine rows by trace id),
   `workspace.py` (exported engine copy + snapshots), `ledger.py`
-  (append-only JSONL, `lab/ledger/` gitignored), `budget.py`, `engine.py` (where the engine repo and its python
+  (append-only JSONL, `lab/ledger/` gitignored; `merge` adds another ledger dir's new records and blobs), `budget.py`, `engine.py` (where the engine repo and its python
   are), `safety/` (write surfaces, srt jail, grader: lint/tests run with the engine's python in the jail),
   `profile.py` (`--profiler torch|cuda-range|pyspy`) + `bundle.py` + `gpu.py` (profiler harness, staged into the pristine tree under `_harness/` so the
   jail never opens this repo, which holds `.env` and the ledger; the tool samples its seen-split corpus workload out here, `corpus.sample`, and stages it as `_harness/workload.json`; window-only memory peaks and scheduler counters, warmup sized to the window, op/kernel tables), `canary.py` (honest regressions patched into
   the engine's process), `vm.py` + `providers/` + `vm-setup.sh` (one GPU VM on Verda/Nebius/Crusoe; pushes both
   trees, engine to `LAB_VM_DIR`, this repo to `LAB_VM_ENV_DIR`; `run --env` runs here; `run` stops the VM when done
-  unless `--keep`, and every session is capped by `LAB_VM_MAX_MINUTES` via `timeout` + a local watchdog + in-VM
+  unless `--keep`; a `--env` run is always brought home first, `collect`: the VM's ledger merged, its run dirs minus
+  rebuildable trees, then `store push` when `LAB_STORE` is set; held-out traces are pushed explicitly since git
+  lacks them), and every session is capped by `LAB_VM_MAX_MINUTES` via `timeout` + a local watchdog + in-VM
   shutdown, because a stalled session once billed 12 h for 3.5 h of work), `corpus.py` +
   `chat_template.py` (corpus loader, template fingerprint). Tests: `tests/test_lab_*.py` (pytest); the ones
   that drive engine code skip unless the engine and its deps import (run them with the engine's python).
 - `lab/validate.py` — `python -m lab.validate --target T`: serves the target's reference and writes its outputs, judges
   each `[validation]` good/bad launch (good must pass, bad must fail: the gate separates on *this* model and GPU), and
-  measures each regime's run-to-run band from repeated reference runs into `knowledge/noise/<regime>.json` (which
+  measures each regime's run-to-run band from repeated reference runs into `noise` ledger records (which
   `submit` reads). Exit 0 only if both hold. Needs a GPU for a real target; tested on fakes. `lab/LEDGER.md` is the
   record-format spec: the environment's public interface.
 - `lab/TRACE.md` + `lab/trace_contract.py` — the request-trace contract: per-request engine rows (trace_id = the
@@ -64,8 +69,17 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   natively (schema 1, inference-server#102); the target names its env vars in `[engine.telemetry] env` (`{dir}`); serve collects
   the files after every bench/equiv/submit and the contract check's report is stored beside them. vLLM OTel span mapping is in the spec, not implemented.
 - `corpus/` — frozen workload traces (BurstGPT timing, WildChat text), seen/heldout, hashed, `manifest.json`;
-  `build_corpus.py` / `fetch_traces.py` rebuild it; any change is a new `corpus_version`.
-- `knowledge/` — measured findings (one JSON each) + `evidence/`; seeded into the ledger as `finding` records.
+  `build_corpus.py` / `fetch_traces.py` rebuild it; any change is a new `corpus_version`. Since 2026-10-09 (version
+  `131149…`) the held-out traces and the build seed (`corpus/.seed`, which reproduces them) are gitignored and live in
+  the store (`python -m store pull --corpus`); the previous version's held-out split was public in git.
+- `store/` — the data store (2026-10-09). `remote.py` (`LAB_STORE` = `s3://<bucket>` with `LAB_STORE_ENDPOINT` for
+  Cloudflare R2, or a directory; write-once keys), `sync.py` (`push`/`pull`: ledger as byte-range segments, blobs,
+  holdout guard state per query count, submit's held-out passive data, held-out traces + seed, `archive` for
+  anything else; zstd, `heldout/` prefix for held-out material), `index.py` (DuckDB tables rebuilt from the ledger and
+  blobs: records, regimes, heldout_aggregates, noise, client_rows, engine_rows, device_samples, kernels, ops;
+  `all.duckdb` adds heldout_rows for the researcher; the agent's `agent.duckdb` never has them and is queried with
+  external access off and configuration locked). Controller-only: VMs never hold store keys (`lab/RUNTIME.md`).
+  CLI: `python -m store push|pull [--blobs] [--corpus]|index|sql "..." [--agent]|archive PATH.. [--heldout]`.
 - `feedback/` — what each side gets after a session. `report.py`: `feedback(path)` → `{for_agent: {integrity, facts}, for_researcher: {assertions, blame}}` (lab ledgers: `lab_feedback`, `for_agent.facts = {harness}` only, `for_researcher.activity` holds the derived facts); `python -m feedback PATH [--run RUN_ID] [--agent-text]`. Accepts an InferenceBench run dir, a BlameGraph session ledger, or an inference-server lab ledger (detected from its first line). Integrity carries `evidence` per violated rule (rule, plain detail, concrete refs: hashes, measurement ids, offending values and limits).
   - `verdict.py` — integrity rules → `Verdict(valid, reasons, evidence, facts)`. Live mode (hash files on disk) or recorded mode (hashes from the submission event). Physical limits (`unphysical()`) are shown to the agent on purpose: they are hardware facts, not detection tricks.
   - `lab_verdict.py` — lab ledger → integrity + derived activity facts (snapshots stand in for configs; no ExperimentLog, so assertions/blame are None for lab ledgers). Record shapes are in `lab/LEDGER.md`; `gain()` reads submit aggregates (improved / regressed / within_band). Submitted snapshot must have a completed short-tier seen bench, tests passed, a passing equiv and no failing equiv (inconclusive is neither; retrying a statistical gate until it passes would let bad changes through).
@@ -122,7 +136,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   ShareGPT from the Hub. Not re-hosted (GPQA asks not to be; ShareGPT's license is unclear). Chat templates are
   stripped. Llama-3.1-405B (404 on the bucket) and edge-agentic (tool-call transcripts) are not imported.
 - `tests/test_*.py` — all synthetic, no GPU, each runnable with `python3 tests/<file>.py`, named after the module they cover; `test_correctness_run.py` is the full reference→candidate→verdict flow on fake servers; `test_kernels.py` also runs on MPS; `test_inject.py` injects failures into real traces and skips without data; `test_regimes.py` drives `tests/fake_engine.py` (fixed decode slots, run out of process) through every regime (~2.5 min).
-- `data/` is gitignored and local only: `data/inferencebench/` (public traces, `hf download aisa-group/InferenceBench-Trajectories --repo-type dataset --local-dir data/inferencebench`), `data/derived/` (cached Haiku/Sonnet outputs from the research phase — the only copy), `data/laya/`, `data/tasks/` (correctness task sets), `data/equiv*/` and `data/h200-run-*/` (GPU run outputs and reports), `data/archive/research-loop/runs/` (the removed research loop's run panels and temp worktrees, Sept 2026), `data/notes/` (the user's notes). Live lab state is `lab/ledger/` and `lab/runs/`, also gitignored. Findings with evidence go in `knowledge/` (committed), never in `data/`.
+- `data/` is gitignored and local only: `data/inferencebench/` (public traces, `hf download aisa-group/InferenceBench-Trajectories --repo-type dataset --local-dir data/inferencebench`), `data/derived/` (cached Haiku/Sonnet outputs from the research phase — the only copy), `data/laya/`, `data/tasks/` (correctness task sets), `data/equiv*/` and `data/h200-run-*/` (GPU run outputs and reports), `data/archive/research-loop/runs/` (the removed research loop's run panels and temp worktrees, Sept 2026), `data/notes/` (the user's notes). Live lab state is `lab/ledger/` and `lab/runs/`, also gitignored, kept in the store by `python -m store push`.
 
 ## History
 `research-v1` tag = research snapshot (InferenceBench harness code removed from history 2026-10-04): Haiku extractor, Sonnet judge,
@@ -210,6 +224,12 @@ sees the GPU (`No CUDA GPUs are available`); `bench`/`equiv`/`submit` serve jail
 `kernel.apparmor_restrict_unprivileged_userns=0` for bwrap (now in `vm-setup.sh`).
 
 ## Next
+Store (2026-10-09, branch `storage/r2`): needs an R2 bucket + API token (`LAB_STORE`, `LAB_STORE_ENDPOINT`,
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`), then `python -m store push` and `archive` of `data/derived`,
+`data/equiv*`, `data/h200-run-*`, `data/engine-h200-*`. Open: a VM `--env` session starts with a fresh holdout
+guard (state is not pushed to the VM, and the default seed is the ledger path, which differs there); the
+controller/worker split (`lab/RUNTIME.md`) keeps the guard on the controller. The index is rebuilt in full when the
+ledger grows; make it incremental when that gets slow. DCGM device samples are indexed as raw lines.
 GPU (needs spend approval): resolve the BF16 puzzle (plain BF16 on the dev tier at concurrency 32 and 128 on one VM,
 ~20 min, ~$1.50); first real run of `python -m regimes run all` against the engine and against vLLM.
 GPU, with approval (and the auto-stop armed): `python -m lab.validate --target targets/inference-server.toml`
@@ -219,5 +239,5 @@ GPU, with approval (and the auto-stop armed): `python -m lab.validate --target t
 results before deciding anything. lab `session.py --run` re-resolves
 `base` from HEAD rather than the run's original base (pre-existing; resuming after the engine moved would misaudit);
 `validity/tier_agreement.py` needs real short/full runs; `validity/roofline.py` wants generalizing to the H200 + MoE
-target. The agent's tool set (e.g. a knowledge tool) is the user's design: ask first. README stays a few one-line
+target. The agent's tool set is the user's design: ask first. README stays a few one-line
 feature bullets, not a dev doc.

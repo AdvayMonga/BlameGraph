@@ -7,6 +7,7 @@ are never rewritten:
   heldout/guard/state-<n>.json.zst    the holdout guard's state after its n-th query
   heldout/private/<run>/<dir>.tar.zst submit's held-out passive data (lab/LEDGER.md)
   heldout/corpus/<version>/<class>/heldout.jsonl.zst   the held-out traces, which are not in git
+  heldout/corpus/<version>/seed.zst   the corpus build seed, which reproduces them
   heldout/archive/...                 archive of held-out material
 """
 
@@ -150,6 +151,8 @@ def push(root: Path, remote: Remote, runs: Path | None = None, corpus: Path | No
         have = set(remote.keys(f"heldout/corpus/{version}/"))
         for p in sorted(Path(corpus).glob("*/heldout.jsonl")):
             out["corpus"] += _put(remote, f"heldout/corpus/{version}/{p.parent.name}/heldout.jsonl.zst", p, have)
+        if (Path(corpus) / ".seed").exists():
+            out["corpus"] += _put(remote, f"heldout/corpus/{version}/seed.zst", Path(corpus) / ".seed", have)
     return out
 
 
@@ -172,7 +175,8 @@ def pull(root: Path, remote: Remote, blobs: bool = False, corpus: Path | None = 
     if corpus:
         version = corpus_version(Path(corpus))
         for key in remote.keys(f"heldout/corpus/{version}/"):
-            dest = Path(corpus) / key.split("/")[-2] / "heldout.jsonl"
+            dest = (Path(corpus) / ".seed" if key.endswith("/seed.zst")
+                    else Path(corpus) / key.split("/")[-2] / "heldout.jsonl")
             if not dest.exists():
                 _get(remote, key, dest)
                 out["corpus"] += 1

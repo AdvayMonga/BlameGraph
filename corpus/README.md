@@ -7,7 +7,7 @@ BurstGPT, real conversation text (with the real assistant replies) from WildChat
 previous synthetic corpus (Poisson arrivals over `scripts/bench/prompt_bank.py`, multi-turn by
 prompt concatenation, corpus_version `659ea3b6…`) remains in git history. **Every panel
 measured against the old version is non-comparable with this one** — the eval harness refuses
-across `corpus_version`, and the noise bands in `knowledge/noise/` do not carry over.
+across `corpus_version`, and the noise bands (ledger `noise` records) do not carry over.
 
 ## A trace
 
@@ -115,8 +115,12 @@ policy tuned on this corpus should be re-checked against a smoother, longer-cont
 ```bash
 uv sync --extra dev --extra corpus                          # pyarrow, for the WildChat shards
 .venv/bin/python corpus/fetch_traces.py              # ~1.8 GB into ~/.cache/inference-server/traces
-.venv/bin/python corpus/build_corpus.py               # seed 20261001
+.venv/bin/python corpus/build_corpus.py               # the secret seed in corpus/.seed
 ```
+
+Since 2026-10-09 the held-out traces and the seed are not in git: the build is deterministic in the seed, so a
+public seed would publish the held-out split. Both live in the store (`python -m store push` / `pull --corpus`);
+the manifest keeps their hashes, so the loader still refuses a changed file.
 
 `fetch_traces.py` pins every URL to a release or revision and every file to a sha256, refuses
 a mismatch, and is idempotent. Raw data never enters git (`TRACE_CACHE` overrides the cache
