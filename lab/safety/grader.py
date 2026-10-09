@@ -198,7 +198,8 @@ def _jail_argv(tree: Path, argv: list[str], env_extra: dict | None, domains, loc
     config = jail.settings([tree.resolve(), tmp], engine.venv(), list(domains),
                            readonly=([HF_HUB] if HF_HUB.exists() else []) + list(read), python=engine.python(),
                            local_binding=local_binding)
-    return jail.wrap(config, tree.with_suffix(f"{tag}.srt.json"), argv), env, tmp
+    # srt sets TMPDIR to a dir that does not exist inside bwrap (nsys and ncu then refuse to start): restate ours.
+    return jail.wrap(config, tree.with_suffix(f"{tag}.srt.json"), ["env", f"TMPDIR={tmp}", *argv]), env, tmp
 
 
 def jailed_popen(tree: Path, argv: list[str], *, env_extra: dict | None = None, stdout=None, stderr=None,

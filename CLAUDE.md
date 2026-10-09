@@ -186,6 +186,18 @@ INT8 (`JunHowie/Qwen3-30B-A3B-GPTQ-Int8`) was skipped: vLLM 0.30 can't load act-
 consistency result is void: the client counted vLLM's role chunk as a fake first token (fixed on
 `fix/calibration-findings`). Repeat audit passes on the honest server and fails the `cache` canary.
 
+## Profiler tools on the H200 (Nebius, 2026-10-08)
+Unjailed, all four work on the real engine (16 requests × 64 tokens): `profile` ~7 min, `trace` 44 s, `kernel` 90-99 s,
+`hostprof` 64 s (30 s sampling, 2,981 samples ≈ 100 Hz × 30 s, scheduler thread in the dump); ~$0.87 of GPU time.
+`launch_count` honoured; ncu durations are ~1.8× nsys's on a tiny kernel (base clocks), DRAM figures physical.
+Fixed from the run: the tools now pass the target's engine env (they had loaded the engine's default model);
+nsys traces CUDA-graph nodes (it had missed every decode kernel: 46,720 vs torch's 860,365 launches);
+`kernels.json` drops record_function annotations (they had doubled its total). **Open, blocks every jailed GPU
+tool on Linux:** srt always mounts a fresh minimal `/dev` and has no device passthrough, so nothing in the jail
+sees the GPU (`No CUDA GPUs are available`); `bench`/`equiv`/`submit` serve jailed too. Needs a design decision
+(GPU-aware jail, container with the NVIDIA runtime, or the VM as the boundary). Ubuntu 24.04 also needs
+`kernel.apparmor_restrict_unprivileged_userns=0` for bwrap (now in `vm-setup.sh`).
+
 ## Next
 GPU (needs spend approval): resolve the BF16 puzzle (plain BF16 on the dev tier at concurrency 32 and 128 on one VM,
 ~20 min, ~$1.50); first real run of `python -m regimes run all` against the engine and against vLLM.

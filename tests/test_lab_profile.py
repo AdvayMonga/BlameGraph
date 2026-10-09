@@ -93,10 +93,11 @@ def test_kernels_table_aggregates_cuda_events_by_name():
     from types import SimpleNamespace as NS
     from torch.autograd import DeviceType
 
-    def ev(name, us, dev=DeviceType.CUDA):
-        return NS(name=name, device_type=dev, time_range=NS(elapsed_us=lambda: us))
+    def ev(name, us, dev=DeviceType.CUDA, annotation=False):
+        return NS(name=name, device_type=dev, time_range=NS(elapsed_us=lambda: us), is_user_annotation=annotation)
     assert bundle.kernels_table([ev("aten::mm", 50, DeviceType.CPU)]) is None
-    k = bundle.kernels_table([ev("gemm", 10), ev("gemm", 30), ev("softmax", 5), ev("aten::mm", 50, DeviceType.CPU)])
+    k = bundle.kernels_table([ev("gemm", 10), ev("gemm", 30), ev("softmax", 5), ev("aten::mm", 50, DeviceType.CPU),
+                             ev("prefill_batch step=1", 99, annotation=True)])
     assert k["launches"] == 3 and k["total_us"] == 45
     assert k["kernels"][0] == {"name": "gemm", "count": 2, "total_us": 40, "mean_us": 20, "max_us": 30}
 

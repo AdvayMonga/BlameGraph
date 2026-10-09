@@ -63,7 +63,7 @@ class ProfTools:
         wl = workload(args)
         wrap = lambda exe, out: [exe, "profile", "--output", str(out / "trace"), "--force-overwrite", "true",
                                  "--trace", "cuda,nvtx,osrt", "--capture-range", "cudaProfilerApi",
-                                 "--capture-range-end", "stop", "--stats", "false"]
+                                 "--capture-range-end", "stop", "--cuda-graph-trace", "node", "--stats", "false"]
         post = lambda exe, out: ([exe, "stats", "--report", NSYS_REPORTS, "--format", "csv", "--output",
                                   str(out / "stats"), str(out / "trace.nsys-rep")], None)
         return self._instrumented("trace", args, "nsys", wrap, wl + ["--profiler", "cuda-range"], post,
@@ -139,13 +139,13 @@ class ProfTools:
             ToolSpec("trace", "Run the profile workload of your current workspace under Nsight Systems (nsys), "
                      "capturing the measured window only. Stores the .nsys-rep and `nsys stats` CSV tables (GPU "
                      "kernels, CUDA API, memory copies, NVTX) in the ledger; returns the head of the kernel table. "
-                     "Refused where nsys is not installed." + gpu("3-6 min (engine start, workload, report export)"),
+                     "Refused where nsys is not installed." + gpu("about 1 min measured at 16 requests x 64 tokens on an H200 (engine start, workload, report export)"),
                      _schema(), self.trace),
             ToolSpec("kernel", "Run the profile workload under Nsight Compute (ncu) on the kernels whose name "
                      "matches `kernel_regex`: skips `launch_skip` matching launches, then profiles `launch_count` "
                      "with metric set `set`. Stores the .ncu-rep and its raw metrics CSV in the ledger; returns the "
                      "head of the CSV. Refused where ncu is not installed."
-                     + gpu("5-20 min (every profiled launch is replayed once per metric pass; set=full has the most)"),
+                     + gpu("about 1.5 min measured at 4-8 launches on an H200; each profiled launch is replayed once per metric pass, so it grows with launch_count and set=full"),
                      _schema(kernel_regex={"type": "string", "maxLength": 200},
                              launch_skip={"type": "integer", "minimum": 0, "maximum": 100000, "default": 0},
                              launch_count={"type": "integer", "minimum": 1, "maximum": 64, "default": 8},
@@ -154,7 +154,7 @@ class ProfTools:
             ToolSpec("hostprof", "Sample the engine process with py-spy for `seconds` while the profile workload "
                      "repeats (scheduler and backend in process, warmup excluded). Stores a speedscope profile and one "
                      "stack dump taken halfway in the ledger; returns the head of the dump. Refused where py-spy is "
-                     "not installed." + gpu("2-4 min plus `seconds`"),
+                     "not installed." + gpu("about 35 s plus `seconds`, measured on an H200"),
                      _schema(seconds={"type": "integer", "minimum": 1, "maximum": 300, "default": 20},
                              rate={"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}), self.hostprof),
         ]

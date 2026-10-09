@@ -139,10 +139,10 @@ Only tool time is charged: the VM also bills while the model thinks between call
 | `test` | no | $0 | CPU lint and suite |
 | `ledger`, `budget` | no | $0 (pure reads, write no record) | milliseconds |
 | `restore`, `note` | no | $0 | under a second |
-| `profile` | yes | seconds × rate | 2-5 min: engine start plus the workload |
-| `trace` | yes | seconds × rate | 3-6 min: engine start, workload, report export, `nsys stats` |
-| `kernel` | yes | seconds × rate | 5-20 min: each profiled launch is replayed once per metric pass (`full` has the most) |
-| `hostprof` | yes | seconds × rate | 2-4 min plus `seconds` |
+| `profile` | yes | seconds × rate | ~7 min measured (16 requests × 64 tokens, H200): engine start, workload, trace export |
+| `trace` | yes | seconds × rate | ~1 min measured (same workload): engine start, workload, report export, `nsys stats` |
+| `kernel` | yes | seconds × rate | ~1.5 min measured at 4-8 launches; each launch is replayed once per metric pass, so it grows with `launch_count` and `full` |
+| `hostprof` | yes | seconds × rate | ~35 s plus `seconds` (measured) |
 | `bench` | yes | seconds × rate | 5-10 min per regime at tier short, 15-25 at full, plus ~2 min engine start |
 | `equiv` | yes | seconds × rate | ~10 min at tier dev, 30-60 at full |
 | `submit` | yes | seconds × rate | 15-25 min per regime (held-out, full tier), plus the base commit measured once per run |
