@@ -139,7 +139,7 @@ Only tool time is charged: the VM also bills while the model thinks between call
 | `test` | no | $0 | CPU lint and suite |
 | `ledger`, `budget` | no | $0 (pure reads, write no record) | milliseconds |
 | `restore`, `note` | no | $0 | under a second |
-| `profile` | yes | seconds × rate | 1-7 min measured (16 requests × 64 tokens, H200); 7 min on a VM's first call, while the weights load from disk |
+| `profile` | yes | seconds × rate | 1-7 min measured (16 requests × 64 tokens, H200); 7 min when the weights were still loading from disk |
 | `trace` | yes | seconds × rate | ~1 min measured (same workload): engine start, workload, report export, `nsys stats` |
 | `kernel` | yes | seconds × rate | ~1.5 min measured at 4-8 launches; each launch is replayed once per metric pass, so it grows with `launch_count` and `full` |
 | `hostprof` | yes | seconds × rate | ~35 s plus `seconds` (measured) |
