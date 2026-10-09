@@ -21,7 +21,10 @@ on write. Every record: `id`, `at`, `schema` (set by the writer), `kind`, `run`,
 | `note` | `note`, `restore`, refusals | free text, or `{verdict: refused, reason}` |
 
 A tool that could not run writes `{verdict: refused | error, reason}` and the agent sees that text; it never
-crashes the session. The integrity verdict (`feedback/lab_verdict.py`) reads only these records: a run is valid
+crashes the session. `bench`, `equiv`, `submit` and `baseline` also write `refused` when a process already held
+the GPU (no engine launched) and `contaminated` when a process other than the served engine held it during the
+measurement; both carry `gpu_processes: [{pid, used_mib, name}]`. A contaminated run is never evidence and never
+cached as the base. The integrity verdict (`feedback/lab_verdict.py`) reads only these records: a run is valid
 iff a completed `submit` exists whose snapshot also has a completed seen-split `bench`, a passing `test`, a
 passing `equiv` (tier full) and no failing `equiv`, and no record reports a write-surface violation.
 

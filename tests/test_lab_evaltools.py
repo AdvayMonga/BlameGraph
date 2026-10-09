@@ -248,6 +248,50 @@ def test_tools_refuse_cleanly_when_the_engine_does_not_start(lab, monkeypatch):
     assert rec["result"]["artifacts"]["telemetry"] is None and rec["result"]["artifacts"]["serve_log"]   # no section: skipped
 
 
+AGENT_PROC = {"pid": 4242, "used_mib": 9000, "name": "python"}
+
+
+def test_nothing_is_measured_while_another_process_holds_the_gpu(lab, monkeypatch):
+    from lab import gpu
+    tb, s = lab
+    monkeypatch.setattr(gpu, "compute_apps", lambda: [AGENT_PROC])
+    out = tb.bench({"regimes": ["single_stream"]})
+    assert out.startswith("bench refused: the GPU was in use") and "pid 4242" in out
+    rec = list(ledger.records(s.ledger_root, kind="bench"))[-1]["result"]
+    assert rec["verdict"] == "refused" and rec["gpu_processes"] == [AGENT_PROC]
+    assert not (s.run_dir / "serve-bench.log").exists()                 # no engine was launched
+
+
+def test_a_measurement_shared_with_another_gpu_process_is_contaminated_and_never_cached(lab, monkeypatch):
+    from lab import gpu
+    tb, s = lab
+    calls = []
+    monkeypatch.setattr(serve, "POLL_S", 0.05)
+    monkeypatch.setattr(gpu, "compute_apps", lambda: calls.append(1) or ([] if len(calls) == 1 else [AGENT_PROC]))
+    out = tb.bench({"regimes": ["single_stream"]})
+    assert out.startswith("bench contaminated: another process held the GPU")
+    rec = list(ledger.records(s.ledger_root, kind="bench"))[-1]["result"]
+    assert rec["verdict"] == "contaminated" and rec["gpu_processes"] == [AGENT_PROC] and "metrics" not in rec
+    calls.clear()
+    with pytest.raises(serve.Contaminated):
+        tb.base_seen(target.load(), ["single_stream"])
+    assert not list(s.run_dir.glob("base-*.json"))
+
+
+def test_the_engines_own_gpu_processes_are_not_foreign(lab, monkeypatch):
+    import time
+    from lab import gpu
+    tb, s = lab
+    srv = serve.Served(tb._pristine(), target.load().engine, jailed=False)
+    monkeypatch.setattr(serve, "POLL_S", 0.05)
+    monkeypatch.setattr(gpu, "compute_apps", lambda: [] if srv.proc is None else
+                        [{"pid": srv.proc.pid, "used_mib": 1, "name": "engine"}])
+    with srv:
+        time.sleep(0.3)
+        srv.exclusive()
+    assert srv.foreign == {}
+
+
 class TwoSessions:
     """Continues once, then stops; keeps each session's spec."""
     name = "scripted"

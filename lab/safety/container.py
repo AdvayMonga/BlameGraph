@@ -96,6 +96,12 @@ def new_name() -> str:
     return f"lab-jail-{uuid.uuid4().hex[:12]}"
 
 
+def pids(name: str) -> set[int]:
+    """The container's processes as host pids; empty once it is gone."""
+    out = subprocess.run([_docker(), "top", name, "-eo", "pid"], capture_output=True, text=True)
+    return {int(x) for x in out.stdout.split() if x.isdigit()} if out.returncode == 0 else set()
+
+
 def remove(name: str) -> None:
     """Kill and remove the container; a no-op if it is already gone."""
     subprocess.run([_docker(), "rm", "-f", name], capture_output=True)

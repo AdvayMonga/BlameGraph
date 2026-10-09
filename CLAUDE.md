@@ -36,7 +36,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `proftools.py` (trace = nsys, kernel = ncu, hostprof = py-spy, each wrapping lab.profile's workload in the jail
   with validated args) + `evaltools.py` (bench → `regimes` on
   the seen split; equiv → `correctness` candidate vs the target's reference; submit → held-out full tier vs the
-  base commit, one aggregate per regime through the Thresholdout guard; all three serve the pristine tree via
+  base commit, one aggregate per regime through the Thresholdout guard; nothing is measured while another process holds
+  the GPU (`refused`), and a process other than the engine on the GPU mid-run makes it `contaminated` (never evidence,
+  never the cached base; `serve.Served.exclusive()`); all three serve the pristine tree via
   `serve.py`, jailed (on Linux, port bridged out of a network-less container); every serve also keeps its passive data, `artifacts.py`: device
   samples via `gpu.DeviceSampler` (DCGM if `dcgmi`, else nvidia-smi), engine telemetry files from `{dir}`, all
   client rows, the serve log; bench/equiv as ledger blobs under `result.artifacts`, submit only in

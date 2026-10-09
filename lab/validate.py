@@ -90,6 +90,7 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
                 for n in names:
                     r = suite.REGIMES[n](ctx)
                     values[n].append(r["value"] if r["valid"] else None)
+            srv.exclusive()                     # a band from a shared GPU would skew every submit
         for n in names:
             report["noise"][n] = write_noise(n, values[n], t, {"tier": "short", "split": "seen"})
     report["bands_measured"] = all(d["band_pct"] is not None for d in report["noise"].values()) if names and noise_runs else None
