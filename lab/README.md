@@ -69,15 +69,15 @@ taken halfway, `pyspy-record.log`). For `pyspy` the process lets its own childre
 
 ## Ledger
 
-`lab/ledger.py`: one JSON line per tool call in `lab/ledger/ledger.jsonl`, the raw knowledge base.
-Not committed for now. Tools write it through `ledger.append`; the agent reads it and never writes it
+`lab/ledger.py`: one JSON line per tool call in `lab/ledger/ledger.jsonl`. Not in git: `python -m store push`
+keeps it and its blobs in the store (`store/`). Tools write it through `ledger.append`; the agent reads it and never writes it
 (the jail's write surface is `src/inference_server/` only).
 
-    python -m lab.ledger seed                      # import knowledge/*.json as `finding` records
+    python -m lab.ledger merge DIR                 # add another ledger dir's new records and blobs (a VM's)
     python -m lab.ledger list --kind bench         # JSONL; also --session, --snapshot
     python -m lab.ledger show ev-20261002-7f3a91
 
-A record: `kind` (test, equiv, bench, profile, submit, finding), `session`, `snapshot`,
+A record: `kind` (test, equiv, bench, profile, submit, noise), `session`, `snapshot`,
 `parent_snapshot`, `base`, `change`, `config` (everything the number is a fact about), `metrics`,
 `gates`, `raw`, `cost`, and `claim`, which holds the agent's own hypothesis and note: untrusted, never
 used for a verdict. The writer stamps `id`, `at` and `schema`. Heavy raw files (diffs, bundles) go
@@ -110,12 +110,13 @@ with the referee's rights, snapshot the workspace and write the ledger on every 
 | `kernel` | `ncu --kernel-name regex:<kernel_regex> --launch-skip N --launch-count N --set basic\|full` around the same workload, then `ncu --import --csv --page raw`; `.ncu-rep` + `metrics.csv` as a blob |
 | `hostprof` | `lab.profile --profiler pyspy`: py-spy record (speedscope) for `seconds` under the repeated workload plus one `py-spy dump`; the bundle as a blob |
 | `ledger` | read records (this run and earlier ones) |
+| `query` | one read-only SQL query over every run's data (`store/index.py`; no held-out rows, no file or network access) |
 | `budget` | dollars left |
 | `restore` | workspace back to a snapshot id (`base` resets) |
 | `note` | a note for the human; recorded, changes nothing |
 | `bench` | serve the pristine copy and run the load regimes (`regimes/`) on the seen split, short tier; one headline per regime, raw (`args.regimes`, `args.tier`) |
 | `equiv` | serve it and run the correctness gate (`correctness/`) against the target's reference outputs; pass, fail or inconclusive with every metric; `tier=full` uses `<reference.dir>-full` |
-| `submit` | the only thing that can produce a win. Needs a passing full-tier equiv and a seen bench on this snapshot. Measures the held-out split at the full tier, measures the base commit the same way (once per run, cached outside the jail), and records one aggregate per regime (base, new, delta %, noise band %, verdict improved/regressed/within_band/unknown_band) through the Thresholdout guard (`validity/holdout.py`, state in `lab/ledger/holdout_state.json`, seed `LAB_HOLDOUT_SEED`): the held-out numbers themselves never reach the ledger. Noise bands come from `knowledge/noise/<regime>.json` when measured |
+| `submit` | the only thing that can produce a win. Needs a passing full-tier equiv and a seen bench on this snapshot. Measures the held-out split at the full tier, measures the base commit the same way (once per run, cached outside the jail), and records one aggregate per regime (base, new, delta %, noise band %, verdict improved/regressed/within_band/unknown_band) through the Thresholdout guard (`validity/holdout.py`, state in `lab/ledger/holdout_state.json`, seed `LAB_HOLDOUT_SEED`): the held-out numbers themselves never reach the ledger. Noise bands come from the ledger's `noise` records (`lab.validate`) when measured |
 
 `trace`, `kernel` and `hostprof` take integers in fixed ranges (`requests` 1-256, `prompt_len` 1-32768,
 `max_tokens` 1-4096, `launch_count` 1-64, `launch_skip` 0-100000, `seconds` 1-300, `rate` 1-1000), `set` from

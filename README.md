@@ -3,7 +3,8 @@
 The environment for autoresearch loops that optimize LLM inference. The engine lives in [inference-server](https://github.com/AdvayMonga/inference-server).
 
 - **Lab:** the agent loop, its tools, ledger, sandbox and cloud GPUs
-- **Workloads:** real-trace corpus and the knowledge base
+- **Workloads:** real-trace corpus
+- **Data store:** every run's data kept in R2 and queryable with SQL
 - **Integrity verdict:** did the agent earn its result
 - **Session feedback:** facts for the agent, diagnostics for the researcher
 - **Load regimes:** drives a server the eight ways it gets used and finds its goodput
