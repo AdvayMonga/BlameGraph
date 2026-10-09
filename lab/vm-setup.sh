@@ -37,6 +37,19 @@ fi
 nsys --version 2>/dev/null || true
 ncu --version 2>/dev/null | head -1 || true
 
+echo "== py-spy (hostprof) and the jail (srt needs Node >= 20, bubblewrap, socat, ripgrep)"
+uv pip install -q --python .venv/bin/python py-spy && .venv/bin/py-spy --version
+if ! command -v srt >/dev/null; then
+  $SUDO apt-get install -y -qq bubblewrap socat ripgrep xz-utils >/dev/null
+  if ! node -e 'process.exit(+process.versions.node.split(".")[0] < 20)' 2>/dev/null; then
+    curl -fsSL https://nodejs.org/dist/v22.11.0/node-v22.11.0-linux-x64.tar.xz | $SUDO tar -xJ -C /usr/local --strip-components=1
+  fi
+  $SUDO npm i -g -s @anthropic-ai/sandbox-runtime >/dev/null
+fi
+# Ubuntu 24.04 blocks unprivileged user namespaces, so bwrap cannot start; this VM is single-purpose.
+$SUDO sysctl -qw kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null || true
+srt -c true >/dev/null 2>&1 && echo "jail: ok" || echo "jail: srt cannot start"
+
 echo "== counters: can a non-admin process read GPU performance counters?"
 # ncu needs NVreg_RestrictProfilingToAdminUsers=0 (or root). Recorded as a fact about this venue.
 if [ -r /proc/driver/nvidia/params ]; then

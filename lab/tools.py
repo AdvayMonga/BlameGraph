@@ -177,7 +177,7 @@ class Toolbox(EvalTools, ProfTools):
                      "(`synthetic`, `prompt_len`); `max_tokens` default 32. Stores the raw bundle (event timeline, chrome "
                      "trace, op and kernel tables, memory, GPU samples, provenance) in the ledger and copies it into your "
                      "workspace under lab/runs/, left out of your change. Returns the bundle path and its file names."
-                     + gpu("2-5 min (engine start plus the workload)"),
+                     + gpu("1-7 min measured at 16 requests x 64 tokens on an H200 (7 min when the weights were still loading from disk)"),
                      {"type": "object", "properties": {"corpus_class": {"type": "string"}, "seed": {"type": "integer"},
                                                        "synthetic": {"type": "boolean"}, "requests": {"type": "integer"},
                                                        "prompt_len": {"type": "integer"},
@@ -250,9 +250,11 @@ def workload_flags(args: dict, harness: Path, n: int) -> list[str]:
 
 
 def default_profile_runner(tree: Path, argv: list[str], read: list[Path] = ()):
-    """lab.profile in the pristine tree as agent code: jailed, weights and `read` read-only, harness first on the path."""
+    """lab.profile in the pristine tree as agent code: jailed, with the target's engine env, weights and `read`
+    read-only, harness first on the path."""
     path = os.pathsep.join([str(tree / HARNESS_DIR), str(tree / "src"), str(tree)])
-    return grader.jailed(tree, argv, timeout_s=3600, env_extra={"PYTHONPATH": path}, read=read)
+    return grader.jailed(tree, argv, timeout_s=3600, env_extra={**target.load().engine.env, "PYTHONPATH": path},
+                         read=read)
 
 
 def clean_pristine(run_dir: Path) -> None:

@@ -85,10 +85,11 @@ def ops_table(prof: Any, top: int = 200) -> dict:
 
 
 def kernels_table(events: Any) -> dict | None:
-    """CUDA kernels aggregated by name (times in us), by total time; None when the trace has no CUDA activity."""
+    """CUDA kernels aggregated by name (times in us), by total time; None when the trace has no CUDA activity.
+    record_function ranges also appear on the device timeline: they are annotations, not kernels."""
     agg: dict[str, list[float]] = {}
     for e in events:
-        if e.device_type == DeviceType.CUDA:
+        if e.device_type == DeviceType.CUDA and not getattr(e, "is_user_annotation", False):
             agg.setdefault(e.name, []).append(e.time_range.elapsed_us())
     if not agg:
         return None

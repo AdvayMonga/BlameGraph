@@ -78,6 +78,7 @@ def test_trace_wraps_the_workload_in_nsys_then_exports_stats(tb):
     assert "gemm_kernel" in out and out.startswith("trace output at lab/runs/")
     prof, stats = calls(tb)
     assert prof[:2] == ["nsys", "profile"] and after(prof, "--capture-range") == "cudaProfilerApi"
+    assert after(prof, "--cuda-graph-trace") == "node"
     assert after(prof, "-m") == "lab.profile" and after(prof, "--profiler") == "cuda-range"
     assert after(prof, "--requests") == "2" and after(prof, "--max-tokens") == "32"
     assert stats[:2] == ["nsys", "stats"] and after(stats, "--report") == proftools.NSYS_REPORTS
