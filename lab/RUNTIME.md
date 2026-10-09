@@ -6,6 +6,32 @@ below). Built: the container jail (`lab/safety/container.py`), GPU exclusivity d
 measured jobs behind the worker interface (`lab/worker.py`). Not built: the agent on the worker (its container, the
 API proxy) and the agent-side jobs. Open decisions are marked **Decide**.
 
+## The line (the user, 2026-10-09)
+
+Don't restrict the agent's search space; restrict only what would let it cheat or cost money. The agent never
+touches (1) secrets and money: API keys, cloud credentials, the HF token; (2) the answer key: held-out workloads,
+correctness reference outputs; (3) the scoreboard: ledger, measurement clients, grader, budget; (4) the GPU
+during its own measurement. Everything else it can have. Decided with it:
+
+- **Internet:** the agent's workbench has it. Hence nothing secret on the VM (rule 1).
+- **Installing libraries:** the agent can pip- and apt-install. Its room is a looser *workbench* container: GPU,
+  network, root inside the container (never on the VM host), writable system dirs. The tight container (no
+  network, no capabilities, read-only root) stays for the measurement rooms only (`test`, `profile`, served
+  engines).
+- **Installed libraries reach measurement only through the change.** A measurement room is rebuilt from the
+  agent's code change alone, so a dependency change has to be part of it: the engine's dependency files (e.g.
+  `pyproject.toml`, `uv.lock`) join the target's write surface and are installed from scratch for the
+  measurement. Patching an installed library in the workbench changes no measured result.
+  **Decide:** the measurement room has no network, so that install needs its own build step (package indexes
+  only, no GPU, no secrets, cached by lockfile hash) before the offline measurement.
+- **Fresh VM per run:** yes (rule 6).
+- **No separate measurement VM** for now: container escape is not a realistic threat at this stage, and it
+  would double GPU cost. Revisit for a public leaderboard.
+- **Refuse rather than kill** (#20) until the workbench can be frozen during a measurement (rule 4).
+
+Not decided here: held-out workloads are sampled from public datasets, so with internet the agent could
+download them; the workload generator's owner decides (rephrased or non-public held-out prompts).
+
 ## Why
 
 Today every part of the lab runs on one machine and serves the engine on that machine's localhost. On a
@@ -28,7 +54,8 @@ cannot signal others), and everything in a jail dies when the jail's command exi
 |---|---|---|---|
 | Controller | laptop (later an always-on box) | session loop, ledger, referee, holdout guard, budget, snapshot store, every secret | no |
 | Worker | GPU VM, host side, outside every jail | job runner, measurement clients, profilers, GPU state | only through the engine's HTTP port |
-| Jails | GPU VM, inside containers | agent's shell and workspace; each served engine | yes, it is the agent's |
+| Workbench | GPU VM, the agent's container | agent's shell and workspace; GPU, internet, root inside | yes, it is the agent's |
+| Measurement rooms | GPU VM, one tight container per job | a tree under `test`/`profile`, a served engine | its code is the agent's; nothing else reaches in |
 
 Rules:
 
@@ -44,10 +71,10 @@ Rules:
    states what was killed (a fact).
 5. **Measurement code is out of reach.** The clients run on the host, outside every container, from a tree the
    jails cannot read; their CPU cores are reserved (cpuset) so the engine cannot starve them.
-6. **One VM per run, destroyed after** (**Decide**; recommended). Nothing from one run can touch the next one's numbers. Setup time is the
+6. **One VM per run, created at run start and deleted at the end** (decided 2026-10-09). Nothing from one run can touch the next one's numbers. Setup time is the
    cost; a prebuilt image with the venv plus a reattached read-only weights disk cuts it.
-7. **Network.** VM egress: the controller tunnel only. Agent jail: the API proxy only. Engine jail: nothing; its
-   port is reachable from the host alone.
+7. **Network.** Workbench: the internet (decided 2026-10-09), so the VM holds nothing secret. Measurement rooms:
+   nothing; a served engine's port is reachable from the host alone.
 
 Left open by not having a separate measurement VM: the clients and the agent's code share a kernel, so a
 kernel or container escape defeats rules 4 and 5. A measurement VM in the same private network closes it later.
