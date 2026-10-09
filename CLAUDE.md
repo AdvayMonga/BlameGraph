@@ -187,7 +187,7 @@ consistency result is void: the client counted vLLM's role chunk as a fake first
 `fix/calibration-findings`). Repeat audit passes on the honest server and fails the `cache` canary.
 
 ## Profiler tools on the H200 (Nebius, 2026-10-08)
-Unjailed, all four work on the real engine (16 requests × 64 tokens): `profile` ~7 min, `trace` 44 s, `kernel` 90-99 s,
+Unjailed, all four work on the real engine (16 requests × 64 tokens): `profile` ~7 min (first call: weights loading from disk), `trace` 44 s, `kernel` 90-99 s,
 `hostprof` 64 s (30 s sampling, 2,981 samples ≈ 100 Hz × 30 s, scheduler thread in the dump); ~$0.87 of GPU time.
 `launch_count` honoured; ncu durations are ~1.8× nsys's on a tiny kernel (base clocks), DRAM figures physical.
 Fixed from the run: the tools now pass the target's engine env (they had loaded the engine's default model);
