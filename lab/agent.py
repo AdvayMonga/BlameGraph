@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shlex
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -100,7 +101,8 @@ class ClaudeAgentSDK:
             argv[at:at] = [w for k in PASS_ENV for w in ("--env", k)]     # the SDK's values, passed through
             line = f"exec {shlex.join(argv)} \"$@\""
         else:
-            cli_tmp = Path(f"/private/tmp/claude-{os.getuid()}")  # the CLI's own per-project scratch; Bash fails without it
+            tmp_root = "/private/tmp" if sys.platform == "darwin" else "/tmp"
+            cli_tmp = Path(f"{tmp_root}/claude-{os.getuid()}")    # the CLI's own per-project scratch; Bash fails without it
             cli_tmp.mkdir(parents=True, exist_ok=True)
             config = jail.settings([home.resolve(), tmp.resolve(), ws, cli_tmp.resolve()], engine.venv(),
                                    [base_url.removeprefix("http://")], readonly=weights, python=engine.python())
