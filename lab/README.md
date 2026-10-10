@@ -157,7 +157,10 @@ derived from the agent's own records and nothing is advice; the `ledger` tool ha
 A session ends when the agent says `stop`, its per-session cap is spent, or it times out. The
 run ends on budget, on `stop`, or on a write-surface violation (the one hard rule). Model cost
 comes from the provider's own accounting; `LAB_MODEL` picks the model, `LAB_AGENT_PROVIDER` the
-provider (only `claude` today, through the Agent SDK CLI; `lab/agent.py` is the seam for others).
+provider: `claude` (the Agent SDK CLI) or `openai` (`lab/agent_openai.py`: any OpenAI-compatible API called
+directly with its key: `LAB_OPENAI_BASE_URL`, https and a public host only, default OpenAI's; `OPENAI_API_KEY`;
+`LAB_MODEL_PRICE="in,out"` in $ per million tokens, required. Its loop runs outside the jail, so the key never
+enters it; file tools stay in the workspace behind the write guard, Bash runs jailed with no network).
 The jail is sandbox-runtime (`npm install -g @anthropic-ai/sandbox-runtime`); `LAB_NO_JAIL=1`
 waives it for tests and a box you trust.
 

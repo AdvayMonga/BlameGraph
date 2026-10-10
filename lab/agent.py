@@ -67,7 +67,10 @@ def load(name: str | None = None) -> Provider:
     name = name or os.environ.get("LAB_AGENT_PROVIDER", "claude")
     if name == "claude":
         return ClaudeAgentSDK()
-    raise ValueError(f"unknown agent provider {name!r}; LAB_AGENT_PROVIDER is claude")
+    if name == "openai":
+        from lab.agent_openai import OpenAICompatible
+        return OpenAICompatible()
+    raise ValueError(f"unknown agent provider {name!r}; LAB_AGENT_PROVIDER is claude or openai")
 
 
 class ClaudeAgentSDK:
