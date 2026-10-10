@@ -150,21 +150,24 @@ class EvalTools:
         t = target.load()
         names = _regimes(args, self.bench_defaults())
         tier = args.get("tier") or "short"
+        seed = args.get("seed", self.seed)
+        if isinstance(seed, bool) or not isinstance(seed, int):
+            raise ValueError("seed must be an integer")
         tree = self._pristine()
         t0 = time.monotonic()
         work, rows = self._work("bench"), []
         try:
             with serve.Served(tree, t.engine, log=self.s.run_dir / "serve-bench.log",
                               jailed=self.serve_jailed, artifacts=work) as srv:
-                results = run_regimes(srv.url, t, names, "seen", tier, self.seed, rows)
+                results = run_regimes(srv.url, t, names, "seen", tier, seed, rows)
                 srv.exclusive()
         except Exception as e:                      # a tool never crashes the session: the failure is the record
             result = {**_failed(e), "seconds": time.monotonic() - t0, "artifacts": self._store(work, rows)}
-            self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier})
+            self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier, "seed": seed})
             return _said("bench", result)
         result = {"verdict": "ok", "metrics": headline(results), "regimes": results, "tier": tier,
                   "seconds": time.monotonic() - t0, "ready_s": srv.ready_s, "artifacts": self._store(work, rows)}
-        self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier})
+        self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier, "seed": seed})
         return json.dumps({"snapshot": snap.id, "split": "seen", "tier": tier, "metrics": result["metrics"]}, indent=1)
 
     # -- equiv --------------------------------------------------------------------------

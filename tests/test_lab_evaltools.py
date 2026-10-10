@@ -118,7 +118,7 @@ def test_bench_serves_and_measures(lab):
     assert out["split"] == "seen" and out["metrics"]["single_stream"]["valid"]
     assert out["metrics"]["single_stream"]["value"] is not None
     rec = next(ledger.records(s.ledger_root, kind="bench"))
-    assert rec["config"] == {"split": "seen", "tier": "short"} and rec["result"]["verdict"] == "ok"
+    assert rec["config"] == {"split": "seen", "tier": "short", "seed": tb.seed} and rec["result"]["verdict"] == "ok"
     assert rec["result"]["ready_s"] is not None and (s.run_dir / "serve-bench.log").exists()
 
 
@@ -358,3 +358,15 @@ def test_bench_defaults_follow_the_task():
     tb.s.task = Task("g", ("long_prompt_short_output",), constraints={"single_stream": {"max_regression_pct": 5},
                                                                      "long_prompt_short_output": {"max_regression_pct": 1}})
     assert tb.bench_defaults() == ("long_prompt_short_output", "single_stream")
+
+
+def test_bench_takes_the_agents_seed(lab, monkeypatch):
+    from lab import evaltools
+    tb, _ = lab
+    seeds = []
+    monkeypatch.setattr(evaltools, "run_regimes", lambda url, t, names, split, tier, seed, rows=None: seeds.append(seed) or [])
+    tb.bench({"regimes": ["single_stream"], "seed": 7})
+    tb.bench({"regimes": ["single_stream"]})
+    assert seeds == [7, tb.seed]
+    with pytest.raises(ValueError):
+        tb.bench({"seed": "7"})

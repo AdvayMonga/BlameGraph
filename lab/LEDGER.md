@@ -13,7 +13,7 @@ on write. Every record: `id`, `at`, `schema` (set by the writer), `kind`, `run`,
 | `test` | `test` | `lint`, `tests` (bools), returncode, output tails, `changed`, `scratch_left_out` |
 | `profile` | `profile` | `bundle` (ledger blob of the profiler output), `workspace_copy`, seconds |
 | `profile` | `trace`, `kernel`, `hostprof` | `bundle` (blob of the instrument's output dir), `workspace_copy`, `instrument` (resolved binary), `argv` (every command run), returncode, seconds, output tail |
-| `bench` | `bench` | `config: {split: seen, tier}`; `verdict: ok`, `metrics: {regime: {objective, value, better, valid, invalid_reasons}}`, `regimes` (full per-regime results), `ready_s`, `artifacts` |
+| `bench` | `bench` | `config: {split: seen, tier, seed}`; `verdict: ok`, `metrics: {regime: {objective, value, better, valid, invalid_reasons}}`, `regimes` (full per-regime results), `ready_s`, `artifacts` |
 | `equiv` | `equiv` | `config: {split: seen, tier}`; `verdict: pass\|fail\|inconclusive`, `passed`, `reasons`, `gates`, `metrics` (accuracy with CI, length, consistency, divergence, per-task flips, unanswered), `thresholds`, `artifacts` |
 | `submit` | `submit` | **held-out shape**: no `result`; top-level `config: {split: heldout, tier: full}` and `metrics: {regime: {base, new, delta_pct, band_pct, verdict}}`, scalars only. The ledger refuses anything else that mentions the held-out split. |
 | `baseline` | the loop, once per run before the first session | `config: {split: seen, tier: short, commit}`; `verdict: ok` with `metrics` shaped like `bench` (the base commit under bench's default regimes: the task's objective and constrained ones, from the cache submit compares against), or `verdict: error`, `reason` |
