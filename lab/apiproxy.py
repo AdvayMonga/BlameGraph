@@ -54,10 +54,11 @@ def credential() -> dict[str, str]:
 
 
 class _Usage:
-    """Usage read off a response as it streams by: JSON, or SSE message_start + message_delta."""
+    """Usage read off a response as it streams by: JSON, or SSE message_start + message_delta. `complete` once the
+    final output count is known."""
 
     def __init__(self, sse: bool):
-        self.sse, self.buf, self.model, self.usage = sse, b"", None, {}
+        self.sse, self.buf, self.model, self.usage, self.complete = sse, b"", None, {}, False
 
     def feed(self, chunk: bytes) -> None:
         self.buf += chunk
@@ -78,6 +79,7 @@ class _Usage:
             self.usage.update(e["message"].get("usage") or {})
         elif e.get("type") == "message_delta":
             self.usage.update(e.get("usage") or {})
+            self.complete = True
 
     def done(self) -> None:
         if self.sse:
@@ -88,14 +90,14 @@ class _Usage:
         except ValueError:
             return
         if isinstance(body, dict) and isinstance(body.get("usage"), dict):
-            self.model, self.usage = body.get("model"), body["usage"]
+            self.model, self.usage, self.complete = body.get("model"), body["usage"], True
 
 
 class Proxy:
     """`with Proxy(cap_usd, host) as p: ... p.url`; `p.spent_usd` and `p.usage` are what the session cost."""
 
     def __init__(self, cap_usd: float, host: str = "127.0.0.1", upstream: str = UPSTREAM):
-        self.cap_usd, self.spent_usd, self.requests = cap_usd, 0.0, 0
+        self.cap_usd, self.spent_usd, self.requests, self.reserved_usd = cap_usd, 0.0, 0, 0.0
         self.usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0,
                       "cache_creation_input_tokens": 0}
         self.auth = credential()
@@ -142,20 +144,24 @@ class Proxy:
         path = urlsplit(h.path).path
         if path not in ALLOWED and not (path.startswith("/v1/models/") and path.count("/") == 3):
             return self._refuse(h, 403, f"{path} is not forwarded")
-        model = None
+        model, max_tokens = None, 0
         if body:
             try:
                 req = json.loads(body)
             except ValueError:
                 return self._refuse(h, 400, "the request body is not JSON")
-            model = req.get("model")
+            model, max_tokens = req.get("model"), int(req.get("max_tokens") or 0)
             if path == "/v1/messages" and (not isinstance(model, str) or price(model) is None):
                 return self._refuse(h, 403, f"no price for model {model!r}; priced: {sorted(PRICES)}")
             if req.get("speed") == "fast":
                 return self._refuse(h, 403, "fast mode is not priced here")
+        metered = path == "/v1/messages"
+        # the request's worst-case output is reserved before it goes, so concurrent requests cannot overshoot the cap
+        hold = max_tokens * price(model)[1] / 1e6 if metered else 0.0
         with self.lock:
-            if path == "/v1/messages" and self.spent_usd >= self.cap_usd:
-                return self._refuse(h, 403, f"this session's ${self.cap_usd:.2f} is spent")
+            if metered and self.spent_usd + self.reserved_usd + hold > self.cap_usd:
+                return self._refuse(h, 403, f"this session's ${self.cap_usd:.2f} is spent (or would be by this request)")
+            self.reserved_usd += hold
         headers = {k: v for k, v in h.headers.items() if k.lower() not in HOP | {"x-api-key", "authorization"}}
         headers.update(self.auth, host=self.upstream.netloc, **{"accept-encoding": "identity"})
         if "authorization" in self.auth:
@@ -163,6 +169,7 @@ class Proxy:
             headers["anthropic-beta"] = ",".join(dict.fromkeys([*betas, OAUTH_BETA]))
         conn = (http.client.HTTPSConnection if self.upstream.scheme == "https" else http.client.HTTPConnection)(
             self.upstream.netloc, timeout=900)
+        usage = None
         try:
             conn.request(h.command, h.path, body=body, headers=headers)
             resp = conn.getresponse()
@@ -178,13 +185,22 @@ class Proxy:
                 h.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                 h.wfile.flush()
             h.wfile.write(b"0\r\n\r\n")
-            usage.done()
-        finally:
+        finally:                                    # charged however it ended: a dropped client still spent
             conn.close()
-        if path == "/v1/messages" and usage.usage:
-            spent = cost_usd(usage.model if usage.model and price(usage.model) else model, usage.usage)
-            with self.lock:
-                self.spent_usd += spent
+            if usage is not None:
+                usage.done()
+            self._charge(metered and usage is not None, usage, model, max_tokens, hold)
+
+    def _charge(self, metered: bool, usage: "_Usage | None", model: str | None, max_tokens: int, hold: float) -> None:
+        """An incomplete response is charged its input as far as seen and its whole `max_tokens` of output."""
+        got = dict(usage.usage) if usage is not None else {}
+        if metered and got and not usage.complete:
+            got["output_tokens"] = max(got.get("output_tokens") or 0, max_tokens)
+        spent = cost_usd(usage.model if usage.model and price(usage.model) else model, got) if metered and got else 0.0
+        with self.lock:
+            self.reserved_usd -= hold
+            self.spent_usd += spent
+            if metered and got:
                 self.requests += 1
                 for k in self.usage:
-                    self.usage[k] += usage.usage.get(k) or 0
+                    self.usage[k] += got.get(k) or 0

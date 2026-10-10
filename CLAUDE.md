@@ -68,6 +68,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   record-format spec: the environment's public interface.
 - `lab/RUNTIME.md` — design (2026-10-08): controller (laptop: ledger, referee, secrets) and worker (GPU VM: jails,
   clients, profilers) behind a job interface; trust zones and rules; why srt cannot jail GPU code on Linux.
+- `lab/build.py` — the dependency build step: a tree whose change touched the target's `deps` (pyproject: dependency
+  tables only, checked by the audit) gets a venv built by the target's `build` command in a no-GPU, `--network none`
+  container whose only way out is a CONNECT proxy to the package-index hosts; cached by the files' hash; jobs run
+  under `engine.using(build.python_for(tree))`.
 - `lab/worker.py` — the job interface, built for the measured jobs: `test`, `measure`, `equiv`, `profile` take input
   trees + JSON args, write an out dir, return JSON; the tools call `self.worker`. `LAB_WORKER=local` (default, in
   process) or `ssh` (the `lab.vm` VM): inputs by content hash, re-hashed on the worker before every job; GpuBusy,
@@ -226,6 +230,16 @@ each srt jail on Linux has its own network namespace, so a jailed server is unre
 Linux the jail is a container with the NVIDIA runtime (`lab/safety/container.py`, `lab/RUNTIME.md`); its GPU
 check (`vm-setup.sh` prints `jail: gpu ok`) has not run yet. The agent's CLI still runs under srt, which on Ubuntu
 24.04 needs `kernel.apparmor_restrict_unprivileged_userns=0` (in `vm-setup.sh`).
+
+## First agent dry run (Nebius H200, 2026-10-10)
+`LAB_WORKER=ssh`, laptop controller, `claude-fable-5-1`, one session ($2.53 as the proxy priced it, 24 turns, 465 s;
+~1 h 20 min of GPU for the whole run). Validated on the real GPU: the GPU in the network-less jail, metadata blocked,
+base and candidate served jailed through the port bridge, `profile`, `trace` (after mounting nsys's install root),
+`test` (after caching the tests' gpt2 tokenizer), the remote workbench over `ssh -R`, the proxy's pricing. The agent
+fused RMSNorm/RoPE in Triton and added a batch-1 decode graph: seen-split short-tier `single_stream` tpot p99 21.4 ->
+13.1 ms; not submitted, correctness not run (equiv needs `data/equiv/ref`, absent in a worktree). A base dev-tier equiv
+on this engine took > 46 min for 774 of 1,597 items at concurrency 16 (vLLM: ~10 min): the tool descriptions' "10 min
+at tier dev" is wrong for this engine. Workbench processes cannot change clocks or power limits on that platform.
 
 ## Next
 GPU (needs spend approval): resolve the BF16 puzzle (plain BF16 on the dev tier at concurrency 32 and 128 on one VM,

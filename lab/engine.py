@@ -4,6 +4,7 @@ is exported from it) and the Python that runs its code. The environment never im
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 ENV_ROOT = Path(__file__).resolve().parents[1]
@@ -15,9 +16,24 @@ def repo() -> Path:
     return target.load().engine_repo
 
 
+_using: list[str] = []
+
+
+@contextmanager
+def using(py: str):
+    """`python()` is `py` inside the block: the venv a tree's own dependency files were built into (lab/build.py)."""
+    _using.append(py)
+    try:
+        yield
+    finally:
+        _using.pop()
+
+
 def python() -> str:
     """The target's engine interpreter (LAB_ENGINE_PYTHON overrides); this interpreter if that file does not exist.
     The engine's venv needs what its test and lint commands import (e.g. `uv sync --extra dev`)."""
+    if _using:
+        return _using[-1]
     from lab import target
     py = target.load().engine_python
     return py if Path(py).exists() else sys.executable

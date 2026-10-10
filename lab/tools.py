@@ -179,16 +179,24 @@ class Toolbox(EvalTools, ProfTools):
         paused = (" While it runs, the container your shell runs in is paused, and processes in it holding the GPU are "
                   "killed and listed in the result." if ClaudeAgentSDK.containerized() else "")
 
+        deps = target.load().deps
+        offline = (f" Only your change reaches the engine here: if it changes {' or '.join(deps)}, those are installed "
+                   "from scratch for it (package indexes only), and the engine then runs with no network, so anything it "
+                   "needs at runtime (draft models, prebuilt kernels, files a library downloads when it is used) has to be "
+                   "in your change." if deps else " The engine runs with no network.")
+
         def gpu(t: str) -> str:
             return (f" Costs GPU time: ~{t} per call, charged at ${rate:g}/h." if known else
-                    f" Costs GPU time: ~{t} per call; no GPU rate is configured on this host, so it is charged $0.") + paused
+                    f" Costs GPU time: ~{t} per call; no GPU rate is configured on this host, so it is charged $0."
+                    ) + offline + paused
         short, full = suite.TIERS["short"], suite.TIERS["full"]
         windows = (f"one engine start plus, per regime, a {short['final_s']:.0f} s measurement window at tier short or "
                    f"{full['final_s']:.0f} s at full, plus {short['probe_s']:.0f} s / {full['probe_s']:.0f} s probes for "
                    f"regimes that search for a load")
         return [
             ToolSpec("test", "Lint and run the test suite on a pristine copy of your current workspace, inside the "
-                     "referee's jail. Returns PASS or FAIL, lint and test status, and the tail of each output." + free,
+                     "referee's jail. Returns PASS or FAIL, lint and test status, and the tail of each output." + offline
+                     + free,
                      obj, self.test),
             ToolSpec("profile", "Run the engine in process under the profiler, jailed, on `requests` sampled from a seen "
                      "corpus class (`corpus_class`, default steady_interactive; `seed`) or on synthetic token ids "

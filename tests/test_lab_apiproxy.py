@@ -127,3 +127,54 @@ def test_no_credential_means_no_proxy(monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     with pytest.raises(RuntimeError):
         apiproxy.Proxy(5.0)
+
+
+def test_a_client_that_drops_mid_stream_is_charged_its_input_and_all_of_max_tokens(monkeypatch):
+    import time
+    seen = []
+
+    class Slow(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers["content-length"]))
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.end_headers()
+            start = b'data: {"type":"message_start","message":{"model":"claude-opus-5-5","usage":{"input_tokens":1000,"output_tokens":1}}}\n\n'
+            self.wfile.write(start)
+            self.wfile.flush()
+            try:
+                for _ in range(50):                     # the rest never comes before the client hangs up
+                    time.sleep(0.05)
+                    self.wfile.write(b'data: {"type":"ping"}\n\n')
+                    self.wfile.flush()
+            except OSError:
+                pass
+            seen.append(True)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Slow)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-real")
+    with apiproxy.Proxy(50.0, upstream=f"http://127.0.0.1:{srv.server_address[1]}") as p:
+        c = http.client.HTTPConnection(urlsplit(p.url).netloc, timeout=10)
+        c.request("POST", "/v1/messages", body=json.dumps({"model": "claude-opus-5-5", "max_tokens": 4000, "stream": True}),
+                  headers={"content-type": "application/json"})
+        r = c.getresponse()
+        r.read1(200)
+        c.close()                                       # hang up
+        deadline = time.time() + 10
+        while not p.requests and time.time() < deadline:
+            time.sleep(0.1)
+    srv.shutdown()
+    p_in, p_out = apiproxy.PRICES["claude-opus-5-5"][:2]
+    assert p.spent_usd == pytest.approx((1000 * p_in + 4000 * p_out) / 1e6) and p.reserved_usd == pytest.approx(0)
+
+
+def test_a_request_whose_worst_case_would_pass_the_cap_is_refused_before_it_goes(upstream, monkeypatch):
+    url, seen = upstream
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-real")
+    with apiproxy.Proxy(0.10, upstream=url) as p:                 # 10k output tokens of opus is $0.20
+        status, body = post(p, "/v1/messages", {"model": "claude-opus-5-5", "max_tokens": 10000})
+    assert status == 403 and b"would be" in body and seen == []

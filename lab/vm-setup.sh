@@ -87,8 +87,18 @@ else
   echo "clock lock: refused"
 fi
 
-echo "== model cache"
+echo "== model cache: the target's model and the Hub repos its tests read (every jail is offline)"
 mkdir -p "$HOME/.cache/huggingface"
+.venv/bin/python - "$here/../${LAB_TARGET:-targets/inference-server.toml}" <<'PY' \
+  || echo "model cache: download failed (finding, not failure)"
+import sys, tomllib
+from huggingface_hub import snapshot_download
+t = tomllib.load(open(sys.argv[1], "rb"))
+print("cached", snapshot_download(t["model"]["name"]))
+for repo in t["engine"].get("hub", []):              # what tests read is tokenizers and configs, not weights
+    print("cached", snapshot_download(repo, allow_patterns=["*.json", "*.txt", "*.model", "*.tiktoken"]))
+PY
+chmod -R a+rX "$HOME/.cache/huggingface"      # the jails' own user reads it (hub metadata is written 0600)
 du -sh "$HOME/.cache/huggingface" 2>/dev/null || true
 
 echo "== smoke"

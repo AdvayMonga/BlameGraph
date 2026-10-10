@@ -4,6 +4,8 @@ dir and returns JSON; the tools keep the policy, the ledger and the budget. `Loc
 the output dir back; the worker re-hashes every tree right before using it and refuses one that does not match, so
 what is measured is what the controller audited. GpuBusy, Contaminated, NotReady and ValueError cross intact. measure, equiv and profile take `workbench`, the agent's
 container: it is paused for the job, and processes in it holding the GPU are killed and listed under `killed`.
+Every job runs the tree with the interpreter `build.python_for` gives it: the engine's, or a venv built from the
+tree's own dependency files.
 
   test     lint + the engine's suite on `tree`                      -> {lint, tests}
   measure  serve `tree`, run regimes; passive data into out          -> {results, ready_s}
@@ -60,21 +62,28 @@ def tree_sha(root: Path) -> str:
 # -- jobs (run where the GPU is) ---------------------------------------------------------------------------------
 
 def job_test(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
+    from lab import build
     from lab.safety import grader
     tree = inputs["tree"]
-    lint = grader.run_lint(tree)
-    tests = grader.run_tests(tree) if lint.passed else grader.Run(False, -1, "skipped: lint failed")
+    try:
+        py = build.python_for(tree)
+    except build.BuildFailed as e:              # a failed test run, recorded like any other
+        skipped = grader.Run(False, -1, str(e))
+        return {"lint": dataclasses.asdict(skipped), "tests": dataclasses.asdict(skipped)}
+    with engine.using(py):
+        lint = grader.run_lint(tree)
+        tests = grader.run_tests(tree) if lint.passed else grader.Run(False, -1, "skipped: lint failed")
     return {"lint": dataclasses.asdict(lint), "tests": dataclasses.asdict(tests)}
 
 
 def job_measure(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     """`args`: names, split, tier, seed, jailed, passive (keep device/telemetry/client rows in `out`)."""
-    from lab import artifacts
+    from lab import artifacts, build
     from lab.evaltools import run_regimes
     t = target.load()
     rows = [] if args["passive"] else None
     try:
-        with container.quiet(args.get("workbench")) as killed, serve.Served(
+        with engine.using(build.python_for(inputs["tree"])), container.quiet(args.get("workbench")) as killed, serve.Served(
                 inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"],
                 artifacts=out if args["passive"] else None) as srv:
             results = run_regimes(srv.url, t, args["names"], args["split"], args["tier"], args["seed"], rows)
@@ -90,12 +99,13 @@ def job_equiv(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     answers already in `prior`'s equiv.outputs.jsonl are reused, not asked again."""
     from correctness import client, run as crun
     from correctness.gate import Thresholds
+    from lab import build
     t = target.load()
     if (inputs["prior"] / "equiv.outputs.jsonl").exists():
         shutil.copyfile(inputs["prior"] / "equiv.outputs.jsonl", out / "equiv.outputs.jsonl")
     enc = hooks.get("encoder") or crun.HFEncoder(t.model, t.chat_kwargs)
-    with container.quiet(args.get("workbench")) as killed, serve.Served(
-            inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"], artifacts=out) as srv:
+    with engine.using(build.python_for(inputs["tree"])), container.quiet(args.get("workbench")) as killed, \
+            serve.Served(inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"], artifacts=out) as srv:
         res = crun.candidate(inputs["reference"], srv.url, t.model, out / "equiv.json", enc,
                              Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio),
                              concurrency=args["concurrency"], api=client.Api(t.engine.api, t.chat_kwargs),
@@ -106,7 +116,12 @@ def job_equiv(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
 
 def job_profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     """`args`: kind (profile | trace | kernel | hostprof), the tool's args, workbench. Files go to `out/files`."""
-    with container.quiet(args.get("workbench")) as killed:
+    from lab import build
+    try:
+        py = build.python_for(inputs["tree"])
+    except build.BuildFailed as e:              # a failed profile run, recorded like any other
+        return {"returncode": -1, "output": str(e)[-3000:], "instrument": None, "argv": [], "head": "", "killed": []}
+    with engine.using(py), container.quiet(args.get("workbench")) as killed:
         return {**_profile(inputs, out, args, hooks), "killed": killed}
 
 
@@ -133,7 +148,7 @@ def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     exe = str(Path(exe).resolve())
     work = tree / proftools.OUT
     work.mkdir()
-    read = [Path(exe).parent]
+    read = [Path(exe).parent, Path(exe).parent.parent]     # the install root: nsys's importer lives beside its binary dir
     src = T.workload_flags(a, harness, proftools._int(a, "requests", *proftools.WORKLOAD["requests"]))
     argv = [*ins["wrap"](exe, work), engine.python(), "-m", "lab.profile", *ins["flags"], *src, *ins["extra"](exe),
             "--out", str(work / "bundle")]
@@ -204,8 +219,11 @@ class Remote:
     """Jobs on another host. `prefix` is the argv that runs one shell command there (ssh ... user@host); empty runs
     it here through sh, which the tests use. `env_dir` is this repo on that host, `python` its interpreter."""
 
-    def __init__(self, prefix: list[str], env_dir: str, python: str, env: dict[str, str], rsh: str | None = None):
-        self.prefix, self.env_dir, self.python, self.env, self.rsh = prefix, env_dir, python, env, rsh
+    def __init__(self, prefix: list[str], env_dir: str, python: str, env: dict[str, str], rsh: str | None = None,
+                 sudo: bool = False):
+        """`sudo`: the login user is not root, so the worker's side runs as root (the workbench is root inside, the
+        measurement rooms drop to their own uid), keeping the login user's HOME (weights, venv, uv)."""
+        self.prefix, self.env_dir, self.python, self.env, self.rsh, self.sudo = prefix, env_dir, python, env, rsh, sudo
         self._root: str | None = None
 
     def _where(self, path: str) -> str:
@@ -213,7 +231,8 @@ class Remote:
 
     def _rsync(self, src: str, dst: str) -> None:
         """By content, not size and mtime: an edit within the same second must not be missed."""
-        p = subprocess.run(["rsync", "-a", "--checksum", "--delete", *(["-e", self.rsh] if self.rsh else []), src, dst],
+        p = subprocess.run(["rsync", "-a", "--checksum", "--delete", *(["-e", self.rsh] if self.rsh else []),
+                            *(["--rsync-path", "sudo -n rsync"] if self.sudo else []), src, dst],
                            capture_output=True, text=True)
         if p.returncode != 0:
             raise WorkerError(f"rsync {src} -> {dst}: {p.stderr.strip()[-1000:]}")
@@ -249,7 +268,8 @@ class Remote:
             if any(c in v for c in '"`\\'):
                 raise WorkerError(f"unsafe value in the worker's env: {v!r}")
         exports = " ".join(f'{k}="{v}"' for k, v in self.env.items())
-        line = f"cd {self.env_dir} && {exports} {self.python} -m lab.worker {command}"
+        root = 'sudo -n env HOME="$HOME" PATH="$PATH" ' if self.sudo else ""
+        line = f"cd {self.env_dir} && {root}{exports} {self.python} -m lab.worker {command}"
         argv = [*self.prefix, line] if self.prefix else ["sh", "-c", line]
         p = subprocess.run(argv, input=stdin, capture_output=True)
         if p.returncode != 0:
@@ -287,7 +307,7 @@ def load(**hooks):
     home = lambda p: p.replace("~", "$HOME", 1)       # noqa: E731 - expanded by the worker's shell
     return Remote(["ssh", *v.ssh_opts, vm.ssh_target(v, record)], v.env_dir, home(v.remote_dir) + "/.venv/bin/python",
                   {"LAB_TARGET": spec.relative_to(engine.ENV_ROOT).as_posix(), "LAB_ENGINE_REPO": home(v.remote_dir)},
-                  rsh=f"ssh {shlex.join(v.ssh_opts)}")
+                  rsh=f"ssh {shlex.join(v.ssh_opts)}", sudo=v.login != "root")
 
 
 # -- the worker host's side ---------------------------------------------------------------------------------------
@@ -349,6 +369,8 @@ def _workbench(req: dict) -> dict:
     from lab import agent
     sock_dir = Path(f"/tmp/lab-proxy-{req['session']}")
     sock_dir.mkdir(mode=0o700, exist_ok=True)
+    if os.environ.get("SUDO_UID"):                  # sshd binds the tunnel's socket here as the login user
+        os.chown(sock_dir, int(os.environ["SUDO_UID"]), int(os.environ["SUDO_GID"]))
     (sock_dir / "proxy.sock").unlink(missing_ok=True)
     scratch = engine.ENV_ROOT / "lab" / "runs" / "remote" / "scratch" / req["session"]
     argv = agent.workbench_command(req["name"], Path(req["workspace"]), scratch, agent_cli(req["sdk_version"]),

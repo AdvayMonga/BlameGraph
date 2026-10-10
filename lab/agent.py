@@ -133,7 +133,10 @@ class ClaudeAgentSDK:
             w = spec.remote.workbench(spec.workbench, spec.scratch.name, spec.remote_workspace,
                                       claude_agent_sdk.__version__)
             *ssh, target = spec.remote.prefix
+            # The SDK may launch this more than once, and that sshd need not unlink a socket a launch left behind;
+            # -n: that call must not read the SDK's stdin.
             line = (f'args=$(printf " %q" "$@")\ncmd={shlex.quote(shlex.join(w["argv"]))}\n'
+                    f'{shlex.join(ssh)} -n -T {target} {shlex.quote("rm -f " + shlex.quote(w["sock"]))} || exit 1\n'
                     f'exec {shlex.join(ssh)} -T -o ExitOnForwardFailure=yes -o StreamLocalBindUnlink=yes '
                     f'-R {w["sock"]}:127.0.0.1:{urlsplit(base_url).port} {target} "$cmd$args"')
         elif self.containerized():
@@ -162,10 +165,17 @@ class ClaudeAgentSDK:
         from claude_agent_sdk import (ClaudeAgentOptions, HookMatcher, ResultMessage,
                                       create_sdk_mcp_server, query, tool)
 
+        # Sharing this host, the workbench is frozen for every lab tool call: nothing in it can swap a file for a link
+        # while the tool snapshots, restores or copies into the workspace (with a Remote worker only rsync writes here).
+        shared = spec.remote is None and self.containerized()
+
         def adapt(t: ToolSpec):
             async def call(args: dict[str, Any]) -> dict[str, Any]:
                 try:
-                    text = await asyncio.to_thread(t.fn, args)   # a long test run must not block the transport
+                    def run():
+                        with container.paused(spec.workbench if shared else None):
+                            return t.fn(args)
+                    text = await asyncio.to_thread(run)          # a long test run must not block the transport
                 except Exception as e:          # the agent sees the refusal, the harness keeps going
                     text = f"{t.name} refused: {e}"
                 return {"content": [{"type": "text", "text": text}]}
