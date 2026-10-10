@@ -94,6 +94,8 @@ def audit(repo: Path, base: str, workspace: Path) -> Audit:
         for name in dirs + files:
             p = Path(root) / name
             rel = p.relative_to(workspace).as_posix()
+            if not p.is_symlink() and any(fnmatch(rel, g) for g in IGNORED):
+                continue
             if _scratch(rel, blobs) and (p.is_symlink() or not (p.is_dir() or p.is_file())
                                          or (p.is_file() and p.stat().st_size > MAX_FILE_BYTES)):
                 a.scratch.append(rel)               # never reaches the pristine tree: a venv's links, big wheels
