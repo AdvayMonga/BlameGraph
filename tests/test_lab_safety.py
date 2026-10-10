@@ -7,7 +7,7 @@ import subprocess
 
 import pytest
 
-from lab.safety import grader, jail
+from lab.safety import container, grader, jail
 from lab.safety.surfaces import may_write
 from tests.lab_fixtures import make_repo
 
@@ -119,6 +119,7 @@ def test_pristine_tree_diff_lint_and_tests(tmp_path, monkeypatch):
 def test_run_tests_refuses_without_the_jail(tmp_path, monkeypatch):
     monkeypatch.delenv("LAB_NO_JAIL", raising=False)
     monkeypatch.setattr(jail, "available", lambda: False)
+    monkeypatch.setattr(container, "available", lambda: False)
     repo = make_repo(tmp_path)
     tree = tmp_path / "t"
     grader.export(repo, "HEAD", tree)

@@ -39,13 +39,15 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   with validated args) + `evaltools.py` (bench → `regimes` on
   the seen split; equiv → `correctness` candidate vs the target's reference; submit → held-out full tier vs the
   base commit, one aggregate per regime through the Thresholdout guard; all three serve the pristine tree via
-  `serve.py`, jailed with local binding allowed; every serve also keeps its passive data, `artifacts.py`: device
+  `serve.py`, jailed (on Linux, port bridged out of a network-less container); every serve also keeps its passive data, `artifacts.py`: device
   samples via `gpu.DeviceSampler` (DCGM if `dcgmi`, else nvidia-smi), engine telemetry files from `{dir}`, all
   client rows, the serve log; bench/equiv as ledger blobs under `result.artifacts`, submit only in
   `<run>/heldout-private/`, never in the ledger; `artifacts.joined` joins client rows to engine rows by trace id),
   `workspace.py` (exported engine copy + snapshots), `ledger.py`
   (append-only JSONL, `lab/ledger/` gitignored), `budget.py`, `engine.py` (where the engine repo and its python
-  are), `safety/` (write surfaces, srt jail, grader: lint/tests run with the engine's python in the jail),
+  are), `safety/` (write surfaces, grader: lint/tests run with the engine's python in the jail; the jail is `container.py` on
+  Linux (one container per jailed command, NVIDIA runtime, `--network none`, socat bridge for a served port; tested in
+  Docker-in-Docker, GPU untested) and srt elsewhere, `LAB_JAIL` overrides),
   `profile.py` (`--profiler torch|cuda-range|pyspy`) + `bundle.py` + `gpu.py` (profiler harness, staged into the pristine tree under `_harness/` so the
   jail never opens this repo, which holds `.env` and the ledger; the tool samples its seen-split corpus workload out here, `corpus.sample`, and stages it as `_harness/workload.json`; window-only memory peaks and scheduler counters, warmup sized to the window, op/kernel tables), `canary.py` (honest regressions patched into
   the engine's process), `vm.py` + `providers/` + `vm-setup.sh` (one GPU VM on Verda/Nebius/Crusoe; pushes both
@@ -59,6 +61,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   measures each regime's run-to-run band from repeated reference runs into `knowledge/noise/<regime>.json` (which
   `submit` reads). Exit 0 only if both hold. Needs a GPU for a real target; tested on fakes. `lab/LEDGER.md` is the
   record-format spec: the environment's public interface.
+- `lab/RUNTIME.md` — design, not built (2026-10-08): controller (laptop: ledger, referee, secrets) and worker (GPU
+  VM: jails, clients, profilers) behind a job interface; trust zones and rules; why srt cannot jail GPU code on Linux.
 - `lab/TRACE.md` + `lab/trace_contract.py` — the request-trace contract: per-request engine rows (trace_id = the
   client's `X-Trace-Id`, `arrival_ts` epoch s, `*_s` monotonic durations, TPOT = (E2E − TTFT)/(n − 1)) in a dir of
   `*.sqlite` (`requests` + `meta`) or `*.jsonl` + `<stem>.meta.json`, with schema version and drop counts;
@@ -205,18 +209,20 @@ Unjailed, all four work on the real engine (16 requests × 64 tokens): `profile`
 `launch_count` honoured; ncu durations are ~1.8× nsys's on a tiny kernel (base clocks), DRAM figures physical.
 Fixed from the run: the tools now pass the target's engine env (they had loaded the engine's default model);
 nsys traces CUDA-graph nodes (it had missed every decode kernel: 46,720 vs torch's 860,365 launches);
-`kernels.json` drops record_function annotations (they had doubled its total). **Open, blocks every jailed GPU
-tool on Linux:** srt always mounts a fresh minimal `/dev` and has no device passthrough, so nothing in the jail
-sees the GPU (`No CUDA GPUs are available`); `bench`/`equiv`/`submit` serve jailed too. Needs a design decision
-(GPU-aware jail, container with the NVIDIA runtime, or the VM as the boundary). Ubuntu 24.04 also needs
-`kernel.apparmor_restrict_unprivileged_userns=0` for bwrap (now in `vm-setup.sh`).
+`kernels.json` drops record_function annotations (they had doubled its total). srt always mounts a fresh minimal
+`/dev` and has no device passthrough, so nothing in an srt jail sees the GPU (`No CUDA GPUs are available`), and
+each srt jail on Linux has its own network namespace, so a jailed server is unreachable. Decided 2026-10-08: on
+Linux the jail is a container with the NVIDIA runtime (`lab/safety/container.py`, `lab/RUNTIME.md`); its GPU
+check (`vm-setup.sh` prints `jail: gpu ok`) has not run yet. The agent's CLI still runs under srt, which on Ubuntu
+24.04 needs `kernel.apparmor_restrict_unprivileged_userns=0` (in `vm-setup.sh`).
 
 ## Next
 GPU (needs spend approval): resolve the BF16 puzzle (plain BF16 on the dev tier at concurrency 32 and 128 on one VM,
 ~20 min, ~$1.50); first real run of `python -m regimes run all` against the engine and against vLLM.
 GPU, with approval (and the auto-stop armed): `python -m lab.validate --target targets/inference-server.toml`
-(reference, FP8/INT8 good, Int4 bad, noise bands for all 8 regimes; ~3-4 h), then a first `python -m lab.session
---task ...` dry run with a tiny budget. Both engine branches from the 2026-10-06 report (`integ/gpu-session-5`,
+(reference, FP8/INT8 good, Int4 bad, noise bands for all 8 regimes; ~3-4 h; serves unjailed, so not blocked), then
+a first `python -m lab.session --task ...` dry run with a tiny budget, which waits on the rest of `lab/RUNTIME.md`
+(the controller/worker split; the agent's CLI still runs under srt, which has no GPU on Linux). Both engine branches from the 2026-10-06 report (`integ/gpu-session-5`,
 `engine/gpu-validated`) were judged by the old gate: re-judge with `python -m correctness verdict` on their saved
 results before deciding anything. lab `session.py --run` re-resolves
 `base` from HEAD rather than the run's original base (pre-existing; resuming after the engine moved would misaudit);

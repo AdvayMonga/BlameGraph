@@ -161,8 +161,11 @@ provider: `claude` (the Agent SDK CLI) or `openai` (`lab/agent_openai.py`: any O
 directly with its key: `LAB_OPENAI_BASE_URL`, https and a public host only, default OpenAI's; `OPENAI_API_KEY`;
 `LAB_MODEL_PRICE="in,out"` in $ per million tokens, required. Its loop runs outside the jail, so the key never
 enters it; file tools stay in the workspace behind the write guard, Bash runs jailed with no network).
-The jail is sandbox-runtime (`npm install -g @anthropic-ai/sandbox-runtime`); `LAB_NO_JAIL=1`
-waives it for tests and a box you trust.
+Agent code runs jailed. On Linux the jail is a container (`lab/safety/container.py`: NVIDIA runtime, no
+network, read-only root, non-root user, no capabilities; a served engine's port reaches the host through a socket
+bridge; image from `python -m lab.safety.container build`, which `vm-setup.sh` runs). Elsewhere it is
+sandbox-runtime (`npm install -g @anthropic-ai/sandbox-runtime`); `LAB_JAIL` picks one. `LAB_NO_JAIL=1` waives
+the jail for tests and a box you trust. The agent's own CLI still runs under srt (`lab/RUNTIME.md`).
 
 ## Canaries
 
