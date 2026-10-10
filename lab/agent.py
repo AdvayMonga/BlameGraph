@@ -9,6 +9,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol
+from urllib.parse import urlsplit
 
 from lab import apiproxy, engine
 from lab.safety import container, jail
@@ -47,6 +48,8 @@ class AgentSpec:
     timeout_s: float = 3600.0
     model: str = field(default_factory=lambda: os.environ.get("LAB_MODEL", "claude-fable-5-1"))
     workbench: str | None = None            # the container name of the agent's workbench (Linux)
+    remote: Any = None                      # a lab.worker.Remote: the workbench runs on that host
+    remote_workspace: str | None = None     # the workspace's path there
 
 
 @dataclass
@@ -72,6 +75,44 @@ def load(name: str | None = None) -> Provider:
     raise ValueError(f"unknown agent provider {name!r}; LAB_AGENT_PROVIDER is claude")
 
 
+PROXY_PORT_IN = 4000              # where a remote workbench serves the tunnelled proxy, inside its own network
+
+
+def _scratch(scratch: Path) -> tuple[Path, Path]:
+    home, tmp = scratch / "home", scratch / "tmp"
+    home.mkdir(parents=True, exist_ok=True)
+    tmp.mkdir(exist_ok=True)
+    return home, tmp
+
+
+def _weights() -> list[Path]:
+    return [HF_HUB] if HF_HUB.exists() else []      # model weights read-only; the token beside them stays hidden
+
+
+def cli_env(home: Path, tmp: Path, ws: Path, base_url: str) -> dict[str, str]:
+    """The CLI's whole environment inside its jail: no credential, only the proxy's URL and its placeholder."""
+    return {"HOME": str(home), "CLAUDE_CONFIG_DIR": str(home), "TMPDIR": str(tmp), "PYTHONPATH": str(ws / "src"),
+            "PYTHONDONTWRITEBYTECODE": "1", "HF_HUB_CACHE": str(HF_HUB), "HF_HUB_OFFLINE": "1",
+            "HF_HOME": str(tmp / "hf-home"), "ANTHROPIC_BASE_URL": base_url,
+            "ANTHROPIC_API_KEY": apiproxy.PLACEHOLDER, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
+
+
+def workbench_command(name: str, ws: Path, scratch: Path, cli: Path, base_url: str | None = None,
+                      sock_dir: Path | None = None) -> list[str]:
+    """`docker run` for the CLI's workbench on this host; the SDK's arguments go after it. With `sock_dir`, the proxy
+    is the unix socket `proxy.sock` there (tunnelled from the controller), served inside on 127.0.0.1:PROXY_PORT_IN."""
+    home, tmp = _scratch(scratch)
+    ws = Path(ws).resolve()
+    env = cli_env(home, tmp, ws, base_url or f"http://127.0.0.1:{PROXY_PORT_IN}")
+    env["PATH"] = f"{Path(engine.python()).parent}:{SYSTEM_PATH}"      # the agent's `python` is the engine's
+    command = [str(cli)] if sock_dir is None else [
+        "sh", "-c", f'socat TCP-LISTEN:{PROXY_PORT_IN},bind=127.0.0.1,fork,reuseaddr UNIX-CONNECT:{sock_dir}/proxy.sock '
+        '& exec "$0" "$@"', str(cli)]
+    writable = [home.resolve(), tmp.resolve(), ws] + ([Path(sock_dir)] if sock_dir else [])
+    return container.workbench_argv(name, ws, command, env, writable, [engine.venv(), *_weights(), cli.parent],
+                                    engine.python())
+
+
 class ClaudeAgentSDK:
     """Claude through the Agent SDK CLI, jailed with a wiped env (on Linux in the workbench container, elsewhere under
     srt); its model calls go through the lab's API proxy, so no credential is ever inside; lab tools run out here."""
@@ -83,35 +124,33 @@ class ClaudeAgentSDK:
         return jail.backend() == "container" and container.available()
 
     def _wrapper(self, spec: AgentSpec, cli: Path, base_url: str) -> Path:
-        home, tmp = spec.scratch / "home", spec.scratch / "tmp"
-        home.mkdir(parents=True, exist_ok=True)
-        tmp.mkdir(exist_ok=True)
-        ws = spec.workspace.resolve()
-        weights = [HF_HUB] if HF_HUB.exists() else []      # model weights read-only; the token beside them stays hidden
-        env = {"HOME": str(home), "CLAUDE_CONFIG_DIR": str(home), "TMPDIR": str(tmp), "PYTHONPATH": str(ws / "src"),
-               "PYTHONDONTWRITEBYTECODE": "1", "HF_HUB_CACHE": str(HF_HUB), "HF_HUB_OFFLINE": "1",
-               "HF_HOME": str(tmp / "hf-home"), "ANTHROPIC_BASE_URL": base_url,
-               "ANTHROPIC_API_KEY": apiproxy.PLACEHOLDER, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
-        engine_bin = Path(engine.python()).parent                 # the agent's `python` is the engine's
-        if self.containerized():
-            env["PATH"] = f"{engine_bin}:{SYSTEM_PATH}"
-            argv = container.workbench_argv(spec.workbench, ws, [str(cli)], env, [home.resolve(), tmp.resolve(), ws],
-                                            [engine.venv(), *weights, cli.parent], engine.python())
+        script = spec.scratch / "cli.sh"
+        if spec.remote is not None:            # the worker host builds its own workbench; the proxy goes down the tunnel
+            import claude_agent_sdk
+            w = spec.remote.workbench(spec.workbench, spec.scratch.name, spec.remote_workspace,
+                                      claude_agent_sdk.__version__)
+            *ssh, target = spec.remote.prefix
+            line = (f'args=$(printf " %q" "$@")\ncmd={shlex.quote(shlex.join(w["argv"]))}\n'
+                    f'exec {shlex.join(ssh)} -T -o ExitOnForwardFailure=yes -o StreamLocalBindUnlink=yes '
+                    f'-R {w["sock"]}:127.0.0.1:{urlsplit(base_url).port} {target} "$cmd$args"')
+        elif self.containerized():
+            argv = workbench_command(spec.workbench, spec.workspace, spec.scratch, cli, base_url=base_url)
             at = argv.index(container.IMAGE)
             argv[at:at] = [w for k in PASS_ENV for w in ("--env", k)]     # the SDK's values, passed through
-            line = f"exec {shlex.join(argv)} \"$@\""
+            line = f'exec {shlex.join(argv)} "$@"'
         else:
+            home, tmp = _scratch(spec.scratch)
+            ws = spec.workspace.resolve()
             tmp_root = "/private/tmp" if sys.platform == "darwin" else "/tmp"
             cli_tmp = Path(f"{tmp_root}/claude-{os.getuid()}")    # the CLI's own per-project scratch; Bash fails without it
             cli_tmp.mkdir(parents=True, exist_ok=True)
             config = jail.settings([home.resolve(), tmp.resolve(), ws, cli_tmp.resolve()], engine.venv(),
-                                   [base_url.removeprefix("http://")], readonly=weights, python=engine.python())
+                                   [base_url.removeprefix("http://")], readonly=_weights(), python=engine.python())
             argv = jail.wrap(config, spec.scratch / "srt.json", [str(cli)])
             keep = " ".join(f'"{k}=${k}"' for k in PASS_ENV)
-            sets = " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
-            line = f'exec env -i {keep} "PATH={engine_bin}:$PATH" {sets} {shlex.join(argv)} "$@"'
-        script = spec.scratch / "cli.sh"
-        script.write_text(f"#!/bin/sh\n{line}\n")
+            sets = " ".join(f"{k}={shlex.quote(v)}" for k, v in cli_env(home, tmp, ws, base_url).items())
+            line = f'exec env -i {keep} "PATH={Path(engine.python()).parent}:$PATH" {sets} {shlex.join(argv)} "$@"'
+        script.write_text(f"#!/bin/bash\n{line}\n")
         script.chmod(0o700)
         return script
 
@@ -139,7 +178,8 @@ class ClaudeAgentSDK:
             output_format={"type": "json_schema", "schema": OUTPUT_SCHEMA},
             cli_path=str(self._wrapper(spec, cli, base_url)),
             hooks={"PreToolUse": [HookMatcher(matcher=WRITE_TOOLS,
-                                              hooks=[write_guard(spec.workspace, spec.base_files)])]},
+                                              hooks=[write_guard(Path(spec.remote_workspace or spec.workspace),
+                                                                 spec.base_files)])]},
         )
         reply = AgentReply(None, 0.0, 0, "no result message")
         async for msg in query(prompt=spec.prompt, options=options):
@@ -153,7 +193,7 @@ class ClaudeAgentSDK:
         """Never raises. The spend is what the API proxy priced, whatever the CLI reports or however it ended."""
         spec.scratch.mkdir(parents=True, exist_ok=True)
         try:
-            host = container.bridge_gateway() if self.containerized() else "127.0.0.1"
+            host = container.bridge_gateway() if spec.remote is None and self.containerized() else "127.0.0.1"
             proxy = apiproxy.Proxy(spec.max_budget_usd, host)
         except Exception as e:                      # nothing was sent: nothing spent
             return AgentReply(None, 0.0, 0, f"provider failed: {type(e).__name__}: {e}")
@@ -164,8 +204,10 @@ class ClaudeAgentSDK:
                 reply = AgentReply(None, 0.0, 0, f"timed out after {spec.timeout_s:.0f}s")
             except Exception as e:
                 reply = AgentReply(None, 0.0, 0, f"provider failed: {type(e).__name__}: {e}")
-            finally:
-                if spec.workbench and self.containerized():
-                    container.remove(spec.workbench)        # a CLI killed mid-session leaves its container behind
+            finally:                                    # a CLI killed mid-session leaves its container behind
+                if spec.remote is not None:
+                    spec.remote.remove_workbench(spec.workbench)
+                elif spec.workbench and self.containerized():
+                    container.remove(spec.workbench)
         reply.cost_usd, reply.cost_estimated, reply.usage = proxy.spent_usd, False, dict(proxy.usage)
         return reply

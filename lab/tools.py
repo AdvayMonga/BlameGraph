@@ -73,12 +73,20 @@ class Toolbox(EvalTools, ProfTools):
         self._t0 = time.monotonic()
         if tool in GPU_TOOLS and self.s.budget.remaining_usd <= 0 and gpu_rate()[0] > 0:
             raise BudgetExceeded(f"{tool}: no budget left for GPU time")
+        self._sync("down")
         snap = self.s.workspace.snapshot()
         if snap.violations:
             self.violation = "; ".join(snap.violations)
             self._record("note", tool, args, {"violation": snap.violations}, snap)
             raise PermissionError(f"workspace violates the write surface: {self.violation}")
         return snap
+
+    def _sync(self, way: str) -> None:
+        """With the agent on a Remote worker: its workspace there is the live one, this one its mirror."""
+        rws = getattr(self.s, "remote_workspace", None)
+        if rws:
+            (self.worker.pull(rws, self.s.workspace.path) if way == "down" else
+             self.worker.push(self.s.workspace.path, rws))
 
     def _pristine(self) -> Path:
         a = self.s.workspace.audit()
@@ -95,6 +103,7 @@ class Toolbox(EvalTools, ProfTools):
         dest = self.s.workspace.path / visible
         shutil.rmtree(dest, ignore_errors=True)
         shutil.copytree(src, dest)
+        self._sync("up")
         return blob, str(visible)
 
     # -- tools ---------------------------------------------------------------------------
@@ -148,6 +157,7 @@ class Toolbox(EvalTools, ProfTools):
         sid = args["snapshot"]
         self._audited("restore", args)
         self.s.workspace.restore(sid)
+        self._sync("up")
         snap = self._audited("restore", args)
         self._record("note", "restore", args, {"restored": sid, "now": snap.id}, snap)
         return f"workspace restored to {sid}"
