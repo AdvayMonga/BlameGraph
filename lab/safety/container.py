@@ -1,5 +1,7 @@
-"""The Linux jail: one container per jailed command (NVIDIA runtime for the GPU), no network at all, read-only root,
-non-root user, no capabilities. A served engine's port reaches the host through a socket bridge. See lab/RUNTIME.md."""
+"""The Linux jails (lab/RUNTIME.md). A measurement room: one container per jailed command (NVIDIA runtime for the
+GPU), no network at all, read-only root, non-root user, no capabilities; a served engine's port reaches the host
+through a socket bridge. The agent's workbench: one container per session with the GPU, the internet and root
+inside it (writable system dirs, Docker's default capabilities), paused by `quiet` while anything is measured."""
 
 from __future__ import annotations
 
@@ -7,7 +9,10 @@ import os
 import shutil
 import subprocess
 import sys
+import signal
+import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 IMAGE = os.environ.get("LAB_JAIL_IMAGE", "lab-jail")
@@ -90,6 +95,68 @@ def argv(name: str, workdir: Path, command: list[str], env: dict[str, str], writ
     sock = writable[-1].resolve() / BRIDGE
     return out + ["sh", "-c", f'socat UNIX-LISTEN:{sock},fork,mode=666 TCP:127.0.0.1:{bridge_port} & exec "$@"',
                   "jail", *command]
+
+
+def workbench_argv(name: str, workdir: Path, command: list[str], env: dict[str, str], writable: list[Path],
+                   readonly: list[Path], python: str) -> list[str]:
+    """`docker run -i` for the agent's CLI: stdio stays the SDK's, the default bridge network gives the internet,
+    root inside when the lab runs as root (otherwise the lab's uid, so the workspace stays the lab's)."""
+    uid, gid = (0, 0) if os.getuid() == 0 else (os.getuid(), os.getgid())
+    out = [_docker(), "run", "-i", "--rm", "--init", "--name", name, "--security-opt", "no-new-privileges",
+           "--pids-limit", "16384", "--shm-size", "16g", "--user", f"{uid}:{gid}", "--workdir", str(workdir.resolve()),
+           "--label", "lab.workbench=1"]
+    if gpus():
+        out += ["--gpus", "all"]
+    if (cpus := cpuset()):
+        out += ["--cpuset-cpus", cpus]
+    for k, v in env.items():
+        out += ["--env", f"{k}={v}"]
+    return out + mounts(writable, readonly, python) + [IMAGE, *command]
+
+
+def bridge_gateway() -> str:
+    """The host's address on Docker's default bridge: what a workbench reaches the host at, and nothing outside."""
+    out = subprocess.run([_docker(), "network", "inspect", "bridge", "-f", "{{(index .IPAM.Config 0).Gateway}}"],
+                         capture_output=True, text=True, check=True)
+    return out.stdout.strip()
+
+
+def running(name: str) -> bool:
+    out = subprocess.run([_docker(), "inspect", "-f", "{{.State.Running}}", name], capture_output=True, text=True)
+    return out.returncode == 0 and out.stdout.strip() == "true"
+
+
+def _kill_gpu_holders(name: str) -> list[dict]:
+    from lab import gpu
+    mine = pids(name)
+    hit = [a for a in (gpu.compute_apps() or []) if a["pid"] in mine]
+    for a in hit:
+        try:
+            os.kill(a["pid"], signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    return hit
+
+
+@contextmanager
+def quiet(name: str | None):
+    """The workbench paused for a measurement: processes in it holding the GPU are killed (and listed), the rest
+    frozen; thawed after. A no-op when there is no such running container."""
+    if not name or _docker() is None or not running(name):
+        yield []
+        return
+    from lab import gpu
+    killed = _kill_gpu_holders(name)
+    subprocess.run([_docker(), "pause", name], capture_output=True, check=True)
+    try:
+        killed += _kill_gpu_holders(name)            # anything that took the GPU before the pause landed
+        deadline = time.monotonic() + 15
+        while killed and time.monotonic() < deadline and any(
+                a["pid"] in {k["pid"] for k in killed} for a in gpu.compute_apps() or []):
+            time.sleep(0.2)                          # until the driver has released their memory
+        yield killed
+    finally:
+        subprocess.run([_docker(), "unpause", name], capture_output=True)
 
 
 def new_name() -> str:

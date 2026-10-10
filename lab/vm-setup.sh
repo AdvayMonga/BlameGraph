@@ -66,6 +66,10 @@ fi
 [ "$(id -u)" = 0 ] || $SUDO usermod -aG docker "$USER"   # takes effect at the next login
 $SUDO docker build -q -t lab-jail -f "$here/safety/jail.Dockerfile" "$here/safety" >/dev/null
 $SUDO docker run --rm --gpus all --network none lab-jail nvidia-smi -L && echo "jail: gpu ok" || echo "jail: no GPU in the container"
+# The agent's workbench has the internet but not the cloud's metadata service (instance credentials, user-data).
+$SUDO iptables -C DOCKER-USER -d 169.254.0.0/16 -j DROP 2>/dev/null || $SUDO iptables -I DOCKER-USER -d 169.254.0.0/16 -j DROP
+$SUDO docker run --rm lab-jail python3 -c "import socket; socket.create_connection(('169.254.169.254', 80), timeout=3)" \
+  2>/dev/null && echo "workbench: METADATA REACHABLE" || echo "workbench: metadata blocked"
 
 echo "== counters: can a non-admin process read GPU performance counters?"
 # ncu needs NVreg_RestrictProfilingToAdminUsers=0 (or root). Recorded as a fact about this venue.

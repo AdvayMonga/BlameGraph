@@ -2,7 +2,8 @@
 dir and returns JSON; the tools keep the policy, the ledger and the budget. `Local` runs a job in this process.
 `Remote` ships each input by content hash, runs `python -m lab.worker run JOB` on the worker host over SSH and brings
 the output dir back; the worker re-hashes every tree right before using it and refuses one that does not match, so
-what is measured is what the controller audited. GpuBusy, Contaminated, NotReady and ValueError cross intact.
+what is measured is what the controller audited. GpuBusy, Contaminated, NotReady and ValueError cross intact. measure, equiv and profile take `workbench`, the agent's
+container: it is paused for the job, and processes in it holding the GPU are killed and listed under `killed`.
 
   test     lint + the engine's suite on `tree`                      -> {lint, tests}
   measure  serve `tree`, run regimes; passive data into out          -> {results, ready_s}
@@ -27,6 +28,7 @@ import tempfile
 from pathlib import Path
 
 from lab import engine, serve, target
+from lab.safety import container
 
 RESULT = "_result.json"
 ENGINE_LOG = "engine.log"          # the served engine's log, in every job's out dir
@@ -66,11 +68,12 @@ def job_measure(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     t = target.load()
     rows = [] if args["passive"] else None
     try:
-        with serve.Served(inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"],
-                          artifacts=out if args["passive"] else None) as srv:
+        with container.quiet(args.get("workbench")) as killed, serve.Served(
+                inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"],
+                artifacts=out if args["passive"] else None) as srv:
             results = run_regimes(srv.url, t, args["names"], args["split"], args["tier"], args["seed"], rows)
             srv.exclusive()
-        return {"results": results, "ready_s": srv.ready_s}
+        return {"results": results, "ready_s": srv.ready_s, "killed": killed}
     finally:
         if rows is not None:
             artifacts.write_rows(out, rows)
@@ -85,17 +88,23 @@ def job_equiv(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     if (inputs["prior"] / "equiv.outputs.jsonl").exists():
         shutil.copyfile(inputs["prior"] / "equiv.outputs.jsonl", out / "equiv.outputs.jsonl")
     enc = hooks.get("encoder") or crun.HFEncoder(t.model, t.chat_kwargs)
-    with serve.Served(inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"], artifacts=out) as srv:
+    with container.quiet(args.get("workbench")) as killed, serve.Served(
+            inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"], artifacts=out) as srv:
         res = crun.candidate(inputs["reference"], srv.url, t.model, out / "equiv.json", enc,
                              Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio),
                              concurrency=args["concurrency"], api=client.Api(t.engine.api, t.chat_kwargs),
                              config={"tier": args["tier"]})
         srv.exclusive()
-    return res
+    return {**res, "killed": killed}
 
 
 def job_profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
-    """`args`: kind (profile | trace | kernel | hostprof) and the tool's args. Output files go to `out/files`."""
+    """`args`: kind (profile | trace | kernel | hostprof), the tool's args, workbench. Files go to `out/files`."""
+    with container.quiet(args.get("workbench")) as killed:
+        return {**_profile(inputs, out, args, hooks), "killed": killed}
+
+
+def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     from lab import proftools, tools as T
     tree, kind, a = inputs["tree"], args["kind"], args["args"]
     files = out / "files"

@@ -165,7 +165,9 @@ Agent code runs jailed. On Linux the jail is a container (`lab/safety/container.
 network, read-only root, non-root user, no capabilities; a served engine's port reaches the host through a socket
 bridge; image from `python -m lab.safety.container build`, which `vm-setup.sh` runs). Elsewhere it is
 sandbox-runtime (`npm install -g @anthropic-ai/sandbox-runtime`); `LAB_JAIL` picks one. `LAB_NO_JAIL=1` waives
-the jail for tests and a box you trust. The agent's own CLI still runs under srt (`lab/RUNTIME.md`).
+the jail for tests and a box you trust. The agent's CLI runs in its own workbench container on Linux (GPU, internet,
+root inside; paused while anything is measured) and under srt elsewhere; its model calls go through
+`lab/apiproxy.py`, so no credential is ever inside a jail (`lab/RUNTIME.md`).
 
 The GPU work behind `test`, `profile`, `trace`, `kernel`, `hostprof`, `bench`, `equiv` and `submit` runs as worker
 jobs (`lab/worker.py`). `LAB_WORKER=local` (default) runs them in process; `LAB_WORKER=ssh` runs them on the VM

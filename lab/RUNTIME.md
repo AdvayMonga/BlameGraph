@@ -3,8 +3,9 @@
 Design, 2026-10-08. Decided with the user: the lab splits into a controller and a worker; no separate
 measurement VM (cost); NVIDIA only for now; the jail on Linux is a container with the NVIDIA runtime (option A
 below). Built: the container jail (`lab/safety/container.py`), GPU exclusivity during measurements, and the
-measured jobs behind the worker interface (`lab/worker.py`). Not built: the agent on the worker (its container, the
-API proxy) and the agent-side jobs. Open decisions are marked **Decide**.
+measured jobs behind the worker interface (`lab/worker.py`), the API proxy (`lab/apiproxy.py`), the workbench
+container with its pause during measurements. Not built: the agent on a *remote* worker (its CLI over SSH, the
+workspace jobs, the proxy through a tunnel) and the dependency build step. Open decisions are marked **Decide**.
 
 ## The line (the user, 2026-10-09)
 
@@ -33,7 +34,8 @@ during its own measurement. Everything else it can have. Decided with it:
 - **Fresh VM per run:** yes (rule 6).
 - **No separate measurement VM** for now: container escape is not a realistic threat at this stage, and it
   would double GPU cost. Revisit for a public leaderboard.
-- **Refuse rather than kill** (#20) until the workbench can be frozen during a measurement (rule 4).
+- **Refuse rather than kill** (#20) until the workbench can be frozen during a measurement (rule 4). Since the
+  workbench container (2026-10-10) its GPU holders are killed and it is paused; refusing stays for anything else.
 
 Not decided here: held-out workloads are sampled from public datasets, so with internet the agent could
 download them; the workload generator's owner decides (rephrased or non-public held-out prompts).
@@ -162,6 +164,31 @@ Contaminated, NotReady and ValueError are raised again on the controller. equiv 
 answers with the job, so calling it again never re-rolls the gate. Tested through a local shell with the same CLI;
 not yet over SSH to a VM. `agent`, `exec`, `snapshot`, `restore` and `facts` come with the agent container.
 
+## The workbench and the proxy, as built (2026-10-10)
+
+- **Workbench** (`container.workbench_argv`, Linux): one container per session, `docker run -i` so the CLI's stdio
+  stays the Agent SDK's. GPU, Docker's default bridge (the internet), root inside when the lab runs as root (the
+  lab's uid otherwise, so the workspace stays the lab's), writable system dirs, Docker's default capabilities,
+  `no-new-privileges`. Mounted: the workspace and the CLI's home and tmp read-write; the engine's venv, the
+  interpreter, weights, CUDA and the CLI binary read-only, so an install in the workbench never reaches a
+  measurement. Container root is uid 0 on the host kernel (no user-namespace remap): an escape is host root,
+  accepted under decision 5; `userns-remap` is the hardening step. `vm-setup.sh` drops container traffic to
+  169.254.0.0/16 (the cloud metadata service) and checks it.
+- **Pause** (`container.quiet`): around every `measure`, `equiv` and `profile` job, processes in the workbench
+  holding the GPU are killed, the container is paused, a second sweep catches any that started before the pause
+  landed, and it waits for their memory to be released; thawed after. The killed processes are in the record and
+  the tool's result (`workbench_killed`), and every GPU tool's description says so on Linux.
+- **API proxy** (`lab/apiproxy.py`): per session, bound to the bridge gateway (Linux) or 127.0.0.1 (srt). The CLI
+  holds the placeholder key `lab-proxy`; the proxy swaps in the lab's key (`x-api-key`) or OAuth token
+  (`Authorization: Bearer` + the oauth beta), forwards only `/v1/messages`, `/v1/messages/count_tokens` and
+  `/v1/models`, prices every response's usage (JSON or SSE) at first-party rates, and refuses once the session's
+  cap is spent, and refuses any unpriced model or fast mode. The session is charged what the proxy priced, not
+  what the CLI reports, and its tokens go in the session record. Before this, the key sat in the CLI's
+  environment, readable from `/proc` by anything in the agent's shell.
+- Not tested: the real CLI through the proxy (it may call an endpoint outside the three; it would see a 403), and
+  the macOS srt path (srt is not installed on the dev box). Tested in Docker-in-Docker: workbench argv, root and
+  writable system dirs, reaching the gateway, pause and thaw; the proxy against a fake API.
+
 ## What moves where
 
 - Controller: `session`, `agent` (SDK side), the tool front ends in `tools`/`evaltools`/`proftools` (policy,
@@ -192,6 +219,7 @@ database, still append-only.
 
 1. ~~Decide the jail~~ (A) and build it. Done, minus the GPU check.
 2. Without a GPU: ~~the job interface with a local transport, the snapshot round trip and rule 3~~ (done for the
-   measured jobs); next the agent container with its freeze, and the API proxy.
+   measured jobs); ~~the agent container with its freeze, and the API proxy~~ (done, lab on one machine); next the
+   agent on a remote worker, then the dependency build step.
 3. With a GPU (spend approval): `--gpus` and the profilers inside the container, then a first `lab.session`
    dry run with a tiny budget.

@@ -132,6 +132,11 @@ def _failed(e: BaseException) -> dict:
     return {"verdict": "error", "reason": _why(e)}
 
 
+def _killed(r: dict) -> dict:
+    """Processes of the agent's workbench killed because they held the GPU when the measurement began (a fact)."""
+    return {"workbench_killed": r["killed"]} if r.get("killed") else {}
+
+
 def _said(tool: str, result: dict) -> str:
     return f"{tool} {'failed' if result['verdict'] == 'error' else result['verdict']}: {result['reason']}"
 
@@ -167,9 +172,10 @@ class EvalTools:
             return _said("bench", result)
         result = {"verdict": "ok", "metrics": headline(r["results"]), "regimes": r["results"], "tier": tier,
                   "seconds": time.monotonic() - t0, "ready_s": r["ready_s"],
-                  "artifacts": artifacts.store(work, self.s.ledger_root)}
+                  "artifacts": artifacts.store(work, self.s.ledger_root), **_killed(r)}
         self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier, "seed": seed})
-        return json.dumps({"snapshot": snap.id, "split": "seen", "tier": tier, "metrics": result["metrics"]}, indent=1)
+        return json.dumps({"snapshot": snap.id, "split": "seen", "tier": tier, "metrics": result["metrics"],
+                           **_killed(r)}, indent=1)
 
     # -- equiv --------------------------------------------------------------------------
     def equiv(self, args: dict) -> str:
@@ -190,8 +196,8 @@ class EvalTools:
             shutil.copyfile(out.with_suffix(".outputs.jsonl"), prior / "equiv.outputs.jsonl")
         try:
             res = self.worker.call("equiv", {"tree": tree, "reference": ref, "prior": prior},
-                                   {"tier": tier, "concurrency": self.equiv_concurrency, "jailed": self.serve_jailed},
-                                   work)
+                                   {"tier": tier, "concurrency": self.equiv_concurrency, "jailed": self.serve_jailed,
+                                    "workbench": getattr(self.s, "workbench", None)}, work)
         except Exception as e:
             result = {**_failed(e), "artifacts": self._equiv_store(work, out, prior)}
             self._record("equiv", "equiv", args, result, snap, config={"split": "seen", "tier": tier})
@@ -199,10 +205,10 @@ class EvalTools:
         passed = {"pass": True, "fail": False}.get(res["verdict"])     # inconclusive is None: neither passing nor failing
         record = {"verdict": res["verdict"], "passed": passed, "reasons": res["reasons"], "gates": res["gates"],
                   "metrics": res["metrics"], "thresholds": res["thresholds"], "tier": tier,
-                  "artifacts": self._equiv_store(work, out, prior)}
+                  "artifacts": self._equiv_store(work, out, prior), **_killed(res)}
         self._record("equiv", "equiv", args, record, snap, config={"split": "seen", "tier": tier})
         return json.dumps({"snapshot": snap.id, "tier": tier, "verdict": res["verdict"], "reasons": res["reasons"],
-                           "metrics": res["metrics"]}, indent=1, default=str)
+                           "metrics": res["metrics"], **_killed(res)}, indent=1, default=str)
 
     # -- submit -------------------------------------------------------------------------
     def submit(self, args: dict) -> str:
@@ -249,7 +255,8 @@ class EvalTools:
             self._record("submit", "submit", args, result, snap)
             return _said("submit", result)
         rec = self._record_heldout("submit", "submit", args, {"tier": "full"}, metrics, snap)
-        out = {"snapshot": snap.id, "split": "heldout", "tier": "full", "metrics": metrics, "record": rec["id"]}
+        out = {"snapshot": snap.id, "split": "heldout", "tier": "full", "metrics": metrics, "record": rec["id"],
+               **_killed(r)}
         task = getattr(self.s, "task", None)
         if task is not None:                       # the task's own win condition, applied to these aggregates
             from lab.task import score
@@ -274,8 +281,8 @@ class EvalTools:
     def _measure(self, tree: Path, out: Path, log: str, **args) -> dict:
         """The worker's `measure` job into `out`; the engine's log is appended to `<run>/<log>` either way."""
         try:
-            return self.worker.call("measure", {"tree": tree}, {"seed": self.seed, **args, "jailed": self.serve_jailed},
-                                    out)
+            return self.worker.call("measure", {"tree": tree}, {"seed": self.seed, **args, "jailed": self.serve_jailed,
+                                                                "workbench": getattr(self.s, "workbench", None)}, out)
         finally:
             src = out / worker.ENGINE_LOG
             if src.exists():
