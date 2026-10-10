@@ -33,6 +33,7 @@ class Session:
     ledger_root: Path
     profile_runner: object = None          # None: lab.tools.default_profile_runner
     task: Task | None = None
+    workbench: str | None = None           # the agent's container: paused while the tools measure
 
 
 @dataclass
@@ -128,13 +129,14 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
         if budget.remaining_usd < MIN_SESSION_USD:
             summary["stopped"] = "budget"
             break
-        s = Session(run_id, f"{run_id}-s{n}", run_dir, ws, budget, cfg.ledger_root, task=cfg.task)
+        s = Session(run_id, f"{run_id}-s{n}", run_dir, ws, budget, cfg.ledger_root, task=cfg.task,
+                    workbench=f"lab-workbench-{run_id}-s{n}")
         tools = Toolbox(s)
         snap = ws.snapshot()
         spec = agent.AgentSpec(system="", prompt=brief(cfg, s, snap.id, n), workspace=ws.path,
                                scratch=run_dir / "scratch" / s.session_id, tools=tools.specs(),
                                base_files=base_files, max_turns=cfg.max_turns,
-                               max_budget_usd=min(cfg.session_usd, budget.remaining_usd))
+                               max_budget_usd=min(cfg.session_usd, budget.remaining_usd), workbench=s.workbench)
         spec.system = system_prompt(target.load(), spec)
         t0 = time.monotonic()
         try:
@@ -154,7 +156,7 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
         status = (reply.output or {}).get("status") if reply.output else None
         ledger.append({"kind": "session", "run": run_id, "session": s.session_id, "provider": provider.name,
                        "model": spec.model, "snapshot": end.id, "snapshot_blob": end.blob, "patch": end.patch,
-                       "cost": {"usd": reply.cost_usd, "estimated": reply.cost_estimated},
+                       "cost": {"usd": reply.cost_usd, "estimated": reply.cost_estimated, "tokens": reply.usage},
                        "turns": reply.turns, "seconds": time.monotonic() - t0,
                        "status": status, "error": reply.error, "violation": tools.violation,
                        "claim": {"note": (reply.output or {}).get("note")}}, cfg.ledger_root)

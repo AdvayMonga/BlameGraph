@@ -259,6 +259,24 @@ def test_tools_refuse_cleanly_when_the_engine_does_not_start(lab, monkeypatch):
     assert rec["result"]["artifacts"]["telemetry"] is None and rec["result"]["artifacts"]["serve_log"]   # no section: skipped
 
 
+def test_the_workbench_is_quieted_for_a_measurement_and_what_was_killed_is_a_fact(lab, monkeypatch):
+    from contextlib import contextmanager
+    from lab.safety import container
+    tb, s = lab
+    s.workbench = "lab-workbench-r1-s1"
+    asked = []
+
+    @contextmanager
+    def quiet(name):
+        asked.append(name)
+        yield [{"pid": 4242, "used_mib": 9000, "name": "python"}]
+    monkeypatch.setattr(container, "quiet", quiet)
+    out = json.loads(tb.bench({"regimes": ["single_stream"]}))
+    assert asked == ["lab-workbench-r1-s1"] and out["workbench_killed"][0]["pid"] == 4242
+    rec = list(ledger.records(s.ledger_root, kind="bench"))[-1]["result"]
+    assert rec["verdict"] == "ok" and rec["workbench_killed"][0]["pid"] == 4242
+
+
 AGENT_PROC = {"pid": 4242, "used_mib": 9000, "name": "python"}
 
 

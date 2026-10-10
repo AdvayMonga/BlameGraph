@@ -12,7 +12,7 @@ from typing import Any
 from lab import corpus, engine, ledger, target
 from lab.agent import ToolSpec
 from lab.budget import Budget, BudgetExceeded, gpu_rate
-from lab.evaltools import EvalTools
+from lab.evaltools import EvalTools, _killed
 from lab.proftools import ProfTools
 from lab.safety import grader
 
@@ -119,17 +119,19 @@ class Toolbox(EvalTools, ProfTools):
         out = self._work("profile")
         t0 = time.monotonic()
         try:
-            r = self.worker.call("profile", {"tree": self._pristine()}, {"kind": "profile", "args": args}, out)
+            r = self.worker.call("profile", {"tree": self._pristine()},
+                                 {"kind": "profile", "args": args, "workbench": getattr(self.s, "workbench", None)}, out)
             blob, visible = self._keep(out / "files") if (out / "files").is_dir() else ("", "")
         finally:
             shutil.rmtree(out, ignore_errors=True)
         result = {"returncode": r["returncode"], "bundle": blob, "workspace_copy": visible,
-                  "seconds": time.monotonic() - t0, "output": r["output"]}
+                  "seconds": time.monotonic() - t0, "output": r["output"], **_killed(r)}
         self._record("profile", "profile", args, result, snap)
+        killed = f"\nkilled in your workbench (held the GPU): {json.dumps(r['killed'])}" if r.get("killed") else ""
         if r["returncode"] != 0 or not blob:
-            return f"profile failed ({r['returncode']}):\n{result['output']}"
+            return f"profile failed ({r['returncode']}):\n{result['output']}{killed}"
         return f"bundle at {visible} (in your workspace; left out of your change)\n" + "\n".join(
-            f"  {p.name}" for p in sorted((self.s.workspace.path / visible).iterdir()))
+            f"  {p.name}" for p in sorted((self.s.workspace.path / visible).iterdir())) + killed
 
     def ledger_tool(self, args: dict) -> str:
         match = {k: v for k, v in args.items() if k in ("kind", "session", "snapshot", "tool") and v}
@@ -163,9 +165,13 @@ class Toolbox(EvalTools, ProfTools):
         rate, known = gpu_rate()
         free = " Costs no GPU time ($0)."
 
+        from lab.agent import ClaudeAgentSDK
+        paused = (" While it runs, the container your shell runs in is paused, and processes in it holding the GPU are "
+                  "killed and listed in the result." if ClaudeAgentSDK.containerized() else "")
+
         def gpu(t: str) -> str:
             return (f" Costs GPU time: ~{t} per call, charged at ${rate:g}/h." if known else
-                    f" Costs GPU time: ~{t} per call; no GPU rate is configured on this host, so it is charged $0.")
+                    f" Costs GPU time: ~{t} per call; no GPU rate is configured on this host, so it is charged $0.") + paused
         short, full = suite.TIERS["short"], suite.TIERS["full"]
         windows = (f"one engine start plus, per regime, a {short['final_s']:.0f} s measurement window at tier short or "
                    f"{full['final_s']:.0f} s at full, plus {short['probe_s']:.0f} s / {full['probe_s']:.0f} s probes for "

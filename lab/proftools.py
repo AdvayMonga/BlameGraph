@@ -8,12 +8,14 @@ the jail with fixed, validated arguments, keeps the raw output as a ledger blob 
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import time
 from pathlib import Path
 
 from lab.agent import ToolSpec
+from lab.evaltools import _killed
 
 OUT = "_instr"                      # in the pristine tree: writable in the jail, rebuilt on every call
 NSYS_REPORTS = "cuda_gpu_kern_sum,cuda_api_sum,cuda_gpu_mem_time_sum,nvtx_sum"
@@ -111,7 +113,8 @@ class ProfTools:
         out = self._work(tool)
         t0 = time.monotonic()
         try:
-            r = self.worker.call("profile", {"tree": tree}, {"kind": tool, "args": args}, out)
+            r = self.worker.call("profile", {"tree": tree},
+                                 {"kind": tool, "args": args, "workbench": getattr(self.s, "workbench", None)}, out)
             if r.get("refused"):
                 self._record("note", tool, args, {"verdict": "refused", "reason": r["refused"]}, snap)
                 return f"{tool} refused: {r['refused']}"
@@ -120,11 +123,12 @@ class ProfTools:
         finally:
             shutil.rmtree(out, ignore_errors=True)
         result = {"returncode": r["returncode"], "bundle": blob, "workspace_copy": visible, "instrument": r["instrument"],
-                  "argv": r["argv"], "seconds": time.monotonic() - t0, "output": r["output"]}
+                  "argv": r["argv"], "seconds": time.monotonic() - t0, "output": r["output"], **_killed(r)}
         self._record("profile", tool, args, result, snap)
+        killed = f"\nkilled in your workbench (held the GPU): {json.dumps(r['killed'])}" if r.get("killed") else ""
         if r["returncode"] != 0 or not r["head"]:
-            return f"{tool} failed ({r['returncode']}):\n{result['output']}"
-        return f"{tool} output at {visible} (in your workspace; left out of your change)\n{r['head']}"
+            return f"{tool} failed ({r['returncode']}):\n{result['output']}{killed}"
+        return f"{tool} output at {visible} (in your workspace; left out of your change)\n{r['head']}{killed}"
 
     def prof_specs(self, gpu) -> list[ToolSpec]:
         """`gpu(time)` renders the cost fact for a description."""
