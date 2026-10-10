@@ -199,10 +199,12 @@ class Toolbox(EvalTools, ProfTools):
                      {"type": "object", "required": ["text"], "properties": {"text": {"type": "string"}}}, self.note),
             ToolSpec("bench", "Serve a pristine copy of your current workspace (jailed) and measure it under load "
                      f"regimes on the seen split. `regimes`: default {_names(self.bench_defaults())}; 'all'; or "
-                     f"any of {_names(suite.REGIMES)}. `tier`: short (default) or full. Returns one headline per regime "
+                     f"any of {_names(suite.REGIMES)}. `tier`: short (default) or full. `seed`: the seen-split workload sample "
+                     f"(default {self.seed}). Returns one headline per regime "
                      f"(objective, value, direction, validity), raw. Takes {windows}." + gpu("5-25 min per regime"),
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}},
-                                                       "tier": {"type": "string", "enum": ["short", "full"]}}}, self.bench),
+                                                       "tier": {"type": "string", "enum": ["short", "full"]},
+                                                       "seed": {"type": "integer"}}}, self.bench),
             ToolSpec("equiv", "Serve your current workspace and run the correctness gate against the reference "
                      "model's outputs at `tier` dev (default) or full. Returns pass, fail or inconclusive with every "
                      "metric. submit requires a passing full-tier equiv on the snapshot. Takes one engine start plus "

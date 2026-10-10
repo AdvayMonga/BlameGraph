@@ -151,20 +151,24 @@ class EvalTools:
         snap = self._audited("bench", args)
         names = _regimes(args, self.bench_defaults())
         tier = args.get("tier") or "short"
+        seed = args.get("seed", self.seed)
+        if isinstance(seed, bool) or not isinstance(seed, int):
+            raise ValueError("seed must be an integer")
         tree = self._pristine()
         t0 = time.monotonic()
         work = self._work("bench")
         try:
-            r = self._measure(tree, work, "serve-bench.log", names=names, split="seen", tier=tier, passive=True)
+            r = self._measure(tree, work, "serve-bench.log", names=names, split="seen", tier=tier, passive=True,
+                              seed=seed)
         except Exception as e:                      # a tool never crashes the session: the failure is the record
             result = {**_failed(e), "seconds": time.monotonic() - t0,
                       "artifacts": artifacts.store(work, self.s.ledger_root)}
-            self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier})
+            self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier, "seed": seed})
             return _said("bench", result)
         result = {"verdict": "ok", "metrics": headline(r["results"]), "regimes": r["results"], "tier": tier,
                   "seconds": time.monotonic() - t0, "ready_s": r["ready_s"],
                   "artifacts": artifacts.store(work, self.s.ledger_root)}
-        self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier})
+        self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier, "seed": seed})
         return json.dumps({"snapshot": snap.id, "split": "seen", "tier": tier, "metrics": result["metrics"]}, indent=1)
 
     # -- equiv --------------------------------------------------------------------------
@@ -270,7 +274,7 @@ class EvalTools:
     def _measure(self, tree: Path, out: Path, log: str, **args) -> dict:
         """The worker's `measure` job into `out`; the engine's log is appended to `<run>/<log>` either way."""
         try:
-            return self.worker.call("measure", {"tree": tree}, {**args, "seed": self.seed, "jailed": self.serve_jailed},
+            return self.worker.call("measure", {"tree": tree}, {"seed": self.seed, **args, "jailed": self.serve_jailed},
                                     out)
         finally:
             src = out / worker.ENGINE_LOG
