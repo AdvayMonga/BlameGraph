@@ -138,25 +138,44 @@ def test_refused_cleanly_without_the_instrument(tb, monkeypatch, tool, args):
     assert rec["tool"] == tool and rec["result"]["verdict"] == "refused" and calls(tb) == []
 
 
-@pytest.mark.parametrize("bad", ["gemm; rm -rf /", "$(id)", "`id`", "a b", "x\nid", "a'b", 'a"b', "a&b", "../x",
-                                 "", "a" * 201, "(", None, 7, ["gemm"]])
-def test_kernel_regex_rejects_injection(tb, bad):
+@pytest.mark.parametrize("bad", ["", "(", None, 7, ["gemm"]])
+def test_kernel_regex_must_be_a_regex(tb, bad):
     with pytest.raises(ValueError):
         tb.kernel({"kernel_regex": bad})
     assert calls(tb) == [] and not list(ledger.records(tb.s.ledger_root))
 
 
 @pytest.mark.parametrize("tool,args", [
-    ("kernel", {"kernel_regex": "gemm", "set": "full --replay-mode application"}),
-    ("kernel", {"kernel_regex": "gemm", "launch_count": 0}),
-    ("kernel", {"kernel_regex": "gemm", "launch_count": "4; id"}),
-    ("trace", {"requests": True}), ("trace", {"requests": "8 --out /"}), ("trace", {"max_tokens": 10**6}),
-    ("hostprof", {"seconds": 301}), ("hostprof", {"rate": -1}),
+    ("kernel", {"kernel_regex": "gemm", "set": ""}), ("kernel", {"kernel_regex": "gemm", "launch_count": 0}),
+    ("kernel", {"kernel_regex": "gemm", "launch_count": "4; id"}), ("kernel", {"ncu_args": "--section X"}),
+    ("trace", {"requests": True}), ("trace", {"requests": "8 --out /"}), ("trace", {"nsys_args": [1]}),
+    ("hostprof", {"seconds": 0}), ("hostprof", {"rate": -1}), ("hostprof", {"pyspy_args": "--native"}),
 ])
 def test_arguments_are_validated_before_anything_runs(tb, tool, args):
     with pytest.raises(ValueError):
         getattr(tb, tool)(args)
     assert calls(tb) == []
+
+
+def test_instrument_flags_pass_through_as_single_argv_items_with_no_upper_limits(tb, monkeypatch):
+    tb.trace({"nsys_args": ["--trace", "cuda,cublas", "--sample", "none"], "requests": 1000, "max_tokens": 8192,
+              "synthetic": True})
+    prof = calls(tb)[0]
+    assert after(prof, "--trace") == "cuda,cublas" and "--capture-range" not in prof
+    assert after(prof, "--requests") == "1000" and after(prof, "--max-tokens") == "8192"
+    tb.kernel({"kernel_regex": "a b; id", "set": "roofline", "launch_count": 500, "ncu_args": ["--section", "Occupancy"]})
+    prof = calls(tb)[2]
+    assert after(prof, "--kernel-name") == "regex:a b; id" and after(prof, "--set") == "roofline"
+    assert after(prof, "--launch-count") == "500" and prof[prof.index("--section") + 1] == "Occupancy"
+    tb.kernel({})
+    assert "--kernel-name" not in calls(tb)[4]
+    seen = {}
+    monkeypatch.setattr(labtools, "default_profile_runner",
+                        lambda tree, argv, read=(): seen.update(argv=argv) or subprocess.CompletedProcess(argv, 1, "", ""))
+    tb.hostprof({"seconds": 900, "rate": 5000, "pyspy_args": ["--native", "--idle"]})
+    a = seen["argv"]
+    assert after(a, "--seconds") == "900" and after(a, "--rate") == "5000"
+    assert [a[i + 1] for i, x in enumerate(a) if x == "--pyspy-arg"] == ["--native", "--idle"]
 
 
 def test_cost_free_tools_record_wall_time_and_zero(tb):
