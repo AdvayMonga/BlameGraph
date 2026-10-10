@@ -120,7 +120,7 @@ def test_served_port_reaches_the_host_and_nothing_else(tmp_path, monkeypatch):
     grader.export(make_repo(tmp_path), "HEAD", tree)
     (tree / "index.html").write_text("ok")
     port = serve.free_port()
-    proc, tmp, stop = grader.jailed_popen(tree, ["python3", "-m", "http.server", str(port), "--bind", "127.0.0.1"],
+    proc, tmp, stop, pids = grader.jailed_popen(tree, ["python3", "-m", "http.server", str(port), "--bind", "127.0.0.1"],
                                           port=port)
     try:
         body, deadline = None, time.monotonic() + 30
@@ -129,7 +129,7 @@ def test_served_port_reaches_the_host_and_nothing_else(tmp_path, monkeypatch):
                 body = urllib.request.urlopen(f"http://127.0.0.1:{port}/index.html", timeout=2).read()
             except OSError:
                 time.sleep(0.3)
-        assert body == b"ok"
+        assert body == b"ok" and pids()                 # the jail reports its processes as host pids
         (tree / "probe.py").write_text(PROBE)       # another jail cannot reach the served engine
         other = grader.jailed(tree, ["python3", "probe.py", "/nonexistent", str(port)], timeout_s=60)
         assert eval(other.stdout.strip().splitlines()[-1])["host_port"] == "no"

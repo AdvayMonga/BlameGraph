@@ -161,3 +161,37 @@ class DeviceSampler(Sampler):
                 self._file.close()
                 self._proc = None
         (self.path.parent / "meta.json").write_text(json.dumps(meta, indent=1))
+
+
+def compute_apps() -> list[dict] | None:
+    """Every process holding a GPU context (host pids): pid, used MiB, name. None where there is no nvidia-smi."""
+    if not available():
+        return None
+    out = subprocess.run(["nvidia-smi", "--query-compute-apps=pid,used_memory,process_name",
+                          "--format=csv,noheader,nounits"], capture_output=True, text=True)
+    if out.returncode != 0:
+        return None
+    apps = []
+    for line in out.stdout.splitlines():
+        pid, mib, name = ([p.strip() for p in line.split(",", 2)] + ["", ""])[:3]
+        if pid.isdigit():
+            apps.append({"pid": int(pid), "used_mib": int(mib) if mib.isdigit() else None, "name": name})
+    return apps
+
+
+def descendants(pid: int) -> set[int]:
+    """`pid` and every process below it, from /proc (Linux); `{pid}` where there is no /proc."""
+    children: dict[int, list[int]] = {}
+    for stat in Path("/proc").glob("[0-9]*/stat"):
+        try:
+            ppid = int(stat.read_text().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        children.setdefault(ppid, []).append(int(stat.parent.name))
+    out, todo = set(), [pid]
+    while todo:
+        p = todo.pop()
+        if p not in out:
+            out.add(p)
+            todo += children.get(p, [])
+    return out

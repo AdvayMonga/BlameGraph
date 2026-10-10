@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
 
-from lab import engine, target
+from lab import engine, gpu, target
 from lab.safety import container, jail
 from lab.safety.surfaces import ALWAYS_DENY, HIDDEN, may_write
 
@@ -220,18 +220,19 @@ def _jail_argv(tree: Path, argv: list[str], env_extra: dict | None, domains, loc
 def jailed_popen(tree: Path, argv: list[str], *, env_extra: dict | None = None, stdout=None, stderr=None,
                  local_binding: bool = True, port: int | None = None):
     """A long-running jailed process (a served engine) in its own session, reachable on the host's 127.0.0.1:`port`.
-    Returns (proc, tmp dir to remove, stop): `stop` removes what lives outside proc's process group."""
+    Returns (proc, tmp dir to remove, stop, pids): `stop` removes what lives outside proc's process group; `pids()`
+    is every host pid the jail runs."""
     wrapped, env, tmp, name = _jail_argv(tree, argv, env_extra, (), local_binding, tag=".serve", port=port)
     proc = subprocess.Popen(wrapped, cwd=tree, env=env, stdout=stdout, stderr=stderr, start_new_session=True)
     if name is None:
-        return proc, tmp, lambda: None
+        return proc, tmp, lambda: None, lambda: gpu.descendants(proc.pid)
     bridge = container.Bridge(port, tmp / container.BRIDGE) if port else None
 
     def stop() -> None:
         container.remove(name)
         if bridge:
             bridge.stop()
-    return proc, tmp, stop
+    return proc, tmp, stop, lambda: container.pids(name)
 
 
 def jailed(tree: Path, argv: list[str], *, timeout_s: float, env_extra: dict | None = None,

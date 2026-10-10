@@ -121,6 +121,19 @@ def equiv_rows(out: Path) -> list[dict]:
     return [{k: v for k, v in json.loads(x).items() if k != "text"} for x in p.read_text().splitlines() if x.strip()]
 
 
+def _failed(e: BaseException) -> dict:
+    """The record of a measurement that did not complete; GPU processes that stopped it are kept as facts."""
+    if isinstance(e, serve.GpuBusy):
+        return {"verdict": "refused", "reason": str(e), "gpu_processes": e.apps}
+    if isinstance(e, serve.Contaminated):
+        return {"verdict": "contaminated", "reason": str(e), "gpu_processes": e.apps}
+    return {"verdict": "error", "reason": _why(e)}
+
+
+def _said(tool: str, result: dict) -> str:
+    return f"{tool} {'failed' if result['verdict'] == 'error' else result['verdict']}: {result['reason']}"
+
+
 def _why(e: BaseException) -> str:
     if isinstance(e, serve.NotReady):
         return f"engine did not start: {e}"
@@ -147,11 +160,11 @@ class EvalTools:
             with serve.Served(tree, t.engine, log=self.s.run_dir / "serve-bench.log",
                               jailed=self.serve_jailed, artifacts=work) as srv:
                 results = run_regimes(srv.url, t, names, "seen", tier, seed, rows)
+                srv.exclusive()
         except Exception as e:                      # a tool never crashes the session: the failure is the record
-            result = {"verdict": "error", "reason": _why(e), "seconds": time.monotonic() - t0,
-                      "artifacts": self._store(work, rows)}
+            result = {**_failed(e), "seconds": time.monotonic() - t0, "artifacts": self._store(work, rows)}
             self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier, "seed": seed})
-            return f"bench failed: {result['reason']}"
+            return _said("bench", result)
         result = {"verdict": "ok", "metrics": headline(results), "regimes": results, "tier": tier,
                   "seconds": time.monotonic() - t0, "ready_s": srv.ready_s, "artifacts": self._store(work, rows)}
         self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier, "seed": seed})
@@ -179,11 +192,11 @@ class EvalTools:
                                      Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio),
                                      concurrency=self.equiv_concurrency, api=client.Api(t.engine.api, t.chat_kwargs),
                                      config={"tier": tier})
+                srv.exclusive()
         except Exception as e:
-            self._record("equiv", "equiv", args, {"verdict": "error", "reason": _why(e),
-                                                  "artifacts": self._store(work, equiv_rows(out))},
-                         snap, config={"split": "seen", "tier": tier})
-            return f"equiv failed: {_why(e)}"
+            result = {**_failed(e), "artifacts": self._store(work, equiv_rows(out))}
+            self._record("equiv", "equiv", args, result, snap, config={"split": "seen", "tier": tier})
+            return _said("equiv", result)
         passed = {"pass": True, "fail": False}.get(res["verdict"])     # inconclusive is None: neither passing nor failing
         record = {"verdict": res["verdict"], "passed": passed, "reasons": res["reasons"], "gates": res["gates"],
                   "metrics": res["metrics"], "thresholds": res["thresholds"], "tier": tier,
@@ -222,6 +235,7 @@ class EvalTools:
                 with serve.Served(tree, t.engine, log=self.s.run_dir / "serve-submit.log", jailed=self.serve_jailed,
                                   artifacts=private) as srv:
                     results = run_regimes(srv.url, t, names, "heldout", "full", self.seed, rows)
+                    srv.exclusive()             # before the holdout guard: a contaminated run spends no query
             finally:
                 artifacts.write_rows(private, rows)
             new = headline(results)
@@ -237,8 +251,9 @@ class EvalTools:
             self._record("submit", "submit", args, {"verdict": "refused", "reason": str(e)}, snap)
             return f"submit refused: {e}"
         except Exception as e:
-            self._record("submit", "submit", args, {"verdict": "error", "reason": _why(e)}, snap)
-            return f"submit failed: {_why(e)}"
+            result = _failed(e)
+            self._record("submit", "submit", args, result, snap)
+            return _said("submit", result)
         rec = self._record_heldout("submit", "submit", args, {"tier": "full"}, metrics, snap)
         out = {"snapshot": snap.id, "split": "heldout", "tier": "full", "metrics": metrics, "record": rec["id"]}
         task = getattr(self.s, "task", None)
@@ -286,6 +301,7 @@ class EvalTools:
             grader.export(self.s.workspace.repo, self.s.workspace.base, tree)
             with serve.Served(tree, t.engine, log=self.s.run_dir / f"serve-base-{split}.log", jailed=self.serve_jailed) as srv:
                 have.update(headline(run_regimes(srv.url, t, missing, split, tier, self.seed)))
+                srv.exclusive()                 # a contaminated base is never cached: every later submit reads it
             cache.write_text(json.dumps(have, indent=1))
         return have
 
@@ -300,7 +316,7 @@ class EvalTools:
             seen = self.base_seen(target.load(), names)
             result = {"verdict": "ok", "metrics": {n: seen[n] for n in names}}
         except Exception as e:                      # no GPU or a base that will not serve is itself the fact
-            result = {"verdict": "error", "reason": _why(e)}
+            result = _failed(e)
         return ledger.append({"kind": "baseline", "run": self.s.run_id, "session": self.s.session_id,
                               "config": {"split": "seen", "tier": BENCH_TIER, "commit": commit},
                               "result": result, "cost": self._cost("baseline")}, self.s.ledger_root)

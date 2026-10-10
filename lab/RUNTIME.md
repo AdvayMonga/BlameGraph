@@ -130,8 +130,13 @@ Transport now: SSH from the controller, one worker. Transport later: a queue. Th
 ## Leftover processes, today
 
 On Linux, srt already isolates them (own PID and network namespace; killed when the jail exits). During a
-session they still share the GPU and CPU with the engine being measured, and nothing stops them before a
-measurement: `serve.py` tears down only the engine's own process group. Rule 4 closes it.
+session they could still share the GPU with the engine being measured. Since 2026-10-09 `serve.py` refuses to
+launch an engine while any process holds the GPU (`GpuBusy`) and polls the GPU's processes every second while it
+serves; anything outside the engine's own processes marks the measurement `contaminated` (`Served.exclusive()`):
+never evidence for submit, never cached as the base, and caught before the holdout guard spends a query. The
+facts (pid, MiB, name) go to the agent. It refuses rather than kills because the lab cannot yet tell the agent's
+processes apart; rule 4's freeze-and-kill comes with the agent container. Not covered: CPU contention, and a GPU
+burst shorter than the poll interval.
 
 ## At scale (not built)
 
