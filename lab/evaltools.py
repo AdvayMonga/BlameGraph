@@ -1,5 +1,6 @@
-"""The three tools that can make a change count: bench, equiv and submit. Each serves the agent's pristine tree
-from outside the jail (lab/serve.py), measures it with the environment's own instruments, and writes the ledger.
+"""The three tools that can make a change count: bench, equiv and submit. Each has the worker (lab/worker.py) serve
+the agent's pristine tree outside the jail and measure it with the environment's own instruments; the policy and the
+ledger stay here.
 
   bench    the regimes on the seen split, short tier -> one headline per regime, raw
   equiv    the correctness gate against the target's reference -> pass | fail | inconclusive, with every metric
@@ -18,11 +19,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 import time
 from pathlib import Path
 
-from lab import artifacts, ledger, serve, target
+from lab import artifacts, ledger, serve, target, worker
 from validity.holdout import HoldoutGuard, Refused
 
 HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT = 100, 2.0, 0.5
@@ -147,7 +149,6 @@ class EvalTools:
     # -- bench --------------------------------------------------------------------------
     def bench(self, args: dict) -> str:
         snap = self._audited("bench", args)
-        t = target.load()
         names = _regimes(args, self.bench_defaults())
         tier = args.get("tier") or "short"
         seed = args.get("seed", self.seed)
@@ -155,18 +156,18 @@ class EvalTools:
             raise ValueError("seed must be an integer")
         tree = self._pristine()
         t0 = time.monotonic()
-        work, rows = self._work("bench"), []
+        work = self._work("bench")
         try:
-            with serve.Served(tree, t.engine, log=self.s.run_dir / "serve-bench.log",
-                              jailed=self.serve_jailed, artifacts=work) as srv:
-                results = run_regimes(srv.url, t, names, "seen", tier, seed, rows)
-                srv.exclusive()
+            r = self._measure(tree, work, "serve-bench.log", names=names, split="seen", tier=tier, passive=True,
+                              seed=seed)
         except Exception as e:                      # a tool never crashes the session: the failure is the record
-            result = {**_failed(e), "seconds": time.monotonic() - t0, "artifacts": self._store(work, rows)}
+            result = {**_failed(e), "seconds": time.monotonic() - t0,
+                      "artifacts": artifacts.store(work, self.s.ledger_root)}
             self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier, "seed": seed})
             return _said("bench", result)
-        result = {"verdict": "ok", "metrics": headline(results), "regimes": results, "tier": tier,
-                  "seconds": time.monotonic() - t0, "ready_s": srv.ready_s, "artifacts": self._store(work, rows)}
+        result = {"verdict": "ok", "metrics": headline(r["results"]), "regimes": r["results"], "tier": tier,
+                  "seconds": time.monotonic() - t0, "ready_s": r["ready_s"],
+                  "artifacts": artifacts.store(work, self.s.ledger_root)}
         self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier, "seed": seed})
         return json.dumps({"snapshot": snap.id, "split": "seen", "tier": tier, "metrics": result["metrics"]}, indent=1)
 
@@ -180,27 +181,25 @@ class EvalTools:
             self._record("equiv", "equiv", args, {"verdict": "refused", "reason": f"no {tier}-tier reference outputs; "
                          "run `python -m correctness reference` for this target first"}, snap)
             return "equiv refused: no reference outputs for this target"
-        from correctness import client, run as crun
-        from correctness.gate import Thresholds
         tree = self._pristine()
         out = self.s.run_dir / "equiv" / f"{snap.id}-{tier}.json"
         work = self._work("equiv")
+        # answers already collected for this snapshot are reused, never re-rolled: the gate is statistical
+        prior = Path(tempfile.mkdtemp(prefix="equiv-prior-", dir=self.s.run_dir))
+        if out.with_suffix(".outputs.jsonl").exists():
+            shutil.copyfile(out.with_suffix(".outputs.jsonl"), prior / "equiv.outputs.jsonl")
         try:
-            with serve.Served(tree, t.engine, log=self.s.run_dir / "serve-equiv.log", jailed=self.serve_jailed,
-                              artifacts=work) as srv:
-                res = crun.candidate(ref, srv.url, t.model, out, self.encoder(t),
-                                     Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio),
-                                     concurrency=self.equiv_concurrency, api=client.Api(t.engine.api, t.chat_kwargs),
-                                     config={"tier": tier})
-                srv.exclusive()
+            res = self.worker.call("equiv", {"tree": tree, "reference": ref, "prior": prior},
+                                   {"tier": tier, "concurrency": self.equiv_concurrency, "jailed": self.serve_jailed},
+                                   work)
         except Exception as e:
-            result = {**_failed(e), "artifacts": self._store(work, equiv_rows(out))}
+            result = {**_failed(e), "artifacts": self._equiv_store(work, out, prior)}
             self._record("equiv", "equiv", args, result, snap, config={"split": "seen", "tier": tier})
             return _said("equiv", result)
         passed = {"pass": True, "fail": False}.get(res["verdict"])     # inconclusive is None: neither passing nor failing
         record = {"verdict": res["verdict"], "passed": passed, "reasons": res["reasons"], "gates": res["gates"],
                   "metrics": res["metrics"], "thresholds": res["thresholds"], "tier": tier,
-                  "artifacts": self._store(work, equiv_rows(out))}
+                  "artifacts": self._equiv_store(work, out, prior)}
         self._record("equiv", "equiv", args, record, snap, config={"split": "seen", "tier": tier})
         return json.dumps({"snapshot": snap.id, "tier": tier, "verdict": res["verdict"], "reasons": res["reasons"],
                            "metrics": res["metrics"]}, indent=1, default=str)
@@ -229,16 +228,11 @@ class EvalTools:
             base_seen = self.base_seen(t, names)
             guard = self.holdout_guard()
             tree = self._pristine()
-            # held-out passive data stays operator-only: never a blob, never in the record, never inside the jail
-            private, rows = self.s.run_dir / "heldout-private" / f"{snap.id}-{time.strftime('%Y%m%dT%H%M%S')}", []
-            try:
-                with serve.Served(tree, t.engine, log=self.s.run_dir / "serve-submit.log", jailed=self.serve_jailed,
-                                  artifacts=private) as srv:
-                    results = run_regimes(srv.url, t, names, "heldout", "full", self.seed, rows)
-                    srv.exclusive()             # before the holdout guard: a contaminated run spends no query
-            finally:
-                artifacts.write_rows(private, rows)
-            new = headline(results)
+            # held-out passive data stays operator-only: never a blob, never in the record, never inside the jail.
+            # A contaminated run raises here, before the holdout guard: it spends no query.
+            private = self.s.run_dir / "heldout-private" / f"{snap.id}-{time.strftime('%Y%m%dT%H%M%S')}"
+            r = self._measure(tree, private, "serve-submit.log", names=names, split="heldout", tier="full", passive=True)
+            new = headline(r["results"])
             metrics, better = {}, {}
             for n in names:
                 held_d, seen_d = delta_pct(base.get(n, {}), new[n]), delta_pct(base_seen.get(n, {}), seen[n])
@@ -273,16 +267,35 @@ class EvalTools:
     equiv_concurrency = 16
     serve_jailed = True
 
-    def encoder(self, t: target.Target):
-        from correctness.run import HFEncoder
-        return getattr(self.s, "encoder", None) or HFEncoder(t.model, t.chat_kwargs)
-
     def _work(self, tool: str) -> Path:
-        """A scratch dir outside the jail for one served run's passive data; emptied into blobs by `_store`."""
+        """A scratch dir outside the jail for one worker job's output; emptied into blobs or removed after."""
         return Path(tempfile.mkdtemp(prefix=f"passive-{tool}-", dir=self.s.run_dir))
 
-    def _store(self, work: Path, rows: list[dict]) -> dict:
-        artifacts.write_rows(work, rows)
+    def _measure(self, tree: Path, out: Path, log: str, **args) -> dict:
+        """The worker's `measure` job into `out`; the engine's log is appended to `<run>/<log>` either way."""
+        try:
+            return self.worker.call("measure", {"tree": tree}, {"seed": self.seed, **args, "jailed": self.serve_jailed},
+                                    out)
+        finally:
+            src = out / worker.ENGINE_LOG
+            if src.exists():
+                with open(self.s.run_dir / log, "ab") as f:
+                    f.write(src.read_bytes())
+                src.unlink()
+
+    def _equiv_store(self, work: Path, out: Path, prior: Path) -> dict:
+        """The gate's files to `out` (kept per snapshot for the next equiv), its rows and passive data as blobs."""
+        shutil.rmtree(prior, ignore_errors=True)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        for name, dest in (("equiv.json", out), ("equiv.outputs.jsonl", out.with_suffix(".outputs.jsonl"))):
+            if (work / name).exists():
+                shutil.move(work / name, dest)
+        log = work / worker.ENGINE_LOG
+        if log.exists():
+            with open(self.s.run_dir / "serve-equiv.log", "ab") as f:
+                f.write(log.read_bytes())
+            log.unlink()
+        artifacts.write_rows(work, equiv_rows(out))
         return artifacts.store(work, self.s.ledger_root)
 
     def holdout_guard(self) -> HoldoutGuard:
@@ -299,9 +312,13 @@ class EvalTools:
             tree = self.s.run_dir / f"base-tree-{split}"
             from lab.safety import grader
             grader.export(self.s.workspace.repo, self.s.workspace.base, tree)
-            with serve.Served(tree, t.engine, log=self.s.run_dir / f"serve-base-{split}.log", jailed=self.serve_jailed) as srv:
-                have.update(headline(run_regimes(srv.url, t, missing, split, tier, self.seed)))
-                srv.exclusive()                 # a contaminated base is never cached: every later submit reads it
+            work = self._work("base")
+            try:                                # a contaminated base raises: never cached, every later submit reads it
+                r = self._measure(tree, work, f"serve-base-{split}.log", names=missing, split=split, tier=tier,
+                                  passive=False)
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+            have.update(headline(r["results"]))
             cache.write_text(json.dumps(have, indent=1))
         return have
 

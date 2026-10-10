@@ -33,8 +33,11 @@ class Toolbox(EvalTools, ProfTools):
     """Bound to one session: knows the workspace, the budget, the ledger root and the run."""
 
     def __init__(self, session: Any):
+        from lab import worker
         self.s = session
         self.violation: str | None = None
+        self.worker = getattr(session, "worker", None) or worker.load(
+            encoder=getattr(session, "encoder", None), profile_runner=getattr(session, "profile_runner", None))
 
     # -- plumbing ------------------------------------------------------------------------
     def _cost(self, tool: str) -> dict:
@@ -97,9 +100,12 @@ class Toolbox(EvalTools, ProfTools):
     # -- tools ---------------------------------------------------------------------------
     def test(self, args: dict) -> str:
         snap = self._audited("test", args)
-        tree = self._pristine()
-        lint = grader.run_lint(tree)
-        tests = grader.run_tests(tree) if lint.passed else grader.Run(False, -1, "skipped: lint failed")
+        out = self._work("test")
+        try:
+            r = self.worker.call("test", {"tree": self._pristine()}, {}, out)
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
+        lint, tests = grader.Run(**r["lint"]), grader.Run(**r["tests"])
         result = {"lint": lint.passed, "tests": tests.passed, "returncode": tests.returncode,
                   "lint_output": lint.output[-2000:], "test_output": tests.output[-4000:],
                   "changed": snap.files + snap.deleted, "scratch_left_out": self.s.workspace.audit().scratch}
@@ -110,22 +116,18 @@ class Toolbox(EvalTools, ProfTools):
 
     def profile(self, args: dict) -> str:
         snap = self._audited("profile", args)
-        tree = self._pristine()
-        out = tree / "lab" / "runs"
-        harness = stage_harness(tree)
-        n = int(args.get("requests", 8))
-        argv = [engine.python(), "-m", "lab.profile", "--requests", str(n),
-                "--max-tokens", str(args.get("max_tokens", 32)), "--out", str(out),
-                *workload_flags(args, harness, n)]
+        out = self._work("profile")
         t0 = time.monotonic()
-        proc = (self.s.profile_runner or default_profile_runner)(tree, argv)
-        bundles = sorted(out.glob("*")) if out.exists() else []
-        blob, visible = self._keep(bundles[-1]) if bundles else ("", "")
-        result = {"returncode": proc.returncode, "bundle": blob, "workspace_copy": visible,
-                  "seconds": time.monotonic() - t0, "output": (proc.stdout + proc.stderr)[-3000:]}
+        try:
+            r = self.worker.call("profile", {"tree": self._pristine()}, {"kind": "profile", "args": args}, out)
+            blob, visible = self._keep(out / "files") if (out / "files").is_dir() else ("", "")
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
+        result = {"returncode": r["returncode"], "bundle": blob, "workspace_copy": visible,
+                  "seconds": time.monotonic() - t0, "output": r["output"]}
         self._record("profile", "profile", args, result, snap)
-        if proc.returncode != 0 or not blob:
-            return f"profile failed ({proc.returncode}):\n{result['output']}"
+        if r["returncode"] != 0 or not blob:
+            return f"profile failed ({r['returncode']}):\n{result['output']}"
         return f"bundle at {visible} (in your workspace; left out of your change)\n" + "\n".join(
             f"  {p.name}" for p in sorted((self.s.workspace.path / visible).iterdir()))
 

@@ -158,6 +158,17 @@ def test_equiv_judges_against_the_reference(lab):
     assert all(j["engine"] for j in joined)                    # every gate request has its engine row (X-Trace-Id)
 
 
+def test_a_second_equiv_on_the_same_snapshot_reuses_its_answers(lab):
+    tb, s = lab
+    tb.equiv({})
+    answers = next((s.run_dir / "equiv").glob("*-dev.outputs.jsonl"))
+    marked = "".join(json.dumps({**json.loads(x), "kept": True}) + "\n" for x in answers.read_text().splitlines())
+    answers.write_text(marked)
+    tb.equiv({})
+    assert answers.read_text() == marked                        # nothing asked again: the gate is never re-rolled
+    assert not list(s.run_dir.glob("equiv-prior-*")) and not list(s.run_dir.glob("passive-*"))
+
+
 def test_submit_keeps_heldout_passive_data_out_of_the_ledger(lab):
     tb, s = lab
     tb.equiv({"tier": "full"}); tb.bench({"regimes": ["single_stream"]})
