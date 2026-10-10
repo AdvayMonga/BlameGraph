@@ -15,7 +15,7 @@ from lab.safety.grader import HF_HUB
 from lab.safety.hooks import WRITE_TOOLS, write_guard
 
 API_HOST = "api.anthropic.com"
-BUILTIN_TOOLS = ["Read", "Grep", "Glob", "Edit", "Write", "Bash"]
+BUILTIN_TOOLS = ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "WebSearch", "WebFetch"]
 PASS_ENV = ("PATH", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_ENTRYPOINT",
             "CLAUDE_AGENT_SDK_VERSION")
 # What a session says when it ends. `stop` means the agent is done with this run.

@@ -106,21 +106,20 @@ with the referee's rights, snapshot the workspace and write the ledger on every 
 |---|---|
 | `test` | lint and the fast suite on a pristine two-commit copy of the workspace, jailed |
 | `profile` | `lab.profile` on the pristine copy, jailed, on `args.corpus_class` (default `steady_interactive`, seen split, `args.seed`) or `args.synthetic`; the bundle goes into the ledger as a blob |
-| `trace` | `nsys profile` around `lab.profile --profiler cuda-range` (window only), then `nsys stats` (kernel, CUDA API, memcpy, NVTX tables as CSV), both jailed; `.nsys-rep` + CSVs as a blob |
-| `kernel` | `ncu --kernel-name regex:<kernel_regex> --launch-skip N --launch-count N --set basic\|full` around the same workload, then `ncu --import --csv --page raw`; `.ncu-rep` + `metrics.csv` as a blob |
-| `hostprof` | `lab.profile --profiler pyspy`: py-spy record (speedscope) for `seconds` under the repeated workload plus one `py-spy dump`; the bundle as a blob |
+| `trace` | `nsys profile` (`args.nsys_args`, default window-only CUDA/NVTX/OS-runtime with CUDA-graph nodes) around `lab.profile --profiler cuda-range` (window only), then `nsys stats` (kernel, CUDA API, memcpy, NVTX tables as CSV), both jailed; `.nsys-rep` + CSVs as a blob |
+| `kernel` | `ncu [--kernel-name regex:<kernel_regex>] --launch-skip N --launch-count N --set <any set> [ncu_args]` around the same workload, then `ncu --import --csv --page raw`; `.ncu-rep` + `metrics.csv` as a blob |
+| `hostprof` | `lab.profile --profiler pyspy`: py-spy record (speedscope, plus `args.pyspy_args`) for `seconds` under the repeated workload plus one `py-spy dump`; the bundle as a blob |
 | `ledger` | read records (this run and earlier ones) |
 | `budget` | dollars left |
 | `restore` | workspace back to a snapshot id (`base` resets) |
 | `note` | a note for the human; recorded, changes nothing |
-| `bench` | serve the pristine copy and run the load regimes (`regimes/`) on the seen split, short tier; one headline per regime, raw (`args.regimes`, `args.tier`) |
+| `bench` | serve the pristine copy and run the load regimes (`regimes/`) on the seen split, short tier; one headline per regime, raw (`args.regimes`, `args.tier`, `args.seed`) |
 | `equiv` | serve it and run the correctness gate (`correctness/`) against the target's reference outputs; pass, fail or inconclusive with every metric; `tier=full` uses `<reference.dir>-full` |
 | `submit` | the only thing that can produce a win. Needs a passing full-tier equiv and a seen bench on this snapshot. Measures the held-out split at the full tier, measures the base commit the same way (once per run, cached outside the jail), and records one aggregate per regime (base, new, delta %, noise band %, verdict improved/regressed/within_band/unknown_band) through the Thresholdout guard (`validity/holdout.py`, state in `lab/ledger/holdout_state.json`, seed `LAB_HOLDOUT_SEED`): the held-out numbers themselves never reach the ledger. Noise bands come from `knowledge/noise/<regime>.json` when measured |
 
-`trace`, `kernel` and `hostprof` take integers in fixed ranges (`requests` 1-256, `prompt_len` 1-32768,
-`max_tokens` 1-4096, `launch_count` 1-64, `launch_skip` 0-100000, `seconds` 1-300, `rate` 1-1000), `set` from
-basic/full, and a `kernel_regex` of at most 200 regex characters (no spaces, quotes, `;`, `&`, backticks, `/` or
-`$(`); nothing else reaches the command line, which is an argv list, never a shell. The instrument is resolved on the
+`trace`, `kernel` and `hostprof` take integers with a lower bound only, any regex and set, and the instrument's
+own flags as a list of strings; the command line is an argv list, never a shell, and runs in the jail, where the
+agent's code runs anyway. Cost is the budget's job, not an argument cap. The instrument is resolved on the
 referee's PATH (refused, and recorded as a refusal, when absent) and its directory is added to the jail's read list.
 The workload is lab.profile's in-process scheduler and backend, so these tools see the engine's kernels and host
 code but not the HTTP front end.
