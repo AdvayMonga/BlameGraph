@@ -169,3 +169,17 @@ def test_the_audit_holds_a_pyproject_to_its_dependency_tables(tmp_path):
     assert grader.audit(repo, "HEAD", ws).ok
     (ws / "pyproject.toml").unlink()
     assert "may not delete a dependency file: pyproject.toml" in grader.audit(repo, "HEAD", ws).violations
+
+
+def test_a_venv_in_scratch_is_left_out_but_a_link_in_the_surface_is_a_violation(tmp_path):
+    repo = make_repo(tmp_path)
+    ws = tmp_path / "ws"
+    grader.export(repo, "HEAD", ws)
+    venv = ws / ".venv" / "bin"
+    venv.mkdir(parents=True)
+    (venv / "python").symlink_to("/usr/bin/python3")
+    (ws / ".venv" / "big.whl").write_bytes(b"x" * (grader.MAX_FILE_BYTES + 1))
+    a = grader.audit(repo, "HEAD", ws)
+    assert a.ok and {".venv/bin/python", ".venv/big.whl"} <= set(a.scratch)
+    (ws / "src/inference_server/sneaky.py").symlink_to("/etc/passwd")
+    assert "symlink: src/inference_server/sneaky.py" in grader.audit(repo, "HEAD", ws).violations

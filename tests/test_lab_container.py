@@ -162,11 +162,25 @@ def test_quiet_kills_the_workbenchs_gpu_holders_then_pauses_and_thaws(monkeypatc
     apps = [[{"pid": 101, "used_mib": 9000, "name": "python"}, {"pid": 999, "used_mib": 1, "name": "other"}]]
     monkeypatch.setattr(gpu, "compute_apps", lambda: apps[0])
     monkeypatch.setattr(container.os, "kill", lambda pid, sig: killed.append(pid) or apps.__setitem__(0, [apps[0][1]]))
-    monkeypatch.setattr(container.subprocess, "run", lambda argv, **k: calls.append(argv[1:]) or subprocess.CompletedProcess(argv, 0))
+    monkeypatch.setattr(container.subprocess, "run", lambda argv, **k: calls.append(argv[1:]) or
+                        subprocess.CompletedProcess(argv, 0, "false", ""))
+    states = lambda: [c for c in calls if c[0] in ("pause", "unpause")]     # noqa: E731
     with container.quiet("wb") as got:
-        assert calls == [["pause", "wb"]]
+        assert states() == [["pause", "wb"]]
     assert killed == [101] and [a["pid"] for a in got] == [101]          # 999 is not the workbench's
-    assert calls == [["pause", "wb"], ["unpause", "wb"]]
+    assert states() == [["pause", "wb"], ["unpause", "wb"]]
+
+
+def test_an_already_paused_workbench_is_left_paused(monkeypatch):
+    calls = []
+    monkeypatch.setattr(container, "_docker", lambda: "docker")
+    monkeypatch.setattr(container, "running", lambda n: True)
+    monkeypatch.setattr(container.subprocess, "run", lambda argv, **k: calls.append(argv[1]) or
+                        subprocess.CompletedProcess(argv, 0, "true", ""))
+    with container.paused("wb"):
+        with container.paused("wb"):
+            pass
+    assert "pause" not in calls and "unpause" not in calls
 
 
 def test_quiet_is_a_no_op_without_a_running_workbench(monkeypatch):

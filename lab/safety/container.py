@@ -139,6 +139,23 @@ def _kill_gpu_holders(name: str) -> list[dict]:
 
 
 @contextmanager
+def paused(name: str | None):
+    """The container frozen for the block (a no-op if it is not running); left paused if it already was."""
+    if not name or _docker() is None or not running(name):
+        yield
+        return
+    already = subprocess.run([_docker(), "inspect", "-f", "{{.State.Paused}}", name], capture_output=True,
+                             text=True).stdout.strip() == "true"
+    if not already:
+        subprocess.run([_docker(), "pause", name], capture_output=True, check=True)
+    try:
+        yield
+    finally:
+        if not already:
+            subprocess.run([_docker(), "unpause", name], capture_output=True)
+
+
+@contextmanager
 def quiet(name: str | None):
     """The workbench paused for a measurement: processes in it holding the GPU are killed (and listed), the rest
     frozen; thawed after. A no-op when there is no such running container."""
@@ -147,16 +164,13 @@ def quiet(name: str | None):
         return
     from lab import gpu
     killed = _kill_gpu_holders(name)
-    subprocess.run([_docker(), "pause", name], capture_output=True, check=True)
-    try:
+    with paused(name):
         killed += _kill_gpu_holders(name)            # anything that took the GPU before the pause landed
         deadline = time.monotonic() + 15
         while killed and time.monotonic() < deadline and any(
                 a["pid"] in {k["pid"] for k in killed} for a in gpu.compute_apps() or []):
             time.sleep(0.2)                          # until the driver has released their memory
         yield killed
-    finally:
-        subprocess.run([_docker(), "unpause", name], capture_output=True)
 
 
 def new_name() -> str:

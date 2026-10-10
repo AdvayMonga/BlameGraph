@@ -148,7 +148,7 @@ def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     exe = str(Path(exe).resolve())
     work = tree / proftools.OUT
     work.mkdir()
-    read = [Path(exe).parent]
+    read = [Path(exe).parent, Path(exe).parent.parent]     # the install root: nsys's importer lives beside its binary dir
     src = T.workload_flags(a, harness, proftools._int(a, "requests", *proftools.WORKLOAD["requests"]))
     argv = [*ins["wrap"](exe, work), engine.python(), "-m", "lab.profile", *ins["flags"], *src, *ins["extra"](exe),
             "--out", str(work / "bundle")]
@@ -219,8 +219,11 @@ class Remote:
     """Jobs on another host. `prefix` is the argv that runs one shell command there (ssh ... user@host); empty runs
     it here through sh, which the tests use. `env_dir` is this repo on that host, `python` its interpreter."""
 
-    def __init__(self, prefix: list[str], env_dir: str, python: str, env: dict[str, str], rsh: str | None = None):
-        self.prefix, self.env_dir, self.python, self.env, self.rsh = prefix, env_dir, python, env, rsh
+    def __init__(self, prefix: list[str], env_dir: str, python: str, env: dict[str, str], rsh: str | None = None,
+                 sudo: bool = False):
+        """`sudo`: the login user is not root, so the worker's side runs as root (the workbench is root inside, the
+        measurement rooms drop to their own uid), keeping the login user's HOME (weights, venv, uv)."""
+        self.prefix, self.env_dir, self.python, self.env, self.rsh, self.sudo = prefix, env_dir, python, env, rsh, sudo
         self._root: str | None = None
 
     def _where(self, path: str) -> str:
@@ -228,7 +231,8 @@ class Remote:
 
     def _rsync(self, src: str, dst: str) -> None:
         """By content, not size and mtime: an edit within the same second must not be missed."""
-        p = subprocess.run(["rsync", "-a", "--checksum", "--delete", *(["-e", self.rsh] if self.rsh else []), src, dst],
+        p = subprocess.run(["rsync", "-a", "--checksum", "--delete", *(["-e", self.rsh] if self.rsh else []),
+                            *(["--rsync-path", "sudo -n rsync"] if self.sudo else []), src, dst],
                            capture_output=True, text=True)
         if p.returncode != 0:
             raise WorkerError(f"rsync {src} -> {dst}: {p.stderr.strip()[-1000:]}")
@@ -264,7 +268,8 @@ class Remote:
             if any(c in v for c in '"`\\'):
                 raise WorkerError(f"unsafe value in the worker's env: {v!r}")
         exports = " ".join(f'{k}="{v}"' for k, v in self.env.items())
-        line = f"cd {self.env_dir} && {exports} {self.python} -m lab.worker {command}"
+        root = 'sudo -n env HOME="$HOME" PATH="$PATH" ' if self.sudo else ""
+        line = f"cd {self.env_dir} && {root}{exports} {self.python} -m lab.worker {command}"
         argv = [*self.prefix, line] if self.prefix else ["sh", "-c", line]
         p = subprocess.run(argv, input=stdin, capture_output=True)
         if p.returncode != 0:
@@ -302,7 +307,7 @@ def load(**hooks):
     home = lambda p: p.replace("~", "$HOME", 1)       # noqa: E731 - expanded by the worker's shell
     return Remote(["ssh", *v.ssh_opts, vm.ssh_target(v, record)], v.env_dir, home(v.remote_dir) + "/.venv/bin/python",
                   {"LAB_TARGET": spec.relative_to(engine.ENV_ROOT).as_posix(), "LAB_ENGINE_REPO": home(v.remote_dir)},
-                  rsh=f"ssh {shlex.join(v.ssh_opts)}")
+                  rsh=f"ssh {shlex.join(v.ssh_opts)}", sudo=v.login != "root")
 
 
 # -- the worker host's side ---------------------------------------------------------------------------------------
@@ -364,6 +369,8 @@ def _workbench(req: dict) -> dict:
     from lab import agent
     sock_dir = Path(f"/tmp/lab-proxy-{req['session']}")
     sock_dir.mkdir(mode=0o700, exist_ok=True)
+    if os.environ.get("SUDO_UID"):                  # sshd binds the tunnel's socket here as the login user
+        os.chown(sock_dir, int(os.environ["SUDO_UID"]), int(os.environ["SUDO_GID"]))
     (sock_dir / "proxy.sock").unlink(missing_ok=True)
     scratch = engine.ENV_ROOT / "lab" / "runs" / "remote" / "scratch" / req["session"]
     argv = agent.workbench_command(req["name"], Path(req["workspace"]), scratch, agent_cli(req["sdk_version"]),
