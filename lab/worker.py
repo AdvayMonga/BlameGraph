@@ -4,6 +4,8 @@ dir and returns JSON; the tools keep the policy, the ledger and the budget. `Loc
 the output dir back; the worker re-hashes every tree right before using it and refuses one that does not match, so
 what is measured is what the controller audited. GpuBusy, Contaminated, NotReady and ValueError cross intact. measure, equiv and profile take `workbench`, the agent's
 container: it is paused for the job, and processes in it holding the GPU are killed and listed under `killed`.
+Every job runs the tree with the interpreter `build.python_for` gives it: the engine's, or a venv built from the
+tree's own dependency files.
 
   test     lint + the engine's suite on `tree`                      -> {lint, tests}
   measure  serve `tree`, run regimes; passive data into out          -> {results, ready_s}
@@ -60,21 +62,28 @@ def tree_sha(root: Path) -> str:
 # -- jobs (run where the GPU is) ---------------------------------------------------------------------------------
 
 def job_test(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
+    from lab import build
     from lab.safety import grader
     tree = inputs["tree"]
-    lint = grader.run_lint(tree)
-    tests = grader.run_tests(tree) if lint.passed else grader.Run(False, -1, "skipped: lint failed")
+    try:
+        py = build.python_for(tree)
+    except build.BuildFailed as e:              # a failed test run, recorded like any other
+        skipped = grader.Run(False, -1, str(e))
+        return {"lint": dataclasses.asdict(skipped), "tests": dataclasses.asdict(skipped)}
+    with engine.using(py):
+        lint = grader.run_lint(tree)
+        tests = grader.run_tests(tree) if lint.passed else grader.Run(False, -1, "skipped: lint failed")
     return {"lint": dataclasses.asdict(lint), "tests": dataclasses.asdict(tests)}
 
 
 def job_measure(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     """`args`: names, split, tier, seed, jailed, passive (keep device/telemetry/client rows in `out`)."""
-    from lab import artifacts
+    from lab import artifacts, build
     from lab.evaltools import run_regimes
     t = target.load()
     rows = [] if args["passive"] else None
     try:
-        with container.quiet(args.get("workbench")) as killed, serve.Served(
+        with engine.using(build.python_for(inputs["tree"])), container.quiet(args.get("workbench")) as killed, serve.Served(
                 inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"],
                 artifacts=out if args["passive"] else None) as srv:
             results = run_regimes(srv.url, t, args["names"], args["split"], args["tier"], args["seed"], rows)
@@ -90,12 +99,13 @@ def job_equiv(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     answers already in `prior`'s equiv.outputs.jsonl are reused, not asked again."""
     from correctness import client, run as crun
     from correctness.gate import Thresholds
+    from lab import build
     t = target.load()
     if (inputs["prior"] / "equiv.outputs.jsonl").exists():
         shutil.copyfile(inputs["prior"] / "equiv.outputs.jsonl", out / "equiv.outputs.jsonl")
     enc = hooks.get("encoder") or crun.HFEncoder(t.model, t.chat_kwargs)
-    with container.quiet(args.get("workbench")) as killed, serve.Served(
-            inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"], artifacts=out) as srv:
+    with engine.using(build.python_for(inputs["tree"])), container.quiet(args.get("workbench")) as killed, \
+            serve.Served(inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"], artifacts=out) as srv:
         res = crun.candidate(inputs["reference"], srv.url, t.model, out / "equiv.json", enc,
                              Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio),
                              concurrency=args["concurrency"], api=client.Api(t.engine.api, t.chat_kwargs),
@@ -106,7 +116,12 @@ def job_equiv(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
 
 def job_profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     """`args`: kind (profile | trace | kernel | hostprof), the tool's args, workbench. Files go to `out/files`."""
-    with container.quiet(args.get("workbench")) as killed:
+    from lab import build
+    try:
+        py = build.python_for(inputs["tree"])
+    except build.BuildFailed as e:              # a failed profile run, recorded like any other
+        return {"returncode": -1, "output": str(e)[-3000:], "instrument": None, "argv": [], "head": "", "killed": []}
+    with engine.using(py), container.quiet(args.get("workbench")) as killed:
         return {**_profile(inputs, out, args, hooks), "killed": killed}
 
 

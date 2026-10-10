@@ -66,6 +66,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   record-format spec: the environment's public interface.
 - `lab/RUNTIME.md` — design (2026-10-08): controller (laptop: ledger, referee, secrets) and worker (GPU VM: jails,
   clients, profilers) behind a job interface; trust zones and rules; why srt cannot jail GPU code on Linux.
+- `lab/build.py` — the dependency build step: a tree whose change touched the target's `deps` (pyproject: dependency
+  tables only, checked by the audit) gets a venv built by the target's `build` command in a no-GPU, `--network none`
+  container whose only way out is a CONNECT proxy to the package-index hosts; cached by the files' hash; jobs run
+  under `engine.using(build.python_for(tree))`.
 - `lab/worker.py` — the job interface, built for the measured jobs: `test`, `measure`, `equiv`, `profile` take input
   trees + JSON args, write an out dir, return JSON; the tools call `self.worker`. `LAB_WORKER=local` (default, in
   process) or `ssh` (the `lab.vm` VM): inputs by content hash, re-hashed on the worker before every job; GpuBusy,

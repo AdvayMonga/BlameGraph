@@ -19,7 +19,9 @@ from tests.lab_fixtures import make_repo
     ("tests/test_engine.py", False, False),          # existing tests are evidence
     ("tests/conftest.py", False, False),
     ("src/inference_server/sitecustomize.py", True, False),
-    ("pyproject.toml", False, False),
+    ("pyproject.toml", False, True),                 # a dependency file: its dependency tables only (the audit)
+    ("uv.lock", False, True),
+    ("sub/pyproject.toml", False, False),
     ("lab/ledger.py", False, False),
     ("corpus/a/heldout.jsonl", True, False),
     ("CORPUS/A/HELDOUT.JSONL", True, False),
@@ -82,7 +84,7 @@ def test_write_hook_lets_the_agent_edit_its_own_new_test(tmp_path):
     (ws / "tests/test_new.py").write_text("x")
     assert allowed(ws, base, "tests/test_new.py")           # still "new": not in the base tree
     assert not allowed(ws, base, "tests/test_engine.py")
-    assert not allowed(ws, base, "../outside.py") and not allowed(ws, base, "pyproject.toml")
+    assert not allowed(ws, base, "../outside.py") and not allowed(ws, base, "tests/conftest.py")
 
 
 def test_jailed_timeout_is_a_failed_run(tmp_path, monkeypatch):
@@ -135,3 +137,35 @@ def test_pristine_refuses_a_failed_audit(tmp_path):
     a = grader.audit(repo, "HEAD", ws)
     with pytest.raises(ValueError):
         grader.pristine_tree(repo, "HEAD", ws, a, tmp_path / "p")
+
+
+PYPROJECT = """[project]
+name = "x"
+dependencies = ["a"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+"""
+
+
+def test_a_pyproject_may_change_its_dependencies_and_nothing_else(tmp_path):
+    from lab.safety.surfaces import deps_only
+    assert deps_only(PYPROJECT, PYPROJECT.replace('["a"]', '["a", "b>=2"]'))
+    assert deps_only(PYPROJECT, PYPROJECT + '\n[tool.uv.sources]\nb = { index = "x" }\n')
+    assert not deps_only(PYPROJECT, PYPROJECT.replace('"-q"', '"-q -k nothing"'))   # test config is the evaluator's
+    assert not deps_only(PYPROJECT, PYPROJECT + "[broken")
+
+
+def test_the_audit_holds_a_pyproject_to_its_dependency_tables(tmp_path):
+    repo = make_repo(tmp_path)
+    ws = tmp_path / "ws"
+    grader.export(repo, "HEAD", ws)
+    text = (ws / "pyproject.toml").read_text()
+    (ws / "pyproject.toml").write_text(text.replace("[tool.ruff]", '[project]\nname = "t"\ndependencies = ["b"]\n\n[tool.ruff]'))
+    assert grader.audit(repo, "HEAD", ws).ok is False                     # [project].name is not a dependency
+    (ws / "pyproject.toml").write_text(text.replace("line-length = 100", "line-length = 300"))
+    assert "may change only the dependency tables of pyproject.toml" in grader.audit(repo, "HEAD", ws).violations
+    (ws / "pyproject.toml").write_text(text + '\n[dependency-groups]\nextra = ["c"]\n')
+    assert grader.audit(repo, "HEAD", ws).ok
+    (ws / "pyproject.toml").unlink()
+    assert "may not delete a dependency file: pyproject.toml" in grader.audit(repo, "HEAD", ws).violations

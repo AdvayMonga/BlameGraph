@@ -74,7 +74,7 @@ def mounts(writable: list[Path], readonly: list[Path], python: str) -> list[str]
 
 
 def argv(name: str, workdir: Path, command: list[str], env: dict[str, str], writable: list[Path],
-         readonly: list[Path], python: str, bridge_port: int | None = None) -> list[str]:
+         readonly: list[Path], python: str, bridge_port: int | None = None, gpu: bool | None = None) -> list[str]:
     """`docker run` for `command`. With `bridge_port`, the engine's 127.0.0.1:port is also served on the unix socket
     `<first writable tmp>/bridge.sock`, which the host side of `Bridge` forwards to the host's 127.0.0.1:port."""
     uid, gid = user()
@@ -82,7 +82,7 @@ def argv(name: str, workdir: Path, command: list[str], env: dict[str, str], writ
            "--tmpfs", "/tmp:exec", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
            "--pids-limit", "8192", "--shm-size", "16g", "--user", f"{uid}:{gid}", "--workdir", str(workdir.resolve()),
            "--label", "lab.jail=1"]
-    if gpus():
+    if gpus() if gpu is None else gpu:
         out += ["--gpus", "all"]
     if (cpus := cpuset()):
         out += ["--cpuset-cpus", cpus]

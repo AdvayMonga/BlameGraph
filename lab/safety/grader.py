@@ -16,7 +16,7 @@ from pathlib import Path
 
 from lab import engine, gpu, target
 from lab.safety import container, jail
-from lab.safety.surfaces import ALWAYS_DENY, HIDDEN, may_write
+from lab.safety.surfaces import ALWAYS_DENY, HIDDEN, deps_only, may_write
 
 IGNORED = ("*/__pycache__/*", "__pycache__/*", "*.pyc", ".pytest_cache/*", "*/.pytest_cache/*",
            ".ruff_cache/*", "*/.ruff_cache/*", "*.egg-info/*", ".DS_Store", "*/.DS_Store",
@@ -121,6 +121,15 @@ def audit(repo: Path, base: str, workspace: Path) -> Audit:
     for rel in a.modified + a.deleted:
         if not may_write(rel, new_file=False):
             a.violations.append(f"may not change: {rel}")
+    deps = target.load().deps
+    for rel in a.deleted:
+        if rel in deps:
+            a.violations.append(f"may not delete a dependency file: {rel}")
+    for rel in a.modified:
+        if rel in deps and rel.endswith(".toml"):
+            old = subprocess.run(["git", "-C", str(repo), "show", f"{base}:{rel}"], capture_output=True, text=True).stdout
+            if not deps_only(old, (workspace / rel).read_text(errors="replace")):
+                a.violations.append(f"may change only the dependency tables of {rel}")
     return a
 
 

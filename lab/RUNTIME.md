@@ -4,8 +4,8 @@ Design, 2026-10-08. Decided with the user: the lab splits into a controller and 
 measurement VM (cost); NVIDIA only for now; the jail on Linux is a container with the NVIDIA runtime (option A
 below). Built: the container jail (`lab/safety/container.py`), GPU exclusivity during measurements, and the
 measured jobs behind the worker interface (`lab/worker.py`), the API proxy (`lab/apiproxy.py`), the workbench
-container with its pause during measurements, and the agent on a remote worker. Not built: the dependency build
-step. Open decisions are marked **Decide**.
+container with its pause during measurements, the agent on a remote worker, and the dependency build step
+(`lab/build.py`). Open decisions are marked **Decide**.
 
 ## The line (the user, 2026-10-09)
 
@@ -209,6 +209,24 @@ on the VM:
 - Tested without a VM: rsync mirroring (content edits, deletions, links), the VM-side `workbench` command, and the
   argument quoting through bash and ssh (an `ssh` stand-in that prints the remote command). Not yet tested against a
   real VM.
+
+## The dependency build step, as built (2026-10-10)
+
+- The target names its dependency files (`deps`) and the command that installs them (`build`, run with
+  `$UV_PROJECT_ENVIRONMENT` set). For inference-server that is vm-setup.sh's recipe: `uv sync --locked`, then the
+  CUDA torch wheel at the locked version.
+- The agent may change those files; a `pyproject.toml` only in its dependency tables (`[project] dependencies`,
+  `optional-dependencies`, `[dependency-groups]`, `[tool.uv] sources` and `index`): any other change, its test and
+  lint config included, is a violation, and deleting a dependency file is one too.
+- Each job asks `build.python_for(tree)`: a tree whose change left the dependency files as in its base (HEAD~1 of
+  the two-commit pristine tree) runs on the engine's venv; a changed one gets a venv built for it, cached by the
+  files' hash. The build runs in a measurement-room container without the GPU and with `--network none`; its only way
+  out is a host-side CONNECT proxy, over a unix socket, to pypi.org, files.pythonhosted.org and the https hosts its
+  files and command name. A failed build is a failed `test`/`profile` or an `error` record carrying the build's
+  output. The tool descriptions state it as a fact: only the change reaches the engine, installed from scratch, and
+  the engine then runs offline.
+- Tested in Docker-in-Docker: the build room gets 200 from PyPI through the proxy, 403 for another host, and no
+  direct route out. The real inference-server build (torch, CUDA) is untested until the GPU run.
 
 ## What moves where
 
