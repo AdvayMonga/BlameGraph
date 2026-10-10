@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lab import agent, engine, ledger, target
+from lab import agent, engine, ledger, target, worker
 from lab.budget import Budget, BudgetExceeded
 from lab.safety import grader
 from lab.task import Task
@@ -34,6 +34,8 @@ class Session:
     profile_runner: object = None          # None: lab.tools.default_profile_runner
     task: Task | None = None
     workbench: str | None = None           # the agent's container: paused while the tools measure
+    worker: object = None                  # None: lab.worker.load() per toolbox
+    remote_workspace: str | None = None    # the workspace's mirror on a Remote worker, where the agent works
 
 
 @dataclass
@@ -122,27 +124,36 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
     done = sum(1 for _ in ledger.records(cfg.ledger_root, run=run_id, kind="session"))
     base_files = grader.base_files(cfg.repo, base)
     summary = {"run": run_id, "base": base, "sessions": 0, "stopped": None, "spent_usd": budget.spent_usd}
+    wk = worker.load()
+    remote = wk if isinstance(wk, worker.Remote) else None      # then the agent works on that host, not here
+    rws = remote.workspace_path(run_id) if remote else None
     if cfg.baseline:
-        Toolbox(Session(run_id, f"{run_id}-baseline", run_dir, ws, budget, cfg.ledger_root, task=cfg.task)).baseline(base)
+        Toolbox(Session(run_id, f"{run_id}-baseline", run_dir, ws, budget, cfg.ledger_root, task=cfg.task,
+                        worker=remote)).baseline(base)
 
     for n in range(done + 1, done + cfg.max_sessions + 1):
         if budget.remaining_usd < MIN_SESSION_USD:
             summary["stopped"] = "budget"
             break
         s = Session(run_id, f"{run_id}-s{n}", run_dir, ws, budget, cfg.ledger_root, task=cfg.task,
-                    workbench=f"lab-workbench-{run_id}-s{n}")
+                    workbench=f"lab-workbench-{run_id}-s{n}", worker=remote, remote_workspace=rws)
         tools = Toolbox(s)
         snap = ws.snapshot()
         spec = agent.AgentSpec(system="", prompt=brief(cfg, s, snap.id, n), workspace=ws.path,
                                scratch=run_dir / "scratch" / s.session_id, tools=tools.specs(),
                                base_files=base_files, max_turns=cfg.max_turns,
-                               max_budget_usd=min(cfg.session_usd, budget.remaining_usd), workbench=s.workbench)
+                               max_budget_usd=min(cfg.session_usd, budget.remaining_usd), workbench=s.workbench,
+                               remote=remote, remote_workspace=rws)
         spec.system = system_prompt(target.load(), spec)
         t0 = time.monotonic()
         try:
+            if remote:
+                remote.push(ws.path, rws)
             reply = provider.run(spec)
         except Exception as e:                  # a provider that raises still gets charged and recorded
             reply = agent.AgentReply(None, spec.max_budget_usd, 0, f"provider raised: {e}", True)
+        if remote:
+            remote.pull(rws, ws.path)           # what the agent left on the worker is what is snapshotted
         clean_pristine(run_dir)
         try:
             budget.charge(reply.cost_usd, s.session_id)

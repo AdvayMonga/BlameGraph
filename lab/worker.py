@@ -11,6 +11,11 @@ container: it is paused for the job, and processes in it holding the GPU are kil
   profile  lab.profile under torch, nsys, ncu or py-spy on `tree`   -> {returncode, output, ...}; files in out
 
     python -m lab.worker has SHA...  |  put SHA < tar  |  run JOB < json > tar      (the worker host's side)
+    python -m lab.worker root  |  mkdir PATH  |  workbench < json > json  |  rm NAME    (the agent's side)
+
+When the agent runs on the worker host too (Remote), its workspace lives there: `push` and `pull` mirror it with
+rsync (pulled files are untrusted: links stay links and the audit refuses them), and `workbench` builds that host's
+`docker run` for the CLI, with the Linux CLI of the controller's Agent SDK version.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ import hashlib
 import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -198,8 +204,45 @@ class Remote:
     """Jobs on another host. `prefix` is the argv that runs one shell command there (ssh ... user@host); empty runs
     it here through sh, which the tests use. `env_dir` is this repo on that host, `python` its interpreter."""
 
-    def __init__(self, prefix: list[str], env_dir: str, python: str, env: dict[str, str]):
-        self.prefix, self.env_dir, self.python, self.env = prefix, env_dir, python, env
+    def __init__(self, prefix: list[str], env_dir: str, python: str, env: dict[str, str], rsh: str | None = None):
+        self.prefix, self.env_dir, self.python, self.env, self.rsh = prefix, env_dir, python, env, rsh
+        self._root: str | None = None
+
+    def _where(self, path: str) -> str:
+        return f"{self.prefix[-1]}:{path}" if self.prefix else path
+
+    def _rsync(self, src: str, dst: str) -> None:
+        """By content, not size and mtime: an edit within the same second must not be missed."""
+        p = subprocess.run(["rsync", "-a", "--checksum", "--delete", *(["-e", self.rsh] if self.rsh else []), src, dst],
+                           capture_output=True, text=True)
+        if p.returncode != 0:
+            raise WorkerError(f"rsync {src} -> {dst}: {p.stderr.strip()[-1000:]}")
+
+    def root(self) -> str:
+        """This repo's absolute path on the worker host."""
+        if self._root is None:
+            self._root = self._run("root").decode().strip()
+        return self._root
+
+    def workspace_path(self, run_id: str) -> str:
+        return f"{self.root()}/lab/runs/remote/{run_id}/workspace"
+
+    def push(self, local: Path, remote: str) -> None:
+        self._run(f"mkdir {shlex.quote(remote)}")
+        self._rsync(f"{local}/", self._where(f"{remote}/"))
+
+    def pull(self, remote: str, local: Path) -> None:
+        Path(local).mkdir(parents=True, exist_ok=True)
+        self._rsync(self._where(f"{remote}/"), f"{local}/")
+
+    def workbench(self, name: str, session: str, workspace: str, sdk_version: str) -> dict:
+        """{argv, sock}: that host's `docker run` for the CLI, and where the proxy's tunnel must land."""
+        req = {"name": name, "session": session, "workspace": workspace, "sdk_version": sdk_version}
+        return json.loads(self._run("workbench", json.dumps(req).encode()))
+
+    def remove_workbench(self, name: str | None) -> None:
+        if name:
+            self._run(f"rm {shlex.quote(name)}")
 
     def _run(self, command: str, stdin: bytes = b"") -> bytes:
         for v in self.env.values():
@@ -243,7 +286,8 @@ def load(**hooks):
         raise WorkerError(f"LAB_TARGET must be inside this repo to be found on the worker: {spec}")
     home = lambda p: p.replace("~", "$HOME", 1)       # noqa: E731 - expanded by the worker's shell
     return Remote(["ssh", *v.ssh_opts, vm.ssh_target(v, record)], v.env_dir, home(v.remote_dir) + "/.venv/bin/python",
-                  {"LAB_TARGET": spec.relative_to(engine.ENV_ROOT).as_posix(), "LAB_ENGINE_REPO": home(v.remote_dir)})
+                  {"LAB_TARGET": spec.relative_to(engine.ENV_ROOT).as_posix(), "LAB_ENGINE_REPO": home(v.remote_dir)},
+                  rsh=f"ssh {shlex.join(v.ssh_opts)}")
 
 
 # -- the worker host's side ---------------------------------------------------------------------------------------
@@ -290,6 +334,28 @@ def _run_job(job: str, request: dict) -> bytes:
         shutil.rmtree(work, ignore_errors=True)
 
 
+def agent_cli(version: str) -> Path:
+    """The Agent SDK's bundled CLI for this host at `version`, installed once into the cache."""
+    d = cache_dir() / f"cli-{version}"
+    exe = d / "claude_agent_sdk" / "_bundled" / "claude"
+    if not exe.exists():
+        uv = shutil.which("uv") or str(Path.home() / ".local" / "bin" / "uv")
+        subprocess.run([uv, "pip", "install", "--quiet", "--no-deps", "--target", str(d), "--python", sys.executable,
+                        f"claude-agent-sdk=={version}"], check=True, stdout=sys.stderr)
+    return exe
+
+
+def _workbench(req: dict) -> dict:
+    from lab import agent
+    sock_dir = Path(f"/tmp/lab-proxy-{req['session']}")
+    sock_dir.mkdir(mode=0o700, exist_ok=True)
+    (sock_dir / "proxy.sock").unlink(missing_ok=True)
+    scratch = engine.ENV_ROOT / "lab" / "runs" / "remote" / "scratch" / req["session"]
+    argv = agent.workbench_command(req["name"], Path(req["workspace"]), scratch, agent_cli(req["sdk_version"]),
+                                   sock_dir=sock_dir)
+    return {"argv": argv, "sock": str(sock_dir / "proxy.sock")}
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     cache_dir().mkdir(parents=True, exist_ok=True)
@@ -299,8 +365,17 @@ def main(argv: list[str] | None = None) -> int:
         _put(argv[1], sys.stdin.buffer.read())
     elif argv[:1] == ["run"] and len(argv) == 2 and argv[1] in JOBS:
         sys.stdout.buffer.write(_run_job(argv[1], json.loads(sys.stdin.buffer.read())))
+    elif argv == ["root"]:
+        print(engine.ENV_ROOT)
+    elif argv[:1] == ["mkdir"] and len(argv) == 2:
+        Path(argv[1]).mkdir(parents=True, exist_ok=True)
+    elif argv == ["workbench"]:
+        print(json.dumps(_workbench(json.loads(sys.stdin.buffer.read()))))
+    elif argv[:1] == ["rm"] and len(argv) == 2:
+        container.remove(argv[1])
     else:
-        print(f"usage: python -m lab.worker has SHA... | put SHA | run {{{','.join(JOBS)}}}", file=sys.stderr)
+        print(f"usage: python -m lab.worker has SHA... | put SHA | run {{{','.join(JOBS)}}} | root | mkdir PATH | "
+              "workbench | rm NAME", file=sys.stderr)
         return 2
     return 0
 

@@ -4,8 +4,8 @@ Design, 2026-10-08. Decided with the user: the lab splits into a controller and 
 measurement VM (cost); NVIDIA only for now; the jail on Linux is a container with the NVIDIA runtime (option A
 below). Built: the container jail (`lab/safety/container.py`), GPU exclusivity during measurements, and the
 measured jobs behind the worker interface (`lab/worker.py`), the API proxy (`lab/apiproxy.py`), the workbench
-container with its pause during measurements. Not built: the agent on a *remote* worker (its CLI over SSH, the
-workspace jobs, the proxy through a tunnel) and the dependency build step. Open decisions are marked **Decide**.
+container with its pause during measurements, and the agent on a remote worker. Not built: the dependency build
+step. Open decisions are marked **Decide**.
 
 ## The line (the user, 2026-10-09)
 
@@ -188,6 +188,27 @@ not yet over SSH to a VM. `agent`, `exec`, `snapshot`, `restore` and `facts` com
 - Not tested: the real CLI through the proxy (it may call an endpoint outside the three; it would see a 403), and
   the macOS srt path (srt is not installed on the dev box). Tested in Docker-in-Docker: workbench argv, root and
   writable system dirs, reaching the gateway, pause and thaw; the proxy against a fake API.
+
+## The agent on a remote worker, as built (2026-10-10)
+
+With `LAB_WORKER=ssh` the session loop, ledger, referee, budget and proxy stay on the controller and the agent works
+on the VM:
+
+- **Workspace**: the live copy is on the VM (`<repo>/lab/runs/remote/<run>/workspace`); the controller's is its
+  mirror. rsync by checksum (`--delete`): pushed before each session and after `restore` or a profile bundle copied
+  in, pulled before every lab tool's snapshot and audit and after the session. Pulled files are untrusted: links stay
+  links, and the audit refuses them as before.
+- **Workbench**: `python -m lab.worker workbench` on the VM builds that host's `docker run` (its GPU, paths, cores)
+  with the Linux CLI of the controller's Agent SDK version (installed once with uv into the worker cache). The
+  controller's `cli.sh` is `ssh -T -R <sock>:127.0.0.1:<proxy> vm '<docker run ...>' <SDK args>`: the CLI's stdio
+  is the SDK's over SSH, so the lab tools stay an in-process MCP server on the controller.
+- **Proxy**: on the controller, bound to its loopback. SSH forwards it to a unix socket in `/tmp/lab-proxy-<session>/`
+  on the VM, mounted into the workbench, where a socat serves it on the container's own 127.0.0.1:4000. It listens on
+  no interface of the VM.
+- The write guard checks the VM's workspace path; the workbench is removed over SSH when the session ends.
+- Tested without a VM: rsync mirroring (content edits, deletions, links), the VM-side `workbench` command, and the
+  argument quoting through bash and ssh (an `ssh` stand-in that prints the remote command). Not yet tested against a
+  real VM.
 
 ## What moves where
 

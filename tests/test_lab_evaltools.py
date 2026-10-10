@@ -389,6 +389,28 @@ def test_bench_defaults_follow_the_task():
     assert tb.bench_defaults() == ("long_prompt_short_output", "single_stream")
 
 
+def test_with_the_agent_on_a_remote_worker_its_workspace_is_pulled_before_every_audit_and_pushed_after_a_restore(lab):
+    tb, s = lab
+    moves = []
+    local = tb.worker
+
+    class Mirror:
+        def call(self, *a, **k):
+            return local.call(*a, **k)
+
+        def pull(self, remote, path):
+            moves.append(("pull", remote))
+
+        def push(self, path, remote):
+            moves.append(("push", remote))
+    tb.worker, s.remote_workspace = Mirror(), "/far/ws"
+    tb.test({})
+    assert moves == [("pull", "/far/ws")]
+    moves.clear()
+    tb.restore({"snapshot": "base"})
+    assert ("push", "/far/ws") in moves and moves[0] == ("pull", "/far/ws")
+
+
 def test_bench_takes_the_agents_seed(lab, monkeypatch):
     from lab import evaltools
     tb, _ = lab
