@@ -30,7 +30,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   what `tests/conftest.py` points at. Surfaces, grader commands, `lab/engine.py`, and the `correctness`,
   `regimes`, `validity` CLIs all read it.
 - `lab/` — moved from inference-server 2026-10-06 (`lab/README.md`). `session.py` (the loop over a dollar budget),
-  `agent.py` (the one place a model is called; the agent's jailed shell gets the engine's python on PATH),
+  `agent.py` (the one place a model is called; the agent's jailed shell gets the engine's python on PATH;
+  `LAB_AGENT_PROVIDER` claude = Agent SDK CLI, openai = `agent_openai.py`: any OpenAI-compatible API with its own
+  key, https public hosts only, `LAB_MODEL_PRICE` required, loop outside the jail, Bash jailed with no network),
   `tools.py` (metered tools: test, profile, ledger, budget, restore, note; every record's `cost` has wall seconds, and
   GPU tools charge them at `LAB_GPU_USD_PER_HOUR` / the target's `[cost] gpu_usd_per_hour` to the run's budget) +
   `proftools.py` (trace = nsys, kernel = ncu, hostprof = py-spy, each wrapping lab.profile's workload in the jail

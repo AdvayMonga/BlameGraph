@@ -15,7 +15,7 @@ from lab.safety.grader import HF_HUB
 from lab.safety.hooks import WRITE_TOOLS, write_guard
 
 API_HOST = "api.anthropic.com"
-BUILTIN_TOOLS = ["Read", "Grep", "Glob", "Edit", "Write", "Bash"]
+BUILTIN_TOOLS = ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "WebSearch", "WebFetch"]
 PASS_ENV = ("PATH", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_ENTRYPOINT",
             "CLAUDE_AGENT_SDK_VERSION")
 # What a session says when it ends. `stop` means the agent is done with this run.
@@ -67,7 +67,10 @@ def load(name: str | None = None) -> Provider:
     name = name or os.environ.get("LAB_AGENT_PROVIDER", "claude")
     if name == "claude":
         return ClaudeAgentSDK()
-    raise ValueError(f"unknown agent provider {name!r}; LAB_AGENT_PROVIDER is claude")
+    if name == "openai":
+        from lab.agent_openai import OpenAICompatible
+        return OpenAICompatible()
+    raise ValueError(f"unknown agent provider {name!r}; LAB_AGENT_PROVIDER is claude or openai")
 
 
 class ClaudeAgentSDK:
