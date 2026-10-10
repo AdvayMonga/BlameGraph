@@ -7,6 +7,7 @@ import pytest
 
 from lab import agent
 from lab.agent import AgentSpec, ToolSpec
+from lab import agent_openai
 from lab.agent_openai import OpenAICompatible, base_url, prices
 
 URL = "https://api.example.com/v1"
@@ -77,7 +78,7 @@ def test_a_session_uses_the_tools_and_finishes(spec):
     assert results["c5"] == "src/inference_server/engine.py:1:BATCH = 16" and results["c6"] == "pong a"
     assert api.bodies[3]["messages"][-1] == {"role": "user", "content": "A session ends only through the `finish` tool."}
     names = [t["function"]["name"] for t in api.bodies[0]["tools"]]
-    assert names == [*agent.BUILTIN_TOOLS, "finish", "ping"]
+    assert names == [*(n for n in agent.BUILTIN_TOOLS if n in agent_openai.BUILTIN), "finish", "ping"]
 
 
 def test_a_builtin_the_spec_leaves_out_is_refused(spec):
