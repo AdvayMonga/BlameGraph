@@ -16,7 +16,7 @@ from lab.safety import container, jail
 from lab.safety.grader import HF_HUB
 from lab.safety.hooks import WRITE_TOOLS, write_guard
 
-BUILTIN_TOOLS = ["Read", "Grep", "Glob", "Edit", "Write", "Bash"]
+BUILTIN_TOOLS = ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "WebSearch", "WebFetch"]
 PASS_ENV = ("CLAUDE_CODE_ENTRYPOINT", "CLAUDE_AGENT_SDK_VERSION")       # what the SDK sets for its CLI
 SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # What a session says when it ends. `stop` means the agent is done with this run.
@@ -72,7 +72,10 @@ def load(name: str | None = None) -> Provider:
     name = name or os.environ.get("LAB_AGENT_PROVIDER", "claude")
     if name == "claude":
         return ClaudeAgentSDK()
-    raise ValueError(f"unknown agent provider {name!r}; LAB_AGENT_PROVIDER is claude")
+    if name == "openai":
+        from lab.agent_openai import OpenAICompatible
+        return OpenAICompatible()
+    raise ValueError(f"unknown agent provider {name!r}; LAB_AGENT_PROVIDER is claude or openai")
 
 
 PROXY_PORT_IN = 4000              # where a remote workbench serves the tunnelled proxy, inside its own network
