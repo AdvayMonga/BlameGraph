@@ -110,8 +110,8 @@ class Workbench:
         return target
 
     def _files(self):
-        for p in sorted(self.ws.rglob("*")):
-            if p.is_file() and ".git" not in p.relative_to(self.ws).parts:
+        for p in sorted(self.ws.rglob("*")):        # a link out of the workspace is never followed
+            if p.is_file() and ".git" not in p.relative_to(self.ws).parts and p.resolve().is_relative_to(self.ws):
                 yield p
 
     def Read(self, file_path: str, offset: int = 1, limit: int = 2000) -> str:

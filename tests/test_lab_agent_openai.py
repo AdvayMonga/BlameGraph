@@ -132,3 +132,15 @@ def test_the_defaults_and_required_settings(monkeypatch):
         agent.load()
     monkeypatch.setenv("LAB_MODEL_PRICE", "1,2")
     assert agent.load().name == "openai"
+
+
+def test_grep_never_follows_a_link_out_of_the_workspace(tmp_path):
+    from lab.agent_openai import Workbench
+    ws, secret = tmp_path / "ws", tmp_path / ".env"
+    ws.mkdir()
+    secret.write_text("OPENAI_API_KEY=sk-secret\n")
+    (ws / "a.py").write_text("x = 1\n")
+    (ws / "leak").symlink_to(secret)
+    (ws / "dir").symlink_to(tmp_path, target_is_directory=True)
+    out = Workbench(ws, set()).Grep(".")
+    assert "sk-secret" not in out and "a.py:1:x = 1" in out
