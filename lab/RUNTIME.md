@@ -13,7 +13,9 @@ touches (1) secrets and money: API keys, cloud credentials, the HF token; (2) th
 correctness reference outputs; (3) the scoreboard: ledger, measurement clients, grader, budget; (4) the GPU
 during its own measurement. Everything else it can have. Decided with it:
 
-- **Internet:** the agent's workbench has it. Hence nothing secret on the VM (rule 1).
+- **Internet:** the agent's workbench has it, open: the same capabilities Claude Code has (a shell with network,
+  web search and fetch, any package install), not gated behind tools. Hence nothing secret on the VM (rule 1).
+  Agent-facing tools are the user's to design; the lab builds none.
 - **Installing libraries:** the agent can pip- and apt-install. Its room is a looser *workbench* container: GPU,
   network, root inside the container (never on the VM host), writable system dirs. The tight container (no
   network, no capabilities, read-only root) stays for the measurement rooms only (`test`, `profile`, served
@@ -22,8 +24,12 @@ during its own measurement. Everything else it can have. Decided with it:
   agent's code change alone, so a dependency change has to be part of it: the engine's dependency files (e.g.
   `pyproject.toml`, `uv.lock`) join the target's write surface and are installed from scratch for the
   measurement. Patching an installed library in the workbench changes no measured result.
-  **Decide:** the measurement room has no network, so that install needs its own build step (package indexes
-  only, no GPU, no secrets, cached by lockfile hash) before the offline measurement.
+  The measurement room stays offline, a fairness rule rather than a safety one: an engine with network during
+  a measurement could forward requests to a remote GPU or API. So the install is its own build step before the
+  measurement (decided 2026-10-09): package indexes only, no GPU, no secrets, cached by lockfile hash. Anything the
+  engine needs at runtime (draft models, prebuilt kernels, files a library downloads on first use) must be in the
+  change, in the dependency files or saved in the workspace; the tool descriptions state that as a fact once the
+  build step exists (not before: today measurements still use the engine venv on the VM).
 - **Fresh VM per run:** yes (rule 6).
 - **No separate measurement VM** for now: container escape is not a realistic threat at this stage, and it
   would double GPU cost. Revisit for a public leaderboard.
