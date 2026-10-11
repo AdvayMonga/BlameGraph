@@ -58,7 +58,8 @@ def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, qu
                     with lock, open(os.path.join(os.environ["TELEMETRY_DIR"], "requests.jsonl"), "a") as f:
                         f.write(json.dumps({"trace_id": self.headers.get("X-Trace-Id"), "tokens_out": n}) + "\n")
                 return self._json({"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
-                                   "usage": {"completion_tokens": n}})
+                                   "usage": {"prompt_tokens": sum(len(m["content"].split()) for m in body["messages"]),
+                                             "completion_tokens": n}})
             with lock:
                 if queue_limit is not None and waiting[0] >= queue_limit:
                     data = b'{"error": "overloaded"}'
@@ -78,7 +79,8 @@ def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, qu
                     time.sleep(token_s)
                     self._chunk({"choices": [{"index": 0, "delta": {"content": t}}]})
                 self._chunk({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
-                self._chunk({"choices": [], "usage": {"completion_tokens": len(text)}})
+                self._chunk({"choices": [], "usage": {"prompt_tokens": sum(len(m["content"].split()) for m in body["messages"]),
+                                                      "completion_tokens": len(text)}})
                 if os.environ.get("TELEMETRY_DIR"):
                     with lock, open(os.path.join(os.environ["TELEMETRY_DIR"], "requests.jsonl"), "a") as f:
                         f.write(json.dumps({"trace_id": self.headers.get("X-Trace-Id"), "tokens_out": len(text)}) + "\n")

@@ -33,6 +33,7 @@ class Row:
     ttft_s: float | None = None
     e2e_s: float | None = None
     n_tokens: int = 0
+    prompt_tokens: int | None = None   # from the server's usage
     tpot_s: float | None = None
     http_status: int | None = None
     finish_reason: str | None = None
@@ -95,6 +96,8 @@ def send(url: str, model: str, req: Request, scheduled: float, clock, timeout: f
         return row
     end = clock()
     row.text, row.finish_reason, row.e2e_s = "".join(parts), finish, end - scheduled
+    if usage and usage.get("prompt_tokens") is not None:
+        row.prompt_tokens = int(usage["prompt_tokens"])
     if usage and usage.get("completion_tokens") is not None:
         row.n_tokens = int(usage["completion_tokens"])
     else:

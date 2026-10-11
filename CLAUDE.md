@@ -33,6 +33,11 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `agent.py` (the one place a model is called; the agent's jailed shell gets the engine's python on PATH;
   `LAB_AGENT_PROVIDER` claude = Agent SDK CLI, openai = `agent_openai.py`: any OpenAI-compatible API with its own
   key, https public hosts only, `LAB_MODEL_PRICE` required, loop outside the jail, Bash jailed with no network),
+  `calibrate.py` (every measured number with its context, decided 2026-10-11: `% of ceiling` from `validity/ceiling`
+  on measured peaks, `% of reference` from `knowledge/reference/<target>/<regime>.json` written by `lab.validate`,
+  and for kernels their share of the window; a ceiling or reference is shown only under a matching config
+  fingerprint (model, dtypes, max_model_len, tier, split, corpus version, GPU), else the field says why it is
+  missing; bench, baseline, profile and kernel records carry a `calibrated` block, the brief shows the baseline's),
   `tools.py` (metered tools: test, profile, ledger, budget, restore, note; every record's `cost` has wall seconds, and
   GPU tools charge them at `LAB_GPU_USD_PER_HOUR` / the target's `[cost] gpu_usd_per_hour` to the run's budget) +
   `proftools.py` (trace = nsys, kernel = ncu, hostprof = py-spy, each wrapping lab.profile's workload in the jail
@@ -102,7 +107,11 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   (`verdict` re-judges saved results under the policy, no server).
 - `canaries/cheat_proxy.py` — cheat proxy in front of any OpenAI-compatible server (`truncate`, `early_eos`,
   `fake_first`, `drop`, `cache` (streamed and not), `inflate_usage`); `python -m canaries --upstream URL --cheat NAME`.
-- `validity/` — `roofline.py` (analytical decode ceiling, no GPU; to be generalized into physical limits), `repeat_audit.py`: repeated-request audit (MLPerf TEST04-style), judges decode time per token, not TTFT, so prefix caching passes and replayed answers fail; `python -m validity repeat --url URL`. `tier_agreement.py`: `tier_agreement(changes)`: Spearman, Kendall tau-b, bootstrap CI, out-of-band disagreements; short tier usable if n ≥ 8, rho ≥ 0.8, CI low ≥ 0.5. `holdout.py`: `HoldoutGuard` (Thresholdout query budget, state persisted atomically under a file lock, deterministic from seed) and `SealedSplit` (hash manifest, one logged unseal per corpus version). Keep sigma small relative to the threshold.
+- `validity/` — `ceiling.py` (physical bounds from the model's HF config and the GPU's peaks: active/total params,
+  bytes streamed per step with MoE experts-touched, decode and prefill floors, the largest batch under a TPOT limit,
+  per-objective regime ceilings; `pct_of`, `ceiling_gain` = Amdahl) + `peaks.py` (`python -m validity peaks`: HBM
+  bandwidth and bf16 GEMM measured once per GPU+driver into `knowledge/peaks/<gpu>.json`, run by `vm-setup.sh`; spec
+  sheet as the labelled fallback), `repeat_audit.py`: repeated-request audit (MLPerf TEST04-style), judges decode time per token, not TTFT, so prefix caching passes and replayed answers fail; `python -m validity repeat --url URL`. `tier_agreement.py`: `tier_agreement(changes)`: Spearman, Kendall tau-b, bootstrap CI, out-of-band disagreements; short tier usable if n ≥ 8, rho ≥ 0.8, CI low ≥ 0.5. `holdout.py`: `HoldoutGuard` (Thresholdout query budget, state persisted atomically under a file lock, deterministic from seed) and `SealedSplit` (hash manifest, one logged unseal per corpus version). Keep sigma small relative to the threshold.
 - `kernels/` — kernel equivalence: `check_kernel` (seen + held-out shapes, per-dtype tolerances, edge cases incl. non-contiguous and NaN/Inf, inputs unchanged, no aliasing, memoization, determinism) and `time_kernel` / `check_memoization` (sync, rotated buffers, L2 flush on CUDA). Validated on CPU, MPS and CUDA (H200, 2026-10-04): all tests pass; the timer resolves ~20 µs kernels at ~9% IQR, 0.2 ms at 1.5%. `make_inputs` gets a seeded CPU generator (generate on CPU, then `.to(device)`).
 - `regimes/` — load generation: drives a live OpenAI-compatible server the eight ways it gets used, client-side.
   `client.py` (one streamed chat request: TTFT from *scheduled* send to first real token, TPOT = (E2E − TTFT)/(n − 1),
@@ -232,6 +241,7 @@ a first `python -m lab.session --task ...` dry run with a tiny budget, which wai
 `engine/gpu-validated`) were judged by the old gate: re-judge with `python -m correctness verdict` on their saved
 results before deciding anything. lab `session.py --run` re-resolves
 `base` from HEAD rather than the run's original base (pre-existing; resuming after the engine moved would misaudit);
-`validity/tier_agreement.py` needs real short/full runs; `validity/roofline.py` wants generalizing to the H200 + MoE
+`validity/tier_agreement.py` needs real short/full runs; the ceilings need one GPU pass (measured peaks, floors
+below every measurement, `lab.validate`'s reference regimes)
 target. The agent's tool set (e.g. a knowledge tool) is the user's design: ask first. README stays a few one-line
 feature bullets, not a dev doc.

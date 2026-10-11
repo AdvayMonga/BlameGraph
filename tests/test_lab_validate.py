@@ -62,7 +62,12 @@ def test_validate_separates_and_measures_bands(spec, tmp_path, monkeypatch):
     items = [{"id": f"mc-{k}", "task": "mmlu_pro", "gold": "C", "max_tokens": 6,
               "messages": [{"role": "user", "content": f"question {k} pick one"}]} for k in range(60)]
     monkeypatch.setattr(tasks, "load", lambda names, tier="dev", **kw: items)
+    from lab import calibrate
+    monkeypatch.setattr(calibrate, "REFERENCE_DIR", tmp_path / "reference")
     rep = validate.validate(spec, noise_runs=2, regimes=["single_stream"], out=tmp_path / "out", encoder=Enc())
+    ref = json.loads((tmp_path / "reference" / spec.name / "single_stream.json").read_text())
+    assert ref["server"] == "reference" and ref["fingerprint"]["tier"] == "short" and "single_stream" in rep["reference_regimes"]
+    assert ref["value"] is not None and ref["shape"]["prompt_tokens_mean"] > 0
     assert rep["candidates"]["same"]["verdict"] == "pass"
     assert rep["candidates"]["wrong4"]["verdict"] == "fail", rep["candidates"]["wrong4"]
     assert rep["gate_separates"] is True

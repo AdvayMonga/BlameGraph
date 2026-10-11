@@ -83,6 +83,10 @@ else
   echo "clock lock: refused"
 fi
 
+echo "== peaks: HBM bandwidth and bf16 GEMM, measured (validity/peaks.py; the ceilings' denominators)"
+ENV_DIR="${LAB_VM_ENV_DIR:-$HOME/BlameGraph}"; ENGINE_DIR="$PWD"
+(cd "$ENV_DIR" && "$ENGINE_DIR/.venv/bin/python" -m validity peaks --seconds 3) || echo "peaks: not measured (finding, not failure)"
+
 echo "== model cache"
 mkdir -p "$HOME/.cache/huggingface"
 du -sh "$HOME/.cache/huggingface" 2>/dev/null || true
