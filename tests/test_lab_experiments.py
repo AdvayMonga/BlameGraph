@@ -99,3 +99,21 @@ def test_a_heldout_record_may_carry_its_experiment(tmp_path):
     rec = ledger.append({"kind": "submit", "run": "r", "config": {"split": "heldout"}, "metrics": {"x": {"delta_pct": 1.0}},
                          "experiment": {"hypothesis": "h", "actual": 1.0}}, tmp_path)
     assert rec["experiment"]["actual"] == 1.0
+
+
+def test_a_heldout_experiment_carries_scalars_only(tmp_path):
+    base = {"kind": "submit", "run": "r", "config": {"split": "heldout"}, "metrics": {"x": {"delta_pct": 1.0}}}
+    with pytest.raises(ledger.LedgerError):
+        ledger.append({**base, "experiment": {"hypothesis": "h", "rows": [1, 2]}}, tmp_path)
+    with pytest.raises(ledger.LedgerError):
+        ledger.append({**base, "experiment": {"hypothesis": "h", "actual": [0.1, 0.2]}}, tmp_path)
+
+
+def test_a_refused_call_needs_no_reflection(tb, monkeypatch):
+    import shutil as sh
+    from lab import proftools
+    real = sh.which
+    monkeypatch.setattr(proftools.shutil, "which", lambda n, *a, **k: None if n == "nsys" else real(n, *a, **k))
+    h = call(tb, "hypothesis", {"hypothesis": "h", "rationale": "r"}).split()[1]
+    assert "refused" in call(tb, "trace", {"hypothesis_id": h, "expect": EXPECT})
+    assert experiments.pending(tb.s.ledger_root, tb.s.run_id) is None

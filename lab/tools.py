@@ -74,6 +74,8 @@ class Toolbox(EvalTools, ProfTools):
         """A measured call made with a hypothesis and a prediction carries both and the computed gap."""
         if tool not in experiments.MEASURED or "expect" not in args or "hypothesis_id" not in args:
             return
+        if body["kind"] == "note" or (result or {}).get("verdict") == "refused":
+            return                                   # nothing was measured, so there is nothing to reflect on
         from lab.evaltools import noise_band_pct
         base = next(ledger.records(self.s.ledger_root, run=self.s.run_id, kind="baseline"), None)
         name = args["expect"].get("metric")

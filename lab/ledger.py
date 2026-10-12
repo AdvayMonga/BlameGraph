@@ -24,6 +24,7 @@ WRITER_FIELDS = {"id", "at", "schema"}
 HELDOUT_FIELDS = {"kind", "config", "metrics", "run", "session", "snapshot", "snapshot_blob", "patch",
                   "tool", "args", "cost", "claim", "experiment"}
 HELDOUT_METRIC_KEYS = {"base", "new", "delta_pct", "band_pct", "verdict"}
+EXPERIMENT_FIELDS = {"hypothesis", "expect", "actual", "actual_missing", "gap", "gap_pct_of_expected", "noise_band_pct"}
 SCALAR = (int, float, str, bool, type(None))
 
 
@@ -77,6 +78,14 @@ def _check(record: dict) -> None:
     metrics = record.get("metrics") or {}
     if not isinstance(metrics, dict):
         raise LedgerError("metrics must be an object")
+    exp = record.get("experiment")
+    if exp is not None:                      # the agent's prediction and one number derived from an aggregate
+        if not isinstance(exp, dict) or exp.keys() - EXPERIMENT_FIELDS:
+            raise LedgerError(f"a held-out experiment may only carry {sorted(EXPERIMENT_FIELDS)}")
+        flat = {k: v for k, v in exp.items() if k != "expect"}
+        if not all(isinstance(v, SCALAR) for v in flat.values()) or not isinstance(exp.get("expect", {}), dict) \
+                or not all(isinstance(v, SCALAR) for v in exp.get("expect", {}).values()):
+            raise LedgerError("a held-out experiment carries scalar values only")
     for name, m in metrics.items():
         if (not isinstance(m, dict) or not m.keys() <= HELDOUT_METRIC_KEYS
                 or not all(isinstance(v, SCALAR) for v in m.values())):

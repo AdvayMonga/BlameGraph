@@ -64,7 +64,8 @@ def test_a_session_edits_tests_notes_and_stops(cfg):
     assert out["sessions"] == 1 and out["stopped"] == "agent" and out["spent_usd"] == pytest.approx(0.75)
     kinds = [r["kind"] for r in ledger.records(cfg.ledger_root)]
     assert kinds == ["test", "note", "hypothesis", "submit", "session"]
-    assert next(ledger.records(cfg.ledger_root, kind="submit"))["experiment"]["expect"]["metric"] == "saturated"
+    sub = next(ledger.records(cfg.ledger_root, kind="submit"))     # refused (no equiv): nothing measured to reflect on
+    assert sub["result"]["verdict"] == "refused" and "experiment" not in sub
     test_rec = next(ledger.records(cfg.ledger_root, kind="test"))
     assert test_rec["result"]["lint"] and test_rec["result"]["tests"]
     assert test_rec["snapshot"] != "base" and (cfg.ledger_root / test_rec["patch"]).exists()
