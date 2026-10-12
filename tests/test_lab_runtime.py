@@ -54,14 +54,17 @@ def test_a_session_edits_tests_notes_and_stops(cfg):
         yield ("call", "test")
         yield ("call", "budget")
         yield ("call", "note", {"text": "hello human"})
-        yield ("call", "submit")
+        yield ("call", "hypothesis", {"hypothesis": "h", "rationale": "r"})
+        hid = next(ledger.records(cfg.ledger_root, kind="hypothesis"))["id"]
+        yield ("call", "submit", {"hypothesis_id": hid, "expect": {"metric": "saturated", "value": 1.0, "unit": "change_pct", "why": "w"}})
         yield ("call", "ledger", {"last": 5})
         yield ("reply", AgentReply({"status": "stop", "note": "done"}, 0.75, 12, None))
     p = ScriptedProvider(script)
     out = session.run(cfg, p)
     assert out["sessions"] == 1 and out["stopped"] == "agent" and out["spent_usd"] == pytest.approx(0.75)
     kinds = [r["kind"] for r in ledger.records(cfg.ledger_root)]
-    assert kinds == ["test", "note", "submit", "session"]
+    assert kinds == ["test", "note", "hypothesis", "submit", "session"]
+    assert next(ledger.records(cfg.ledger_root, kind="submit"))["experiment"]["expect"]["metric"] == "saturated"
     test_rec = next(ledger.records(cfg.ledger_root, kind="test"))
     assert test_rec["result"]["lint"] and test_rec["result"]["tests"]
     assert test_rec["snapshot"] != "base" and (cfg.ledger_root / test_rec["patch"]).exists()
@@ -168,7 +171,9 @@ def test_restore_and_profile_tools(cfg, monkeypatch):
         first["snap"] = next(ledger.records(cfg.ledger_root, kind="test"))["snapshot"]
         (ws / "src/inference_server/engine.py").write_text("def speed():\n    return 6\n")
         yield ("call", "restore", {"snapshot": first["snap"]})
-        yield ("call", "profile", {"requests": 2})
+        yield ("call", "hypothesis", {"hypothesis": "h", "rationale": "r"})
+        hid = next(ledger.records(cfg.ledger_root, kind="hypothesis"))["id"]
+        yield ("call", "profile", {"requests": 2, "hypothesis_id": hid, "expect": {"metric": "saturated", "value": 1.0, "unit": "change_pct", "why": "w"}})
         yield ("reply", AgentReply({"status": "stop", "note": None}, 0.1, 1, None))
     p = ScriptedProvider(script)
     out = session.run(cfg, p)

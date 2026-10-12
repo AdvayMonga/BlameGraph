@@ -19,6 +19,14 @@ on write. Every record: `id`, `at`, `schema` (set by the writer), `kind`, `run`,
 | `baseline` | the loop, once per run before the first session | `config: {split: seen, tier: short, commit}`; `verdict: ok` with `metrics` and `calibrated` shaped like `bench`'s (the base commit under bench's default regimes: the task's objective and constrained ones, from the cache submit compares against), or `verdict: error`, `reason` |
 | `finding` | `lab.ledger seed` | a `knowledge/` entry, whole, as `claim`; `source`, `content_sha` |
 | `note` | `note`, `restore`, refusals | free text, or `{verdict: refused, reason}` |
+| `hypothesis` | `hypothesis` | the agent's text: `hypothesis` (bottleneck and proposed change), `rationale`, optional `abandon_if`, `from_record` |
+| `reflection` | `reflect` | the agent's text on one measured record: `record`, `reflection` (why it matched or differed from `expect`), optional `alternative` |
+
+Every measured record (`bench`, `equiv`, `submit`, `profile`, including `trace`/`kernel`/`hostprof`) made by the
+agent carries `experiment: {hypothesis, expect: {metric, value, unit: absolute|change_pct, why}, actual, gap,
+gap_pct_of_expected, noise_band_pct}`, or `actual_missing` saying why the lab could not compute the measured
+counterpart (`lab/experiments.py`). The agent's measured tools refuse a call without an open hypothesis and an
+`expect`, and while the run's latest measured record has no `reflection`.
 
 A tool that could not run writes `{verdict: refused | error, reason}` and the agent sees that text; it never
 crashes the session. `bench`, `equiv`, `submit` and `baseline` also write `refused` when a process already held

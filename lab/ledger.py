@@ -17,11 +17,12 @@ from typing import Any, Iterator
 
 SCHEMA = 1
 ROOT = Path(__file__).resolve().parents[1] / "lab" / "ledger"
-KINDS = {"test", "equiv", "bench", "profile", "submit", "finding", "session", "note", "baseline"}
+KINDS = {"test", "equiv", "bench", "profile", "submit", "finding", "session", "note", "baseline", "hypothesis",
+         "reflection"}
 WRITER_FIELDS = {"id", "at", "schema"}
 # A held-out record is one aggregate per metric and nothing else: these fields, scalar values.
 HELDOUT_FIELDS = {"kind", "config", "metrics", "run", "session", "snapshot", "snapshot_blob", "patch",
-                  "tool", "args", "cost", "claim"}
+                  "tool", "args", "cost", "claim", "experiment"}
 HELDOUT_METRIC_KEYS = {"base", "new", "delta_pct", "band_pct", "verdict"}
 SCALAR = (int, float, str, bool, type(None))
 

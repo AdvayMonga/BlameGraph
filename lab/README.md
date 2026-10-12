@@ -113,6 +113,8 @@ with the referee's rights, snapshot the workspace and write the ledger on every 
 | `budget` | dollars left |
 | `restore` | workspace back to a snapshot id (`base` resets) |
 | `note` | a note for the human; recorded, changes nothing |
+| `hypothesis` | the agent's hypothesis and rationale (optional `abandon_if`, `from_record`); its id is what every measured tool requires as `hypothesis_id`, with an `expect` (metric, value, unit, why) |
+| `reflect` | the agent's reflection on a measured record (optional `alternative`); the run's latest measured record needs one before the next measured call |
 | `bench` | serve the pristine copy and run the load regimes (`regimes/`) on the seen split, short tier; one headline per regime, raw (`args.regimes`, `args.tier`, `args.seed`), each with its context (`lab/calibrate.py`: % of the physical ceiling, % of the reference engine measured the same way; only under a matching config fingerprint) |
 | `equiv` | serve it and run the correctness gate (`correctness/`) against the target's reference outputs; pass, fail or inconclusive with every metric; `tier=full` uses `<reference.dir>-full` |
 | `submit` | the only thing that can produce a win. Needs a passing full-tier equiv and a seen bench on this snapshot. Measures the held-out split at the full tier, measures the base commit the same way (once per run, cached outside the jail), and records one aggregate per regime (base, new, delta %, noise band %, verdict improved/regressed/within_band/unknown_band) through the Thresholdout guard (`validity/holdout.py`, state in `lab/ledger/holdout_state.json`, seed `LAB_HOLDOUT_SEED`): the held-out numbers themselves never reach the ledger. Noise bands come from `knowledge/noise/<regime>.json` when measured |

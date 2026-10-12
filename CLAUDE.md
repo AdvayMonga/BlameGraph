@@ -33,6 +33,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `agent.py` (the one place a model is called; the agent's jailed shell gets the engine's python on PATH;
   `LAB_AGENT_PROVIDER` claude = Agent SDK CLI, openai = `agent_openai.py`: any OpenAI-compatible API with its own
   key, https public hosts only, `LAB_MODEL_PRICE` required, loop outside the jail, Bash jailed with no network),
+  `experiments.py` (decided 2026-10-11: no measured number without the agent's reasoning and no reasoning without
+  the number; measured tools require an open `hypothesis` record and an `expect` {metric, value, unit, why}, the
+  record keeps both with the computed gap, and the next measured call is refused until a `reflection` on the last
+  one is filed; the brief lists the run's hypotheses with their measurements and reflections) +
   `calibrate.py` (every measured number with its context, decided 2026-10-11: `% of ceiling` from `validity/ceiling`
   on measured peaks, `% of reference` from `knowledge/reference/<target>/<regime>.json` written by `lab.validate`
   with `perf_reference` (the correctness reference minus its determinism switches, which are slow by design),
