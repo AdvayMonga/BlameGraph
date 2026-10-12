@@ -13,6 +13,15 @@ from dataclasses import dataclass
 from validity.peaks import Peaks
 
 DTYPE_BYTES = {"bf16": 2, "fp16": 2, "fp8": 1, "int8": 1, "int4": 0.5}
+ALIASES = {"bfloat16": "bf16", "float16": "fp16", "half": "fp16", "float8": "fp8", "fp8_e4m3": "fp8", "fp8_e5m2": "fp8"}
+
+
+def dtype(name: str) -> str:
+    """A dtype name as DTYPE_BYTES knows it; ValueError for one it does not."""
+    d = ALIASES.get(str(name).lower(), str(name).lower())
+    if d not in DTYPE_BYTES:
+        raise ValueError(f"unknown dtype {name!r}; one of {sorted(DTYPE_BYTES)} or {sorted(ALIASES)}")
+    return d
 
 
 @dataclass(frozen=True)
@@ -116,10 +125,17 @@ def prefill_floor(m: ModelSpec, hw: Peaks, prompt_tokens: int, w_dtype: str = "b
             "bound": "memory" if t_mem >= t_compute else "compute", "weight_bytes": w, "kv_bytes": kv, "flops": flops}
 
 
+def capacity_batch(m: ModelSpec, hw: Peaks, context: float, w_dtype: str = "bf16", kv_dtype: str = "bf16") -> int:
+    """Sequences of `context` tokens whose KV fits in HBM beside all the weights (no activations or fragmentation:
+    an upper bound)."""
+    free = hw.mem_bytes - m.total_params * DTYPE_BYTES[w_dtype]
+    return max(0, int(free // (context * m.kv_bytes_per_token(kv_dtype)))) if context > 0 else 1 << 16
+
+
 def max_batch_under(m: ModelSpec, hw: Peaks, tpot_limit_s: float, context: float, w_dtype: str = "bf16",
                     kv_dtype: str = "bf16", cap: int = 1 << 16) -> int:
-    """Largest batch whose decode-step floor still meets the TPOT limit (the floor grows with batch)."""
-    lo, hi = 0, cap
+    """Largest batch whose decode-step floor still meets the TPOT limit and whose KV fits in HBM."""
+    lo, hi = 0, min(cap, capacity_batch(m, hw, context, w_dtype, kv_dtype))
     while lo < hi:
         mid = (lo + hi + 1) // 2
         if decode_step_floor(m, hw, mid, context, w_dtype, kv_dtype)["floor_s"] <= tpot_limit_s:
@@ -153,17 +169,24 @@ def regime_ceiling(objective: str, m: ModelSpec, hw: Peaks, shape: Shape, limits
     if objective == "tpot_p99_s":
         f = decode_step_floor(m, hw, max(1, round(shape.concurrency)), ctx, w_dtype, kv_dtype)
         return {"ceiling": f["floor_s"], "better": "lower", "bound": f["bound"],
-                "basis": f"decode step floor at batch {max(1, round(shape.concurrency))}, context {ctx:.0f}"}
+                "basis": f"decode step floor at batch {max(1, round(shape.concurrency))}, context {ctx:.0f}; one "
+                         f"token per sequence per step, uniform expert routing, {w_dtype} weights, {kv_dtype} KV"}
     if objective == "ttft_p99_s":
         f = prefill_floor(m, hw, int(shape.prompt_tokens_p99), w_dtype, kv_dtype)
         return {"ceiling": f["floor_s"], "better": "lower", "bound": f["bound"],
-                "basis": f"prefill floor at the p99 prompt, {shape.prompt_tokens_p99:.0f} tokens"}
-    if objective in ("goodput_req_per_s", "good_req_per_s", "goodput_sessions_per_s"):
+                "basis": f"prefill floor at the p99 prompt, {shape.prompt_tokens_p99:.0f} tokens, {w_dtype} weights"}
+    if objective in ("goodput_req_per_s", "good_req_per_s"):
+        # each request costs its prefill FLOPs at peak (weights amortised over the batch) plus its output tokens at
+        # the decode ceiling; one GPU-second holds at most 1 / (that) requests
         tps = tokens_per_s_ceiling(m, hw, limits["tpot_s"], ctx, w_dtype, kv_dtype)
-        per = tps / shape.output_tokens_mean if shape.output_tokens_mean else 0.0
-        return {"ceiling": per, "better": "higher", "bound": "memory",
-                "basis": f"decode tokens/s at the largest batch meeting TPOT <= {limits['tpot_s']} s, "
-                         f"context {ctx:.0f}, / {shape.output_tokens_mean:.0f} output tokens per request"}
+        pf = prefill_floor(m, hw, int(shape.prompt_tokens_mean), w_dtype, kv_dtype)
+        per_req = pf["t_compute_s"] + (shape.output_tokens_mean / tps if tps else float("inf"))
+        return {"ceiling": 1 / per_req if per_req and per_req != float("inf") else 0.0, "better": "higher",
+                "bound": "decode" if shape.output_tokens_mean / max(tps, 1e-12) > pf["t_compute_s"] else "prefill",
+                "basis": f"1 / (prefill compute of {shape.prompt_tokens_mean:.0f} prompt tokens + "
+                         f"{shape.output_tokens_mean:.0f} output tokens at the decode ceiling: the largest batch "
+                         f"meeting TPOT <= {limits['tpot_s']} s whose KV fits in HBM, context {ctx:.0f}); "
+                         f"one token per sequence per step, uniform expert routing, {w_dtype} weights, {kv_dtype} KV"}
     return None
 
 

@@ -95,12 +95,13 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
         for n in names:
             report["noise"][n] = write_noise(n, values[n], t, {"tier": "short", "split": "seen"})
     report["bands_measured"] = all(d["band_pct"] is not None for d in report["noise"].values()) if names and noise_runs else None
-    # 4. the reference engine under the same regimes, once: what every bench is shown next to
+    # 4. the reference engine under the same regimes, once, without its determinism switches: what every bench is shown next to
     if reference_regimes and names:
-        with serve.Served(target.ENV_ROOT, t.reference, log=log_dir / "serve-reference-regimes.log", jailed=False) as srv:
+        with serve.Served(target.ENV_ROOT, calibrate.perf_reference(t), log=log_dir / "serve-reference-regimes.log",
+                          jailed=False) as srv:
             rows: list = []
             ctx = suite.Ctx.from_target(t, srv.url, split="seen", tier="short", seed=0, rows=rows)
-            fp = calibrate.fingerprint(t, gpu.query(), "short", "seen")
+            fp = calibrate.fingerprint(t, gpu.query(), "short", "seen", 0)
             for n in names:
                 k = len(rows)
                 r = suite.REGIMES[n](ctx)

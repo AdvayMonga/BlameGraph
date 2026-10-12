@@ -135,7 +135,10 @@ class ProfTools:
         finally:
             shutil.rmtree(out, ignore_errors=True)
         from lab import calibrate
-        cal = calibrate.calibrate_ncu(self.s.ledger_root / blob / "metrics.csv", r.get("gpu")) if blob and tool == "kernel" else None
+        try:
+            cal = calibrate.calibrate_ncu(self.s.ledger_root / blob / "metrics.csv", r.get("gpu")) if blob and tool == "kernel" else None
+        except Exception as e:                   # noqa: BLE001
+            cal = {"error": f"calibration failed: {type(e).__name__}: {e}"}
         result = {"calibrated": cal, "returncode": r["returncode"], "bundle": blob, "workspace_copy": visible, "instrument": r["instrument"],
                   "argv": r["argv"], "seconds": time.monotonic() - t0, "output": r["output"]}
         self._record("profile", tool, args, result, snap)

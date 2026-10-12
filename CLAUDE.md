@@ -34,7 +34,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `LAB_AGENT_PROVIDER` claude = Agent SDK CLI, openai = `agent_openai.py`: any OpenAI-compatible API with its own
   key, https public hosts only, `LAB_MODEL_PRICE` required, loop outside the jail, Bash jailed with no network),
   `calibrate.py` (every measured number with its context, decided 2026-10-11: `% of ceiling` from `validity/ceiling`
-  on measured peaks, `% of reference` from `knowledge/reference/<target>/<regime>.json` written by `lab.validate`,
+  on measured peaks, `% of reference` from `knowledge/reference/<target>/<regime>.json` written by `lab.validate`
+  with `perf_reference` (the correctness reference minus its determinism switches, which are slow by design),
   and for kernels their share of the window; a ceiling or reference is shown only under a matching config
   fingerprint (model, dtypes, max_model_len, tier, split, corpus version, GPU), else the field says why it is
   missing; bench, baseline, profile and kernel records carry a `calibrated` block, the brief shows the baseline's),
@@ -109,7 +110,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `fake_first`, `drop`, `cache` (streamed and not), `inflate_usage`); `python -m canaries --upstream URL --cheat NAME`.
 - `validity/` — `ceiling.py` (physical bounds from the model's HF config and the GPU's peaks: active/total params,
   bytes streamed per step with MoE experts-touched, decode and prefill floors, the largest batch under a TPOT limit,
-  per-objective regime ceilings; `pct_of`, `ceiling_gain` = Amdahl) + `peaks.py` (`python -m validity peaks`: HBM
+  per-objective regime ceilings: TPOT = decode step floor, TTFT = prefill floor at the p99 prompt, goodput =
+  1 / (prefill compute + output tokens at the decode ceiling, batch capped by TPOT and by KV fitting in HBM); no
+  bound for speedups, cold start or sessions/s; assumptions (one token per step, uniform routing, declared dtypes)
+  are in each `basis`, so a value above 100% means one of them does not hold; `pct_of`, `ceiling_gain` = Amdahl) + `peaks.py` (`python -m validity peaks`: HBM
   bandwidth and bf16 GEMM measured once per GPU+driver into `knowledge/peaks/<gpu>.json`, run by `vm-setup.sh`; spec
   sheet as the labelled fallback), `repeat_audit.py`: repeated-request audit (MLPerf TEST04-style), judges decode time per token, not TTFT, so prefix caching passes and replayed answers fail; `python -m validity repeat --url URL`. `tier_agreement.py`: `tier_agreement(changes)`: Spearman, Kendall tau-b, bootstrap CI, out-of-band disagreements; short tier usable if n ≥ 8, rho ≥ 0.8, CI low ≥ 0.5. `holdout.py`: `HoldoutGuard` (Thresholdout query budget, state persisted atomically under a file lock, deterministic from seed) and `SealedSplit` (hash manifest, one logged unseal per corpus version). Keep sigma small relative to the threshold.
 - `kernels/` — kernel equivalence: `check_kernel` (seen + held-out shapes, per-dtype tolerances, edge cases incl. non-contiguous and NaN/Inf, inputs unchanged, no aliasing, memoization, determinism) and `time_kernel` / `check_memoization` (sync, rotated buffers, L2 flush on CUDA). Validated on CPU, MPS and CUDA (H200, 2026-10-04): all tests pass; the timer resolves ~20 µs kernels at ~9% IQR, 0.2 ms at 1.5%. `make_inputs` gets a seeded CPU generator (generate on CPU, then `.to(device)`).

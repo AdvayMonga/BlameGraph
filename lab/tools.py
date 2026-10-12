@@ -123,10 +123,12 @@ class Toolbox(EvalTools, ProfTools):
             blob, visible = self._keep(out / "files") if (out / "files").is_dir() else ("", "")
         finally:
             shutil.rmtree(out, ignore_errors=True)
-        bundles = sorted(p for p in (self.s.ledger_root / blob).glob("*") if p.is_dir()) if blob else []
+        try:                                     # the blob is the bundle itself (worker copies it to `files`)
+            cal = calibrate.calibrate_kernels(self.s.ledger_root / blob, r.get("gpu")) if blob else None
+        except Exception as e:                   # noqa: BLE001  never costs the measurement it describes
+            cal = {"error": f"calibration failed: {type(e).__name__}: {e}"}
         result = {"returncode": r["returncode"], "bundle": blob, "workspace_copy": visible,
-                  "seconds": time.monotonic() - t0, "output": r["output"],
-                  "calibrated": calibrate.calibrate_kernels(bundles[-1], r.get("gpu")) if bundles else None}
+                  "seconds": time.monotonic() - t0, "output": r["output"], "calibrated": cal}
         self._record("profile", "profile", args, result, snap)
         if r["returncode"] != 0 or not blob:
             return f"profile failed ({r['returncode']}):\n{result['output']}"

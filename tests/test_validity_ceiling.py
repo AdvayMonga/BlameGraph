@@ -47,7 +47,8 @@ def test_prefill_floor_and_goodput_ceiling():
     assert p["floor_s"] > ceiling.prefill_floor(m, H200, 512)["floor_s"]
     b = ceiling.max_batch_under(m, H200, 0.1, 1024)
     assert b > 64 and ceiling.decode_step_floor(m, H200, b, 1024)["floor_s"] <= 0.1
-    assert ceiling.decode_step_floor(m, H200, b + 1, 1024)["floor_s"] > 0.1
+    assert (b == ceiling.capacity_batch(m, H200, 1024)
+            or ceiling.decode_step_floor(m, H200, b + 1, 1024)["floor_s"] > 0.1)
     assert ceiling.max_batch_under(m, H200, 1e-6, 1024) == 0 and ceiling.tokens_per_s_ceiling(m, H200, 1e-6, 1024) == 0
 
 
@@ -75,7 +76,8 @@ def test_pct_of_and_ceiling_gain():
 def test_peaks_measured_file_wins_over_spec_and_driver_must_match():
     import tempfile
     tmp_path = Path(tempfile.mkdtemp())
-    assert peaks.load("NVIDIA H200").source == "spec" and peaks.load("Radeon") is None
+    empty = Path(tempfile.mkdtemp())
+    assert peaks.load("NVIDIA H200", peaks_dir=empty).source == "spec" and peaks.load("Radeon", peaks_dir=empty) is None
     p = peaks.Peaks("NVIDIA H200", 900e12, 4.5e12, 141e9, "measured", driver="580.1")
     out = peaks.write(p, tmp_path)
     assert out.name == "nvidia-h200.json" and json.loads(out.read_text())["bw_bytes_s"] == 4.5e12
@@ -96,6 +98,28 @@ def test_measure_needs_cuda():
     except RuntimeError:
         return
     raise AssertionError("measure() must refuse without CUDA")
+
+
+def test_capacity_caps_the_batch_and_goodput_pays_for_prefill():
+    m = ModelSpec.from_hf_config(QWEN3_30B_A3B)
+    cap = ceiling.capacity_batch(m, H200, 1024)
+    assert 0 < cap < 1200                                   # ~80 GB free for KV at ~100 KB/token
+    assert ceiling.max_batch_under(m, H200, 10.0, 1024) == cap   # a loose TPOT limit stops at HBM, not at 65k
+    lim = {"ttft_s": 2.0, "tpot_s": 0.1}
+    short_out = ceiling.regime_ceiling("goodput_req_per_s", m, H200, Shape(8000, 9000, 50), lim)
+    long_out = ceiling.regime_ceiling("goodput_req_per_s", m, H200, Shape(8000, 9000, 2000), lim)
+    no_prefill = ceiling.tokens_per_s_ceiling(m, H200, 0.1, 8025) / 50
+    assert short_out["ceiling"] < no_prefill and short_out["bound"] == "prefill" and long_out["bound"] == "decode"
+    assert ceiling.regime_ceiling("goodput_sessions_per_s", m, H200, Shape(600, 900, 200), lim) is None
+
+
+def test_dtype_aliases():
+    assert ceiling.dtype("bfloat16") == "bf16" and ceiling.dtype("FP8") == "fp8"
+    try:
+        ceiling.dtype("int3")
+    except ValueError:
+        return
+    raise AssertionError("unknown dtype accepted")
 
 
 if __name__ == "__main__":

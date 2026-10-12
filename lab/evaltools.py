@@ -165,7 +165,8 @@ class EvalTools:
                       "artifacts": artifacts.store(work, self.s.ledger_root)}
             self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier, "seed": seed})
             return _said("bench", result)
-        cal = calibrate.calibrate_results(r["results"], artifacts.read_rows(work), target.load(), r.get("gpu"), tier, "seen")
+        cal = calibrate.calibrate_results(r["results"], artifacts.read_rows(work), target.load(), r.get("gpu"), tier,
+                                          "seen", seed)
         result = {"verdict": "ok", "metrics": headline(r["results"]), "calibrated": cal, "regimes": r["results"],
                   "tier": tier, "seconds": time.monotonic() - t0, "ready_s": r["ready_s"], "gpu": r.get("gpu"),
                   "artifacts": artifacts.store(work, self.s.ledger_root)}
@@ -317,7 +318,8 @@ class EvalTools:
             work = self._work("base")
             try:                                # a contaminated base raises: never cached, every later submit reads it
                 r = self._measure(tree, work, f"serve-base-{split}.log", names=missing, split=split, tier=tier,
-                                  passive=False)
+                                  passive=split == "seen")     # held-out rows never leave the worker
+                base_rows = artifacts.read_rows(work) if split == "seen" else []
             finally:
                 shutil.rmtree(work, ignore_errors=True)
             have.update(headline(r["results"]))
@@ -325,7 +327,8 @@ class EvalTools:
             if split == "seen":                 # the base's context travels with the baseline record
                 cal = cache.with_suffix(".calibrated.json")
                 prior = json.loads(cal.read_text()) if cal.exists() else {}
-                prior.update(calibrate.calibrate_results(r["results"], [], t, r.get("gpu"), tier, split))
+                prior.update(calibrate.calibrate_results(r["results"], base_rows, t, r.get("gpu"), tier, split,
+                                                         self.seed))
                 cal.write_text(json.dumps(prior, indent=1))
         return have
 

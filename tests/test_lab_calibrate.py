@@ -33,7 +33,7 @@ def test_results_get_ceiling_pct_and_shape(t):
     assert cal["value"] == 0.02 and cal["ceiling"] < 0.02 and 0 < cal["pct_of_ceiling"] < 100
     assert cal["bound"] == "memory" and cal["peaks_source"] == "spec" and cal["shape"]["prompt_tokens_mean"] == 600
     assert cal["fingerprint"]["gpu"] == "NVIDIA H200" and cal["fingerprint"]["w_dtype"] == "bf16"
-    assert cal["reference"] is None and "no reference" in cal["reference_missing"]
+    assert cal["reference"] is None and "no reference measurement" in cal["reference_missing"]
 
 
 def test_missing_inputs_are_named_not_guessed(t, monkeypatch):
@@ -84,3 +84,29 @@ def test_facts_for_the_brief(t):
     assert f["peaks"]["source"] == "spec" and f["model"]["active_params"] > 2.9e9
     assert 0.001 < f["floors_s"]["decode_step_batch1_ctx1k"] < 0.003
     assert calibrate.facts(t, None)["peaks"] is None
+
+
+def test_perf_reference_drops_determinism_switches(t):
+    import dataclasses
+    srv = calibrate.perf_reference(t)
+    assert "VLLM_BATCH_INVARIANT" not in srv.env and srv.launch == t.reference.launch
+    sg = dataclasses.replace(t, reference=dataclasses.replace(t.reference, launch="python -m sglang.launch_server "
+                                                              "--enable-deterministic-inference --port {port}"))
+    assert "--enable-deterministic-inference" not in calibrate.perf_reference(sg).launch
+
+
+def test_calibration_never_raises_and_invalid_values_say_why(t, monkeypatch):
+    bad = calibrate.calibrate_results([{"regime": "x"}], [], t, GPU, "short", "seen")
+    assert "calibration failed" in bad["error"]
+    inv = calibrate.calibrate_results([{**results()[0], "valid": False, "invalid_reasons": ["3 silent drops"]}], rows(),
+                                      t, GPU, "short", "seen")["single_stream"]
+    assert inv["value"] is None and "3 silent drops" in inv["value_missing"]
+
+
+def test_ncu_units_and_odd_cells(tmp_path):
+    p = tmp_path / "metrics.csv"
+    p.write_text('"ID","Kernel Name","gpu__time_duration.sum","dram__bytes.sum.per_second"\n'
+                 '"","","usecond","Gbyte/second"\n"0","gemm","1,250.5","2,400"\n"1","gemm","n/a",""\n')
+    n = calibrate.calibrate_ncu(p, GPU)["launches"]
+    assert n[0]["duration"] == 1250.5 and round(n[0]["pct_of_bandwidth_peak"]) == 50
+    assert n[1]["duration"] is None and n[1]["pct_of_bandwidth_peak"] is None
