@@ -245,7 +245,12 @@ a first `python -m lab.session --task ...` dry run with a tiny budget, which wai
 `engine/gpu-validated`) were judged by the old gate: re-judge with `python -m correctness verdict` on their saved
 results before deciding anything. lab `session.py --run` re-resolves
 `base` from HEAD rather than the run's original base (pre-existing; resuming after the engine moved would misaudit);
-`validity/tier_agreement.py` needs real short/full runs; the ceilings need one GPU pass (measured peaks, floors
-below every measurement, `lab.validate`'s reference regimes)
+`validity/tier_agreement.py` needs real short/full runs. Ceilings checked on an H200 (Nebius, driver 580.173,
+2026-10-13; peaks 4.14 TB/s, 794 TFLOP/s bf16): every floor below every measurement once goodput charges only the
+prefill the server reports as uncached (vLLM's prefix cache made a prefill-inclusive bound read 147-471%). Plain vLLM:
+single_stream TPOT p99 4.1 ms (37% of ceiling), saturated 5.8 req/s (19%), long prompt 68 req/s (94%); the engine:
+21 ms (7%), 0.097 req/s (0.5%), long prompt invalid (111 requests without a response). Stored in
+`knowledge/reference/inference-server/`. Finding for the corpus: long_prompt_short_output's window repeats each
+prompt ~5x (23,185 requests over 4,794 prompts), which rewards prefix caching.
 target. The agent's tool set (e.g. a knowledge tool) is the user's design: ask first. README stays a few one-line
 feature bullets, not a dev doc.

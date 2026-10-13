@@ -23,8 +23,9 @@ def results(regime="single_stream", objective="tpot_p99_s", value=0.02, better="
 
 
 @pytest.fixture
-def t(monkeypatch):
+def t(monkeypatch, tmp_path):
     monkeypatch.setattr(calibrate, "model_config", lambda model: QWEN3_30B_A3B)
+    monkeypatch.setattr(calibrate, "REFERENCE_DIR", tmp_path / "no-reference")      # the committed ones are real
     return target.load()
 
 
@@ -110,3 +111,10 @@ def test_ncu_units_and_odd_cells(tmp_path):
     n = calibrate.calibrate_ncu(p, GPU)["launches"]
     assert n[0]["duration"] == 1250.5 and round(n[0]["pct_of_bandwidth_peak"]) == 50
     assert n[1]["duration"] is None and n[1]["pct_of_bandwidth_peak"] is None
+
+
+def test_uncached_prompt_tokens_come_from_the_server_or_not_at_all():
+    full = [{**r, "cached_tokens": 450} for r in rows()]
+    assert calibrate.shape_from_rows(full).uncached_prompt_tokens_mean == 150
+    partial = full[:5] + rows()[5:]
+    assert calibrate.shape_from_rows(partial).uncached_prompt_tokens_mean is None

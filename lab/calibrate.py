@@ -87,7 +87,10 @@ def shape_from_rows(rows: list[dict]) -> Shape | None:
     if not prompts:
         return None
     p99 = sorted(prompts)[min(len(prompts) - 1, int(0.99 * len(prompts)))]
-    return Shape(statistics.fmean(prompts), float(p99), statistics.fmean(outs), max(1.0, conc))
+    reported = [r["prompt_tokens"] - r["cached_tokens"] for r in ok
+                if r.get("prompt_tokens") and r.get("cached_tokens") is not None]
+    uncached = statistics.fmean(reported) if len(reported) == len(ok) else None
+    return Shape(statistics.fmean(prompts), float(p99), statistics.fmean(outs), max(1.0, conc), uncached)
 
 
 # -- reference numbers -----------------------------------------------------------------------

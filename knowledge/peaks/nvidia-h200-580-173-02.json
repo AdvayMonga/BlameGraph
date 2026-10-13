@@ -1,0 +1,11 @@
+{
+ "gpu": "NVIDIA H200",
+ "bf16_flops": 794182576833900.2,
+ "bw_bytes_s": 4135566038904.868,
+ "mem_bytes": 150109880320.0,
+ "source": "measured",
+ "driver": "580.173.02",
+ "sm_clock_mhz": 1455,
+ "measured_at": "2026-10-13T17:39:50",
+ "method": "best of 3.0s: 512MiB bf16 copy; 8192^3 bf16 GEMM"
+}

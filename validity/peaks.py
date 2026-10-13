@@ -1,5 +1,5 @@
 """Hardware peaks the ceilings are computed against: HBM bandwidth and bf16 tensor-core throughput, measured once
-per GPU + driver (`python -m validity peaks`, run by lab/vm-setup.sh) into knowledge/peaks/<gpu>.json. Spec-sheet
+per GPU + driver (`python -m validity peaks`, run by lab/vm-setup.sh) into knowledge/peaks/<gpu>-<driver>.json. Spec-sheet
 numbers are the fallback, labelled `source: spec`; a ceiling from them says so."""
 from __future__ import annotations
 
@@ -44,14 +44,19 @@ def spec_for(gpu: str) -> Peaks | None:
     return None
 
 
+def path_for(gpu: str, driver: str | None, peaks_dir: Path | None = None) -> Path:
+    return (peaks_dir or PEAKS_DIR) / (f"{slug(gpu)}-{slug(driver)}.json" if driver else f"{slug(gpu)}.json")
+
+
 def load(gpu: str, driver: str | None = None, peaks_dir: Path | None = None) -> Peaks | None:
-    """Measured peaks for this GPU (and driver, when known); else the spec sheet; else None."""
-    p = (peaks_dir or PEAKS_DIR) / f"{slug(gpu)}.json"
-    if p.exists():
-        d = json.loads(p.read_text())
-        if driver is None or d.get("driver") in (None, driver):
-            return Peaks(**d)
-    return spec_for(gpu)
+    """Measured peaks for this GPU and driver; without a driver, the latest measurement of the GPU; else the spec
+    sheet; else None. A measurement on another driver is not used."""
+    d = peaks_dir or PEAKS_DIR
+    if driver:
+        p = path_for(gpu, driver, d)
+        return Peaks(**json.loads(p.read_text())) if p.exists() else spec_for(gpu)
+    found = sorted(d.glob(f"{slug(gpu)}*.json"), key=lambda q: json.loads(q.read_text()).get("measured_at") or "")
+    return Peaks(**json.loads(found[-1].read_text())) if found else spec_for(gpu)
 
 
 def measure(seconds: float = 3.0) -> Peaks:
@@ -99,6 +104,6 @@ def measure(seconds: float = 3.0) -> Peaks:
 def write(p: Peaks, peaks_dir: Path | None = None) -> Path:
     d = peaks_dir or PEAKS_DIR
     d.mkdir(parents=True, exist_ok=True)
-    out = d / f"{slug(p.gpu)}.json"
+    out = path_for(p.gpu, p.driver, d)
     out.write_text(json.dumps(asdict(p), indent=1) + "\n")
     return out

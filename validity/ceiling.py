@@ -160,6 +160,7 @@ class Shape:
     prompt_tokens_p99: float
     output_tokens_mean: float
     concurrency: float = 1.0          # mean sequences in flight
+    uncached_prompt_tokens_mean: float | None = None   # what the server reported it had to prefill; None = unknown
 
 
 def regime_ceiling(objective: str, m: ModelSpec, hw: Peaks, shape: Shape, limits: dict,
@@ -178,12 +179,18 @@ def regime_ceiling(objective: str, m: ModelSpec, hw: Peaks, shape: Shape, limits
     if objective in ("goodput_req_per_s", "good_req_per_s"):
         # each request costs its prefill FLOPs at peak (weights amortised over the batch) plus its output tokens at
         # the decode ceiling; one GPU-second holds at most 1 / (that) requests
+        # a prefix cache can skip any prompt token, so only what the server reports as uncached counts; when it
+        # reports nothing, prefill is left out and the bound is decode alone (still a true bound, a looser one)
         tps = tokens_per_s_ceiling(m, hw, limits["tpot_s"], ctx, w_dtype, kv_dtype)
-        pf = prefill_floor(m, hw, int(shape.prompt_tokens_mean), w_dtype, kv_dtype)
-        per_req = pf["t_compute_s"] + (shape.output_tokens_mean / tps if tps else float("inf"))
+        uncached = shape.uncached_prompt_tokens_mean or 0.0
+        prefill_s = prefill_floor(m, hw, int(uncached), w_dtype, kv_dtype)["t_compute_s"] if uncached >= 1 else 0.0
+        per_req = prefill_s + (shape.output_tokens_mean / tps if tps else float("inf"))
+        known = shape.uncached_prompt_tokens_mean is not None
         return {"ceiling": 1 / per_req if per_req and per_req != float("inf") else 0.0, "better": "higher",
-                "bound": "decode" if shape.output_tokens_mean / max(tps, 1e-12) > pf["t_compute_s"] else "prefill",
-                "basis": f"1 / (prefill compute of {shape.prompt_tokens_mean:.0f} prompt tokens + "
+                "bound": "decode" if shape.output_tokens_mean / max(tps, 1e-12) > prefill_s else "prefill",
+                "basis": (f"1 / (prefill compute of the {uncached:.0f} uncached prompt tokens per request the server "
+                          f"reported" if known else "1 / (no prefill: the server reported no prefix-cache counts, so "
+                          "every prompt token may have been cached") + " + "
                          f"{shape.output_tokens_mean:.0f} output tokens at the decode ceiling: the largest batch "
                          f"meeting TPOT <= {limits['tpot_s']} s whose KV fits in HBM, context {ctx:.0f}); "
                          f"one token per sequence per step, uniform expert routing, {w_dtype} weights, {kv_dtype} KV"}
