@@ -89,7 +89,7 @@ def _baseline(s: Session) -> str:
     head = f"Baseline (base commit {c['commit']}, {c['split']} split, {c['tier']} tier, record {b['id']})"
     if r["verdict"] != "ok":
         return f"{head}: not measured; {r['reason']}"
-    return f"{head}:\n{json.dumps(r['metrics'])}"
+    return f"{head}:\n{json.dumps(r['metrics'])}\nCalibrated (ceiling = physical bound from measured peaks; reference = the reference engine measured the same way):\n{json.dumps(r.get('calibrated') or {})}"
 
 
 def brief(cfg: RunConfig, s: Session, snapshot_id: str, n: int) -> str:

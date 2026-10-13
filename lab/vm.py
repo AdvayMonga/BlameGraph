@@ -296,7 +296,12 @@ def main(argv: list[str] | None = None) -> int:
         print(p.types(), end="")
         return 0
     if args.cmd == "setup":
-        return run(vm, f"bash {vm.env_dir}/lab/vm-setup.sh {vm.remote_dir}", keep=True)
+        code = run(vm, f"bash {vm.env_dir}/lab/vm-setup.sh {vm.remote_dir}", keep=True)
+        try:                                   # the measured peaks come home: every ceiling is computed from them
+            fetch(vm, p.get(vm.name), "knowledge/peaks", engine.ENV_ROOT / "knowledge" / "peaks", base=vm.env_dir)
+        except ProviderError as e:
+            print(f"[lab.vm] peaks not fetched: {e}", file=sys.stderr)
+        return code
     words = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not words:
         ap.error("run needs a command")

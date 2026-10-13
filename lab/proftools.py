@@ -134,7 +134,12 @@ class ProfTools:
             blob, visible = self._keep(files) if files.is_dir() and any(p.is_file() for p in files.rglob("*")) else ("", "")
         finally:
             shutil.rmtree(out, ignore_errors=True)
-        result = {"returncode": r["returncode"], "bundle": blob, "workspace_copy": visible, "instrument": r["instrument"],
+        from lab import calibrate
+        try:
+            cal = calibrate.calibrate_ncu(self.s.ledger_root / blob / "metrics.csv", r.get("gpu")) if blob and tool == "kernel" else None
+        except Exception as e:                   # noqa: BLE001
+            cal = {"error": f"calibration failed: {type(e).__name__}: {e}"}
+        result = {"calibrated": cal, "returncode": r["returncode"], "bundle": blob, "workspace_copy": visible, "instrument": r["instrument"],
                   "argv": r["argv"], "seconds": time.monotonic() - t0, "output": r["output"]}
         self._record("profile", tool, args, result, snap)
         if r["returncode"] != 0 or not r["head"]:

@@ -119,6 +119,10 @@ def test_bench_serves_and_measures(lab):
     assert out["metrics"]["single_stream"]["value"] is not None
     rec = next(ledger.records(s.ledger_root, kind="bench"))
     assert rec["config"] == {"split": "seen", "tier": "short", "seed": tb.seed} and rec["result"]["verdict"] == "ok"
+    cal = out["calibrated"]["single_stream"]                   # every number with its context, or why it has none
+    assert cal["value"] == out["metrics"]["single_stream"]["value"] and cal["fingerprint"]["tier"] == "short"
+    assert ("ceiling_missing" in cal) == (cal.get("ceiling") is None) and "reference_missing" in cal
+    assert cal["shape"]["prompt_tokens_mean"] > 0 if cal.get("shape") else True
     assert rec["result"]["ready_s"] is not None and (s.run_dir / "serve-bench.log").exists()
 
 

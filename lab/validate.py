@@ -25,7 +25,7 @@ import sys
 import time
 from pathlib import Path
 
-from lab import serve, target
+from lab import calibrate, gpu, serve, target
 
 
 def band_pct(values: list[float]) -> float | None:
@@ -47,7 +47,8 @@ def write_noise(regime: str, values: list[float], t: target.Target, extra: dict 
 
 
 def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: list[str] | None = None,
-             out: Path | None = None, encoder=None, log_dir: Path | None = None) -> dict:
+             out: Path | None = None, encoder=None, log_dir: Path | None = None,
+             reference_regimes: bool = True) -> dict:
     from correctness import client, run as crun, tasks
     from correctness.gate import Thresholds
     from regimes import suite
@@ -94,6 +95,19 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
         for n in names:
             report["noise"][n] = write_noise(n, values[n], t, {"tier": "short", "split": "seen"})
     report["bands_measured"] = all(d["band_pct"] is not None for d in report["noise"].values()) if names and noise_runs else None
+    # 4. the reference engine under the same regimes, once, without its determinism switches: what every bench is shown next to
+    if reference_regimes and names:
+        with serve.Served(target.ENV_ROOT, calibrate.perf_reference(t), log=log_dir / "serve-reference-regimes.log",
+                          jailed=False) as srv:
+            rows: list = []
+            ctx = suite.Ctx.from_target(t, srv.url, split="seen", tier="short", seed=0, rows=rows)
+            fp = calibrate.fingerprint(t, gpu.query(), "short", "seen", 0)
+            for n in names:
+                k = len(rows)
+                r = suite.REGIMES[n](ctx)
+                calibrate.write_reference(t, n, r, fp, rows[k:])
+                report.setdefault("reference_regimes", {})[n] = r["value"] if r["valid"] else None
+            srv.exclusive()
     (out / "report.json").write_text(json.dumps(report, indent=1, default=str))
     return report
 
@@ -103,11 +117,13 @@ def main(argv=None) -> int:
     target.add_argument(ap)
     ap.add_argument("--tier", choices=("dev", "full"), default="dev")
     ap.add_argument("--noise-runs", type=int, default=3)
+    ap.add_argument("--no-reference-regimes", action="store_true", help="skip measuring the reference under the regimes")
     ap.add_argument("--regimes", help="comma-separated (default: all)")
     ap.add_argument("--out")
     a = ap.parse_args(argv)
     t = target.load(a.target)
-    rep = validate(t, a.tier, a.noise_runs, a.regimes.split(",") if a.regimes else None, Path(a.out) if a.out else None)
+    rep = validate(t, a.tier, a.noise_runs, a.regimes.split(",") if a.regimes else None, Path(a.out) if a.out else None,
+                   reference_regimes=not a.no_reference_regimes)
     for name, c in rep["candidates"].items():
         print(f"{c['kind']:4s} {name}: {c['verdict'].upper()}" + (f"  {c['reasons']}" if c["reasons"] else ""))
     for n, d in rep["noise"].items():

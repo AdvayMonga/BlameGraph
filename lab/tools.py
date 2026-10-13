@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from lab import corpus, engine, ledger, target
+from lab import calibrate, corpus, engine, ledger, target
 from lab.agent import ToolSpec
 from lab.budget import Budget, BudgetExceeded, gpu_rate
 from lab.evaltools import EvalTools
@@ -123,8 +123,12 @@ class Toolbox(EvalTools, ProfTools):
             blob, visible = self._keep(out / "files") if (out / "files").is_dir() else ("", "")
         finally:
             shutil.rmtree(out, ignore_errors=True)
+        try:                                     # the blob is the bundle itself (worker copies it to `files`)
+            cal = calibrate.calibrate_kernels(self.s.ledger_root / blob, r.get("gpu")) if blob else None
+        except Exception as e:                   # noqa: BLE001  never costs the measurement it describes
+            cal = {"error": f"calibration failed: {type(e).__name__}: {e}"}
         result = {"returncode": r["returncode"], "bundle": blob, "workspace_copy": visible,
-                  "seconds": time.monotonic() - t0, "output": r["output"]}
+                  "seconds": time.monotonic() - t0, "output": r["output"], "calibrated": cal}
         self._record("profile", "profile", args, result, snap)
         if r["returncode"] != 0 or not blob:
             return f"profile failed ({r['returncode']}):\n{result['output']}"
