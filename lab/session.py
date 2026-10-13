@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lab import agent, engine, ledger, target
+from lab import agent, engine, experiments, ledger, target
 from lab.budget import Budget, BudgetExceeded
 from lab.safety import grader
 from lab.task import Task
@@ -101,6 +101,8 @@ def brief(cfg: RunConfig, s: Session, snapshot_id: str, n: int) -> str:
             f"Referee (this run so far):\n{json.dumps(referee(s), default=str)}\n\n"
             f"{_baseline(s)}\n\n"
             f"Last session of this run:\n{json.dumps(last[0]) if last else 'none'}\n\n"
+            f"Hypotheses of this run (your records: expected, measured, gap, reflection):\n"
+            f"{json.dumps(experiments.summary(s.ledger_root, s.run_id)) or '[]'}\n\n"
             "Every record of this and earlier runs is readable with the `ledger` tool.")
 
 
