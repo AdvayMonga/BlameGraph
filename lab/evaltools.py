@@ -24,7 +24,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from lab import artifacts, ledger, serve, target, worker
+from lab import artifacts, calibrate, ledger, serve, target, worker
 from validity.holdout import HoldoutGuard, Refused
 
 HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT = 100, 2.0, 0.5
@@ -170,12 +170,14 @@ class EvalTools:
                       "artifacts": artifacts.store(work, self.s.ledger_root)}
             self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier, "seed": seed})
             return _said("bench", result)
-        result = {"verdict": "ok", "metrics": headline(r["results"]), "regimes": r["results"], "tier": tier,
-                  "seconds": time.monotonic() - t0, "ready_s": r["ready_s"],
+        cal = calibrate.calibrate_results(r["results"], artifacts.read_rows(work), target.load(), r.get("gpu"), tier,
+                                          "seen", seed)
+        result = {"verdict": "ok", "metrics": headline(r["results"]), "calibrated": cal, "regimes": r["results"],
+                  "tier": tier, "seconds": time.monotonic() - t0, "ready_s": r["ready_s"], "gpu": r.get("gpu"),
                   "artifacts": artifacts.store(work, self.s.ledger_root), **_killed(r)}
         self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier, "seed": seed})
         return json.dumps({"snapshot": snap.id, "split": "seen", "tier": tier, "metrics": result["metrics"],
-                           **_killed(r)}, indent=1)
+                           "calibrated": cal, **_killed(r)}, indent=1)
 
     # -- equiv --------------------------------------------------------------------------
     def equiv(self, args: dict) -> str:
@@ -322,11 +324,18 @@ class EvalTools:
             work = self._work("base")
             try:                                # a contaminated base raises: never cached, every later submit reads it
                 r = self._measure(tree, work, f"serve-base-{split}.log", names=missing, split=split, tier=tier,
-                                  passive=False)
+                                  passive=split == "seen")     # held-out rows never leave the worker
+                base_rows = artifacts.read_rows(work) if split == "seen" else []
             finally:
                 shutil.rmtree(work, ignore_errors=True)
             have.update(headline(r["results"]))
             cache.write_text(json.dumps(have, indent=1))
+            if split == "seen":                 # the base's context travels with the baseline record
+                cal = cache.with_suffix(".calibrated.json")
+                prior = json.loads(cal.read_text()) if cal.exists() else {}
+                prior.update(calibrate.calibrate_results(r["results"], base_rows, t, r.get("gpu"), tier, split,
+                                                         self.seed))
+                cal.write_text(json.dumps(prior, indent=1))
         return have
 
     def baseline(self, commit: str) -> dict:
@@ -338,7 +347,10 @@ class EvalTools:
         self._t0 = time.monotonic()
         try:
             seen = self.base_seen(target.load(), names)
-            result = {"verdict": "ok", "metrics": {n: seen[n] for n in names}}
+            cal = self.s.run_dir / f"base-seen-{BENCH_TIER}.calibrated.json"
+            calibrated = json.loads(cal.read_text()) if cal.exists() else {}
+            result = {"verdict": "ok", "metrics": {n: seen[n] for n in names},
+                      "calibrated": {n: calibrated[n] for n in names if n in calibrated}}
         except Exception as e:                      # no GPU or a base that will not serve is itself the fact
             result = _failed(e)
         return ledger.append({"kind": "baseline", "run": self.s.run_id, "session": self.s.session_id,
