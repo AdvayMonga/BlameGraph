@@ -30,8 +30,11 @@ echo "== CUDA toolkit"
 nvcc --version 2>/dev/null | tail -1 || ls /usr/local/cuda/bin/nvcc 2>/dev/null || echo "nvcc: not on PATH"
 
 echo "== Nsight"
-# CUDA images keep ncu in /usr/local/cuda/bin, which is on no login PATH; the tools look it up by name.
-command -v ncu >/dev/null || { [ -x /usr/local/cuda/bin/ncu ] && $SUDO ln -sf /usr/local/cuda/bin/ncu /usr/local/bin/ncu; }
+# CUDA images keep ncu in /usr/local/cuda/bin, on no login PATH, and that one is only a launcher for the install under
+# /opt/nvidia/nsight-compute/<version>: link the real one, so the tool's jail mounts its whole install root.
+ncu_real=$(ls -d /opt/nvidia/nsight-compute/*/ncu 2>/dev/null | sort -V | tail -1)
+if [ -n "$ncu_real" ]; then $SUDO ln -sf "$ncu_real" /usr/local/bin/ncu
+elif ! command -v ncu >/dev/null && [ -x /usr/local/cuda/bin/ncu ]; then $SUDO ln -sf /usr/local/cuda/bin/ncu /usr/local/bin/ncu; fi
 if ! command -v nsys >/dev/null || ! command -v ncu >/dev/null; then
   $SUDO apt-get update -qq
   $SUDO apt-get install -y -qq nsight-systems nsight-compute 2>/dev/null \

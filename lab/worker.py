@@ -149,6 +149,8 @@ def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     work = tree / proftools.OUT
     work.mkdir()
     read = [Path(exe).parent, Path(exe).parent.parent]     # the install root: nsys's importer lives beside its binary dir
+    if Path("/opt/nvidia").is_dir():
+        read.append(Path("/opt/nvidia"))                    # where launchers like CUDA's bin/ncu find the real install
     src = T.workload_flags(a, harness, proftools._int(a, "requests", *proftools.WORKLOAD["requests"]))
     argv = [*ins["wrap"](exe, work), engine.python(), "-m", "lab.profile", *ins["flags"], *src, *ins["extra"](exe),
             "--out", str(work / "bundle")]
