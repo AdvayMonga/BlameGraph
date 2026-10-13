@@ -30,6 +30,8 @@ echo "== CUDA toolkit"
 nvcc --version 2>/dev/null | tail -1 || ls /usr/local/cuda/bin/nvcc 2>/dev/null || echo "nvcc: not on PATH"
 
 echo "== Nsight"
+# CUDA images keep ncu in /usr/local/cuda/bin, which is on no login PATH; the tools look it up by name.
+command -v ncu >/dev/null || { [ -x /usr/local/cuda/bin/ncu ] && $SUDO ln -sf /usr/local/cuda/bin/ncu /usr/local/bin/ncu; }
 if ! command -v nsys >/dev/null || ! command -v ncu >/dev/null; then
   $SUDO apt-get update -qq
   $SUDO apt-get install -y -qq nsight-systems nsight-compute 2>/dev/null \
@@ -67,9 +69,12 @@ fi
 $SUDO docker build -q -t lab-jail -f "$here/safety/jail.Dockerfile" "$here/safety" >/dev/null
 $SUDO docker run --rm --gpus all --network none lab-jail nvidia-smi -L && echo "jail: gpu ok" || echo "jail: no GPU in the container"
 # The agent's workbench has the internet but not the cloud's metadata service (instance credentials, user-data).
-$SUDO iptables -C DOCKER-USER -d 169.254.0.0/16 -j DROP 2>/dev/null || $SUDO iptables -I DOCKER-USER -d 169.254.0.0/16 -j DROP
+# Only that address: a cloud's DNS resolver can sit in 169.254.0.0/16 too, and the workbench needs names.
+$SUDO iptables -C DOCKER-USER -d 169.254.169.254 -j DROP 2>/dev/null || $SUDO iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
 $SUDO docker run --rm lab-jail python3 -c "import socket; socket.create_connection(('169.254.169.254', 80), timeout=3)" \
   2>/dev/null && echo "workbench: METADATA REACHABLE" || echo "workbench: metadata blocked"
+$SUDO docker run --rm lab-jail python3 -c "import socket; socket.create_connection(('pypi.org', 443), timeout=10)" \
+  2>/dev/null && echo "workbench: internet ok (DNS and egress)" || echo "workbench: NO INTERNET (DNS or egress)"
 
 echo "== counters: can a non-admin process read GPU performance counters?"
 # ncu needs NVreg_RestrictProfilingToAdminUsers=0 (or root). Recorded as a fact about this venue.

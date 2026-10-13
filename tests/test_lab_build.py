@@ -66,7 +66,7 @@ def test_the_allowed_hosts_are_the_index_defaults_plus_what_the_files_and_build_
     tree.mkdir()
     (tree / "pyproject.toml").write_text('[[tool.uv.index]]\nurl = "https://download.pytorch.org/whl/cu130"\n')
     got = build.hosts(tree, "uv sync --index-url https://mirror.example.org/simple")
-    assert got == {"pypi.org", "files.pythonhosted.org", "download.pytorch.org", "mirror.example.org"}
+    assert got == {*build.INDEX_HOSTS, "mirror.example.org"} and "pypi.nvidia.com" in got
 
 
 def proxy_request(sock_path: Path, line: bytes) -> bytes:

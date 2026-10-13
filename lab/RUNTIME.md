@@ -173,7 +173,8 @@ not yet over SSH to a VM. `agent`, `exec`, `snapshot`, `restore` and `facts` com
   interpreter, weights, CUDA and the CLI binary read-only, so an install in the workbench never reaches a
   measurement. Container root is uid 0 on the host kernel (no user-namespace remap): an escape is host root,
   accepted under decision 5; `userns-remap` is the hardening step. `vm-setup.sh` drops container traffic to
-  169.254.0.0/16 (the cloud metadata service) and checks it.
+  169.254.169.254 (the cloud metadata service; only that address, a cloud's DNS can sit elsewhere in 169.254/16) and
+  checks both that and the workbench's internet.
 - **Pause** (`container.quiet`): around every `measure`, `equiv` and `profile` job, processes in the workbench
   holding the GPU are killed, the container is paused, a second sweep catches any that started before the pause
   landed, and it waits for their memory to be released; thawed after. The killed processes are in the record and

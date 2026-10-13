@@ -23,7 +23,10 @@ from pathlib import Path
 from lab import engine, target
 from lab.safety import container
 
-INDEX_HOSTS = ("pypi.org", "files.pythonhosted.org")        # plus every host the dependency files and build name
+# PyPI, plus the wheel hosts that CUDA builds of torch pull from (its nvidia-* dependencies live on NVIDIA's index);
+# every https host the dependency files and the build command name is added per build.
+INDEX_HOSTS = ("pypi.org", "files.pythonhosted.org", "download.pytorch.org", "download-r2.pytorch.org",
+               "pypi.nvidia.com")
 PROXY_PORT_IN = 3128
 LOG_TAIL = 4000
 TIMEOUT_S = 3600

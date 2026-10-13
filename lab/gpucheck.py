@@ -70,7 +70,7 @@ def jail_gpu(tmp: Path) -> str:
 @check("workbench")
 def workbench(tmp: Path) -> str:
     """The workbench: the GPU, root, apt and pip over the internet, and no cloud metadata service."""
-    script = ("set -e; nvidia-smi -L; id -u; apt-get update -qq; apt-get install -y -qq --no-install-recommends "
+    script = ("cat /etc/resolv.conf; set -e; nvidia-smi -L; id -u; apt-get update -qq; apt-get install -y -qq --no-install-recommends "
               "python3-pip >/dev/null; pip3 install --quiet --break-system-packages six; python3 -c 'import six'; "
               "echo pip-ok; python3 -c \"import socket; socket.create_connection(('169.254.169.254', 80), timeout=3)\" "
               "&& echo METADATA-REACHABLE || echo metadata-blocked")
