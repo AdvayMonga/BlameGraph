@@ -36,6 +36,16 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   Linux the Claude CLI runs in a per-session workbench container: GPU, internet, root inside, engine venv read-only;
   its model calls go through `apiproxy.py`, which injects the key, prices usage and enforces the session cap; the
   workbench is paused by `container.quiet` around measure/equiv/profile jobs, GPU holders killed and recorded),
+  `experiments.py` (decided 2026-10-11: no measured number without the agent's reasoning and no reasoning without
+  the number; measured tools require an open `hypothesis` record and an `expect` {metric, value, unit, why}, the
+  record keeps both with the computed gap, and the next measured call is refused until a `reflection` on the last
+  one is filed; the brief lists the run's hypotheses with their measurements and reflections) +
+  `calibrate.py` (every measured number with its context, decided 2026-10-11: `% of ceiling` from `validity/ceiling`
+  on measured peaks, `% of reference` from `knowledge/reference/<target>/<regime>.json` written by `lab.validate`
+  with `perf_reference` (the correctness reference minus its determinism switches, which are slow by design),
+  and for kernels their share of the window; a ceiling or reference is shown only under a matching config
+  fingerprint (model, dtypes, max_model_len, tier, split, corpus version, GPU), else the field says why it is
+  missing; bench, baseline, profile and kernel records carry a `calibrated` block, the brief shows the baseline's),
   `tools.py` (metered tools: test, profile, ledger, budget, restore, note; every record's `cost` has wall seconds, and
   GPU tools charge them at `LAB_GPU_USD_PER_HOUR` / the target's `[cost] gpu_usd_per_hour` to the run's budget) +
   `proftools.py` (trace = nsys, kernel = ncu, hostprof = py-spy, each wrapping lab.profile's workload in the jail
@@ -107,7 +117,14 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   (`verdict` re-judges saved results under the policy, no server).
 - `canaries/cheat_proxy.py` — cheat proxy in front of any OpenAI-compatible server (`truncate`, `early_eos`,
   `fake_first`, `drop`, `cache` (streamed and not), `inflate_usage`); `python -m canaries --upstream URL --cheat NAME`.
-- `validity/` — `roofline.py` (analytical decode ceiling, no GPU; to be generalized into physical limits), `repeat_audit.py`: repeated-request audit (MLPerf TEST04-style), judges decode time per token, not TTFT, so prefix caching passes and replayed answers fail; `python -m validity repeat --url URL`. `tier_agreement.py`: `tier_agreement(changes)`: Spearman, Kendall tau-b, bootstrap CI, out-of-band disagreements; short tier usable if n ≥ 8, rho ≥ 0.8, CI low ≥ 0.5. `holdout.py`: `HoldoutGuard` (Thresholdout query budget, state persisted atomically under a file lock, deterministic from seed) and `SealedSplit` (hash manifest, one logged unseal per corpus version). Keep sigma small relative to the threshold.
+- `validity/` — `ceiling.py` (physical bounds from the model's HF config and the GPU's peaks: active/total params,
+  bytes streamed per step with MoE experts-touched, decode and prefill floors, the largest batch under a TPOT limit,
+  per-objective regime ceilings: TPOT = decode step floor, TTFT = prefill floor at the p99 prompt, goodput =
+  1 / (prefill compute + output tokens at the decode ceiling, batch capped by TPOT and by KV fitting in HBM); no
+  bound for speedups, cold start or sessions/s; assumptions (one token per step, uniform routing, declared dtypes)
+  are in each `basis`, so a value above 100% means one of them does not hold; `pct_of`, `ceiling_gain` = Amdahl) + `peaks.py` (`python -m validity peaks`: HBM
+  bandwidth and bf16 GEMM measured once per GPU+driver into `knowledge/peaks/<gpu>.json`, run by `vm-setup.sh`; spec
+  sheet as the labelled fallback), `repeat_audit.py`: repeated-request audit (MLPerf TEST04-style), judges decode time per token, not TTFT, so prefix caching passes and replayed answers fail; `python -m validity repeat --url URL`. `tier_agreement.py`: `tier_agreement(changes)`: Spearman, Kendall tau-b, bootstrap CI, out-of-band disagreements; short tier usable if n ≥ 8, rho ≥ 0.8, CI low ≥ 0.5. `holdout.py`: `HoldoutGuard` (Thresholdout query budget, state persisted atomically under a file lock, deterministic from seed) and `SealedSplit` (hash manifest, one logged unseal per corpus version). Keep sigma small relative to the threshold.
 - `kernels/` — kernel equivalence: `check_kernel` (seen + held-out shapes, per-dtype tolerances, edge cases incl. non-contiguous and NaN/Inf, inputs unchanged, no aliasing, memoization, determinism) and `time_kernel` / `check_memoization` (sync, rotated buffers, L2 flush on CUDA). Validated on CPU, MPS and CUDA (H200, 2026-10-04): all tests pass; the timer resolves ~20 µs kernels at ~9% IQR, 0.2 ms at 1.5%. `make_inputs` gets a seeded CPU generator (generate on CPU, then `.to(device)`).
 - `regimes/` — load generation: drives a live OpenAI-compatible server the eight ways it gets used, client-side.
   `client.py` (one streamed chat request: TTFT from *scheduled* send to first real token, TPOT = (E2E − TTFT)/(n − 1),
@@ -237,6 +254,12 @@ a first `python -m lab.session --task ...` dry run with a tiny budget, which wai
 `engine/gpu-validated`) were judged by the old gate: re-judge with `python -m correctness verdict` on their saved
 results before deciding anything. lab `session.py --run` re-resolves
 `base` from HEAD rather than the run's original base (pre-existing; resuming after the engine moved would misaudit);
-`validity/tier_agreement.py` needs real short/full runs; `validity/roofline.py` wants generalizing to the H200 + MoE
+`validity/tier_agreement.py` needs real short/full runs. Ceilings checked on an H200 (Nebius, driver 580.173,
+2026-10-13; peaks 4.14 TB/s, 794 TFLOP/s bf16): every floor below every measurement once goodput charges only the
+prefill the server reports as uncached (vLLM's prefix cache made a prefill-inclusive bound read 147-471%). Plain vLLM:
+single_stream TPOT p99 4.1 ms (37% of ceiling), saturated 5.8 req/s (19%), long prompt 68 req/s (94%); the engine:
+21 ms (7%), 0.097 req/s (0.5%), long prompt invalid (111 requests without a response). Stored in
+`knowledge/reference/inference-server/`. Finding for the corpus: long_prompt_short_output's window repeats each
+prompt ~5x (23,185 requests over 4,794 prompts), which rewards prefix caching.
 target. The agent's tool set (e.g. a knowledge tool) is the user's design: ask first. README stays a few one-line
 feature bullets, not a dev doc.

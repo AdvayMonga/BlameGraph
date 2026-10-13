@@ -1,0 +1,56 @@
+{
+ "target": "inference-server",
+ "server": "reference",
+ "launch": "vllm serve Qwen/Qwen3-30B-A3B --dtype bfloat16 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}",
+ "env": {},
+ "regime": "single_stream",
+ "objective": "tpot_p99_s",
+ "value": 0.00414084390815831,
+ "better": "lower",
+ "valid": true,
+ "summary": {
+  "n": 20,
+  "ok": 20,
+  "error": 0,
+  "silent_drop": 0,
+  "truncated": 0,
+  "crash": 0,
+  "attainment": 1.0,
+  "meets_limits": true,
+  "ttft_p50_s": 0.026337838000017655,
+  "ttft_p99_s": 0.07710730499991314,
+  "tpot_p50_s": 0.00402400701940755,
+  "tpot_p99_s": 0.00414084390815831,
+  "output_tokens": 15988,
+  "elapsed_s": 65.61843898899997,
+  "req_per_s": 0.3047923770840194,
+  "good_req_per_s": 0.3047923770840194,
+  "output_tok_per_s": 243.6510262409651,
+  "client_lag_p99_s": 0.00013822099992921721,
+  "limits": {
+   "ttft_s": 0.5,
+   "tpot_s": 0.03
+  },
+  "valid": true,
+  "invalid_reasons": []
+ },
+ "fingerprint": {
+  "model": "Qwen/Qwen3-30B-A3B",
+  "w_dtype": "bf16",
+  "kv_dtype": "bf16",
+  "max_model_len": 32768,
+  "tier": "short",
+  "split": "seen",
+  "corpus_version": "81739c469a304fac4a486917dee281ae8182881ab64128030b3c6ce1a428c613",
+  "gpu": "NVIDIA H200",
+  "driver": "580.173.02",
+  "sm_clock_mhz": "1980",
+  "seed": 0
+ },
+ "shape": {
+  "prompt_tokens_mean": 1377.65,
+  "prompt_tokens_p99": 3406.0,
+  "output_tokens_mean": 799.4,
+  "concurrency": 1.0
+ }
+}

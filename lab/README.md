@@ -105,7 +105,7 @@ with the referee's rights, snapshot the workspace and write the ledger on every 
 | tool | does |
 |---|---|
 | `test` | lint and the fast suite on a pristine two-commit copy of the workspace, jailed |
-| `profile` | `lab.profile` on the pristine copy, jailed, on `args.corpus_class` (default `steady_interactive`, seen split, `args.seed`) or `args.synthetic`; the bundle goes into the ledger as a blob |
+| `profile` | `lab.profile` on the pristine copy, jailed, on `args.corpus_class` (default `steady_interactive`, seen split, `args.seed`) or `args.synthetic`; the bundle goes into the ledger as a blob, with each kernel's share of the window (the Amdahl denominator) in the record |
 | `trace` | `nsys profile` (`args.nsys_args`, default window-only CUDA/NVTX/OS-runtime with CUDA-graph nodes) around `lab.profile --profiler cuda-range` (window only), then `nsys stats` (kernel, CUDA API, memcpy, NVTX tables as CSV), both jailed; `.nsys-rep` + CSVs as a blob |
 | `kernel` | `ncu [--kernel-name regex:<kernel_regex>] --launch-skip N --launch-count N --set <any set> [ncu_args]` around the same workload, then `ncu --import --csv --page raw`; `.ncu-rep` + `metrics.csv` as a blob |
 | `hostprof` | `lab.profile --profiler pyspy`: py-spy record (speedscope, plus `args.pyspy_args`) for `seconds` under the repeated workload plus one `py-spy dump`; the bundle as a blob |
@@ -113,7 +113,9 @@ with the referee's rights, snapshot the workspace and write the ledger on every 
 | `budget` | dollars left |
 | `restore` | workspace back to a snapshot id (`base` resets) |
 | `note` | a note for the human; recorded, changes nothing |
-| `bench` | serve the pristine copy and run the load regimes (`regimes/`) on the seen split, short tier; one headline per regime, raw (`args.regimes`, `args.tier`, `args.seed`) |
+| `hypothesis` | the agent's hypothesis and rationale (optional `abandon_if`, `from_record`); its id is what every measured tool requires as `hypothesis_id`, with an `expect` (metric, value, unit, why) |
+| `reflect` | the agent's reflection on a measured record (optional `alternative`); the run's latest measured record needs one before the next measured call |
+| `bench` | serve the pristine copy and run the load regimes (`regimes/`) on the seen split, short tier; one headline per regime, raw (`args.regimes`, `args.tier`, `args.seed`), each with its context (`lab/calibrate.py`: % of the physical ceiling, % of the reference engine measured the same way; only under a matching config fingerprint) |
 | `equiv` | serve it and run the correctness gate (`correctness/`) against the target's reference outputs; pass, fail or inconclusive with every metric; `tier=full` uses `<reference.dir>-full` |
 | `submit` | the only thing that can produce a win. Needs a passing full-tier equiv and a seen bench on this snapshot. Measures the held-out split at the full tier, measures the base commit the same way (once per run, cached outside the jail), and records one aggregate per regime (base, new, delta %, noise band %, verdict improved/regressed/within_band/unknown_band) through the Thresholdout guard (`validity/holdout.py`, state in `lab/ledger/holdout_state.json`, seed `LAB_HOLDOUT_SEED`): the held-out numbers themselves never reach the ledger. Noise bands come from `knowledge/noise/<regime>.json` when measured |
 

@@ -19,6 +19,11 @@ def write_rows(work: Path, rows: list[dict]) -> None:
     (Path(work) / ROWS).write_text("".join(json.dumps(r) + "\n" for r in rows))
 
 
+def read_rows(work: Path) -> list[dict]:
+    p = Path(work) / ROWS
+    return [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
+
+
 def store(work: Path, root: Path) -> dict:
     """`work`'s passive data as ledger blobs, {device, telemetry, client_rows, serve_log} (None when absent); `work`
     is removed."""

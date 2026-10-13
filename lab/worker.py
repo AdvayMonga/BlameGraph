@@ -79,7 +79,8 @@ def job_measure(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
                 artifacts=out if args["passive"] else None) as srv:
             results = run_regimes(srv.url, t, args["names"], args["split"], args["tier"], args["seed"], rows)
             srv.exclusive()
-        return {"results": results, "ready_s": srv.ready_s, "killed": killed}
+        from lab import gpu
+        return {"results": results, "ready_s": srv.ready_s, "gpu": gpu.query(), "killed": killed}
     finally:
         if rows is not None:
             artifacts.write_rows(out, rows)
@@ -125,7 +126,8 @@ def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
         if bundles:
             T._drop_links(bundles[-1])
             shutil.copytree(bundles[-1], files)
-        return {"returncode": proc.returncode, "output": (proc.stdout + proc.stderr)[-3000:]}
+        from lab import gpu
+        return {"returncode": proc.returncode, "output": (proc.stdout + proc.stderr)[-3000:], "gpu": gpu.query()}
     ins = proftools.instrument(kind, a)
     exe = shutil.which(ins["binary"])
     if not exe:
@@ -152,8 +154,9 @@ def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     found = sorted(work.glob(ins["summary"]))
     if any(p.is_file() for p in work.rglob("*")):
         shutil.copytree(work, files)
+    from lab import gpu
     return {"returncode": proc.returncode, "instrument": exe, "argv": commands, "output": log[-3000:],
-            "head": proftools._head(found[-1] if found else None)}
+            "head": proftools._head(found[-1] if found else None), "gpu": gpu.query()}
 
 
 JOBS = {"test": job_test, "measure": job_measure, "equiv": job_equiv, "profile": job_profile}
