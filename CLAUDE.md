@@ -243,6 +243,10 @@ fused RMSNorm/RoPE in Triton and added a batch-1 decode graph: seen-split short-
 13.1 ms; not submitted, correctness not run (equiv needs `data/equiv/ref`, absent in a worktree). A base dev-tier equiv
 on this engine took > 46 min for 774 of 1,597 items at concurrency 16 (vLLM: ~10 min): the tool descriptions' "10 min
 at tier dev" is wrong for this engine. Workbench processes cannot change clocks or power limits on that platform.
+`python -m lab.gpucheck` then passed every item on Nebius H200s (2026-10-13, three runs, fixes between them):
+jail GPU, quiet, exclusivity, hostprof; workbench (after blocking only 169.254.169.254: the /16 took DNS with it);
+the dependency build (after allowing pypi.nvidia.com); ncu (after linking the real /opt/nvidia install). The jail's
+user can read GPU performance counters on that image.
 
 ## Next
 GPU (needs spend approval): resolve the BF16 puzzle (plain BF16 on the dev tier at concurrency 32 and 128 on one VM,
