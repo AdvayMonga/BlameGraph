@@ -23,7 +23,8 @@ WRITER_FIELDS = {"id", "at", "schema"}
 # A held-out record is one aggregate per metric and nothing else: these fields, scalar values.
 HELDOUT_FIELDS = {"kind", "config", "metrics", "run", "session", "snapshot", "snapshot_blob", "patch",
                   "tool", "args", "cost", "claim", "experiment"}
-HELDOUT_METRIC_KEYS = {"base", "new", "delta_pct", "band_pct", "verdict"}
+HELDOUT_METRIC_KEYS = {"base", "new", "delta_pct", "band_pct", "verdict",
+                       "ceiling", "pct_of_ceiling_base", "pct_of_ceiling_new", "ceiling_from", "reference_missing"}
 EXPERIMENT_FIELDS = {"hypothesis", "expect", "actual", "actual_missing", "gap", "gap_pct_of_expected", "noise_band_pct"}
 SCALAR = (int, float, str, bool, type(None))
 

@@ -94,6 +94,20 @@ def aggregate(base: dict, delta: float | None, better: str, band_pct: float | No
     return {"base": b, "new": b * (1 + delta / 100), "delta_pct": delta, "band_pct": band_pct, "verdict": verdict}
 
 
+def heldout_context(seen_cal: dict, base: dict, delta: float | None, better: str) -> dict:
+    """A held-out aggregate's context: the ceiling computed from the base commit's seen-split request shape (nothing
+    about the held-out requests goes into it), as % for the base and the new value. The reference is measured on the
+    seen split at the short tier, so it is not comparable to a held-out full-tier number."""
+    from validity.ceiling import pct_of
+    c = seen_cal.get("ceiling")
+    b = base.get("value")
+    new = b * (1 + delta / 100) if b is not None and delta is not None else None
+    return {"ceiling": c, "pct_of_ceiling_base": pct_of(b, c, better), "pct_of_ceiling_new": pct_of(new, c, better),
+            "ceiling_from": "the base commit's seen-split request shape" if c is not None
+            else (seen_cal.get("ceiling_missing") or "no seen-split calibration of the base in this run"),
+            "reference_missing": "the reference is measured on the seen split at tier short; this is held-out at tier full"}
+
+
 def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
     """What the referee measures against: the parameters the agent cannot read off its ledger. Facts, not advice."""
     from regimes import suite
@@ -108,11 +122,37 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
                         "tasks": list(t.tasks)},
         "noise_bands_pct": {n: noise_band_pct(n) for n in suite.REGIMES},
         "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,
+        "ceilings": _ceiling_facts(t, ledger_root),
     }
     if ledger_root and (Path(ledger_root) / "holdout_state.json").exists():
         st = json.loads((Path(ledger_root) / "holdout_state.json").read_text())
         facts["heldout_queries_left"] = st.get("budget_left")
     return facts
+
+
+def _ceiling_facts(t: target.Target, ledger_root: Path | None) -> dict:
+    """Peaks, streamed bytes and floors on the GPU this run measured on; nothing before its first measurement."""
+    g = _last_gpu(ledger_root)
+    if g is None:
+        return {"missing": "no measurement in this ledger yet, so no GPU to compute ceilings for"}
+    try:
+        return calibrate.facts(t, g)
+    except Exception as e:                       # noqa: BLE001
+        return {"missing": f"ceilings not computed: {type(e).__name__}: {e}"}
+
+
+def _last_gpu(ledger_root: Path | None) -> dict | None:
+    """The GPU the run's measurements last ran on, from the latest bench or baseline record (the controller has none)."""
+    if not ledger_root or not (Path(ledger_root) / "ledger.jsonl").exists():
+        return None
+    for r in reversed(list(ledger.records(ledger_root))):
+        g = (r.get("result") or {}).get("gpu") if r.get("kind") == "bench" else None
+        if g is None and r.get("kind") == "baseline":
+            fp = next(iter(((r.get("result") or {}).get("calibrated") or {}).values()), {}).get("fingerprint") or {}
+            g = {"name": fp.get("gpu"), "driver_version": fp.get("driver")} if fp.get("gpu") else None
+        if g:
+            return g
+    return None
 
 
 def equiv_rows(out: Path) -> list[dict]:
@@ -241,6 +281,8 @@ class EvalTools:
             private = self.s.run_dir / "heldout-private" / f"{snap.id}-{time.strftime('%Y%m%dT%H%M%S')}"
             r = self._measure(tree, private, "serve-submit.log", names=names, split="heldout", tier="full", passive=True)
             new = headline(r["results"])
+            cal_path = self.s.run_dir / f"base-seen-{BENCH_TIER}.calibrated.json"
+            seen_cal = json.loads(cal_path.read_text()) if cal_path.exists() else {}
             metrics, better = {}, {}
             for n in names:
                 held_d, seen_d = delta_pct(base.get(n, {}), new[n]), delta_pct(base_seen.get(n, {}), seen[n])
@@ -248,7 +290,8 @@ class EvalTools:
                 # with the seen one. Without a seen delta to compare, nothing held-out is reported at all.
                 held_d = guard.query(seen_d, held_d)["value"] if held_d is not None and seen_d is not None else None
                 better[n] = new[n].get("better", "higher")
-                metrics[n] = aggregate(base.get(n, {}), held_d, better[n], noise_band_pct(n, t))
+                metrics[n] = {**aggregate(base.get(n, {}), held_d, better[n], noise_band_pct(n, t)),
+                              **heldout_context(seen_cal.get(n) or {}, base.get(n, {}), held_d, better[n])}
         except Refused as e:
             self._record("submit", "submit", args, {"verdict": "refused", "reason": str(e)}, snap)
             return f"submit refused: {e}"
