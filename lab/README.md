@@ -145,7 +145,7 @@ Only tool time is charged: the VM also bills while the model thinks between call
 | `kernel` | yes | seconds × rate | ~1.5 min measured at 4-8 launches; each launch is replayed once per metric pass, so it grows with `launch_count` and `full` |
 | `hostprof` | yes | seconds × rate | ~35 s plus `seconds` (measured) |
 | `bench` | yes | seconds × rate | 5-10 min per regime at tier short, 15-25 at full, plus ~2 min engine start |
-| `equiv` | yes | seconds × rate | ~10 min at tier dev, 30-60 at full |
+| `equiv` | yes | seconds × rate | tier dev (~1.6k items): ~10 min on vLLM, ~95 min on the example engine (17 items/min, H200); full is ~12x the items |
 | `submit` | yes | seconds × rate | 15-25 min per regime (held-out, full tier), plus the base commit measured once per run |
 
 The same estimates are in each tool's description, stated as facts about cost, with the configured rate.
