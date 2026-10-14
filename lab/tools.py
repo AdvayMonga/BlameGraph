@@ -266,7 +266,7 @@ class Toolbox(EvalTools, ProfTools):
                      "with the base commit measured the same way. Needs a passing full-tier equiv and a completed "
                      "short-tier seen bench on this snapshot. `regimes`: default those of that bench. The only thing "
                      "that can produce a win. Returns one aggregate per regime (base, new, delta %, noise band %, "
-                     "verdict) and, with a task, its score. Takes one engine start plus a held-out full-tier "
+                     "verdict, and % of the ceiling computed from the base's seen-split request shape) and, with a task, its score. Takes one engine start plus a held-out full-tier "
                      f"measurement per regime, the base commit's held-out measurement once per run, and up to one of the "
                      f"{HOLDOUT_BUDGET} held-out queries per regime." + gpu("15-25 min per regime"),
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}}}},

@@ -42,7 +42,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   with `perf_reference` (the correctness reference minus its determinism switches, which are slow by design),
   and for kernels their share of the window; a ceiling or reference is shown only under a matching config
   fingerprint (model, dtypes, max_model_len, tier, split, corpus version, GPU), else the field says why it is
-  missing; bench, baseline, profile and kernel records carry a `calibrated` block, the brief shows the baseline's),
+  missing; bench, baseline, profile and kernel records carry a `calibrated` block, the brief shows the baseline's;
+  submit's held-out aggregates carry the ceiling from the base's seen-split shape and % of it, never anything computed
+  from held-out requests; harness facts carry peaks and floors for the GPU the ledger last measured on),
   `tools.py` (metered tools: test, profile, ledger, budget, restore, note; every record's `cost` has wall seconds, and
   GPU tools charge them at `LAB_GPU_USD_PER_HOUR` / the target's `[cost] gpu_usd_per_hour` to the run's budget) +
   `proftools.py` (trace = nsys, kernel = ncu, hostprof = py-spy, each wrapping lab.profile's workload in the jail
