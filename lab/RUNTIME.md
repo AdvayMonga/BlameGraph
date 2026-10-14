@@ -207,6 +207,9 @@ on the VM:
   on the VM, mounted into the workbench, where a socat serves it on the container's own 127.0.0.1:4000. It listens on
   no interface of the VM.
 - The write guard checks the VM's workspace path; the workbench is removed over SSH when the session ends.
+- The workbench is frozen on the VM (`python -m lab.worker pause`) for the whole of every lab tool call, so the root
+  rsync of a pull or push never races a process in it swapping a file or a directory for a link (2026-10-13 review:
+  a swapped directory could have carried the held-out split out, or let root write anywhere on the VM).
 - Tested without a VM: rsync mirroring (content edits, deletions, links), the VM-side `workbench` command, and the
   argument quoting through bash and ssh (an `ssh` stand-in that prints the remote command). Not yet tested against a
   real VM.

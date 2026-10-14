@@ -152,7 +152,10 @@ class ClaudeAgentSDK:
             cli_tmp = Path(f"{tmp_root}/claude-{os.getuid()}")    # the CLI's own per-project scratch; Bash fails without it
             cli_tmp.mkdir(parents=True, exist_ok=True)
             config = jail.settings([home.resolve(), tmp.resolve(), ws, cli_tmp.resolve()], engine.venv(),
-                                   [base_url.removeprefix("http://")], readonly=_weights(), python=engine.python())
+                                   [base_url.removeprefix("http://")], readonly=_weights(), python=engine.python(),
+                                   local_binding=True)     # srt on macOS reaches 127.0.0.1 only with it (and then
+                                                           # every local port: dev only; measurements that count run
+                                                           # on Linux, where each jail has its own network)
             argv = jail.wrap(config, spec.scratch / "srt.json", [str(cli)])
             keep = " ".join(f'"{k}=${k}"' for k in PASS_ENV)
             sets = " ".join(f"{k}={shlex.quote(v)}" for k, v in cli_env(home, tmp, ws, base_url).items())
@@ -166,15 +169,18 @@ class ClaudeAgentSDK:
         from claude_agent_sdk import (ClaudeAgentOptions, HookMatcher, ResultMessage,
                                       create_sdk_mcp_server, query, tool)
 
-        # Sharing this host, the workbench is frozen for every lab tool call: nothing in it can swap a file for a link
-        # while the tool snapshots, restores or copies into the workspace (with a Remote worker only rsync writes here).
-        shared = spec.remote is None and self.containerized()
+        # The workbench is frozen for every lab tool call, wherever it runs: nothing in it can swap a file or a dir for a
+        # link while the tool snapshots, restores, copies into the workspace, or (Remote) rsyncs it as root on the VM.
+        if spec.remote is not None:
+            frozen = lambda: spec.remote.paused(spec.workbench)                                  # noqa: E731
+        else:
+            frozen = lambda: container.paused(spec.workbench if self.containerized() else None)  # noqa: E731
 
         def adapt(t: ToolSpec):
             async def call(args: dict[str, Any]) -> dict[str, Any]:
                 try:
                     def run():
-                        with container.paused(spec.workbench if shared else None):
+                        with frozen():
                             return t.fn(args)
                     text = await asyncio.to_thread(run)          # a long test run must not block the transport
                 except Exception as e:          # the agent sees the refusal, the harness keeps going

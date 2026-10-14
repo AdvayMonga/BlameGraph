@@ -138,21 +138,30 @@ def _kill_gpu_holders(name: str) -> list[dict]:
     return hit
 
 
+def pause(name: str | None) -> bool:
+    """Freeze a running container; True only if this call froze it (False: absent, stopped, or already paused)."""
+    if not name or _docker() is None or not running(name):
+        return False
+    if subprocess.run([_docker(), "inspect", "-f", "{{.State.Paused}}", name], capture_output=True,
+                      text=True).stdout.strip() == "true":
+        return False
+    subprocess.run([_docker(), "pause", name], capture_output=True, check=True)
+    return True
+
+
+def unpause(name: str) -> None:
+    subprocess.run([_docker(), "unpause", name], capture_output=True)
+
+
 @contextmanager
 def paused(name: str | None):
     """The container frozen for the block (a no-op if it is not running); left paused if it already was."""
-    if not name or _docker() is None or not running(name):
-        yield
-        return
-    already = subprocess.run([_docker(), "inspect", "-f", "{{.State.Paused}}", name], capture_output=True,
-                             text=True).stdout.strip() == "true"
-    if not already:
-        subprocess.run([_docker(), "pause", name], capture_output=True, check=True)
+    did = pause(name)
     try:
         yield
     finally:
-        if not already:
-            subprocess.run([_docker(), "unpause", name], capture_output=True)
+        if did:
+            unpause(name)
 
 
 @contextmanager

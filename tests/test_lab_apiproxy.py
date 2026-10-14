@@ -178,3 +178,23 @@ def test_a_request_whose_worst_case_would_pass_the_cap_is_refused_before_it_goes
     with apiproxy.Proxy(0.10, upstream=url) as p:                 # 10k output tokens of opus is $0.20
         status, body = post(p, "/v1/messages", {"model": "claude-opus-5-5", "max_tokens": 10000})
     assert status == 403 and b"would be" in body and seen == []
+
+
+def test_a_bodyless_or_unpriced_messages_request_is_refused_not_crashed(upstream, monkeypatch):
+    url, seen = upstream
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-real")
+    with apiproxy.Proxy(5.0, upstream=url) as p:
+        c = http.client.HTTPConnection(urlsplit(p.url).netloc, timeout=10)
+        c.request("GET", "/v1/messages")
+        r = c.getresponse()
+        assert r.status == 403 and b"priced model" in r.read()
+        assert post(p, "/v1/messages", {"max_tokens": 10})[0] == 403
+    assert seen == []
+
+
+def test_the_input_is_reserved_too(upstream, monkeypatch):
+    url, seen = upstream
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-real")
+    with apiproxy.Proxy(0.05, upstream=url) as p:                   # 20k bytes of opus input is up to $0.08
+        status, body = post(p, "/v1/messages", {"model": "claude-opus-5-5", "max_tokens": 1, "pad": "x" * 20000})
+    assert status == 403 and seen == []

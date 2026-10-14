@@ -23,6 +23,7 @@ rsync (pulled files are untrusted: links stay links and the audit refuses them),
 from __future__ import annotations
 
 import dataclasses
+from contextlib import contextmanager
 import hashlib
 import io
 import json
@@ -264,6 +265,16 @@ class Remote:
         req = {"name": name, "session": session, "workspace": workspace, "sdk_version": sdk_version}
         return json.loads(self._run("workbench", json.dumps(req).encode()))
 
+    @contextmanager
+    def paused(self, name: str | None):
+        """The workbench on the worker host frozen for the block (as `container.paused` there)."""
+        did = bool(name) and self._run(f"pause {shlex.quote(name)}").decode().strip() == "paused"
+        try:
+            yield
+        finally:
+            if did:
+                self._run(f"unpause {shlex.quote(name)}")
+
     def remove_workbench(self, name: str | None) -> None:
         if name:
             self._run(f"rm {shlex.quote(name)}")
@@ -400,9 +411,13 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(_workbench(json.loads(sys.stdin.buffer.read()))))
     elif argv[:1] == ["rm"] and len(argv) == 2:
         container.remove(argv[1])
+    elif argv[:1] == ["pause"] and len(argv) == 2:        # prints "paused" only if this call froze it
+        print("paused" if container.pause(argv[1]) else "")
+    elif argv[:1] == ["unpause"] and len(argv) == 2:
+        container.unpause(argv[1])
     else:
         print(f"usage: python -m lab.worker has SHA... | put SHA | run {{{','.join(JOBS)}}} | root | mkdir PATH | "
-              "workbench | rm NAME", file=sys.stderr)
+              "workbench | rm NAME | pause NAME | unpause NAME", file=sys.stderr)
         return 2
     return 0
 

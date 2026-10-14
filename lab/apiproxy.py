@@ -156,8 +156,11 @@ class Proxy:
             if req.get("speed") == "fast":
                 return self._refuse(h, 403, "fast mode is not priced here")
         metered = path == "/v1/messages"
-        # the request's worst-case output is reserved before it goes, so concurrent requests cannot overshoot the cap
-        hold = max_tokens * price(model)[1] / 1e6 if metered else 0.0
+        if metered and (not body or not isinstance(model, str) or price(model) is None):
+            return self._refuse(h, 403, "a /v1/messages request needs a JSON body naming a priced model")
+        # Its worst case is reserved before it goes (input: at most a token per byte of body; output: all of max_tokens),
+        # so concurrent requests cannot overshoot the cap.
+        hold = (len(body) * price(model)[0] + max_tokens * price(model)[1]) / 1e6 if metered else 0.0
         with self.lock:
             if metered and self.spent_usd + self.reserved_usd + hold > self.cap_usd:
                 return self._refuse(h, 403, f"this session's ${self.cap_usd:.2f} is spent (or would be by this request)")

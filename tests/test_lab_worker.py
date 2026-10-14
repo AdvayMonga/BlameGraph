@@ -135,3 +135,13 @@ def test_the_worker_builds_its_own_workbench_with_the_tunnelled_proxy(remote, tm
     assert argv[1:3] == ["run", "-i"] and "lab-workbench-r1-s1" in argv and str(cli) == argv[-1]
     assert w["sock"] == "/tmp/lab-proxy-r1-s1/proxy.sock" and "UNIX-CONNECT:/tmp/lab-proxy-r1-s1/proxy.sock" in argv[-2]
     assert "ANTHROPIC_BASE_URL=http://127.0.0.1:4000" in argv and not any("sk-" in a for a in argv)
+
+
+@pytest.mark.parametrize("said,unpaused", [(b"paused\n", True), (b"\n", False)])
+def test_remote_pause_thaws_only_what_it_froze(said, unpaused):
+    r = worker.Remote(["ssh", "host"], "~/BlameGraph", "python", {})
+    calls = []
+    r._run = lambda command, stdin=b"": calls.append(command) or (said if command.startswith("pause") else b"")
+    with r.paused("lab-workbench-r1-s1"):
+        assert calls == ["pause lab-workbench-r1-s1"]
+    assert (calls[-1] == "unpause lab-workbench-r1-s1") is unpaused
