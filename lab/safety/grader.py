@@ -16,7 +16,7 @@ from pathlib import Path
 
 from lab import engine, gpu, target
 from lab.safety import container, jail
-from lab.safety.surfaces import ALWAYS_DENY, HIDDEN, may_write
+from lab.safety.surfaces import ALWAYS_DENY, HIDDEN, deps_only, may_write
 
 IGNORED = ("*/__pycache__/*", "__pycache__/*", "*.pyc", ".pytest_cache/*", "*/.pytest_cache/*",
            ".ruff_cache/*", "*/.ruff_cache/*", "*.egg-info/*", ".DS_Store", "*/.DS_Store",
@@ -94,6 +94,12 @@ def audit(repo: Path, base: str, workspace: Path) -> Audit:
         for name in dirs + files:
             p = Path(root) / name
             rel = p.relative_to(workspace).as_posix()
+            if not p.is_symlink() and any(fnmatch(rel, g) for g in IGNORED):
+                continue
+            if _scratch(rel, blobs) and (p.is_symlink() or not (p.is_dir() or p.is_file())
+                                         or (p.is_file() and p.stat().st_size > MAX_FILE_BYTES)):
+                a.scratch.append(rel)               # never reaches the pristine tree: a venv's links, big wheels
+                continue
             if p.is_symlink():
                 a.violations.append(f"symlink: {rel}")
             elif p.is_dir() or any(fnmatch(rel, g) for g in IGNORED):
@@ -121,7 +127,22 @@ def audit(repo: Path, base: str, workspace: Path) -> Audit:
     for rel in a.modified + a.deleted:
         if not may_write(rel, new_file=False):
             a.violations.append(f"may not change: {rel}")
+    deps = target.load().deps
+    for rel in a.deleted:
+        if rel in deps:
+            a.violations.append(f"may not delete a dependency file: {rel}")
+    for rel in a.modified:
+        if rel in deps and rel.endswith(".toml"):
+            old = subprocess.run(["git", "-C", str(repo), "show", f"{base}:{rel}"], capture_output=True, text=True).stdout
+            if not deps_only(old, (workspace / rel).read_text(errors="replace")):
+                a.violations.append(f"may change only the dependency tables of {rel}")
     return a
+
+
+def _scratch(rel: str, blobs: dict) -> bool:
+    """Outside what the agent may write and not a base file: left out of every tree, whatever it is."""
+    return (rel not in blobs and not may_write(rel, new_file=True)
+            and not any(fnmatch(rel.lower(), p.lower()) for p in ALWAYS_DENY + HIDDEN))
 
 
 def pristine_tree(repo: Path, base: str, workspace: Path, result: Audit, dest: Path) -> None:

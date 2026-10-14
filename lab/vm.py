@@ -190,7 +190,9 @@ def push(vm: VM, record: Record) -> None:
     """Both working trees, minus .git and everything .gitignore excludes (secrets, weights, venvs, ledger, runs)."""
     # .venv is named explicitly: a gitignore-only exclusion did not protect it from --delete on the VM.
     for local, remote in ((engine.repo(), vm.remote_dir), (engine.ENV_ROOT, vm.env_dir)):
-        _rsync(vm, "--delete", "--exclude=.git", "--exclude=.venv", "--exclude=__pycache__", "--filter=:- .gitignore",
+        # lab/runs is named explicitly too: it holds the worker's cache and the agent's live workspaces there.
+        _rsync(vm, "--delete", "--exclude=.git", "--exclude=.venv", "--exclude=__pycache__", "--exclude=/lab/runs",
+               "--filter=:- .gitignore",
                f"{local}/", f"{ssh_target(vm, record)}:{remote}/")
 
 

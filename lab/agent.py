@@ -121,6 +121,7 @@ class ClaudeAgentSDK:
     srt); its model calls go through the lab's API proxy, so no credential is ever inside; lab tools run out here."""
 
     name = "claude"
+    remote = True                       # can work on a Remote worker's host (its CLI over ssh)
 
     @staticmethod
     def containerized() -> bool:
@@ -133,7 +134,10 @@ class ClaudeAgentSDK:
             w = spec.remote.workbench(spec.workbench, spec.scratch.name, spec.remote_workspace,
                                       claude_agent_sdk.__version__)
             *ssh, target = spec.remote.prefix
+            # The SDK may launch this more than once, and that sshd need not unlink a socket a launch left behind;
+            # -n: that call must not read the SDK's stdin.
             line = (f'args=$(printf " %q" "$@")\ncmd={shlex.quote(shlex.join(w["argv"]))}\n'
+                    f'{shlex.join(ssh)} -n -T {target} {shlex.quote("rm -f " + shlex.quote(w["sock"]))} || exit 1\n'
                     f'exec {shlex.join(ssh)} -T -o ExitOnForwardFailure=yes -o StreamLocalBindUnlink=yes '
                     f'-R {w["sock"]}:127.0.0.1:{urlsplit(base_url).port} {target} "$cmd$args"')
         elif self.containerized():
@@ -148,7 +152,10 @@ class ClaudeAgentSDK:
             cli_tmp = Path(f"{tmp_root}/claude-{os.getuid()}")    # the CLI's own per-project scratch; Bash fails without it
             cli_tmp.mkdir(parents=True, exist_ok=True)
             config = jail.settings([home.resolve(), tmp.resolve(), ws, cli_tmp.resolve()], engine.venv(),
-                                   [base_url.removeprefix("http://")], readonly=_weights(), python=engine.python())
+                                   [base_url.removeprefix("http://")], readonly=_weights(), python=engine.python(),
+                                   local_binding=True)     # srt on macOS reaches 127.0.0.1 only with it (and then
+                                                           # every local port: dev only; measurements that count run
+                                                           # on Linux, where each jail has its own network)
             argv = jail.wrap(config, spec.scratch / "srt.json", [str(cli)])
             keep = " ".join(f'"{k}=${k}"' for k in PASS_ENV)
             sets = " ".join(f"{k}={shlex.quote(v)}" for k, v in cli_env(home, tmp, ws, base_url).items())
@@ -162,10 +169,20 @@ class ClaudeAgentSDK:
         from claude_agent_sdk import (ClaudeAgentOptions, HookMatcher, ResultMessage,
                                       create_sdk_mcp_server, query, tool)
 
+        # The workbench is frozen for every lab tool call, wherever it runs: nothing in it can swap a file or a dir for a
+        # link while the tool snapshots, restores, copies into the workspace, or (Remote) rsyncs it as root on the VM.
+        if spec.remote is not None:
+            frozen = lambda: spec.remote.paused(spec.workbench)                                  # noqa: E731
+        else:
+            frozen = lambda: container.paused(spec.workbench if self.containerized() else None)  # noqa: E731
+
         def adapt(t: ToolSpec):
             async def call(args: dict[str, Any]) -> dict[str, Any]:
                 try:
-                    text = await asyncio.to_thread(t.fn, args)   # a long test run must not block the transport
+                    def run():
+                        with frozen():
+                            return t.fn(args)
+                    text = await asyncio.to_thread(run)          # a long test run must not block the transport
                 except Exception as e:          # the agent sees the refusal, the harness keeps going
                     text = f"{t.name} refused: {e}"
                 return {"content": [{"type": "text", "text": text}]}

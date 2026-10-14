@@ -60,10 +60,12 @@ def test_a_remote_workbench_is_launched_over_ssh_with_the_proxy_tunnelled_and_ar
     assert "-R /tmp/lab-proxy-scratch/proxy.sock:127.0.0.1:5555 root@203.0.113.5" in text
     fake = tmp_path / "bin" / "ssh"                            # an ssh that prints the remote command it was given
     fake.parent.mkdir()
-    fake.write_text('#!/bin/sh\nfor a; do last="$a"; done\nprintf "%s" "$last"\n')
+    fake.write_text('#!/bin/sh\nfor a; do last="$a"; done\nprintf "%s\\n" "$last"\n')
     fake.chmod(0o755)
     out = subprocess.run(["bash", str(script), "--output-format", "stream-json", "it's \"quoted\" $HOME"],
                          capture_output=True, text=True, env={"PATH": f"{fake.parent}:/usr/bin:/bin"})
-    remote_argv = shlex.split(out.stdout)
+    first, launch = out.stdout.splitlines()
+    assert first == "rm -f /tmp/lab-proxy-scratch/proxy.sock"           # a stale socket from an earlier launch goes
+    remote_argv = shlex.split(launch)
     assert remote_argv == ["docker", "run", "-i", "--name", "lab-workbench-r1-s1", "lab-jail", "sh", "-c",
                            'exec "$0" "$@"', "/c/claude", "--output-format", "stream-json", "it's \"quoted\" $HOME"]

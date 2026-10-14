@@ -128,6 +128,8 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
     summary = {"run": run_id, "base": base, "sessions": 0, "stopped": None, "spent_usd": budget.spent_usd}
     wk = worker.load()
     remote = wk if isinstance(wk, worker.Remote) else None      # then the agent works on that host, not here
+    if remote and not getattr(provider, "remote", False):       # its edits here would be overwritten by the mirror
+        raise ValueError(f"provider {provider.name!r} works on this machine; it cannot run with LAB_WORKER=ssh")
     rws = remote.workspace_path(run_id) if remote else None
     if cfg.baseline:
         Toolbox(Session(run_id, f"{run_id}-baseline", run_dir, ws, budget, cfg.ledger_root, task=cfg.task,

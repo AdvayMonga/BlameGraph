@@ -30,6 +30,11 @@ echo "== CUDA toolkit"
 nvcc --version 2>/dev/null | tail -1 || ls /usr/local/cuda/bin/nvcc 2>/dev/null || echo "nvcc: not on PATH"
 
 echo "== Nsight"
+# CUDA images keep ncu in /usr/local/cuda/bin, on no login PATH, and that one is only a launcher for the install under
+# /opt/nvidia/nsight-compute/<version>: link the real one, so the tool's jail mounts its whole install root.
+ncu_real=$(ls -d /opt/nvidia/nsight-compute/*/ncu 2>/dev/null | sort -V | tail -1)
+if [ -n "$ncu_real" ]; then $SUDO ln -sf "$ncu_real" /usr/local/bin/ncu
+elif ! command -v ncu >/dev/null && [ -x /usr/local/cuda/bin/ncu ]; then $SUDO ln -sf /usr/local/cuda/bin/ncu /usr/local/bin/ncu; fi
 if ! command -v nsys >/dev/null || ! command -v ncu >/dev/null; then
   $SUDO apt-get update -qq
   $SUDO apt-get install -y -qq nsight-systems nsight-compute 2>/dev/null \
@@ -67,9 +72,12 @@ fi
 $SUDO docker build -q -t lab-jail -f "$here/safety/jail.Dockerfile" "$here/safety" >/dev/null
 $SUDO docker run --rm --gpus all --network none lab-jail nvidia-smi -L && echo "jail: gpu ok" || echo "jail: no GPU in the container"
 # The agent's workbench has the internet but not the cloud's metadata service (instance credentials, user-data).
-$SUDO iptables -C DOCKER-USER -d 169.254.0.0/16 -j DROP 2>/dev/null || $SUDO iptables -I DOCKER-USER -d 169.254.0.0/16 -j DROP
+# Only that address: a cloud's DNS resolver can sit in 169.254.0.0/16 too, and the workbench needs names.
+$SUDO iptables -C DOCKER-USER -d 169.254.169.254 -j DROP 2>/dev/null || $SUDO iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
 $SUDO docker run --rm lab-jail python3 -c "import socket; socket.create_connection(('169.254.169.254', 80), timeout=3)" \
   2>/dev/null && echo "workbench: METADATA REACHABLE" || echo "workbench: metadata blocked"
+$SUDO docker run --rm lab-jail python3 -c "import socket; socket.create_connection(('pypi.org', 443), timeout=10)" \
+  2>/dev/null && echo "workbench: internet ok (DNS and egress)" || echo "workbench: NO INTERNET (DNS or egress)"
 
 echo "== counters: can a non-admin process read GPU performance counters?"
 # ncu needs NVreg_RestrictProfilingToAdminUsers=0 (or root). Recorded as a fact about this venue.
@@ -91,8 +99,18 @@ echo "== peaks: HBM bandwidth and bf16 GEMM, measured (validity/peaks.py; the ce
 ENV_DIR="${LAB_VM_ENV_DIR:-$HOME/BlameGraph}"; ENGINE_DIR="$PWD"
 (cd "$ENV_DIR" && "$ENGINE_DIR/.venv/bin/python" -m validity peaks --seconds 3) || echo "peaks: not measured (finding, not failure)"
 
-echo "== model cache"
+echo "== model cache: the target's model and the Hub repos its tests read (every jail is offline)"
 mkdir -p "$HOME/.cache/huggingface"
+.venv/bin/python - "$here/../${LAB_TARGET:-targets/inference-server.toml}" <<'PY' \
+  || echo "model cache: download failed (finding, not failure)"
+import sys, tomllib
+from huggingface_hub import snapshot_download
+t = tomllib.load(open(sys.argv[1], "rb"))
+print("cached", snapshot_download(t["model"]["name"]))
+for repo in t["engine"].get("hub", []):              # what tests read is tokenizers and configs, not weights
+    print("cached", snapshot_download(repo, allow_patterns=["*.json", "*.txt", "*.model", "*.tiktoken"]))
+PY
+chmod -R a+rX "$HOME/.cache/huggingface"      # the jails' own user reads it (hub metadata is written 0600)
 du -sh "$HOME/.cache/huggingface" 2>/dev/null || true
 
 echo "== smoke"

@@ -51,6 +51,8 @@ class Target:
     add_only: tuple[str, ...]
     test: str
     lint: str
+    deps: tuple[str, ...]          # dependency files the agent may change (pyproject: its dependency tables only)
+    build: str | None              # installs `deps` into $UV_PROJECT_ENVIRONMENT (lab/build.py)
     reference: Server | None
     reference_dir: Path | None
     interactive: Limits
@@ -96,7 +98,7 @@ def parse(path: Path) -> Target:
         path=path, model=m["name"], chat_kwargs=dict(m.get("chat_kwargs") or {}), max_model_len=m.get("max_model_len"),
         engine_repo=repo, engine_python=py, engine=_server(e),
         write=tuple(e.get("write") or ()), add_only=tuple(e.get("add_only") or ()),
-        test=e["test"], lint=e["lint"],
+        test=e["test"], lint=e["lint"], deps=tuple(e.get("deps") or ()), build=e.get("build"),
         reference=_server(r), reference_dir=(ENV_ROOT / r["dir"]) if r and r.get("dir") else None,
         interactive=Limits(**lim.get("interactive", {"ttft_s": 0.5, "tpot_s": 0.030})),
         conversational=Limits(**lim.get("conversational", {"ttft_s": 2.0, "tpot_s": 0.100})),

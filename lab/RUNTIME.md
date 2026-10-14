@@ -4,8 +4,8 @@ Design, 2026-10-08. Decided with the user: the lab splits into a controller and 
 measurement VM (cost); NVIDIA only for now; the jail on Linux is a container with the NVIDIA runtime (option A
 below). Built: the container jail (`lab/safety/container.py`), GPU exclusivity during measurements, and the
 measured jobs behind the worker interface (`lab/worker.py`), the API proxy (`lab/apiproxy.py`), the workbench
-container with its pause during measurements, and the agent on a remote worker. Not built: the dependency build
-step. Open decisions are marked **Decide**.
+container with its pause during measurements, the agent on a remote worker, and the dependency build step
+(`lab/build.py`). Open decisions are marked **Decide**.
 
 ## The line (the user, 2026-10-09)
 
@@ -173,7 +173,8 @@ not yet over SSH to a VM. `agent`, `exec`, `snapshot`, `restore` and `facts` com
   interpreter, weights, CUDA and the CLI binary read-only, so an install in the workbench never reaches a
   measurement. Container root is uid 0 on the host kernel (no user-namespace remap): an escape is host root,
   accepted under decision 5; `userns-remap` is the hardening step. `vm-setup.sh` drops container traffic to
-  169.254.0.0/16 (the cloud metadata service) and checks it.
+  169.254.169.254 (the cloud metadata service; only that address, a cloud's DNS can sit elsewhere in 169.254/16) and
+  checks both that and the workbench's internet.
 - **Pause** (`container.quiet`): around every `measure`, `equiv` and `profile` job, processes in the workbench
   holding the GPU are killed, the container is paused, a second sweep catches any that started before the pause
   landed, and it waits for their memory to be released; thawed after. The killed processes are in the record and
@@ -206,9 +207,30 @@ on the VM:
   on the VM, mounted into the workbench, where a socat serves it on the container's own 127.0.0.1:4000. It listens on
   no interface of the VM.
 - The write guard checks the VM's workspace path; the workbench is removed over SSH when the session ends.
+- The workbench is frozen on the VM (`python -m lab.worker pause`) for the whole of every lab tool call, so the root
+  rsync of a pull or push never races a process in it swapping a file or a directory for a link (2026-10-13 review:
+  a swapped directory could have carried the held-out split out, or let root write anywhere on the VM).
 - Tested without a VM: rsync mirroring (content edits, deletions, links), the VM-side `workbench` command, and the
   argument quoting through bash and ssh (an `ssh` stand-in that prints the remote command). Not yet tested against a
   real VM.
+
+## The dependency build step, as built (2026-10-10)
+
+- The target names its dependency files (`deps`) and the command that installs them (`build`, run with
+  `$UV_PROJECT_ENVIRONMENT` set). For inference-server that is vm-setup.sh's recipe: `uv sync --locked`, then the
+  CUDA torch wheel at the locked version.
+- The agent may change those files; a `pyproject.toml` only in its dependency tables (`[project] dependencies`,
+  `optional-dependencies`, `[dependency-groups]`, `[tool.uv] sources` and `index`): any other change, its test and
+  lint config included, is a violation, and deleting a dependency file is one too.
+- Each job asks `build.python_for(tree)`: a tree whose change left the dependency files as in its base (HEAD~1 of
+  the two-commit pristine tree) runs on the engine's venv; a changed one gets a venv built for it, cached by the
+  files' hash. The build runs in a measurement-room container without the GPU and with `--network none`; its only way
+  out is a host-side CONNECT proxy, over a unix socket, to pypi.org, files.pythonhosted.org and the https hosts its
+  files and command name. A failed build is a failed `test`/`profile` or an `error` record carrying the build's
+  output. The tool descriptions state it as a fact: only the change reaches the engine, installed from scratch, and
+  the engine then runs offline.
+- Tested in Docker-in-Docker: the build room gets 200 from PyPI through the proxy, 403 for another host, and no
+  direct route out. The real inference-server build (torch, CUDA) is untested until the GPU run.
 
 ## What moves where
 
