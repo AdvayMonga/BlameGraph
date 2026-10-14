@@ -103,3 +103,35 @@ def test_local_by_default_and_nothing_else_but_ssh(monkeypatch):
     monkeypatch.setenv("LAB_WORKER", "gpu-box")
     with pytest.raises(ValueError):
         worker.load()
+
+
+def test_push_and_pull_mirror_the_workspace_and_keep_links_as_links(remote, tmp_path):
+    r, _, _ = remote
+    local = tmp_path / "local"
+    (local / "src").mkdir(parents=True)
+    (local / "src" / "a.py").write_text("x = 1\n")
+    far = str(tmp_path / "far" / "ws")
+    r.push(local, far)
+    assert (Path(far) / "src" / "a.py").read_text() == "x = 1\n"
+    (Path(far) / "src" / "a.py").write_text("x = 2\n")
+    (Path(far) / "src" / "b.py").write_text("y = 1\n")
+    (Path(far) / "leak").symlink_to("/etc/passwd")
+    r.pull(far, local)
+    assert (local / "src" / "a.py").read_text() == "x = 2\n" and (local / "src" / "b.py").exists()
+    assert (local / "leak").is_symlink()                      # never followed; the audit refuses it
+    (Path(far) / "src" / "b.py").unlink()
+    r.pull(far, local)
+    assert not (local / "src" / "b.py").exists()
+
+
+def test_the_worker_builds_its_own_workbench_with_the_tunnelled_proxy(remote, tmp_path, monkeypatch):
+    r, _, _ = remote
+    cli = tmp_path / "cache" / "cli-9.9.9" / "claude_agent_sdk" / "_bundled" / "claude"
+    cli.parent.mkdir(parents=True)
+    cli.write_text("")                                         # already installed: nothing is downloaded
+    (tmp_path / "ws").mkdir()
+    w = r.workbench("lab-workbench-r1-s1", "r1-s1", str(tmp_path / "ws"), "9.9.9")
+    argv = w["argv"]
+    assert argv[1:3] == ["run", "-i"] and "lab-workbench-r1-s1" in argv and str(cli) == argv[-1]
+    assert w["sock"] == "/tmp/lab-proxy-r1-s1/proxy.sock" and "UNIX-CONNECT:/tmp/lab-proxy-r1-s1/proxy.sock" in argv[-2]
+    assert "ANTHROPIC_BASE_URL=http://127.0.0.1:4000" in argv and not any("sk-" in a for a in argv)

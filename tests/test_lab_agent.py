@@ -34,3 +34,36 @@ def test_the_wrapper_holds_no_credential_and_points_at_the_proxy(tmp_path, monke
         assert "--env CLAUDE_CODE_ENTRYPOINT" in script            # the SDK's value, passed through by name
     else:
         assert script.splitlines()[1].startswith("exec env -i")
+
+
+def test_a_remote_workbench_is_launched_over_ssh_with_the_proxy_tunnelled_and_args_intact(tmp_path, monkeypatch):
+    import shlex
+    import subprocess
+
+    class FakeRemote:
+        prefix = ["ssh", "-i", "key", "root@203.0.113.5"]
+
+        def workbench(self, name, session, workspace, version):
+            return {"argv": ["docker", "run", "-i", "--name", name, "lab-jail", "sh", "-c", 'exec "$0" "$@"', "/c/claude"],
+                    "sock": f"/tmp/lab-proxy-{session}/proxy.sock"}
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret-key")
+    import sys
+    import types
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", types.SimpleNamespace(__version__="9.9.9"))
+    s = spec(tmp_path)
+    s.scratch.mkdir()
+    s.remote, s.remote_workspace = FakeRemote(), "/root/BlameGraph/lab/runs/remote/r1/workspace"
+    script = agent.ClaudeAgentSDK()._wrapper(s, Path("/unused"), "http://127.0.0.1:5555")
+    text = script.read_text()
+    assert "sk-secret" not in text
+    assert "-R /tmp/lab-proxy-scratch/proxy.sock:127.0.0.1:5555 root@203.0.113.5" in text
+    fake = tmp_path / "bin" / "ssh"                            # an ssh that prints the remote command it was given
+    fake.parent.mkdir()
+    fake.write_text('#!/bin/sh\nfor a; do last="$a"; done\nprintf "%s" "$last"\n')
+    fake.chmod(0o755)
+    out = subprocess.run(["bash", str(script), "--output-format", "stream-json", "it's \"quoted\" $HOME"],
+                         capture_output=True, text=True, env={"PATH": f"{fake.parent}:/usr/bin:/bin"})
+    remote_argv = shlex.split(out.stdout)
+    assert remote_argv == ["docker", "run", "-i", "--name", "lab-workbench-r1-s1", "lab-jail", "sh", "-c",
+                           'exec "$0" "$@"', "/c/claude", "--output-format", "stream-json", "it's \"quoted\" $HOME"]
