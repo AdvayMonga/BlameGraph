@@ -25,19 +25,21 @@ def read_rows(work: Path) -> list[dict]:
 
 
 def store(work: Path, root: Path) -> dict:
-    """`work`'s passive data as ledger blobs, {device, telemetry, client_rows, serve_log} (None when absent); `work`
-    is removed."""
+    """`work`'s passive data as ledger blobs, {device, telemetry, client_rows, serve_log} (None when absent), plus
+    `profiles` (each profile launch's own device/telemetry/serve log) when there were any; `work` is removed."""
     def blob(name: str, suffix: str = "") -> str | None:
         p = Path(work) / name
         return ledger.put_blob(p, root, suffix) if p.exists() else None
-    tel = Path(work) / "telemetry"
-    if tel.is_dir() and any(tel.iterdir()):       # the request-trace contract check travels with the data (lab/TRACE.md)
-        from lab.trace_contract import validate
-        rep = validate(tel)
-        (tel / "contract.json").write_text(json.dumps({"valid": rep.valid, "errors": rep.errors[:50],
-                                                       "rows": len(rep.rows), "files": rep.files}, default=str))
+    for tel in [Path(work) / "telemetry", *Path(work).glob("profiles/*/telemetry")]:
+        if tel.is_dir() and any(tel.iterdir()):   # the request-trace contract check travels with the data (lab/TRACE.md)
+            from lab.trace_contract import validate
+            rep = validate(tel)
+            (tel / "contract.json").write_text(json.dumps({"valid": rep.valid, "errors": rep.errors[:50],
+                                                           "rows": len(rep.rows), "files": rep.files}, default=str))
     out = {"device": blob("device"), "telemetry": blob("telemetry"), "client_rows": blob(ROWS, ".jsonl"),
            "serve_log": blob("serve.log", ".log")}
+    if (Path(work) / "profiles").is_dir():       # launches of the engine's own profiles (lab/profiles.py)
+        out["profiles"] = blob("profiles")
     shutil.rmtree(work, ignore_errors=True)
     return out
 

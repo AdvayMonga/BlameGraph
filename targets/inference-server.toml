@@ -20,6 +20,8 @@ test = "python -m pytest -q -p no:cacheprovider -m 'not heavy and not needs_host
 lint = "python -m ruff check ."
 hub = ["gpt2"]                               # Hub repos whose tokenizer the engine's tests read; cached at setup (jails are offline)
 deps = ["pyproject.toml", "uv.lock"]        # the agent may change these (pyproject: its dependency tables only)
+profiles = "src/inference_server/profiles.toml"   # launch profiles in the engine's tree (lab/profiles.py)
+profile_env = "ENGINE_PROFILE"                    # names a launch's profile
 # Installs a changed `deps` into $UV_PROJECT_ENVIRONMENT (lab/build.py): vm-setup.sh's recipe, the lock with the
 # CUDA torch wheel at the locked version (the lock pins the CPU index on Linux).
 build = '''uv sync --locked --extra dev --no-install-project && uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" --reinstall "torch==$(awk '/^name = "torch"$/{getline; sub(/version = "/,""); sub(/"/,""); print; exit}' uv.lock)" --index-url https://download.pytorch.org/whl/cu130'''

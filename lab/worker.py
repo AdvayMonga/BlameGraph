@@ -78,36 +78,51 @@ def job_test(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
 
 
 def job_measure(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
-    """`args`: names, split, tier, seed, jailed, passive (keep device/telemetry/client rows in `out`)."""
-    from lab import artifacts, build
+    """`args`: names, split, tier, seed, jailed, passive (keep device/telemetry/client rows in `out`). One engine
+    launch per profile (lab/profiles.py), general first; every result and row carries its `profile` (None = general),
+    and a profile's device/telemetry/serve log land in `out/profiles/<regime>/`."""
+    from lab import artifacts, build, profiles
     from lab.evaltools import run_regimes
     t = target.load()
     rows = [] if args["passive"] else None
+    results, ready = [], {}
     try:
-        with engine.using(build.python_for(inputs["tree"])), container.quiet(args.get("workbench")) as killed, serve.Served(
-                inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"],
-                artifacts=out if args["passive"] else None) as srv:
-            results = run_regimes(srv.url, t, args["names"], args["split"], args["tier"], args["seed"], rows)
-            srv.exclusive()
+        with engine.using(build.python_for(inputs["tree"])), container.quiet(args.get("workbench")) as killed:
+            for prof, names in profiles.launches(inputs["tree"], t, args["names"]):
+                where = None
+                if args["passive"]:
+                    where = out if prof is None else out / "profiles" / prof
+                    where.mkdir(parents=True, exist_ok=True)
+                k = len(rows) if rows is not None else 0
+                with serve.Served(inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"],
+                                  artifacts=where, env_extra=profiles.env(t, prof)) as srv:
+                    got = run_regimes(srv.url, t, names, args["split"], args["tier"], args["seed"], rows)
+                    srv.exclusive()
+                for r in got + (rows or [])[k:]:
+                    r["profile"] = prof
+                results += got
+                ready[prof] = srv.ready_s
         from lab import gpu
-        return {"results": results, "ready_s": srv.ready_s, "gpu": gpu.query(), "killed": killed}
+        return {"results": results, "ready_s": ready[None],
+                "profiles_ready_s": {p: s for p, s in ready.items() if p}, "gpu": gpu.query(), "killed": killed}
     finally:
         if rows is not None:
             artifacts.write_rows(out, rows)
 
 
 def job_equiv(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
-    """`args`: tier, concurrency, jailed. The gate's outputs land in `out` as equiv.json and equiv.outputs.jsonl;
-    answers already in `prior`'s equiv.outputs.jsonl are reused, not asked again."""
+    """`args`: tier, concurrency, jailed, profile (None = general). The gate's outputs land in `out` as equiv.json and
+    equiv.outputs.jsonl; answers already in `prior`'s equiv.outputs.jsonl are reused, not asked again."""
     from correctness import client, run as crun
     from correctness.gate import Thresholds
-    from lab import build
+    from lab import build, profiles
     t = target.load()
     if (inputs["prior"] / "equiv.outputs.jsonl").exists():
         shutil.copyfile(inputs["prior"] / "equiv.outputs.jsonl", out / "equiv.outputs.jsonl")
     enc = hooks.get("encoder") or crun.HFEncoder(t.model, t.chat_kwargs)
     with engine.using(build.python_for(inputs["tree"])), container.quiet(args.get("workbench")) as killed, \
-            serve.Served(inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"], artifacts=out) as srv:
+            serve.Served(inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"], artifacts=out,
+                         env_extra=profiles.env(t, args.get("profile"))) as srv:
         res = crun.candidate(inputs["reference"], srv.url, t.model, out / "equiv.json", enc,
                              Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio),
                              concurrency=args["concurrency"], api=client.Api(t.engine.api, t.chat_kwargs),

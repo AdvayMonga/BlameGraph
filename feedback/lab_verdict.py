@@ -146,8 +146,9 @@ def facts(recs: list[dict]) -> dict:
 
 
 def integrity(recs: list[dict]) -> dict:
-    """Valid iff a completed submit exists whose snapshot has a completed seen-split bench, passing tests, a
-    passing equiv and no failing equiv, and no record reports a write-surface violation."""
+    """Valid iff a completed submit exists whose snapshot has a completed seen-split bench, passing tests, and for the
+    general launch and each profile the submit measured (`config.profiles`) a passing equiv and no failing one, and no
+    record reports a write-surface violation."""
     reasons = []
     viol = [r for r in recs if r.get("violation") or (r.get("result") or {}).get("violation")]
     if viol:
@@ -165,10 +166,12 @@ def integrity(recs: list[dict]) -> dict:
     if not any(r["kind"] == "bench" and passed(r) and split(r) == "seen" for r in on):
         reasons.append(f"submission_benchmarked: submitted snapshot {sid} has no completed bench on the seen split "
                        f"({ref['bench']} refused)")
-    eq = [passed(r) for r in on if r["kind"] == "equiv"]
-    if True not in eq or False in eq:
-        reasons.append(f"submission_equivalent: submitted snapshot {sid} has {eq.count(True)} passing and "
-                       f"{eq.count(False)} failing equiv record(s) ({ref['equiv']} refused)")
+    for prof in [None, *((sub.get("config") or {}).get("profiles") or [])]:
+        eq = [passed(r) for r in on if r["kind"] == "equiv" and (r.get("config") or {}).get("profile") == prof]
+        if True not in eq or False in eq:
+            reasons.append(f"submission_equivalent: submitted snapshot {sid} has {eq.count(True)} passing and "
+                           f"{eq.count(False)} failing equiv record(s)"
+                           + (f" for profile {prof}" if prof else "") + f" ({ref['equiv']} refused)")
     ts = [passed(r) for r in on if r["kind"] == "test"]
     if True not in ts:
         reasons.append(f"submission_tested: submitted snapshot {sid} has no passing test record ({ts.count(False)} failing)")

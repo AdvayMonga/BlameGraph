@@ -40,9 +40,17 @@ Across layers, built: the end-to-end judge, calibration (`lab/calibrate.py`), ex
 ## Layout
 Top-level packages, run from the repo root (no install step; `pyproject.toml` lists optional extras and holds the
 pytest/ruff config). Each folder with commands has its own `python -m`.
+- `lab/profiles.py` — launch profiles (decided 2026-10-14): one engine, a config per regime in a TOML file of its own
+  tree (`[general]` + a table per regime, on the agent's write surface). bench, submit and the base measurement serve
+  the general config once for every regime, then each regime whose table is non-empty in its own launch with
+  `<profile_env>=<regime>`; that number is the headline, the general one beside it (`metrics.<regime>.general`).
+  Each profile is gated on its own: equiv takes `profile`, submit needs a passing full-tier equiv per profile it
+  measures and records them in `config.profiles`, and the verdict checks the same. The harness reads only the file.
+  Noise bands and profiler tools stay general-only.
 - `targets/<name>.toml` + `lab/target.py` — **the target spec** (since 2026-10-06): model + chat kwargs, engine
   (repo, python, launch command with `{port}`, health path, env, logprobs `api` vllm|sglang|none, write surface,
-  add-only globs, test and lint commands, optional `[engine.telemetry] env` with `{dir}`), reference server + its outputs dir, MLPerf latency limits, correctness
+  add-only globs, test and lint commands, optional `[engine.telemetry] env` with `{dir}`, optional `profiles` +
+  `profile_env`: launch profiles, `lab/profiles.py`), reference server + its outputs dir, MLPerf latency limits, correctness
   tasks and policy, corpus dir. Selected by `LAB_TARGET` or `--target`; `target.load()` raises `NoTarget` otherwise.
   Nothing defaults to the user's engine or to Qwen3; `targets/inference-server.toml` is the committed example and
   what `tests/conftest.py` points at. Surfaces, grader commands, `lab/engine.py`, and the `correctness`,
