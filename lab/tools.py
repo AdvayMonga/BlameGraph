@@ -266,13 +266,13 @@ class Toolbox(EvalTools, ProfTools):
             ToolSpec("equiv", "Serve your current workspace and run the correctness gate against the reference "
                      "model's outputs at `tier` dev (default) or full. Returns pass, fail or inconclusive with every "
                      "metric. submit requires a passing full-tier equiv on the snapshot. Takes one engine start plus "
-                     "generating the tier's task set." + gpu("10 min at tier dev and 30-60 min at tier full"),
+                     "generating the tier's task set." + gpu("10 min at tier dev on unmodified vLLM and ~95 min on the example engine (about 17 items/min at concurrency 16, H200); the full tier is about 12x the items"),
                      {"type": "object", "properties": {"tier": {"type": "string", "enum": ["dev", "full"]}}}, self.equiv),
             ToolSpec("submit", "Measure your current workspace on the held-out split at the full tier and compare it "
                      "with the base commit measured the same way. Needs a passing full-tier equiv and a completed "
                      "short-tier seen bench on this snapshot. `regimes`: default those of that bench. The only thing "
                      "that can produce a win. Returns one aggregate per regime (base, new, delta %, noise band %, "
-                     "verdict) and, with a task, its score. Takes one engine start plus a held-out full-tier "
+                     "verdict, and % of the ceiling computed from the base's seen-split request shape) and, with a task, its score. Takes one engine start plus a held-out full-tier "
                      f"measurement per regime, the base commit's held-out measurement once per run, and up to one of the "
                      f"{HOLDOUT_BUDGET} held-out queries per regime." + gpu("15-25 min per regime"),
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}}}},
