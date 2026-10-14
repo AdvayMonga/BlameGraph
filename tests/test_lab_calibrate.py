@@ -118,3 +118,27 @@ def test_uncached_prompt_tokens_come_from_the_server_or_not_at_all():
     assert calibrate.shape_from_rows(full).uncached_prompt_tokens_mean == 150
     partial = full[:5] + rows()[5:]
     assert calibrate.shape_from_rows(partial).uncached_prompt_tokens_mean is None
+
+
+def test_heldout_aggregate_context_uses_the_seen_ceiling_only():
+    from lab import ledger
+    from lab.evaltools import aggregate, heldout_context
+    seen = {"ceiling": 20.0}
+    m = {**aggregate({"value": 5.0}, 10.0, "higher", 3.0), **heldout_context(seen, {"value": 5.0}, 10.0, "higher")}
+    assert m["pct_of_ceiling_base"] == pytest.approx(25) and m["pct_of_ceiling_new"] == pytest.approx(27.5)
+    assert "seen-split" in m["ceiling_from"] and "held-out" in m["reference_missing"]
+    none = heldout_context({"ceiling_missing": "no peaks"}, {"value": 5.0}, None, "higher")
+    assert none["ceiling"] is None and none["pct_of_ceiling_new"] is None and none["ceiling_from"] == "no peaks"
+    import tempfile
+    from pathlib import Path
+    ledger.append({"kind": "submit", "run": "r", "config": {"split": "heldout"}, "metrics": {"saturated": m}},
+                  Path(tempfile.mkdtemp()))                     # the held-out writer accepts the context fields
+
+
+def test_brief_ceilings_need_a_measured_gpu(t, tmp_path):
+    from lab import ledger
+    from lab.evaltools import _ceiling_facts
+    assert "no measurement" in _ceiling_facts(t, tmp_path)["missing"]
+    ledger.append({"kind": "bench", "run": "r", "result": {"gpu": GPU}}, tmp_path)
+    f = _ceiling_facts(t, tmp_path)
+    assert f["peaks"]["gpu"] == "NVIDIA H200" and f["floors_s"]["decode_step_batch1_ctx1k"] > 0
