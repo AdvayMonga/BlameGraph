@@ -141,3 +141,70 @@ def test_served_port_reaches_the_host_and_nothing_else(tmp_path, monkeypatch):
     assert left.stdout.strip() == ""
     with pytest.raises(OSError):
         socket.create_connection(("127.0.0.1", port), timeout=2)
+
+
+def test_the_workbench_has_network_gpu_and_root_inside(docker_named, tmp_path, monkeypatch):
+    monkeypatch.setattr(container.os, "getuid", lambda: 0)
+    monkeypatch.setattr(container, "gpus", lambda: True)
+    a = container.workbench_argv("wb", tmp_path, ["claude"], {"K": "v"}, [tmp_path], [], sys.executable)
+    s = " ".join(a)
+    assert "--user 0:0" in s and "--gpus all" in s and "-i" in a and a[-1] == "claude"
+    for absent in ("--network", "--read-only", "--cap-drop"):
+        assert absent not in s
+
+
+def test_quiet_kills_the_workbenchs_gpu_holders_then_pauses_and_thaws(monkeypatch):
+    from lab import gpu
+    calls, killed = [], []
+    monkeypatch.setattr(container, "_docker", lambda: "docker")
+    monkeypatch.setattr(container, "running", lambda n: True)
+    monkeypatch.setattr(container, "pids", lambda n: {101, 102})
+    apps = [[{"pid": 101, "used_mib": 9000, "name": "python"}, {"pid": 999, "used_mib": 1, "name": "other"}]]
+    monkeypatch.setattr(gpu, "compute_apps", lambda: apps[0])
+    monkeypatch.setattr(container.os, "kill", lambda pid, sig: killed.append(pid) or apps.__setitem__(0, [apps[0][1]]))
+    monkeypatch.setattr(container.subprocess, "run", lambda argv, **k: calls.append(argv[1:]) or subprocess.CompletedProcess(argv, 0))
+    with container.quiet("wb") as got:
+        assert calls == [["pause", "wb"]]
+    assert killed == [101] and [a["pid"] for a in got] == [101]          # 999 is not the workbench's
+    assert calls == [["pause", "wb"], ["unpause", "wb"]]
+
+
+def test_quiet_is_a_no_op_without_a_running_workbench(monkeypatch):
+    monkeypatch.setattr(container, "_docker", lambda: "docker")
+    monkeypatch.setattr(container, "running", lambda n: False)
+    with container.quiet("wb") as got:
+        assert got == []
+    with container.quiet(None) as got:
+        assert got == []
+
+
+@live
+def test_a_paused_workbench_is_frozen_and_thawed_after(tmp_path):
+    name = container.new_name()
+    subprocess.run(["docker", "run", "-d", "--rm", "--name", name, container.IMAGE, "sleep", "60"], check=True,
+                   capture_output=True)
+    state = lambda: subprocess.run(["docker", "inspect", "-f", "{{.State.Paused}}", name], capture_output=True,  # noqa: E731
+                                   text=True).stdout.strip()
+    try:
+        with container.quiet(name):
+            assert state() == "true"
+        assert state() == "false"
+    finally:
+        container.remove(name)
+
+
+@live
+def test_the_workbench_is_root_with_writable_system_dirs_and_reaches_the_host_gateway(tmp_path):
+    gw = container.bridge_gateway()
+    srv = socket.socket()
+    srv.bind((gw, 0))
+    srv.listen()
+    port = srv.getsockname()[1]
+    probe = ("import os, socket; open('/usr/local/x', 'w').write('y'); "
+             f"socket.create_connection(('{gw}', {port}), timeout=5); print(os.getuid())")
+    argv = container.workbench_argv(container.new_name(), tmp_path, ["python3", "-c", probe], {}, [tmp_path], [],
+                                    sys.executable)
+    out = subprocess.run(argv, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    srv.close()
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == ("0" if os.getuid() == 0 else str(os.getuid()))
