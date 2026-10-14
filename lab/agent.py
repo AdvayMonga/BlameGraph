@@ -121,6 +121,7 @@ class ClaudeAgentSDK:
     srt); its model calls go through the lab's API proxy, so no credential is ever inside; lab tools run out here."""
 
     name = "claude"
+    remote = True                       # can work on a Remote worker's host (its CLI over ssh)
 
     @staticmethod
     def containerized() -> bool:

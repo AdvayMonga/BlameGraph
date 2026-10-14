@@ -255,3 +255,17 @@ def test_system_prompt_is_generated_from_the_target_and_tools_and_advises_nothin
     assert t.model in system and t.engine_repo.name in system and "`stop`" in system and "`note`" in system
     assert "{" not in system.replace(t.engine.launch, "").replace(json.dumps(t.engine.env), "")   # all filled
     assert not ADVICE.search(system), ADVICE.search(system)
+
+
+def test_a_provider_that_works_locally_is_refused_with_a_remote_worker(cfg, monkeypatch):
+    from lab import worker
+
+    class Far(worker.Remote):
+        def __init__(self):
+            pass
+
+        def workspace_path(self, run_id):
+            return "/far"
+    monkeypatch.setattr(worker, "load", lambda **k: Far())
+    with pytest.raises(ValueError, match="cannot run with LAB_WORKER=ssh"):
+        session.run(cfg, ScriptedProvider(lambda n, ws: iter(())))
