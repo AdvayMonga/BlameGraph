@@ -19,6 +19,24 @@ ToolSpec descriptions, which state what each tool does, returns and costs, never
 task, budget, referee, a BASELINE (the base commit under bench's defaults = the task's objective + constrained regimes, measured once per run, `baseline` ledger
 kind; `RunConfig.baseline=False` skips it) and only the run's last `session` record.
 
+## Central goal (decided 2026-10-14)
+Make the loop rely less on the raw model and more on per-layer machinery. The engine is looked at as four layers;
+each needs data, a simulator, a hypothesis generator, measurement tools and an evaluator, and all of them answer to one
+end-to-end judge (`equiv` + `submit` + the held-out guard). The agent chooses which layer to work on; it is given each
+layer's share of time × its distance from the ceiling as a fact. Layer 1 first.
+
+| | 1. Kernels | 2. Model execution | 3. Runtime | 4. Serving |
+|---|---|---|---|---|
+| In the example engine | `models/paged_attention_kernel.py`, MoE grouped GEMM, norm/rope, sampling | `models/qwen3_moe.py`, `backends/custom_torch_backend.py`, `launch_table.py`, `quant.py` | `scheduler.py`, `scheduling_policy.py`, `kv_cache/` | `server.py`, `openai_shim.py`, tokenizer, startup, `control_plane/` |
+| Data | partial: `check_kernel` makes random inputs at chosen shapes; missing the shapes the engine actually calls, logged from real runs | partial: correctness task sets + corpus; missing a small fixed batch for logit checks and a list of step configurations | partial: corpus (public, repeats prompts); the load generator (separate work) replaces it | have: same workloads + the cold-start command |
+| Simulator | not needed (the real kernel runs in seconds; the roofline is the bound) | partial: analytic step floors (`validity/ceiling.py`); missing a measured step-time model | missing: scheduler simulator (real `scheduler.py` on a fake clock and backend, step times from layer 2's model) | not needed |
+| Hypothesis generator | missing (evolutionary: fast evaluator, many candidates) | missing (hypothesis-driven + knob search) | missing (hypothesis-driven, simulator-screened) | not needed: the general agent |
+| Measurement tools | have: `time_kernel`, ncu `kernel`, nsys `trace`, % of bandwidth peak | have: `profile`, `trace`, kernel share of time, step floors | have: `bench` client rows, engine telemetry, timeline, py-spy | have: `bench` cold_start/overload, serve logs, telemetry |
+| Evaluator | partial: `kernels/check_kernel` + `time_kernel` built and validated on the H200, not wired into the loop | missing: fast step-time + logit check (no server) | partial: `bench` + `equiv`; no noise bands measured for this engine yet | have: `bench` regimes |
+
+Across layers, built: the end-to-end judge, calibration (`lab/calibrate.py`), experiment records
+(`lab/experiments.py`), the workbench/measurement sandbox, the GPU VM tooling.
+
 ## Layout
 Top-level packages, run from the repo root (no install step; `pyproject.toml` lists optional extras and holds the
 pytest/ruff config). Each folder with commands has its own `python -m`.
@@ -284,5 +302,5 @@ single_stream TPOT p99 4.1 ms (37% of ceiling), saturated 5.8 req/s (19%), long 
 21 ms (7%), 0.097 req/s (0.5%), long prompt invalid (111 requests without a response). Stored in
 `knowledge/reference/inference-server/`. Finding for the corpus: long_prompt_short_output's window repeats each
 prompt ~5x (23,185 requests over 4,794 prompts), which rewards prefix caching.
-target. The agent's tool set (e.g. a knowledge tool) is the user's design: ask first. README stays a few one-line
+The agent's tool set (e.g. a knowledge tool) is the user's design: ask first. README stays a few one-line
 feature bullets, not a dev doc.
