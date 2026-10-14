@@ -491,3 +491,21 @@ def test_submit_needs_a_passing_full_equiv_for_each_profile_it_measures(lab):
     assert set(out["metrics"]) == {"single_stream"}
     rec = next(r for r in ledger.records(s.ledger_root, kind="submit") if r.get("config", {}).get("split") == "heldout")
     assert rec["config"]["profiles"] == ["single_stream"]
+
+
+def test_a_profile_launch_that_fails_is_flagged_and_the_measurement_goes_on(lab, launches, monkeypatch):
+    tb, s = lab
+    _profile(s, "[single_stream]\nMAX_BATCH_SIZE = 1\n")
+    real = serve.Served.__enter__
+
+    def enter(self):
+        if self.env_extra.get("ENGINE_PROFILE"):
+            raise serve.NotReady("exited with 1")
+        return real(self)
+    monkeypatch.setattr(serve.Served, "__enter__", enter)
+    out = json.loads(tb.bench({"regimes": ["single_stream"]}))
+    m = out["metrics"]["single_stream"]
+    assert m["profile"] == "single_stream" and m["valid"] is False and m["value"] is None
+    assert m["invalid_reasons"] == ["profile launch failed: engine did not start: exited with 1"]
+    assert m["general"]["valid"] and out["profiles_failed"] == {"single_stream": "engine did not start: exited with 1"}
+    assert next(ledger.records(s.ledger_root, kind="bench"))["result"]["verdict"] == "ok"

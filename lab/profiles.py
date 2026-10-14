@@ -30,6 +30,17 @@ def launches(tree: Path, t: target.Target, names: list[str]) -> list[tuple[str |
     return [(None, list(names))] + [(n, [n]) for n in names if n in own]
 
 
+def refusal(tree: Path, t: target.Target, profile: str | None) -> str | None:
+    """Why `profile` cannot be served from `tree`, or None (no profile is the general launch)."""
+    if not profile:
+        return None
+    if not t.profiles:
+        return "this target names no profiles file"
+    if profile not in overrides(tree, t):
+        return f"no [{profile}] table with settings in {t.profiles}"
+    return None
+
+
 def env(t: target.Target, profile: str | None) -> dict[str, str]:
     """The launch env that selects `profile` (nothing for the general config)."""
     return {t.profile_env: profile} if profile else {}

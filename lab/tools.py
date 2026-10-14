@@ -9,11 +9,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from lab import calibrate, corpus, engine, experiments, ledger, target
+from lab import calibrate, corpus, engine, experiments, ledger, profiles, target
 from lab.agent import ToolSpec
 from lab.budget import Budget, BudgetExceeded, gpu_rate
 from lab.evaltools import EvalTools, _killed
-from lab.proftools import ProfTools
+from lab.proftools import PROFILE_ARG, ProfTools
 from lab.safety import grader
 
 # Tools that occupy the GPU: their wall time is charged at the venue's rate. The rest cost $0.
@@ -140,10 +140,15 @@ class Toolbox(EvalTools, ProfTools):
 
     def profile(self, args: dict) -> str:
         snap = self._audited("profile", args)
+        tree = self._pristine()
+        why = profiles.refusal(tree, target.load(), args.get("profile"))
+        if why:
+            self._record("note", "profile", args, {"verdict": "refused", "reason": why}, snap)
+            return f"profile refused: {why}"
         out = self._work("profile")
         t0 = time.monotonic()
         try:
-            r = self.worker.call("profile", {"tree": self._pristine()},
+            r = self.worker.call("profile", {"tree": tree},
                                  {"kind": "profile", "args": args, "workbench": getattr(self.s, "workbench", None)}, out)
             blob, visible = self._keep(out / "files") if (out / "files").is_dir() else ("", "")
         finally:
@@ -260,11 +265,14 @@ class Toolbox(EvalTools, ProfTools):
                      "(`synthetic`, `prompt_len`); `max_tokens` default 32. Stores the raw bundle (event timeline, chrome "
                      "trace, op and kernel tables, memory, GPU samples, provenance) in the ledger and copies it into your "
                      "workspace under lab/runs/, left out of your change. Returns the bundle path and its file names."
+                     + (PROFILE_ARG if tg.profiles else "")
                      + gpu("1-7 min measured at 16 requests x 64 tokens on an H200 (7 min when the weights were still loading from disk)"),
                      {"type": "object", "properties": {"corpus_class": {"type": "string"}, "seed": {"type": "integer"},
                                                        "synthetic": {"type": "boolean"}, "requests": {"type": "integer"},
                                                        "prompt_len": {"type": "integer"},
-                                                       "max_tokens": {"type": "integer"}}}, self.profile),
+                                                       "max_tokens": {"type": "integer"},
+                                                       **({"profile": {"type": "string"}} if tg.profiles else {})}},
+                     self.profile),
             ToolSpec("ledger", "Read records of this and earlier runs: every tool call, session and baseline, with "
                      "snapshots and results. Filters: `kind`, `session`, `snapshot`, `tool`. Returns the `last` N "
                      "matches (default 20) as JSON lines." + free,
@@ -298,7 +306,8 @@ class Toolbox(EvalTools, ProfTools):
             ToolSpec("submit", "Measure your current workspace on the held-out split at the full tier and compare it "
                      "with the base commit measured the same way. Needs a passing full-tier equiv and a completed "
                      "short-tier seen bench on this snapshot. `regimes`: default those of that bench. The only thing "
-                     "that can produce a win. Returns one aggregate per regime (base, new, delta %, noise band %, "
+                     "that can produce a win. Returns one aggregate per regime (base, new, delta %, noise band % (measured on "
+                     "the base engine's general config), "
                      "verdict, and % of the ceiling computed from the base's seen-split request shape) and, with a task, its score. Takes one engine start plus a held-out full-tier "
                      f"measurement per regime, the base commit's held-out measurement once per run, and up to one of the "
                      f"{HOLDOUT_BUDGET} held-out queries per regime." + prof + gpu("15-25 min per regime"),
@@ -353,12 +362,12 @@ def workload_flags(args: dict, harness: Path, n: int) -> list[str]:
     return ["--workload", str(harness / "workload.json")] + (["--enable-thinking"] if t.chat_kwargs.get("enable_thinking") else [])
 
 
-def default_profile_runner(tree: Path, argv: list[str], read: list[Path] = ()):
-    """lab.profile in the pristine tree as agent code: jailed, with the target's engine env, weights and `read`
-    read-only, harness first on the path."""
+def default_profile_runner(tree: Path, argv: list[str], read: list[Path] = (), env: dict | None = None):
+    """lab.profile in the pristine tree as agent code: jailed, with the target's engine env (and `env`: a launch
+    profile's), weights and `read` read-only, harness first on the path."""
     path = os.pathsep.join([str(tree / HARNESS_DIR), str(tree / "src"), str(tree)])
-    return grader.jailed(tree, argv, timeout_s=3600, env_extra={**target.load().engine.env, "PYTHONPATH": path},
-                         read=read)
+    return grader.jailed(tree, argv, timeout_s=3600,
+                         env_extra={**target.load().engine.env, **(env or {}), "PYTHONPATH": path}, read=read)
 
 
 def clean_pristine(run_dir: Path) -> None:

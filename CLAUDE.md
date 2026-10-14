@@ -46,7 +46,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `<profile_env>=<regime>`; that number is the headline, the general one beside it (`metrics.<regime>.general`).
   Each profile is gated on its own: equiv takes `profile`, submit needs a passing full-tier equiv per profile it
   measures and records them in `config.profiles`, and the verdict checks the same. The harness reads only the file.
-  Noise bands and profiler tools stay general-only.
+  A profile launch that fails makes its regimes invalid with the reason (`profiles_failed`) and the rest is kept; a
+  busy GPU, contamination or the general launch failing still fail the measurement. The profiler tools take
+  `profile` too. Noise bands stay the base engine's general config, stated in the harness facts.
 - `targets/<name>.toml` + `lab/target.py` — **the target spec** (since 2026-10-06): model + chat kwargs, engine
   (repo, python, launch command with `{port}`, health path, env, logprobs `api` vllm|sglang|none, write surface,
   add-only globs, test and lint commands, optional `[engine.telemetry] env` with `{dir}`, optional `profiles` +

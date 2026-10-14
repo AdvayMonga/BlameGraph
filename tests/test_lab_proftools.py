@@ -242,3 +242,19 @@ def test_symlinks_left_by_the_jailed_run_are_not_copied_out(tb, monkeypatch):
     tb.profile({"synthetic": True})
     copy = tb.s.workspace.path / last(tb, kind="profile")["result"]["workspace_copy"]
     assert sorted(p.name for p in copy.iterdir()) == ["meta.json"]
+
+
+def test_profiler_tools_run_a_launch_profile_only_when_the_file_has_it(tb, monkeypatch):
+    seen = []
+    monkeypatch.setattr(labtools, "default_profile_runner", lambda tree, argv, read=(), env=None:
+                        seen.append(env) or subprocess.CompletedProcess(argv, 1, "", "no engine"))
+    assert tb.profile({"profile": "single_stream"}).startswith("profile refused: no [single_stream] table")
+    assert tb.trace({"profile": "single_stream"}).startswith("trace refused: no [single_stream] table")
+    assert seen == [] and last(tb)["result"]["verdict"] == "refused"
+    (tb.s.workspace.path / "src" / "inference_server" / "profiles.toml").write_text("[single_stream]\nMAX_BATCH_SIZE = 1\n")
+    tb.profile({"profile": "single_stream"})
+    tb.hostprof({"profile": "single_stream", "seconds": 5})
+    tb.profile({})
+    assert seen == [{"ENGINE_PROFILE": "single_stream"}] * 2 + [None]
+    assert all("profile" in t.schema["properties"] for t in tb.specs()
+               if t.name in ("profile", "trace", "kernel", "hostprof", "equiv"))

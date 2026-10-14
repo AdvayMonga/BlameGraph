@@ -129,6 +129,8 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
                         f"consistent streams; under the line fails only when the net loss is significant",
                         "tasks": list(t.tasks)},
         "noise_bands_pct": {n: noise_band_pct(n) for n in suite.REGIMES},
+        "noise_bands_measured_on": "the base commit's engine with its general config, repeated unchanged runs "
+                                   "(lab.validate); submit applies them to every candidate and every launch profile",
         "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,
         "ceilings": _ceiling_facts(t, ledger_root),
     }
@@ -220,12 +222,13 @@ class EvalTools:
             return _said("bench", result)
         cal = calibrate.calibrate_results(r["results"], artifacts.read_rows(work), target.load(), r.get("gpu"), tier,
                                           "seen", seed)
+        failed = {"profiles_failed": r["profiles_failed"]} if r.get("profiles_failed") else {}
         result = {"verdict": "ok", "metrics": headline(r["results"]), "calibrated": cal, "regimes": r["results"],
                   "tier": tier, "seconds": time.monotonic() - t0, "ready_s": r["ready_s"], "gpu": r.get("gpu"),
-                  "artifacts": artifacts.store(work, self.s.ledger_root), **_killed(r)}
+                  "artifacts": artifacts.store(work, self.s.ledger_root), **failed, **_killed(r)}
         self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier, "seed": seed})
         return json.dumps({"snapshot": snap.id, "split": "seen", "tier": tier, "metrics": result["metrics"],
-                           "calibrated": cal, **_killed(r)}, indent=1)
+                           "calibrated": cal, **failed, **_killed(r)}, indent=1)
 
     # -- equiv --------------------------------------------------------------------------
     def equiv(self, args: dict) -> str:
@@ -240,9 +243,8 @@ class EvalTools:
                          "run `python -m correctness reference` for this target first"}, snap, config=config)
             return "equiv refused: no reference outputs for this target"
         tree = self._pristine()
-        if profile and profile not in profiles.overrides(tree, t):
-            why = (f"no [{profile}] table with settings in {t.profiles}" if t.profiles
-                   else "this target names no profiles file")
+        why = profiles.refusal(tree, t, profile)
+        if why:
             self._record("equiv", "equiv", args, {"verdict": "refused", "reason": why}, snap, config=config)
             return f"equiv refused: {why}"
         out = self.s.run_dir / "equiv" / f"{snap.id}-{tier}{'-' + profile if profile else ''}.json"
