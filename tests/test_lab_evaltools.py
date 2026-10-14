@@ -198,7 +198,8 @@ def test_submit_needs_full_equiv_and_a_bench_then_records_one_aggregate_per_metr
     out = json.loads(tb.submit({}))
     assert out["split"] == "heldout" and set(out["metrics"]) == {"single_stream"}
     m = out["metrics"]["single_stream"]
-    assert set(m) == {"base", "new", "delta_pct", "band_pct", "verdict"} and m["verdict"] == "unknown_band"
+    assert set(m) == {"base", "new", "delta_pct", "band_pct", "verdict", "ceiling", "pct_of_ceiling_base",
+                      "pct_of_ceiling_new", "ceiling_from", "reference_missing"} and m["verdict"] == "unknown_band"
     rec = next(r for r in ledger.records(s.ledger_root, kind="submit") if r.get("config", {}).get("split") == "heldout")
     assert "result" not in rec and rec["metrics"] == out["metrics"]        # the ledger's held-out shape, nothing else
     state = json.loads((s.ledger_root / "holdout_state.json").read_text())
