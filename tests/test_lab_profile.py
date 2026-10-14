@@ -157,9 +157,10 @@ async def test_pyspy_samples_this_process_under_a_repeated_workload(tmp_path, st
     exe.write_text(FAKE_PYSPY.replace("LOG, ", f"{str(tmp_path / 'calls.log')!r}, "))
     exe.chmod(0o755)
     out = await profile.run(stub_backend_cls(), Settings(max_batch_size=2), profile.synthetic_prompts(2, 4), max_tokens=2,
-                            out=tmp_path / "b", profiler="pyspy", pyspy=(str(exe), 0.5, 50))
+                            out=tmp_path / "b", profiler="pyspy", pyspy=(str(exe), 0.5, 50, ["--native"]))
     rec, dump = [json.loads(line) for line in (tmp_path / "calls.log").read_text().splitlines()]
     assert rec[:3] == ["record", "--pid", str(os.getpid())] and "--nonblocking" in rec and "speedscope" in rec
+    assert rec[-1] == "--native"
     assert dump == ["dump", "--pid", str(os.getpid()), "--nonblocking"]
     assert (out / "pyspy.speedscope.json").exists() and "MainThread" in (out / "pyspy-dump.txt").read_text()
     meta = json.loads((out / "meta.json").read_text())

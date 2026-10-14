@@ -118,7 +118,11 @@ def test_bench_serves_and_measures(lab):
     assert out["split"] == "seen" and out["metrics"]["single_stream"]["valid"]
     assert out["metrics"]["single_stream"]["value"] is not None
     rec = next(ledger.records(s.ledger_root, kind="bench"))
-    assert rec["config"] == {"split": "seen", "tier": "short"} and rec["result"]["verdict"] == "ok"
+    assert rec["config"] == {"split": "seen", "tier": "short", "seed": tb.seed} and rec["result"]["verdict"] == "ok"
+    cal = out["calibrated"]["single_stream"]                   # every number with its context, or why it has none
+    assert cal["value"] == out["metrics"]["single_stream"]["value"] and cal["fingerprint"]["tier"] == "short"
+    assert ("ceiling_missing" in cal) == (cal.get("ceiling") is None) and "reference_missing" in cal
+    assert cal["shape"]["prompt_tokens_mean"] > 0 if cal.get("shape") else True
     assert rec["result"]["ready_s"] is not None and (s.run_dir / "serve-bench.log").exists()
 
 
@@ -158,6 +162,17 @@ def test_equiv_judges_against_the_reference(lab):
     assert all(j["engine"] for j in joined)                    # every gate request has its engine row (X-Trace-Id)
 
 
+def test_a_second_equiv_on_the_same_snapshot_reuses_its_answers(lab):
+    tb, s = lab
+    tb.equiv({})
+    answers = next((s.run_dir / "equiv").glob("*-dev.outputs.jsonl"))
+    marked = "".join(json.dumps({**json.loads(x), "kept": True}) + "\n" for x in answers.read_text().splitlines())
+    answers.write_text(marked)
+    tb.equiv({})
+    assert answers.read_text() == marked                        # nothing asked again: the gate is never re-rolled
+    assert not list(s.run_dir.glob("equiv-prior-*")) and not list(s.run_dir.glob("passive-*"))
+
+
 def test_submit_keeps_heldout_passive_data_out_of_the_ledger(lab):
     tb, s = lab
     tb.equiv({"tier": "full"}); tb.bench({"regimes": ["single_stream"]})
@@ -183,7 +198,8 @@ def test_submit_needs_full_equiv_and_a_bench_then_records_one_aggregate_per_metr
     out = json.loads(tb.submit({}))
     assert out["split"] == "heldout" and set(out["metrics"]) == {"single_stream"}
     m = out["metrics"]["single_stream"]
-    assert set(m) == {"base", "new", "delta_pct", "band_pct", "verdict"} and m["verdict"] == "unknown_band"
+    assert set(m) == {"base", "new", "delta_pct", "band_pct", "verdict", "ceiling", "pct_of_ceiling_base",
+                      "pct_of_ceiling_new", "ceiling_from", "reference_missing"} and m["verdict"] == "unknown_band"
     rec = next(r for r in ledger.records(s.ledger_root, kind="submit") if r.get("config", {}).get("split") == "heldout")
     assert "result" not in rec and rec["metrics"] == out["metrics"]        # the ledger's held-out shape, nothing else
     state = json.loads((s.ledger_root / "holdout_state.json").read_text())
@@ -246,6 +262,68 @@ def test_tools_refuse_cleanly_when_the_engine_does_not_start(lab, monkeypatch):
     rec = list(ledger.records(s.ledger_root, kind="bench"))[-1]
     assert rec["result"]["verdict"] == "error"
     assert rec["result"]["artifacts"]["telemetry"] is None and rec["result"]["artifacts"]["serve_log"]   # no section: skipped
+
+
+def test_the_workbench_is_quieted_for_a_measurement_and_what_was_killed_is_a_fact(lab, monkeypatch):
+    from contextlib import contextmanager
+    from lab.safety import container
+    tb, s = lab
+    s.workbench = "lab-workbench-r1-s1"
+    asked = []
+
+    @contextmanager
+    def quiet(name):
+        asked.append(name)
+        yield [{"pid": 4242, "used_mib": 9000, "name": "python"}]
+    monkeypatch.setattr(container, "quiet", quiet)
+    out = json.loads(tb.bench({"regimes": ["single_stream"]}))
+    assert asked == ["lab-workbench-r1-s1"] and out["workbench_killed"][0]["pid"] == 4242
+    rec = list(ledger.records(s.ledger_root, kind="bench"))[-1]["result"]
+    assert rec["verdict"] == "ok" and rec["workbench_killed"][0]["pid"] == 4242
+
+
+AGENT_PROC = {"pid": 4242, "used_mib": 9000, "name": "python"}
+
+
+def test_nothing_is_measured_while_another_process_holds_the_gpu(lab, monkeypatch):
+    from lab import gpu
+    tb, s = lab
+    monkeypatch.setattr(gpu, "compute_apps", lambda: [AGENT_PROC])
+    out = tb.bench({"regimes": ["single_stream"]})
+    assert out.startswith("bench refused: the GPU was in use") and "pid 4242" in out
+    rec = list(ledger.records(s.ledger_root, kind="bench"))[-1]["result"]
+    assert rec["verdict"] == "refused" and rec["gpu_processes"] == [AGENT_PROC]
+    assert not (s.run_dir / "serve-bench.log").exists()                 # no engine was launched
+
+
+def test_a_measurement_shared_with_another_gpu_process_is_contaminated_and_never_cached(lab, monkeypatch):
+    from lab import gpu
+    tb, s = lab
+    calls = []
+    monkeypatch.setattr(serve, "POLL_S", 0.05)
+    monkeypatch.setattr(gpu, "compute_apps", lambda: calls.append(1) or ([] if len(calls) == 1 else [AGENT_PROC]))
+    out = tb.bench({"regimes": ["single_stream"]})
+    assert out.startswith("bench contaminated: another process held the GPU")
+    rec = list(ledger.records(s.ledger_root, kind="bench"))[-1]["result"]
+    assert rec["verdict"] == "contaminated" and rec["gpu_processes"] == [AGENT_PROC] and "metrics" not in rec
+    calls.clear()
+    with pytest.raises(serve.Contaminated):
+        tb.base_seen(target.load(), ["single_stream"])
+    assert not list(s.run_dir.glob("base-*.json"))
+
+
+def test_the_engines_own_gpu_processes_are_not_foreign(lab, monkeypatch):
+    import time
+    from lab import gpu
+    tb, s = lab
+    srv = serve.Served(tb._pristine(), target.load().engine, jailed=False)
+    monkeypatch.setattr(serve, "POLL_S", 0.05)
+    monkeypatch.setattr(gpu, "compute_apps", lambda: [] if srv.proc is None else
+                        [{"pid": srv.proc.pid, "used_mib": 1, "name": "engine"}])
+    with srv:
+        time.sleep(0.3)
+        srv.exclusive()
+    assert srv.foreign == {}
 
 
 class TwoSessions:
@@ -314,3 +392,37 @@ def test_bench_defaults_follow_the_task():
     tb.s.task = Task("g", ("long_prompt_short_output",), constraints={"single_stream": {"max_regression_pct": 5},
                                                                      "long_prompt_short_output": {"max_regression_pct": 1}})
     assert tb.bench_defaults() == ("long_prompt_short_output", "single_stream")
+
+
+def test_with_the_agent_on_a_remote_worker_its_workspace_is_pulled_before_every_audit_and_pushed_after_a_restore(lab):
+    tb, s = lab
+    moves = []
+    local = tb.worker
+
+    class Mirror:
+        def call(self, *a, **k):
+            return local.call(*a, **k)
+
+        def pull(self, remote, path):
+            moves.append(("pull", remote))
+
+        def push(self, path, remote):
+            moves.append(("push", remote))
+    tb.worker, s.remote_workspace = Mirror(), "/far/ws"
+    tb.test({})
+    assert moves == [("pull", "/far/ws")]
+    moves.clear()
+    tb.restore({"snapshot": "base"})
+    assert ("push", "/far/ws") in moves and moves[0] == ("pull", "/far/ws")
+
+
+def test_bench_takes_the_agents_seed(lab, monkeypatch):
+    from lab import evaltools
+    tb, _ = lab
+    seeds = []
+    monkeypatch.setattr(evaltools, "run_regimes", lambda url, t, names, split, tier, seed, rows=None: seeds.append(seed) or [])
+    tb.bench({"regimes": ["single_stream"], "seed": 7})
+    tb.bench({"regimes": ["single_stream"]})
+    assert seeds == [7, tb.seed]
+    with pytest.raises(ValueError):
+        tb.bench({"seed": "7"})

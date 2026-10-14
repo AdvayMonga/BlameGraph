@@ -2,6 +2,7 @@
 # One-time bootstrap of a fresh GPU VM for the lab. Idempotent; run via `python -m lab.vm setup`.
 # Arg: the engine tree on the VM (default ~/inference-server).
 set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)           # this environment's lab/
 cd "${1:-$HOME/inference-server}"            # the engine tree: its venv is the one every GPU command runs with
 SUDO=$([ "$(id -u)" = 0 ] && echo "" || echo sudo)   # Verda images log in as root
 
@@ -29,6 +30,11 @@ echo "== CUDA toolkit"
 nvcc --version 2>/dev/null | tail -1 || ls /usr/local/cuda/bin/nvcc 2>/dev/null || echo "nvcc: not on PATH"
 
 echo "== Nsight"
+# CUDA images keep ncu in /usr/local/cuda/bin, on no login PATH, and that one is only a launcher for the install under
+# /opt/nvidia/nsight-compute/<version>: link the real one, so the tool's jail mounts its whole install root.
+ncu_real=$(ls -d /opt/nvidia/nsight-compute/*/ncu 2>/dev/null | sort -V | tail -1)
+if [ -n "$ncu_real" ]; then $SUDO ln -sf "$ncu_real" /usr/local/bin/ncu
+elif ! command -v ncu >/dev/null && [ -x /usr/local/cuda/bin/ncu ]; then $SUDO ln -sf /usr/local/cuda/bin/ncu /usr/local/bin/ncu; fi
 if ! command -v nsys >/dev/null || ! command -v ncu >/dev/null; then
   $SUDO apt-get update -qq
   $SUDO apt-get install -y -qq nsight-systems nsight-compute 2>/dev/null \
@@ -37,7 +43,7 @@ fi
 nsys --version 2>/dev/null || true
 ncu --version 2>/dev/null | head -1 || true
 
-echo "== py-spy (hostprof) and the jail (srt needs Node >= 20, bubblewrap, socat, ripgrep)"
+echo "== py-spy (hostprof) and srt, the agent CLI's jail until lab/RUNTIME.md's split (Node >= 20, bubblewrap, socat, ripgrep)"
 uv pip install -q --python .venv/bin/python py-spy && .venv/bin/py-spy --version
 uv pip install -q --python .venv/bin/python duckdb zstandard    # the agent's query tool (store/index.py)
 if ! command -v srt >/dev/null; then
@@ -49,7 +55,30 @@ if ! command -v srt >/dev/null; then
 fi
 # Ubuntu 24.04 blocks unprivileged user namespaces, so bwrap cannot start; this VM is single-purpose.
 $SUDO sysctl -qw kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null || true
-srt -c true >/dev/null 2>&1 && echo "jail: ok" || echo "jail: srt cannot start"
+srt -c true >/dev/null 2>&1 && echo "srt: ok" || echo "srt: cannot start"
+
+echo "== jail: docker + NVIDIA Container Toolkit + the lab-jail image (lab/safety/container.py)"
+command -v docker >/dev/null || $SUDO apt-get install -y -qq docker.io socat >/dev/null
+command -v socat >/dev/null || $SUDO apt-get install -y -qq socat >/dev/null
+if ! command -v nvidia-ctk >/dev/null; then
+  curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+    | $SUDO gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+  curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+    | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+    | $SUDO tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null
+  $SUDO apt-get update -qq && $SUDO apt-get install -y -qq nvidia-container-toolkit >/dev/null
+  $SUDO nvidia-ctk runtime configure --runtime=docker >/dev/null && $SUDO systemctl restart docker
+fi
+[ "$(id -u)" = 0 ] || $SUDO usermod -aG docker "$USER"   # takes effect at the next login
+$SUDO docker build -q -t lab-jail -f "$here/safety/jail.Dockerfile" "$here/safety" >/dev/null
+$SUDO docker run --rm --gpus all --network none lab-jail nvidia-smi -L && echo "jail: gpu ok" || echo "jail: no GPU in the container"
+# The agent's workbench has the internet but not the cloud's metadata service (instance credentials, user-data).
+# Only that address: a cloud's DNS resolver can sit in 169.254.0.0/16 too, and the workbench needs names.
+$SUDO iptables -C DOCKER-USER -d 169.254.169.254 -j DROP 2>/dev/null || $SUDO iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
+$SUDO docker run --rm lab-jail python3 -c "import socket; socket.create_connection(('169.254.169.254', 80), timeout=3)" \
+  2>/dev/null && echo "workbench: METADATA REACHABLE" || echo "workbench: metadata blocked"
+$SUDO docker run --rm lab-jail python3 -c "import socket; socket.create_connection(('pypi.org', 443), timeout=10)" \
+  2>/dev/null && echo "workbench: internet ok (DNS and egress)" || echo "workbench: NO INTERNET (DNS or egress)"
 
 echo "== counters: can a non-admin process read GPU performance counters?"
 # ncu needs NVreg_RestrictProfilingToAdminUsers=0 (or root). Recorded as a fact about this venue.
@@ -67,8 +96,22 @@ else
   echo "clock lock: refused"
 fi
 
-echo "== model cache"
+echo "== peaks: HBM bandwidth and bf16 GEMM, measured (validity/peaks.py; the ceilings' denominators)"
+ENV_DIR="${LAB_VM_ENV_DIR:-$HOME/BlameGraph}"; ENGINE_DIR="$PWD"
+(cd "$ENV_DIR" && "$ENGINE_DIR/.venv/bin/python" -m validity peaks --seconds 3) || echo "peaks: not measured (finding, not failure)"
+
+echo "== model cache: the target's model and the Hub repos its tests read (every jail is offline)"
 mkdir -p "$HOME/.cache/huggingface"
+.venv/bin/python - "$here/../${LAB_TARGET:-targets/inference-server.toml}" <<'PY' \
+  || echo "model cache: download failed (finding, not failure)"
+import sys, tomllib
+from huggingface_hub import snapshot_download
+t = tomllib.load(open(sys.argv[1], "rb"))
+print("cached", snapshot_download(t["model"]["name"]))
+for repo in t["engine"].get("hub", []):              # what tests read is tokenizers and configs, not weights
+    print("cached", snapshot_download(repo, allow_patterns=["*.json", "*.txt", "*.model", "*.tiktoken"]))
+PY
+chmod -R a+rX "$HOME/.cache/huggingface"      # the jails' own user reads it (hub metadata is written 0600)
 du -sh "$HOME/.cache/huggingface" 2>/dev/null || true
 
 echo "== smoke"

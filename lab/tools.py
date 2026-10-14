@@ -9,10 +9,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-from lab import corpus, engine, ledger, target
+from lab import calibrate, corpus, engine, experiments, ledger, target
 from lab.agent import ToolSpec
 from lab.budget import Budget, BudgetExceeded, gpu_rate
-from lab.evaltools import EvalTools
+from lab.evaltools import EvalTools, _killed
 from lab.proftools import ProfTools
 from lab.safety import grader
 
@@ -33,8 +33,11 @@ class Toolbox(EvalTools, ProfTools):
     """Bound to one session: knows the workspace, the budget, the ledger root and the run."""
 
     def __init__(self, session: Any):
+        from lab import worker
         self.s = session
         self.violation: str | None = None
+        self.worker = getattr(session, "worker", None) or worker.load(
+            encoder=getattr(session, "encoder", None), profile_runner=getattr(session, "profile_runner", None))
 
     # -- plumbing ------------------------------------------------------------------------
     def _cost(self, tool: str) -> dict:
@@ -56,6 +59,7 @@ class Toolbox(EvalTools, ProfTools):
                 "patch": snapshot.patch, "result": result, "cost": self._cost(tool)}
         if config:
             body["config"] = config
+        self._experiment(body, tool, args, result=result)
         return ledger.append(body, self.s.ledger_root)
 
     def _record_heldout(self, kind: str, tool: str, args: dict, config: dict, metrics: dict, snapshot) -> dict:
@@ -63,19 +67,41 @@ class Toolbox(EvalTools, ProfTools):
         body = {"kind": kind, "run": self.s.run_id, "session": self.s.session_id, "tool": tool, "args": args,
                 "snapshot": snapshot.id, "snapshot_blob": snapshot.blob, "patch": snapshot.patch,
                 "config": {**config, "split": "heldout"}, "metrics": metrics, "cost": self._cost(tool)}
+        self._experiment(body, tool, args, metrics=metrics)
         return ledger.append(body, self.s.ledger_root)
+
+    def _experiment(self, body: dict, tool: str, args: dict, result: dict | None = None, metrics: dict | None = None):
+        """A measured call made with a hypothesis and a prediction carries both and the computed gap."""
+        if tool not in experiments.MEASURED or "expect" not in args or "hypothesis_id" not in args:
+            return
+        if body["kind"] == "note" or (result or {}).get("verdict") == "refused":
+            return                                   # nothing was measured, so there is nothing to reflect on
+        from lab.evaltools import noise_band_pct
+        base = next(ledger.records(self.s.ledger_root, run=self.s.run_id, kind="baseline"), None)
+        name = args["expect"].get("metric")
+        band = noise_band_pct(name, target.load()) if tool in ("bench", "submit") and isinstance(name, str) else None
+        body["experiment"] = experiments.outcome(tool, args, result, metrics,
+                                                 ((base or {}).get("result") or {}).get("metrics"), band)
 
     def _audited(self, tool: str, args: dict):
         """Snapshot, and stop the run on a surface violation: integrity failures are the one hard rule."""
         self._t0 = time.monotonic()
         if tool in GPU_TOOLS and self.s.budget.remaining_usd <= 0 and gpu_rate()[0] > 0:
             raise BudgetExceeded(f"{tool}: no budget left for GPU time")
+        self._sync("down")
         snap = self.s.workspace.snapshot()
         if snap.violations:
             self.violation = "; ".join(snap.violations)
             self._record("note", tool, args, {"violation": snap.violations}, snap)
             raise PermissionError(f"workspace violates the write surface: {self.violation}")
         return snap
+
+    def _sync(self, way: str) -> None:
+        """With the agent on a Remote worker: its workspace there is the live one, this one its mirror."""
+        rws = getattr(self.s, "remote_workspace", None)
+        if rws:
+            (self.worker.pull(rws, self.s.workspace.path) if way == "down" else
+             self.worker.push(self.s.workspace.path, rws))
 
     def _pristine(self) -> Path:
         a = self.s.workspace.audit()
@@ -92,14 +118,18 @@ class Toolbox(EvalTools, ProfTools):
         dest = self.s.workspace.path / visible
         shutil.rmtree(dest, ignore_errors=True)
         shutil.copytree(src, dest)
+        self._sync("up")
         return blob, str(visible)
 
     # -- tools ---------------------------------------------------------------------------
     def test(self, args: dict) -> str:
         snap = self._audited("test", args)
-        tree = self._pristine()
-        lint = grader.run_lint(tree)
-        tests = grader.run_tests(tree) if lint.passed else grader.Run(False, -1, "skipped: lint failed")
+        out = self._work("test")
+        try:
+            r = self.worker.call("test", {"tree": self._pristine()}, {}, out)
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
+        lint, tests = grader.Run(**r["lint"]), grader.Run(**r["tests"])
         result = {"lint": lint.passed, "tests": tests.passed, "returncode": tests.returncode,
                   "lint_output": lint.output[-2000:], "test_output": tests.output[-4000:],
                   "changed": snap.files + snap.deleted, "scratch_left_out": self.s.workspace.audit().scratch}
@@ -110,24 +140,26 @@ class Toolbox(EvalTools, ProfTools):
 
     def profile(self, args: dict) -> str:
         snap = self._audited("profile", args)
-        tree = self._pristine()
-        out = tree / "lab" / "runs"
-        harness = stage_harness(tree)
-        n = int(args.get("requests", 8))
-        argv = [engine.python(), "-m", "lab.profile", "--requests", str(n),
-                "--max-tokens", str(args.get("max_tokens", 32)), "--out", str(out),
-                *workload_flags(args, harness, n)]
+        out = self._work("profile")
         t0 = time.monotonic()
-        proc = (self.s.profile_runner or default_profile_runner)(tree, argv)
-        bundles = sorted(out.glob("*")) if out.exists() else []
-        blob, visible = self._keep(bundles[-1]) if bundles else ("", "")
-        result = {"returncode": proc.returncode, "bundle": blob, "workspace_copy": visible,
-                  "seconds": time.monotonic() - t0, "output": (proc.stdout + proc.stderr)[-3000:]}
+        try:
+            r = self.worker.call("profile", {"tree": self._pristine()},
+                                 {"kind": "profile", "args": args, "workbench": getattr(self.s, "workbench", None)}, out)
+            blob, visible = self._keep(out / "files") if (out / "files").is_dir() else ("", "")
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
+        try:                                     # the blob is the bundle itself (worker copies it to `files`)
+            cal = calibrate.calibrate_kernels(self.s.ledger_root / blob, r.get("gpu")) if blob else None
+        except Exception as e:                   # noqa: BLE001  never costs the measurement it describes
+            cal = {"error": f"calibration failed: {type(e).__name__}: {e}"}
+        result = {"returncode": r["returncode"], "bundle": blob, "workspace_copy": visible,
+                  "seconds": time.monotonic() - t0, "output": r["output"], "calibrated": cal, **_killed(r)}
         self._record("profile", "profile", args, result, snap)
-        if proc.returncode != 0 or not blob:
-            return f"profile failed ({proc.returncode}):\n{result['output']}"
+        killed = f"\nkilled in your workbench (held the GPU): {json.dumps(r['killed'])}" if r.get("killed") else ""
+        if r["returncode"] != 0 or not blob:
+            return f"profile failed ({r['returncode']}):\n{result['output']}{killed}"
         return f"bundle at {visible} (in your workspace; left out of your change)\n" + "\n".join(
-            f"  {p.name}" for p in sorted((self.s.workspace.path / visible).iterdir()))
+            f"  {p.name}" for p in sorted((self.s.workspace.path / visible).iterdir())) + killed
 
     def ledger_tool(self, args: dict) -> str:
         match = {k: v for k, v in args.items() if k in ("kind", "session", "snapshot", "tool") and v}
@@ -152,6 +184,7 @@ class Toolbox(EvalTools, ProfTools):
         sid = args["snapshot"]
         self._audited("restore", args)
         self.s.workspace.restore(sid)
+        self._sync("up")
         snap = self._audited("restore", args)
         self._record("note", "restore", args, {"restored": sid, "now": snap.id}, snap)
         return f"workspace restored to {sid}"
@@ -161,6 +194,39 @@ class Toolbox(EvalTools, ProfTools):
         self._record("note", "note", args, {"text": args["text"]}, snap)
         return "noted"
 
+    def hypothesis(self, args: dict) -> str:
+        fields = experiments.new_hypothesis(args)
+        rec = ledger.append({"kind": "hypothesis", "run": self.s.run_id, "session": self.s.session_id, **fields},
+                            self.s.ledger_root)
+        return f"hypothesis {rec['id']}"
+
+    def reflect(self, args: dict) -> str:
+        fields = experiments.new_reflection(self.s.ledger_root, self.s.run_id, args)
+        rec = ledger.append({"kind": "reflection", "run": self.s.run_id, "session": self.s.session_id, **fields},
+                            self.s.ledger_root)
+        return f"reflection {rec['id']} on {fields['record']}"
+
+    def _measured(self, spec: ToolSpec) -> ToolSpec:
+        """A measured tool: refused without an open hypothesis and a prediction, or while the last result lacks a
+        reflection; its reply ends with the prediction, the measurement and the gap."""
+        def call(args: dict) -> str:
+            experiments.check(self.s.ledger_root, self.s.run_id, spec.name, args)
+            text = spec.fn(args)
+            last = experiments.pending(self.s.ledger_root, self.s.run_id)
+            if last is None or last.get("tool") != spec.name:
+                return text
+            x = last["experiment"]
+            measured = x.get("actual") if "actual_missing" not in x else f"not computed ({x['actual_missing']})"
+            return (f"{text}\n\nExperiment record {last['id']}: expected {x['expect']['metric']} = "
+                    f"{x['expect']['value']} ({x['expect']['unit']}), measured {measured}"
+                    + (f", gap {x['gap']:+.4g}" if x.get("gap") is not None else "")
+                    + f". The next measured call is refused until `reflect` records a reflection on {last['id']}.")
+        schema = {**spec.schema, "properties": {**spec.schema.get("properties", {}), **experiments.MEASURED_PROPS},
+                  "required": sorted(set(spec.schema.get("required", [])) | {"hypothesis_id", "expect"})}
+        note = (" Requires `hypothesis_id` (a `hypothesis` record of this run) and `expect` (metric, value, unit, "
+                "why); the record keeps both with the measured value and the gap.")
+        return ToolSpec(spec.name, spec.description + note, schema, call)
+
     def specs(self) -> list[ToolSpec]:
         """What each tool does, returns and costs; never when or how to use it."""
         from regimes import suite
@@ -169,16 +235,28 @@ class Toolbox(EvalTools, ProfTools):
         rate, known = gpu_rate()
         free = " Costs no GPU time ($0)."
 
+        from lab.agent import ClaudeAgentSDK
+        paused = (" While it runs, the container your shell runs in is paused, and processes in it holding the GPU are "
+                  "killed and listed in the result." if ClaudeAgentSDK.containerized() else "")
+
+        deps = target.load().deps
+        offline = (f" Only your change reaches the engine here: if it changes {' or '.join(deps)}, those are installed "
+                   "from scratch for it (package indexes only), and the engine then runs with no network, so anything it "
+                   "needs at runtime (draft models, prebuilt kernels, files a library downloads when it is used) has to be "
+                   "in your change." if deps else " The engine runs with no network.")
+
         def gpu(t: str) -> str:
             return (f" Costs GPU time: ~{t} per call, charged at ${rate:g}/h." if known else
-                    f" Costs GPU time: ~{t} per call; no GPU rate is configured on this host, so it is charged $0.")
+                    f" Costs GPU time: ~{t} per call; no GPU rate is configured on this host, so it is charged $0."
+                    ) + offline + paused
         short, full = suite.TIERS["short"], suite.TIERS["full"]
         windows = (f"one engine start plus, per regime, a {short['final_s']:.0f} s measurement window at tier short or "
                    f"{full['final_s']:.0f} s at full, plus {short['probe_s']:.0f} s / {full['probe_s']:.0f} s probes for "
                    f"regimes that search for a load")
-        return [
+        specs = [
             ToolSpec("test", "Lint and run the test suite on a pristine copy of your current workspace, inside the "
-                     "referee's jail. Returns PASS or FAIL, lint and test status, and the tail of each output." + free,
+                     "referee's jail. Returns PASS or FAIL, lint and test status, and the tail of each output." + offline
+                     + free,
                      obj, self.test),
             ToolSpec("profile", "Run the engine in process under the profiler, jailed, on `requests` sampled from a seen "
                      "corpus class (`corpus_class`, default steady_interactive; `seed`) or on synthetic token ids "
@@ -213,26 +291,43 @@ class Toolbox(EvalTools, ProfTools):
                      {"type": "object", "required": ["text"], "properties": {"text": {"type": "string"}}}, self.note),
             ToolSpec("bench", "Serve a pristine copy of your current workspace (jailed) and measure it under load "
                      f"regimes on the seen split. `regimes`: default {_names(self.bench_defaults())}; 'all'; or "
-                     f"any of {_names(suite.REGIMES)}. `tier`: short (default) or full. Returns one headline per regime "
+                     f"any of {_names(suite.REGIMES)}. `tier`: short (default) or full. `seed`: the seen-split workload sample "
+                     f"(default {self.seed}). Returns one headline per regime "
                      f"(objective, value, direction, validity), raw. Takes {windows}." + gpu("5-25 min per regime"),
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}},
-                                                       "tier": {"type": "string", "enum": ["short", "full"]}}}, self.bench),
+                                                       "tier": {"type": "string", "enum": ["short", "full"]},
+                                                       "seed": {"type": "integer"}}}, self.bench),
             ToolSpec("equiv", "Serve your current workspace and run the correctness gate against the reference "
                      "model's outputs at `tier` dev (default) or full. Returns pass, fail or inconclusive with every "
                      "metric. submit requires a passing full-tier equiv on the snapshot. Takes one engine start plus "
-                     "generating the tier's task set." + gpu("10 min at tier dev and 30-60 min at tier full"),
+                     "generating the tier's task set." + gpu("10 min at tier dev on unmodified vLLM and ~95 min on the example engine (about 17 items/min at concurrency 16, H200); the full tier is about 12x the items"),
                      {"type": "object", "properties": {"tier": {"type": "string", "enum": ["dev", "full"]}}}, self.equiv),
             ToolSpec("submit", "Measure your current workspace on the held-out split at the full tier and compare it "
                      "with the base commit measured the same way. Needs a passing full-tier equiv and a completed "
                      "short-tier seen bench on this snapshot. `regimes`: default those of that bench. The only thing "
                      "that can produce a win. Returns one aggregate per regime (base, new, delta %, noise band %, "
-                     "verdict) and, with a task, its score. Takes one engine start plus a held-out full-tier "
+                     "verdict, and % of the ceiling computed from the base's seen-split request shape) and, with a task, its score. Takes one engine start plus a held-out full-tier "
                      f"measurement per regime, the base commit's held-out measurement once per run, and up to one of the "
                      f"{HOLDOUT_BUDGET} held-out queries per regime." + gpu("15-25 min per regime"),
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}}}},
                      self.submit),
             *self.prof_specs(gpu),
+            ToolSpec("hypothesis", "Record a hypothesis: `hypothesis` (the bottleneck and the proposed change), "
+                     "`rationale` (why), optional `abandon_if` (the result that would end it) and `from_record` (the "
+                     "measured record whose reflection proposed it). Returns its id, which measured tools take as "
+                     "`hypothesis_id`." + free,
+                     {"type": "object", "required": ["hypothesis", "rationale"],
+                      "properties": {"hypothesis": {"type": "string"}, "rationale": {"type": "string"},
+                                     "abandon_if": {"type": "string"}, "from_record": {"type": "string"}}},
+                     self.hypothesis),
+            ToolSpec("reflect", "Record a reflection on a measured record: `record` (its id), `reflection` (why the "
+                     "result matched or differed from its `expect`), optional `alternative` (another hypothesis). "
+                     "The latest measured record of the run needs one before the next measured call." + free,
+                     {"type": "object", "required": ["record", "reflection"],
+                      "properties": {"record": {"type": "string"}, "reflection": {"type": "string"},
+                                     "alternative": {"type": "string"}}}, self.reflect),
         ]
+        return [self._measured(s) if s.name in experiments.MEASURED else s for s in specs]
 
 
 def _names(names) -> str:

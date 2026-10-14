@@ -194,8 +194,10 @@ def push(vm: VM, record: Record) -> None:
     # .venv is named explicitly: a gitignore-only exclusion did not protect it from --delete on the VM.
     for local, remote, keep in ((engine.repo(), vm.remote_dir, []),
                                 (engine.ENV_ROOT, vm.env_dir, ["--include=corpus/*/heldout.jsonl"])):
-        _rsync(vm, "--delete", "--exclude=.git", "--exclude=.venv", "--exclude=__pycache__", *keep,
-               "--filter=:- .gitignore", f"{local}/", f"{ssh_target(vm, record)}:{remote}/")
+        # lab/runs is named explicitly too: it holds the worker's cache and the agent's live workspaces there.
+        _rsync(vm, "--delete", "--exclude=.git", "--exclude=.venv", "--exclude=__pycache__", "--exclude=/lab/runs",
+               *keep, "--filter=:- .gitignore",
+               f"{local}/", f"{ssh_target(vm, record)}:{remote}/")
 
 
 def fetch(vm: VM, record: Record, remote: str, local: Path, base: str | None = None, *extra: str) -> None:
@@ -324,7 +326,12 @@ def main(argv: list[str] | None = None) -> int:
         print(p.types(), end="")
         return 0
     if args.cmd == "setup":
-        return run(vm, f"bash {vm.env_dir}/lab/vm-setup.sh {vm.remote_dir}", keep=True)
+        code = run(vm, f"bash {vm.env_dir}/lab/vm-setup.sh {vm.remote_dir}", keep=True)
+        try:                                   # the measured peaks come home: every ceiling is computed from them
+            fetch(vm, p.get(vm.name), "knowledge/peaks", engine.ENV_ROOT / "knowledge" / "peaks", base=vm.env_dir)
+        except ProviderError as e:
+            print(f"[lab.vm] peaks not fetched: {e}", file=sys.stderr)
+        return code
     words = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not words:
         ap.error("run needs a command")

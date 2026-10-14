@@ -80,3 +80,22 @@ def test_sampler_writes_epoch_seconds(fake_smi, tmp_path):
 def test_unparseable_timestamp_leaves_epoch_empty():
     out = gpu.add_epoch("timestamp, x\nnot a time, 1\n")
     assert out.splitlines() == ["epoch_s,timestamp,x", ",not a time,1"]
+
+
+def test_compute_apps_parses_pids_memory_and_names(monkeypatch):
+    import subprocess
+    monkeypatch.setattr(gpu, "available", lambda: True)
+    monkeypatch.setattr(gpu.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 0, "123, 4000, python\n456, [N/A], /usr/bin/vllm, worker\n", ""))
+    assert gpu.compute_apps() == [{"pid": 123, "used_mib": 4000, "name": "python"},
+                                  {"pid": 456, "used_mib": None, "name": "/usr/bin/vllm, worker"}]
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc")
+def test_descendants_include_children():
+    import subprocess
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"])
+    try:
+        assert {os.getpid(), child.pid} <= gpu.descendants(os.getpid())
+    finally:
+        child.kill()

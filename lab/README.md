@@ -105,23 +105,24 @@ with the referee's rights, snapshot the workspace and write the ledger on every 
 | tool | does |
 |---|---|
 | `test` | lint and the fast suite on a pristine two-commit copy of the workspace, jailed |
-| `profile` | `lab.profile` on the pristine copy, jailed, on `args.corpus_class` (default `steady_interactive`, seen split, `args.seed`) or `args.synthetic`; the bundle goes into the ledger as a blob |
-| `trace` | `nsys profile` around `lab.profile --profiler cuda-range` (window only), then `nsys stats` (kernel, CUDA API, memcpy, NVTX tables as CSV), both jailed; `.nsys-rep` + CSVs as a blob |
-| `kernel` | `ncu --kernel-name regex:<kernel_regex> --launch-skip N --launch-count N --set basic\|full` around the same workload, then `ncu --import --csv --page raw`; `.ncu-rep` + `metrics.csv` as a blob |
-| `hostprof` | `lab.profile --profiler pyspy`: py-spy record (speedscope) for `seconds` under the repeated workload plus one `py-spy dump`; the bundle as a blob |
+| `profile` | `lab.profile` on the pristine copy, jailed, on `args.corpus_class` (default `steady_interactive`, seen split, `args.seed`) or `args.synthetic`; the bundle goes into the ledger as a blob, with each kernel's share of the window (the Amdahl denominator) in the record |
+| `trace` | `nsys profile` (`args.nsys_args`, default window-only CUDA/NVTX/OS-runtime with CUDA-graph nodes) around `lab.profile --profiler cuda-range` (window only), then `nsys stats` (kernel, CUDA API, memcpy, NVTX tables as CSV), both jailed; `.nsys-rep` + CSVs as a blob |
+| `kernel` | `ncu [--kernel-name regex:<kernel_regex>] --launch-skip N --launch-count N --set <any set> [ncu_args]` around the same workload, then `ncu --import --csv --page raw`; `.ncu-rep` + `metrics.csv` as a blob |
+| `hostprof` | `lab.profile --profiler pyspy`: py-spy record (speedscope, plus `args.pyspy_args`) for `seconds` under the repeated workload plus one `py-spy dump`; the bundle as a blob |
 | `ledger` | read records (this run and earlier ones) |
 | `query` | one read-only SQL query over every run's data (`store/index.py`; no held-out rows, no file or network access) |
 | `budget` | dollars left |
 | `restore` | workspace back to a snapshot id (`base` resets) |
 | `note` | a note for the human; recorded, changes nothing |
-| `bench` | serve the pristine copy and run the load regimes (`regimes/`) on the seen split, short tier; one headline per regime, raw (`args.regimes`, `args.tier`) |
+| `hypothesis` | the agent's hypothesis and rationale (optional `abandon_if`, `from_record`); its id is what every measured tool requires as `hypothesis_id`, with an `expect` (metric, value, unit, why) |
+| `reflect` | the agent's reflection on a measured record (optional `alternative`); the run's latest measured record needs one before the next measured call |
+| `bench` | serve the pristine copy and run the load regimes (`regimes/`) on the seen split, short tier; one headline per regime, raw (`args.regimes`, `args.tier`, `args.seed`), each with its context (`lab/calibrate.py`: % of the physical ceiling, % of the reference engine measured the same way; only under a matching config fingerprint) |
 | `equiv` | serve it and run the correctness gate (`correctness/`) against the target's reference outputs; pass, fail or inconclusive with every metric; `tier=full` uses `<reference.dir>-full` |
-| `submit` | the only thing that can produce a win. Needs a passing full-tier equiv and a seen bench on this snapshot. Measures the held-out split at the full tier, measures the base commit the same way (once per run, cached outside the jail), and records one aggregate per regime (base, new, delta %, noise band %, verdict improved/regressed/within_band/unknown_band) through the Thresholdout guard (`validity/holdout.py`, state in `lab/ledger/holdout_state.json`, seed `LAB_HOLDOUT_SEED`): the held-out numbers themselves never reach the ledger. Noise bands come from the ledger's `noise` records (`lab.validate`) when measured |
+| `submit` | the only thing that can produce a win. Needs a passing full-tier equiv and a seen bench on this snapshot. Measures the held-out split at the full tier, measures the base commit the same way (once per run, cached outside the jail), and records one aggregate per regime (base, new, delta %, noise band %, verdict improved/regressed/within_band/unknown_band, and the ceiling from the base's seen-split request shape with the base's and new value's % of it) through the Thresholdout guard (`validity/holdout.py`, state in `lab/ledger/holdout_state.json`, seed `LAB_HOLDOUT_SEED`): the held-out numbers themselves never reach the ledger. Noise bands come from the ledger's `noise` records (`lab.validate`) when measured |
 
-`trace`, `kernel` and `hostprof` take integers in fixed ranges (`requests` 1-256, `prompt_len` 1-32768,
-`max_tokens` 1-4096, `launch_count` 1-64, `launch_skip` 0-100000, `seconds` 1-300, `rate` 1-1000), `set` from
-basic/full, and a `kernel_regex` of at most 200 regex characters (no spaces, quotes, `;`, `&`, backticks, `/` or
-`$(`); nothing else reaches the command line, which is an argv list, never a shell. The instrument is resolved on the
+`trace`, `kernel` and `hostprof` take integers with a lower bound only, any regex and set, and the instrument's
+own flags as a list of strings; the command line is an argv list, never a shell, and runs in the jail, where the
+agent's code runs anyway. Cost is the budget's job, not an argument cap. The instrument is resolved on the
 referee's PATH (refused, and recorded as a refusal, when absent) and its directory is added to the jail's read list.
 The workload is lab.profile's in-process scheduler and backend, so these tools see the engine's kernels and host
 code but not the HTTP front end.
@@ -145,7 +146,7 @@ Only tool time is charged: the VM also bills while the model thinks between call
 | `kernel` | yes | seconds × rate | ~1.5 min measured at 4-8 launches; each launch is replayed once per metric pass, so it grows with `launch_count` and `full` |
 | `hostprof` | yes | seconds × rate | ~35 s plus `seconds` (measured) |
 | `bench` | yes | seconds × rate | 5-10 min per regime at tier short, 15-25 at full, plus ~2 min engine start |
-| `equiv` | yes | seconds × rate | ~10 min at tier dev, 30-60 at full |
+| `equiv` | yes | seconds × rate | tier dev (~1.6k items): ~10 min on vLLM, ~95 min on the example engine (17 items/min, H200); full is ~12x the items |
 | `submit` | yes | seconds × rate | 15-25 min per regime (held-out, full tier), plus the base commit measured once per run |
 
 The same estimates are in each tool's description, stated as facts about cost, with the configured rate.
@@ -159,9 +160,21 @@ derived from the agent's own records and nothing is advice; the `ledger` tool ha
 A session ends when the agent says `stop`, its per-session cap is spent, or it times out. The
 run ends on budget, on `stop`, or on a write-surface violation (the one hard rule). Model cost
 comes from the provider's own accounting; `LAB_MODEL` picks the model, `LAB_AGENT_PROVIDER` the
-provider (only `claude` today, through the Agent SDK CLI; `lab/agent.py` is the seam for others).
-The jail is sandbox-runtime (`npm install -g @anthropic-ai/sandbox-runtime`); `LAB_NO_JAIL=1`
-waives it for tests and a box you trust.
+provider: `claude` (the Agent SDK CLI) or `openai` (`lab/agent_openai.py`: any OpenAI-compatible API called
+directly with its key: `LAB_OPENAI_BASE_URL`, https and a public host only, default OpenAI's; `OPENAI_API_KEY`;
+`LAB_MODEL_PRICE="in,out"` in $ per million tokens, required. Its loop runs outside the jail, so the key never
+enters it; file tools stay in the workspace behind the write guard, Bash runs jailed with no network).
+Agent code runs jailed. On Linux the jail is a container (`lab/safety/container.py`: NVIDIA runtime, no
+network, read-only root, non-root user, no capabilities; a served engine's port reaches the host through a socket
+bridge; image from `python -m lab.safety.container build`, which `vm-setup.sh` runs). Elsewhere it is
+sandbox-runtime (`npm install -g @anthropic-ai/sandbox-runtime`); `LAB_JAIL` picks one. `LAB_NO_JAIL=1` waives
+the jail for tests and a box you trust. The agent's CLI runs in its own workbench container on Linux (GPU, internet,
+root inside; paused while anything is measured) and under srt elsewhere; its model calls go through
+`lab/apiproxy.py`, so no credential is ever inside a jail (`lab/RUNTIME.md`).
+
+The GPU work behind `test`, `profile`, `trace`, `kernel`, `hostprof`, `bench`, `equiv` and `submit` runs as worker
+jobs (`lab/worker.py`). `LAB_WORKER=local` (default) runs them in process; `LAB_WORKER=ssh` runs them on the VM
+`lab.vm` names (start it and run `python -m lab.vm setup` first), shipping each tree by content hash.
 
 ## Canaries
 

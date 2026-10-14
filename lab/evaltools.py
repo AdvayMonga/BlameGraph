@@ -1,5 +1,6 @@
-"""The three tools that can make a change count: bench, equiv and submit. Each serves the agent's pristine tree
-from outside the jail (lab/serve.py), measures it with the environment's own instruments, and writes the ledger.
+"""The three tools that can make a change count: bench, equiv and submit. Each has the worker (lab/worker.py) serve
+the agent's pristine tree outside the jail and measure it with the environment's own instruments; the policy and the
+ledger stay here.
 
   bench    the regimes on the seen split, short tier -> one headline per regime, raw
   equiv    the correctness gate against the target's reference -> pass | fail | inconclusive, with every metric
@@ -18,11 +19,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 import time
 from pathlib import Path
 
-from lab import artifacts, ledger, serve, target
+from lab import artifacts, calibrate, ledger, serve, target, worker
 from validity.holdout import HoldoutGuard, Refused
 
 HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT = 100, 2.0, 0.5
@@ -92,6 +94,20 @@ def aggregate(base: dict, delta: float | None, better: str, band_pct: float | No
     return {"base": b, "new": b * (1 + delta / 100), "delta_pct": delta, "band_pct": band_pct, "verdict": verdict}
 
 
+def heldout_context(seen_cal: dict, base: dict, delta: float | None, better: str) -> dict:
+    """A held-out aggregate's context: the ceiling computed from the base commit's seen-split request shape (nothing
+    about the held-out requests goes into it), as % for the base and the new value. The reference is measured on the
+    seen split at the short tier, so it is not comparable to a held-out full-tier number."""
+    from validity.ceiling import pct_of
+    c = seen_cal.get("ceiling")
+    b = base.get("value")
+    new = b * (1 + delta / 100) if b is not None and delta is not None else None
+    return {"ceiling": c, "pct_of_ceiling_base": pct_of(b, c, better), "pct_of_ceiling_new": pct_of(new, c, better),
+            "ceiling_from": "the base commit's seen-split request shape" if c is not None
+            else (seen_cal.get("ceiling_missing") or "no seen-split calibration of the base in this run"),
+            "reference_missing": "the reference is measured on the seen split at tier short; this is held-out at tier full"}
+
+
 def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
     """What the referee measures against: the parameters the agent cannot read off its ledger. Facts, not advice."""
     from regimes import suite
@@ -106,11 +122,37 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
                         "tasks": list(t.tasks)},
         "noise_bands_pct": {n: noise_band_pct(n, root=ledger_root or ledger.ROOT) for n in suite.REGIMES},
         "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,
+        "ceilings": _ceiling_facts(t, ledger_root),
     }
     if ledger_root and (Path(ledger_root) / "holdout_state.json").exists():
         st = json.loads((Path(ledger_root) / "holdout_state.json").read_text())
         facts["heldout_queries_left"] = st.get("budget_left")
     return facts
+
+
+def _ceiling_facts(t: target.Target, ledger_root: Path | None) -> dict:
+    """Peaks, streamed bytes and floors on the GPU this run measured on; nothing before its first measurement."""
+    g = _last_gpu(ledger_root)
+    if g is None:
+        return {"missing": "no measurement in this ledger yet, so no GPU to compute ceilings for"}
+    try:
+        return calibrate.facts(t, g)
+    except Exception as e:                       # noqa: BLE001
+        return {"missing": f"ceilings not computed: {type(e).__name__}: {e}"}
+
+
+def _last_gpu(ledger_root: Path | None) -> dict | None:
+    """The GPU the run's measurements last ran on, from the latest bench or baseline record (the controller has none)."""
+    if not ledger_root or not (Path(ledger_root) / "ledger.jsonl").exists():
+        return None
+    for r in reversed(list(ledger.records(ledger_root))):
+        g = (r.get("result") or {}).get("gpu") if r.get("kind") == "bench" else None
+        if g is None and r.get("kind") == "baseline":
+            fp = next(iter(((r.get("result") or {}).get("calibrated") or {}).values()), {}).get("fingerprint") or {}
+            g = {"name": fp.get("gpu"), "driver_version": fp.get("driver")} if fp.get("gpu") else None
+        if g:
+            return g
+    return None
 
 
 def equiv_rows(out: Path) -> list[dict]:
@@ -119,6 +161,24 @@ def equiv_rows(out: Path) -> list[dict]:
     if not p.exists():
         return []
     return [{k: v for k, v in json.loads(x).items() if k != "text"} for x in p.read_text().splitlines() if x.strip()]
+
+
+def _failed(e: BaseException) -> dict:
+    """The record of a measurement that did not complete; GPU processes that stopped it are kept as facts."""
+    if isinstance(e, serve.GpuBusy):
+        return {"verdict": "refused", "reason": str(e), "gpu_processes": e.apps}
+    if isinstance(e, serve.Contaminated):
+        return {"verdict": "contaminated", "reason": str(e), "gpu_processes": e.apps}
+    return {"verdict": "error", "reason": _why(e)}
+
+
+def _killed(r: dict) -> dict:
+    """Processes of the agent's workbench killed because they held the GPU when the measurement began (a fact)."""
+    return {"workbench_killed": r["killed"]} if r.get("killed") else {}
+
+
+def _said(tool: str, result: dict) -> str:
+    return f"{tool} {'failed' if result['verdict'] == 'error' else result['verdict']}: {result['reason']}"
 
 
 def _why(e: BaseException) -> str:
@@ -134,25 +194,30 @@ class EvalTools:
     # -- bench --------------------------------------------------------------------------
     def bench(self, args: dict) -> str:
         snap = self._audited("bench", args)
-        t = target.load()
         names = _regimes(args, self.bench_defaults())
         tier = args.get("tier") or "short"
+        seed = args.get("seed", self.seed)
+        if isinstance(seed, bool) or not isinstance(seed, int):
+            raise ValueError("seed must be an integer")
         tree = self._pristine()
         t0 = time.monotonic()
-        work, rows = self._work("bench"), []
+        work = self._work("bench")
         try:
-            with serve.Served(tree, t.engine, log=self.s.run_dir / "serve-bench.log",
-                              jailed=self.serve_jailed, artifacts=work) as srv:
-                results = run_regimes(srv.url, t, names, "seen", tier, self.seed, rows)
+            r = self._measure(tree, work, "serve-bench.log", names=names, split="seen", tier=tier, passive=True,
+                              seed=seed)
         except Exception as e:                      # a tool never crashes the session: the failure is the record
-            result = {"verdict": "error", "reason": _why(e), "seconds": time.monotonic() - t0,
-                      "artifacts": self._store(work, rows)}
-            self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier})
-            return f"bench failed: {result['reason']}"
-        result = {"verdict": "ok", "metrics": headline(results), "regimes": results, "tier": tier,
-                  "seconds": time.monotonic() - t0, "ready_s": srv.ready_s, "artifacts": self._store(work, rows)}
-        self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier})
-        return json.dumps({"snapshot": snap.id, "split": "seen", "tier": tier, "metrics": result["metrics"]}, indent=1)
+            result = {**_failed(e), "seconds": time.monotonic() - t0,
+                      "artifacts": artifacts.store(work, self.s.ledger_root)}
+            self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier, "seed": seed})
+            return _said("bench", result)
+        cal = calibrate.calibrate_results(r["results"], artifacts.read_rows(work), target.load(), r.get("gpu"), tier,
+                                          "seen", seed)
+        result = {"verdict": "ok", "metrics": headline(r["results"]), "calibrated": cal, "regimes": r["results"],
+                  "tier": tier, "seconds": time.monotonic() - t0, "ready_s": r["ready_s"], "gpu": r.get("gpu"),
+                  "artifacts": artifacts.store(work, self.s.ledger_root), **_killed(r)}
+        self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier, "seed": seed})
+        return json.dumps({"snapshot": snap.id, "split": "seen", "tier": tier, "metrics": result["metrics"],
+                           "calibrated": cal, **_killed(r)}, indent=1)
 
     # -- equiv --------------------------------------------------------------------------
     def equiv(self, args: dict) -> str:
@@ -164,30 +229,28 @@ class EvalTools:
             self._record("equiv", "equiv", args, {"verdict": "refused", "reason": f"no {tier}-tier reference outputs; "
                          "run `python -m correctness reference` for this target first"}, snap)
             return "equiv refused: no reference outputs for this target"
-        from correctness import client, run as crun
-        from correctness.gate import Thresholds
         tree = self._pristine()
         out = self.s.run_dir / "equiv" / f"{snap.id}-{tier}.json"
         work = self._work("equiv")
+        # answers already collected for this snapshot are reused, never re-rolled: the gate is statistical
+        prior = Path(tempfile.mkdtemp(prefix="equiv-prior-", dir=self.s.run_dir))
+        if out.with_suffix(".outputs.jsonl").exists():
+            shutil.copyfile(out.with_suffix(".outputs.jsonl"), prior / "equiv.outputs.jsonl")
         try:
-            with serve.Served(tree, t.engine, log=self.s.run_dir / "serve-equiv.log", jailed=self.serve_jailed,
-                              artifacts=work) as srv:
-                res = crun.candidate(ref, srv.url, t.model, out, self.encoder(t),
-                                     Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio),
-                                     concurrency=self.equiv_concurrency, api=client.Api(t.engine.api, t.chat_kwargs),
-                                     config={"tier": tier})
+            res = self.worker.call("equiv", {"tree": tree, "reference": ref, "prior": prior},
+                                   {"tier": tier, "concurrency": self.equiv_concurrency, "jailed": self.serve_jailed,
+                                    "workbench": getattr(self.s, "workbench", None)}, work)
         except Exception as e:
-            self._record("equiv", "equiv", args, {"verdict": "error", "reason": _why(e),
-                                                  "artifacts": self._store(work, equiv_rows(out))},
-                         snap, config={"split": "seen", "tier": tier})
-            return f"equiv failed: {_why(e)}"
+            result = {**_failed(e), "artifacts": self._equiv_store(work, out, prior)}
+            self._record("equiv", "equiv", args, result, snap, config={"split": "seen", "tier": tier})
+            return _said("equiv", result)
         passed = {"pass": True, "fail": False}.get(res["verdict"])     # inconclusive is None: neither passing nor failing
         record = {"verdict": res["verdict"], "passed": passed, "reasons": res["reasons"], "gates": res["gates"],
                   "metrics": res["metrics"], "thresholds": res["thresholds"], "tier": tier,
-                  "artifacts": self._store(work, equiv_rows(out))}
+                  "artifacts": self._equiv_store(work, out, prior), **_killed(res)}
         self._record("equiv", "equiv", args, record, snap, config={"split": "seen", "tier": tier})
         return json.dumps({"snapshot": snap.id, "tier": tier, "verdict": res["verdict"], "reasons": res["reasons"],
-                           "metrics": res["metrics"]}, indent=1, default=str)
+                           "metrics": res["metrics"], **_killed(res)}, indent=1, default=str)
 
     # -- submit -------------------------------------------------------------------------
     def submit(self, args: dict) -> str:
@@ -213,15 +276,13 @@ class EvalTools:
             base_seen = self.base_seen(t, names)
             guard = self.holdout_guard()
             tree = self._pristine()
-            # held-out passive data stays operator-only: never a blob, never in the record, never inside the jail
-            private, rows = self.s.run_dir / "heldout-private" / f"{snap.id}-{time.strftime('%Y%m%dT%H%M%S')}", []
-            try:
-                with serve.Served(tree, t.engine, log=self.s.run_dir / "serve-submit.log", jailed=self.serve_jailed,
-                                  artifacts=private) as srv:
-                    results = run_regimes(srv.url, t, names, "heldout", "full", self.seed, rows)
-            finally:
-                artifacts.write_rows(private, rows)
-            new = headline(results)
+            # held-out passive data stays operator-only: never a blob, never in the record, never inside the jail.
+            # A contaminated run raises here, before the holdout guard: it spends no query.
+            private = self.s.run_dir / "heldout-private" / f"{snap.id}-{time.strftime('%Y%m%dT%H%M%S')}"
+            r = self._measure(tree, private, "serve-submit.log", names=names, split="heldout", tier="full", passive=True)
+            new = headline(r["results"])
+            cal_path = self.s.run_dir / f"base-seen-{BENCH_TIER}.calibrated.json"
+            seen_cal = json.loads(cal_path.read_text()) if cal_path.exists() else {}
             metrics, better = {}, {}
             for n in names:
                 held_d, seen_d = delta_pct(base.get(n, {}), new[n]), delta_pct(base_seen.get(n, {}), seen[n])
@@ -229,15 +290,18 @@ class EvalTools:
                 # with the seen one. Without a seen delta to compare, nothing held-out is reported at all.
                 held_d = guard.query(seen_d, held_d)["value"] if held_d is not None and seen_d is not None else None
                 better[n] = new[n].get("better", "higher")
-                metrics[n] = aggregate(base.get(n, {}), held_d, better[n], noise_band_pct(n, t, self.s.ledger_root))
+                metrics[n] = {**aggregate(base.get(n, {}), held_d, better[n], noise_band_pct(n, t, self.s.ledger_root)),
+                              **heldout_context(seen_cal.get(n) or {}, base.get(n, {}), held_d, better[n])}
         except Refused as e:
             self._record("submit", "submit", args, {"verdict": "refused", "reason": str(e)}, snap)
             return f"submit refused: {e}"
         except Exception as e:
-            self._record("submit", "submit", args, {"verdict": "error", "reason": _why(e)}, snap)
-            return f"submit failed: {_why(e)}"
+            result = _failed(e)
+            self._record("submit", "submit", args, result, snap)
+            return _said("submit", result)
         rec = self._record_heldout("submit", "submit", args, {"tier": "full"}, metrics, snap)
-        out = {"snapshot": snap.id, "split": "heldout", "tier": "full", "metrics": metrics, "record": rec["id"]}
+        out = {"snapshot": snap.id, "split": "heldout", "tier": "full", "metrics": metrics, "record": rec["id"],
+               **_killed(r)}
         task = getattr(self.s, "task", None)
         if task is not None:                       # the task's own win condition, applied to these aggregates
             from lab.task import score
@@ -255,16 +319,35 @@ class EvalTools:
     equiv_concurrency = 16
     serve_jailed = True
 
-    def encoder(self, t: target.Target):
-        from correctness.run import HFEncoder
-        return getattr(self.s, "encoder", None) or HFEncoder(t.model, t.chat_kwargs)
-
     def _work(self, tool: str) -> Path:
-        """A scratch dir outside the jail for one served run's passive data; emptied into blobs by `_store`."""
+        """A scratch dir outside the jail for one worker job's output; emptied into blobs or removed after."""
         return Path(tempfile.mkdtemp(prefix=f"passive-{tool}-", dir=self.s.run_dir))
 
-    def _store(self, work: Path, rows: list[dict]) -> dict:
-        artifacts.write_rows(work, rows)
+    def _measure(self, tree: Path, out: Path, log: str, **args) -> dict:
+        """The worker's `measure` job into `out`; the engine's log is appended to `<run>/<log>` either way."""
+        try:
+            return self.worker.call("measure", {"tree": tree}, {"seed": self.seed, **args, "jailed": self.serve_jailed,
+                                                                "workbench": getattr(self.s, "workbench", None)}, out)
+        finally:
+            src = out / worker.ENGINE_LOG
+            if src.exists():
+                with open(self.s.run_dir / log, "ab") as f:
+                    f.write(src.read_bytes())
+                src.unlink()
+
+    def _equiv_store(self, work: Path, out: Path, prior: Path) -> dict:
+        """The gate's files to `out` (kept per snapshot for the next equiv), its rows and passive data as blobs."""
+        shutil.rmtree(prior, ignore_errors=True)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        for name, dest in (("equiv.json", out), ("equiv.outputs.jsonl", out.with_suffix(".outputs.jsonl"))):
+            if (work / name).exists():
+                shutil.move(work / name, dest)
+        log = work / worker.ENGINE_LOG
+        if log.exists():
+            with open(self.s.run_dir / "serve-equiv.log", "ab") as f:
+                f.write(log.read_bytes())
+            log.unlink()
+        artifacts.write_rows(work, equiv_rows(out))
         return artifacts.store(work, self.s.ledger_root)
 
     def holdout_guard(self) -> HoldoutGuard:
@@ -281,9 +364,21 @@ class EvalTools:
             tree = self.s.run_dir / f"base-tree-{split}"
             from lab.safety import grader
             grader.export(self.s.workspace.repo, self.s.workspace.base, tree)
-            with serve.Served(tree, t.engine, log=self.s.run_dir / f"serve-base-{split}.log", jailed=self.serve_jailed) as srv:
-                have.update(headline(run_regimes(srv.url, t, missing, split, tier, self.seed)))
+            work = self._work("base")
+            try:                                # a contaminated base raises: never cached, every later submit reads it
+                r = self._measure(tree, work, f"serve-base-{split}.log", names=missing, split=split, tier=tier,
+                                  passive=split == "seen")     # held-out rows never leave the worker
+                base_rows = artifacts.read_rows(work) if split == "seen" else []
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+            have.update(headline(r["results"]))
             cache.write_text(json.dumps(have, indent=1))
+            if split == "seen":                 # the base's context travels with the baseline record
+                cal = cache.with_suffix(".calibrated.json")
+                prior = json.loads(cal.read_text()) if cal.exists() else {}
+                prior.update(calibrate.calibrate_results(r["results"], base_rows, t, r.get("gpu"), tier, split,
+                                                         self.seed))
+                cal.write_text(json.dumps(prior, indent=1))
         return have
 
     def baseline(self, commit: str) -> dict:
@@ -295,9 +390,12 @@ class EvalTools:
         self._t0 = time.monotonic()
         try:
             seen = self.base_seen(target.load(), names)
-            result = {"verdict": "ok", "metrics": {n: seen[n] for n in names}}
+            cal = self.s.run_dir / f"base-seen-{BENCH_TIER}.calibrated.json"
+            calibrated = json.loads(cal.read_text()) if cal.exists() else {}
+            result = {"verdict": "ok", "metrics": {n: seen[n] for n in names},
+                      "calibrated": {n: calibrated[n] for n in names if n in calibrated}}
         except Exception as e:                      # no GPU or a base that will not serve is itself the fact
-            result = {"verdict": "error", "reason": _why(e)}
+            result = _failed(e)
         return ledger.append({"kind": "baseline", "run": self.s.run_id, "session": self.s.session_id,
                               "config": {"split": "seen", "tier": BENCH_TIER, "commit": commit},
                               "result": result, "cost": self._cost("baseline")}, self.s.ledger_root)

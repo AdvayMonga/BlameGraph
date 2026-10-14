@@ -22,6 +22,24 @@ ToolSpec descriptions, which state what each tool does, returns and costs, never
 task, budget, referee, a BASELINE (the base commit under bench's defaults = the task's objective + constrained regimes, measured once per run, `baseline` ledger
 kind; `RunConfig.baseline=False` skips it) and only the run's last `session` record.
 
+## Central goal (decided 2026-10-14)
+Make the loop rely less on the raw model and more on per-layer machinery. The engine is looked at as four layers;
+each needs data, a simulator, a hypothesis generator, measurement tools and an evaluator, and all of them answer to one
+end-to-end judge (`equiv` + `submit` + the held-out guard). The agent chooses which layer to work on; it is given each
+layer's share of time × its distance from the ceiling as a fact. Layer 1 first.
+
+| | 1. Kernels | 2. Model execution | 3. Runtime | 4. Serving |
+|---|---|---|---|---|
+| In the example engine | `models/paged_attention_kernel.py`, MoE grouped GEMM, norm/rope, sampling | `models/qwen3_moe.py`, `backends/custom_torch_backend.py`, `launch_table.py`, `quant.py` | `scheduler.py`, `scheduling_policy.py`, `kv_cache/` | `server.py`, `openai_shim.py`, tokenizer, startup, `control_plane/` |
+| Data | partial: `check_kernel` makes random inputs at chosen shapes; missing the shapes the engine actually calls, logged from real runs | partial: correctness task sets + corpus; missing a small fixed batch for logit checks and a list of step configurations | partial: corpus (public, repeats prompts); the load generator (separate work) replaces it | have: same workloads + the cold-start command |
+| Simulator | not needed (the real kernel runs in seconds; the roofline is the bound) | partial: analytic step floors (`validity/ceiling.py`); missing a measured step-time model | missing: scheduler simulator (real `scheduler.py` on a fake clock and backend, step times from layer 2's model) | not needed |
+| Hypothesis generator | missing (evolutionary: fast evaluator, many candidates) | missing (hypothesis-driven + knob search) | missing (hypothesis-driven, simulator-screened) | not needed: the general agent |
+| Measurement tools | have: `time_kernel`, ncu `kernel`, nsys `trace`, % of bandwidth peak | have: `profile`, `trace`, kernel share of time, step floors | have: `bench` client rows, engine telemetry, timeline, py-spy | have: `bench` cold_start/overload, serve logs, telemetry |
+| Evaluator | partial: `kernels/check_kernel` + `time_kernel` built and validated on the H200, not wired into the loop | missing: fast step-time + logit check (no server) | partial: `bench` + `equiv`; no noise bands measured for this engine yet | have: `bench` regimes |
+
+Across layers, built: the end-to-end judge, calibration (`lab/calibrate.py`), experiment records
+(`lab/experiments.py`), the workbench/measurement sandbox, the GPU VM tooling.
+
 ## Layout
 Top-level packages, run from the repo root (no install step; `pyproject.toml` lists optional extras and holds the
 pytest/ruff config). Each folder with commands has its own `python -m`.
@@ -33,20 +51,41 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   what `tests/conftest.py` points at. Surfaces, grader commands, `lab/engine.py`, and the `correctness`,
   `regimes`, `validity` CLIs all read it.
 - `lab/` — moved from inference-server 2026-10-06 (`lab/README.md`). `session.py` (the loop over a dollar budget),
-  `agent.py` (the one place a model is called; the agent's jailed shell gets the engine's python on PATH),
+  `agent.py` (the one place a model is called; the agent's jailed shell gets the engine's python on PATH;
+  `LAB_AGENT_PROVIDER` claude = Agent SDK CLI, openai = `agent_openai.py`: any OpenAI-compatible API with its own
+  key, https public hosts only, `LAB_MODEL_PRICE` required, loop outside the jail, Bash jailed with no network; on
+  Linux the Claude CLI runs in a per-session workbench container: GPU, internet, root inside, engine venv read-only;
+  its model calls go through `apiproxy.py`, which injects the key, prices usage and enforces the session cap; the
+  workbench is paused by `container.quiet` around measure/equiv/profile jobs, GPU holders killed and recorded),
+  `experiments.py` (decided 2026-10-11: no measured number without the agent's reasoning and no reasoning without
+  the number; measured tools require an open `hypothesis` record and an `expect` {metric, value, unit, why}, the
+  record keeps both with the computed gap, and the next measured call is refused until a `reflection` on the last
+  one is filed; the brief lists the run's hypotheses with their measurements and reflections) +
+  `calibrate.py` (every measured number with its context, decided 2026-10-11: `% of ceiling` from `validity/ceiling`
+  on measured peaks, `% of reference` from `knowledge/reference/<target>/<regime>.json` written by `lab.validate`
+  with `perf_reference` (the correctness reference minus its determinism switches, which are slow by design),
+  and for kernels their share of the window; a ceiling or reference is shown only under a matching config
+  fingerprint (model, dtypes, max_model_len, tier, split, corpus version, GPU), else the field says why it is
+  missing; bench, baseline, profile and kernel records carry a `calibrated` block, the brief shows the baseline's;
+  submit's held-out aggregates carry the ceiling from the base's seen-split shape and % of it, never anything computed
+  from held-out requests; harness facts carry peaks and floors for the GPU the ledger last measured on),
   `tools.py` (metered tools: test, profile, ledger, query, budget, restore, note; every record's `cost` has wall seconds, and
   GPU tools charge them at `LAB_GPU_USD_PER_HOUR` / the target's `[cost] gpu_usd_per_hour` to the run's budget) +
   `proftools.py` (trace = nsys, kernel = ncu, hostprof = py-spy, each wrapping lab.profile's workload in the jail
   with validated args) + `evaltools.py` (bench → `regimes` on
   the seen split; equiv → `correctness` candidate vs the target's reference; submit → held-out full tier vs the
-  base commit, one aggregate per regime through the Thresholdout guard; all three serve the pristine tree via
-  `serve.py`, jailed with local binding allowed; every serve also keeps its passive data, `artifacts.py`: device
+  base commit, one aggregate per regime through the Thresholdout guard; nothing is measured while another process holds
+  the GPU (`refused`), and a process other than the engine on the GPU mid-run makes it `contaminated` (never evidence,
+  never the cached base; `serve.Served.exclusive()`); all three serve the pristine tree via
+  `serve.py`, jailed (on Linux, port bridged out of a network-less container); every serve also keeps its passive data, `artifacts.py`: device
   samples via `gpu.DeviceSampler` (DCGM if `dcgmi`, else nvidia-smi), engine telemetry files from `{dir}`, all
   client rows, the serve log; bench/equiv as ledger blobs under `result.artifacts`, submit only in
   `<run>/heldout-private/`, never in the ledger; `artifacts.joined` joins client rows to engine rows by trace id),
   `workspace.py` (exported engine copy + snapshots), `ledger.py`
   (append-only JSONL, `lab/ledger/` gitignored; `merge` adds another ledger dir's new records and blobs), `budget.py`, `engine.py` (where the engine repo and its python
-  are), `safety/` (write surfaces, srt jail, grader: lint/tests run with the engine's python in the jail),
+  are), `safety/` (write surfaces, grader: lint/tests run with the engine's python in the jail; the jail is `container.py` on
+  Linux (one container per jailed command, NVIDIA runtime, `--network none`, socat bridge for a served port; tested in
+  Docker-in-Docker, GPU untested) and srt elsewhere, `LAB_JAIL` overrides),
   `profile.py` (`--profiler torch|cuda-range|pyspy`) + `bundle.py` + `gpu.py` (profiler harness, staged into the pristine tree under `_harness/` so the
   jail never opens this repo, which holds `.env` and the ledger; the tool samples its seen-split corpus workload out here, `corpus.sample`, and stages it as `_harness/workload.json`; window-only memory peaks and scheduler counters, warmup sized to the window, op/kernel tables), `canary.py` (honest regressions patched into
   the engine's process), `vm.py` + `providers/` + `vm-setup.sh` (one GPU VM on Verda/Nebius/Crusoe; pushes both
@@ -62,6 +101,21 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   measures each regime's run-to-run band from repeated reference runs into `noise` ledger records (which
   `submit` reads). Exit 0 only if both hold. Needs a GPU for a real target; tested on fakes. `lab/LEDGER.md` is the
   record-format spec: the environment's public interface.
+- `lab/RUNTIME.md` — design (2026-10-08): controller (laptop: ledger, referee, secrets) and worker (GPU VM: jails,
+  clients, profilers) behind a job interface; trust zones and rules; why srt cannot jail GPU code on Linux.
+- `lab/build.py` — the dependency build step: a tree whose change touched the target's `deps` (pyproject: dependency
+  tables only, checked by the audit) gets a venv built by the target's `build` command in a no-GPU, `--network none`
+  container whose only way out is a CONNECT proxy to the package-index hosts; cached by the files' hash; jobs run
+  under `engine.using(build.python_for(tree))`.
+- `lab/gpucheck.py` — `python -m lab.gpucheck` on a GPU VM (as root, like the worker): what the jails need from a real
+  GPU host, PASS/FAIL each: jail GPU, workbench (GPU, root, apt/pip, metadata blocked), quiet, exclusivity, ncu,
+  hostprof, the dependency build.
+- `lab/worker.py` — the job interface, built for the measured jobs: `test`, `measure`, `equiv`, `profile` take input
+  trees + JSON args, write an out dir, return JSON; the tools call `self.worker`. `LAB_WORKER=local` (default, in
+  process) or `ssh` (the `lab.vm` VM): inputs by content hash, re-hashed on the worker before every job; GpuBusy,
+  Contaminated, NotReady, ValueError cross intact. Remote is tested through a local shell, not yet over SSH. With
+  `ssh` the agent works on the VM too: its workspace mirrored by rsync (pulled before every audit), its workbench
+  built there (`workbench`), its CLI's stdio over `ssh -R`, the API proxy tunnelled to a unix socket in the workbench.
 - `lab/TRACE.md` + `lab/trace_contract.py` — the request-trace contract: per-request engine rows (trace_id = the
   client's `X-Trace-Id`, `arrival_ts` epoch s, `*_s` monotonic durations, TPOT = (E2E − TTFT)/(n − 1)) in a dir of
   `*.sqlite` (`requests` + `meta`) or `*.jsonl` + `<stem>.meta.json`, with schema version and drop counts;
@@ -104,7 +158,14 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   (`verdict` re-judges saved results under the policy, no server).
 - `canaries/cheat_proxy.py` — cheat proxy in front of any OpenAI-compatible server (`truncate`, `early_eos`,
   `fake_first`, `drop`, `cache` (streamed and not), `inflate_usage`); `python -m canaries --upstream URL --cheat NAME`.
-- `validity/` — `roofline.py` (analytical decode ceiling, no GPU; to be generalized into physical limits), `repeat_audit.py`: repeated-request audit (MLPerf TEST04-style), judges decode time per token, not TTFT, so prefix caching passes and replayed answers fail; `python -m validity repeat --url URL`. `tier_agreement.py`: `tier_agreement(changes)`: Spearman, Kendall tau-b, bootstrap CI, out-of-band disagreements; short tier usable if n ≥ 8, rho ≥ 0.8, CI low ≥ 0.5. `holdout.py`: `HoldoutGuard` (Thresholdout query budget, state persisted atomically under a file lock, deterministic from seed) and `SealedSplit` (hash manifest, one logged unseal per corpus version). Keep sigma small relative to the threshold.
+- `validity/` — `ceiling.py` (physical bounds from the model's HF config and the GPU's peaks: active/total params,
+  bytes streamed per step with MoE experts-touched, decode and prefill floors, the largest batch under a TPOT limit,
+  per-objective regime ceilings: TPOT = decode step floor, TTFT = prefill floor at the p99 prompt, goodput =
+  1 / (prefill compute + output tokens at the decode ceiling, batch capped by TPOT and by KV fitting in HBM); no
+  bound for speedups, cold start or sessions/s; assumptions (one token per step, uniform routing, declared dtypes)
+  are in each `basis`, so a value above 100% means one of them does not hold; `pct_of`, `ceiling_gain` = Amdahl) + `peaks.py` (`python -m validity peaks`: HBM
+  bandwidth and bf16 GEMM measured once per GPU+driver into `knowledge/peaks/<gpu>.json`, run by `vm-setup.sh`; spec
+  sheet as the labelled fallback), `repeat_audit.py`: repeated-request audit (MLPerf TEST04-style), judges decode time per token, not TTFT, so prefix caching passes and replayed answers fail; `python -m validity repeat --url URL`. `tier_agreement.py`: `tier_agreement(changes)`: Spearman, Kendall tau-b, bootstrap CI, out-of-band disagreements; short tier usable if n ≥ 8, rho ≥ 0.8, CI low ≥ 0.5. `holdout.py`: `HoldoutGuard` (Thresholdout query budget, state persisted atomically under a file lock, deterministic from seed) and `SealedSplit` (hash manifest, one logged unseal per corpus version). Keep sigma small relative to the threshold.
 - `kernels/` — kernel equivalence: `check_kernel` (seen + held-out shapes, per-dtype tolerances, edge cases incl. non-contiguous and NaN/Inf, inputs unchanged, no aliasing, memoization, determinism) and `time_kernel` / `check_memoization` (sync, rotated buffers, L2 flush on CUDA). Validated on CPU, MPS and CUDA (H200, 2026-10-04): all tests pass; the timer resolves ~20 µs kernels at ~9% IQR, 0.2 ms at 1.5%. `make_inputs` gets a seeded CPU generator (generate on CPU, then `.to(device)`).
 - `regimes/` — load generation: drives a live OpenAI-compatible server the eight ways it gets used, client-side.
   `client.py` (one streamed chat request: TTFT from *scheduled* send to first real token, TPOT = (E2E − TTFT)/(n − 1),
@@ -217,11 +278,26 @@ Unjailed, all four work on the real engine (16 requests × 64 tokens): `profile`
 `launch_count` honoured; ncu durations are ~1.8× nsys's on a tiny kernel (base clocks), DRAM figures physical.
 Fixed from the run: the tools now pass the target's engine env (they had loaded the engine's default model);
 nsys traces CUDA-graph nodes (it had missed every decode kernel: 46,720 vs torch's 860,365 launches);
-`kernels.json` drops record_function annotations (they had doubled its total). **Open, blocks every jailed GPU
-tool on Linux:** srt always mounts a fresh minimal `/dev` and has no device passthrough, so nothing in the jail
-sees the GPU (`No CUDA GPUs are available`); `bench`/`equiv`/`submit` serve jailed too. Needs a design decision
-(GPU-aware jail, container with the NVIDIA runtime, or the VM as the boundary). Ubuntu 24.04 also needs
-`kernel.apparmor_restrict_unprivileged_userns=0` for bwrap (now in `vm-setup.sh`).
+`kernels.json` drops record_function annotations (they had doubled its total). srt always mounts a fresh minimal
+`/dev` and has no device passthrough, so nothing in an srt jail sees the GPU (`No CUDA GPUs are available`), and
+each srt jail on Linux has its own network namespace, so a jailed server is unreachable. Decided 2026-10-08: on
+Linux the jail is a container with the NVIDIA runtime (`lab/safety/container.py`, `lab/RUNTIME.md`); its GPU
+check (`vm-setup.sh` prints `jail: gpu ok`) has not run yet. The agent's CLI still runs under srt, which on Ubuntu
+24.04 needs `kernel.apparmor_restrict_unprivileged_userns=0` (in `vm-setup.sh`).
+
+## First agent dry run (Nebius H200, 2026-10-10)
+`LAB_WORKER=ssh`, laptop controller, `claude-fable-5-1`, one session ($2.53 as the proxy priced it, 24 turns, 465 s;
+~1 h 20 min of GPU for the whole run). Validated on the real GPU: the GPU in the network-less jail, metadata blocked,
+base and candidate served jailed through the port bridge, `profile`, `trace` (after mounting nsys's install root),
+`test` (after caching the tests' gpt2 tokenizer), the remote workbench over `ssh -R`, the proxy's pricing. The agent
+fused RMSNorm/RoPE in Triton and added a batch-1 decode graph: seen-split short-tier `single_stream` tpot p99 21.4 ->
+13.1 ms; not submitted, correctness not run (equiv needs `data/equiv/ref`, absent in a worktree). A base dev-tier equiv
+on this engine took > 46 min for 774 of 1,597 items at concurrency 16 (vLLM: ~10 min): the tool descriptions' "10 min
+at tier dev" is wrong for this engine. Workbench processes cannot change clocks or power limits on that platform.
+`python -m lab.gpucheck` then passed every item on Nebius H200s (2026-10-13, three runs, fixes between them):
+jail GPU, quiet, exclusivity, hostprof; workbench (after blocking only 169.254.169.254: the /16 took DNS with it);
+the dependency build (after allowing pypi.nvidia.com); ncu (after linking the real /opt/nvidia install). The jail's
+user can read GPU performance counters on that image.
 
 ## Next
 Store (2026-10-09, branch `storage/r2`): needs an R2 bucket + API token (`LAB_STORE`, `LAB_STORE_ENDPOINT`,
@@ -233,11 +309,18 @@ ledger grows; make it incremental when that gets slow. DCGM device samples are i
 GPU (needs spend approval): resolve the BF16 puzzle (plain BF16 on the dev tier at concurrency 32 and 128 on one VM,
 ~20 min, ~$1.50); first real run of `python -m regimes run all` against the engine and against vLLM.
 GPU, with approval (and the auto-stop armed): `python -m lab.validate --target targets/inference-server.toml`
-(reference, FP8/INT8 good, Int4 bad, noise bands for all 8 regimes; ~3-4 h), then a first `python -m lab.session
---task ...` dry run with a tiny budget. Both engine branches from the 2026-10-06 report (`integ/gpu-session-5`,
+(reference, FP8/INT8 good, Int4 bad, noise bands for all 8 regimes; ~3-4 h; serves unjailed, so not blocked), then
+a first `python -m lab.session --task ...` dry run with a tiny budget, which waits on the rest of `lab/RUNTIME.md`
+(the controller/worker split; the agent's CLI still runs under srt, which has no GPU on Linux). Both engine branches from the 2026-10-06 report (`integ/gpu-session-5`,
 `engine/gpu-validated`) were judged by the old gate: re-judge with `python -m correctness verdict` on their saved
 results before deciding anything. lab `session.py --run` re-resolves
 `base` from HEAD rather than the run's original base (pre-existing; resuming after the engine moved would misaudit);
-`validity/tier_agreement.py` needs real short/full runs; `validity/roofline.py` wants generalizing to the H200 + MoE
-target. The agent's tool set is the user's design: ask first. README stays a few one-line
+`validity/tier_agreement.py` needs real short/full runs. Ceilings checked on an H200 (Nebius, driver 580.173,
+2026-10-13; peaks 4.14 TB/s, 794 TFLOP/s bf16): every floor below every measurement once goodput charges only the
+prefill the server reports as uncached (vLLM's prefix cache made a prefill-inclusive bound read 147-471%). Plain vLLM:
+single_stream TPOT p99 4.1 ms (37% of ceiling), saturated 5.8 req/s (19%), long prompt 68 req/s (94%); the engine:
+21 ms (7%), 0.097 req/s (0.5%), long prompt invalid (111 requests without a response). Stored in
+`knowledge/reference/inference-server/`. Finding for the corpus: long_prompt_short_output's window repeats each
+prompt ~5x (23,185 requests over 4,794 prompts), which rewards prefix caching.
+The agent's tool set is the user's design: ask first. README stays a few one-line
 feature bullets, not a dev doc.

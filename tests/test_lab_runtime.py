@@ -54,14 +54,18 @@ def test_a_session_edits_tests_notes_and_stops(cfg):
         yield ("call", "test")
         yield ("call", "budget")
         yield ("call", "note", {"text": "hello human"})
-        yield ("call", "submit")
+        yield ("call", "hypothesis", {"hypothesis": "h", "rationale": "r"})
+        hid = next(ledger.records(cfg.ledger_root, kind="hypothesis"))["id"]
+        yield ("call", "submit", {"hypothesis_id": hid, "expect": {"metric": "saturated", "value": 1.0, "unit": "change_pct", "why": "w"}})
         yield ("call", "ledger", {"last": 5})
         yield ("reply", AgentReply({"status": "stop", "note": "done"}, 0.75, 12, None))
     p = ScriptedProvider(script)
     out = session.run(cfg, p)
     assert out["sessions"] == 1 and out["stopped"] == "agent" and out["spent_usd"] == pytest.approx(0.75)
     kinds = [r["kind"] for r in ledger.records(cfg.ledger_root)]
-    assert kinds == ["test", "note", "submit", "session"]
+    assert kinds == ["test", "note", "hypothesis", "submit", "session"]
+    sub = next(ledger.records(cfg.ledger_root, kind="submit"))     # refused (no equiv): nothing measured to reflect on
+    assert sub["result"]["verdict"] == "refused" and "experiment" not in sub
     test_rec = next(ledger.records(cfg.ledger_root, kind="test"))
     assert test_rec["result"]["lint"] and test_rec["result"]["tests"]
     assert test_rec["snapshot"] != "base" and (cfg.ledger_root / test_rec["patch"]).exists()
@@ -168,7 +172,9 @@ def test_restore_and_profile_tools(cfg, monkeypatch):
         first["snap"] = next(ledger.records(cfg.ledger_root, kind="test"))["snapshot"]
         (ws / "src/inference_server/engine.py").write_text("def speed():\n    return 6\n")
         yield ("call", "restore", {"snapshot": first["snap"]})
-        yield ("call", "profile", {"requests": 2})
+        yield ("call", "hypothesis", {"hypothesis": "h", "rationale": "r"})
+        hid = next(ledger.records(cfg.ledger_root, kind="hypothesis"))["id"]
+        yield ("call", "profile", {"requests": 2, "hypothesis_id": hid, "expect": {"metric": "saturated", "value": 1.0, "unit": "change_pct", "why": "w"}})
         yield ("reply", AgentReply({"status": "stop", "note": None}, 0.1, 1, None))
     p = ScriptedProvider(script)
     out = session.run(cfg, p)
@@ -249,3 +255,17 @@ def test_system_prompt_is_generated_from_the_target_and_tools_and_advises_nothin
     assert t.model in system and t.engine_repo.name in system and "`stop`" in system and "`note`" in system
     assert "{" not in system.replace(t.engine.launch, "").replace(json.dumps(t.engine.env), "")   # all filled
     assert not ADVICE.search(system), ADVICE.search(system)
+
+
+def test_a_provider_that_works_locally_is_refused_with_a_remote_worker(cfg, monkeypatch):
+    from lab import worker
+
+    class Far(worker.Remote):
+        def __init__(self):
+            pass
+
+        def workspace_path(self, run_id):
+            return "/far"
+    monkeypatch.setattr(worker, "load", lambda **k: Far())
+    with pytest.raises(ValueError, match="cannot run with LAB_WORKER=ssh"):
+        session.run(cfg, ScriptedProvider(lambda n, ws: iter(())))

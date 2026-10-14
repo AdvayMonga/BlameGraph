@@ -1,0 +1,147 @@
+"""lab.worker: tree hashes, and the Remote transport end to end through a local shell (the same CLI ssh would run)."""
+
+from __future__ import annotations
+
+import os
+import stat
+import sys
+from pathlib import Path
+
+import pytest
+
+from lab import engine, serve, target, worker
+from lab.safety import grader
+from tests.lab_fixtures import make_repo
+from tests.test_lab_evaltools import _target
+
+MEASURE = {"names": ["single_stream"], "split": "seen", "tier": "short", "seed": 0, "jailed": False, "passive": False}
+
+
+@pytest.fixture
+def remote(tmp_path, monkeypatch):
+    """A Remote whose 'host' is this machine, with its own cache; returns (remote, a pristine tree, calls made)."""
+    monkeypatch.setenv("LAB_NO_JAIL", "1")
+    repo = make_repo(tmp_path)
+    spec = _target(tmp_path, repo, tmp_path / "ref")
+    monkeypatch.setenv("LAB_TARGET", str(spec))
+    monkeypatch.setenv("LAB_ENGINE_REPO", str(repo))
+    target._cache.clear()
+    tree = tmp_path / "tree"
+    grader.export(repo, "HEAD", tree)
+    r = worker.Remote([], str(engine.ENV_ROOT), sys.executable, {"LAB_WORKER_CACHE": str(tmp_path / "cache")})
+    calls = []
+    run = r._run
+    r._run = lambda command, stdin=b"": calls.append(command.split()[0]) or run(command, stdin)
+    yield r, tree, calls
+    target._cache.clear()
+
+
+def test_tree_sha_covers_content_and_exec_bit_and_refuses_links(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "f").write_text("x")
+    first = worker.tree_sha(tmp_path / "a")
+    (tmp_path / "a" / "f").chmod(0o755)
+    second = worker.tree_sha(tmp_path / "a")
+    (tmp_path / "a" / "f").write_text("y")
+    assert len({first, second, worker.tree_sha(tmp_path / "a")}) == 3
+    (tmp_path / "a" / "l").symlink_to("/etc/passwd")
+    with pytest.raises(worker.WorkerError):
+        worker.tree_sha(tmp_path / "a")
+
+
+def test_remote_runs_the_job_on_the_shipped_tree_and_ships_it_once(remote, tmp_path):
+    r, tree, calls = remote
+    res = r.call("test", {"tree": tree}, {}, tmp_path / "out1")
+    assert res["lint"]["passed"] and res["tests"]["passed"], res
+    assert calls == ["has", "put", "run"]
+    calls.clear()
+    r.call("test", {"tree": tree}, {}, tmp_path / "out2")
+    assert calls == ["has", "run"]                              # cached by hash: not shipped again
+
+
+def test_remote_carries_gpu_busy_with_its_facts(remote, tmp_path, monkeypatch):
+    r, tree, _ = remote
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    smi = bin_dir / "nvidia-smi"
+    smi.write_text(f"#!{sys.executable}\nimport sys\n"
+                   "if any(a.startswith('--query-compute-apps') for a in sys.argv): print('4242, 9000, python')\n")
+    smi.chmod(smi.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    with pytest.raises(serve.GpuBusy) as e:
+        r.call("measure", {"tree": tree}, MEASURE, tmp_path / "out")
+    assert e.value.apps == [{"pid": 4242, "used_mib": 9000, "name": "python"}]
+
+
+def test_remote_carries_an_engine_that_did_not_start(remote, tmp_path, monkeypatch):
+    r, tree, _ = remote
+    spec = Path(os.environ["LAB_TARGET"])
+    spec.write_text(spec.read_text().replace('launch = "python ', 'launch = "python -c \'import sys; sys.exit(3)\' #', 1))
+    with pytest.raises(serve.NotReady):
+        r.call("measure", {"tree": tree}, MEASURE, tmp_path / "out")
+    assert (tmp_path / "out" / worker.ENGINE_LOG).exists()      # what was written still comes back
+
+
+def test_a_tree_changed_after_it_was_put_is_refused(remote, tmp_path):
+    r, tree, _ = remote
+    r.call("test", {"tree": tree}, {}, tmp_path / "out1")
+    cached = tmp_path / "cache" / worker.tree_sha(tree)
+    (cached / "src" / "inference_server" / "engine.py").write_text("def speed():\n    return 100\n")
+    with pytest.raises(worker.WorkerError, match="changed after it was put"):
+        r.call("test", {"tree": tree}, {}, tmp_path / "out2")
+
+
+def test_put_refuses_a_tree_that_does_not_hash_to_its_name(remote):
+    r, tree, _ = remote
+    with pytest.raises(worker.WorkerError, match="received tree hashes to"):
+        r._run(f"put {'0' * 64}", worker._tar(tree))
+
+
+def test_local_by_default_and_nothing_else_but_ssh(monkeypatch):
+    monkeypatch.delenv("LAB_WORKER", raising=False)
+    assert isinstance(worker.load(), worker.Local)
+    monkeypatch.setenv("LAB_WORKER", "gpu-box")
+    with pytest.raises(ValueError):
+        worker.load()
+
+
+def test_push_and_pull_mirror_the_workspace_and_keep_links_as_links(remote, tmp_path):
+    r, _, _ = remote
+    local = tmp_path / "local"
+    (local / "src").mkdir(parents=True)
+    (local / "src" / "a.py").write_text("x = 1\n")
+    far = str(tmp_path / "far" / "ws")
+    r.push(local, far)
+    assert (Path(far) / "src" / "a.py").read_text() == "x = 1\n"
+    (Path(far) / "src" / "a.py").write_text("x = 2\n")
+    (Path(far) / "src" / "b.py").write_text("y = 1\n")
+    (Path(far) / "leak").symlink_to("/etc/passwd")
+    r.pull(far, local)
+    assert (local / "src" / "a.py").read_text() == "x = 2\n" and (local / "src" / "b.py").exists()
+    assert (local / "leak").is_symlink()                      # never followed; the audit refuses it
+    (Path(far) / "src" / "b.py").unlink()
+    r.pull(far, local)
+    assert not (local / "src" / "b.py").exists()
+
+
+def test_the_worker_builds_its_own_workbench_with_the_tunnelled_proxy(remote, tmp_path, monkeypatch):
+    r, _, _ = remote
+    cli = tmp_path / "cache" / "cli-9.9.9" / "claude_agent_sdk" / "_bundled" / "claude"
+    cli.parent.mkdir(parents=True)
+    cli.write_text("")                                         # already installed: nothing is downloaded
+    (tmp_path / "ws").mkdir()
+    w = r.workbench("lab-workbench-r1-s1", "r1-s1", str(tmp_path / "ws"), "9.9.9")
+    argv = w["argv"]
+    assert argv[1:3] == ["run", "-i"] and "lab-workbench-r1-s1" in argv and str(cli) == argv[-1]
+    assert w["sock"] == "/tmp/lab-proxy-r1-s1/proxy.sock" and "UNIX-CONNECT:/tmp/lab-proxy-r1-s1/proxy.sock" in argv[-2]
+    assert "ANTHROPIC_BASE_URL=http://127.0.0.1:4000" in argv and not any("sk-" in a for a in argv)
+
+
+@pytest.mark.parametrize("said,unpaused", [(b"paused\n", True), (b"\n", False)])
+def test_remote_pause_thaws_only_what_it_froze(said, unpaused):
+    r = worker.Remote(["ssh", "host"], "~/BlameGraph", "python", {})
+    calls = []
+    r._run = lambda command, stdin=b"": calls.append(command) or (said if command.startswith("pause") else b"")
+    with r.paused("lab-workbench-r1-s1"):
+        assert calls == ["pause lab-workbench-r1-s1"]
+    assert (calls[-1] == "unpause lab-workbench-r1-s1") is unpaused

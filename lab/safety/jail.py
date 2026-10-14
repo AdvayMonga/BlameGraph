@@ -17,6 +17,12 @@ def available() -> bool:
     return shutil.which("srt") is not None
 
 
+def backend() -> str:
+    """`container` on Linux (srt there has no GPU and gives each jail its own network), `srt` elsewhere; LAB_JAIL
+    overrides."""
+    return os.environ.get("LAB_JAIL") or ("container" if sys.platform.startswith("linux") else "srt")
+
+
 def required() -> bool:
     """The referee runs agent code jailed unless LAB_NO_JAIL=1 (tests, a dev box you trust)."""
     return os.environ.get("LAB_NO_JAIL") != "1"

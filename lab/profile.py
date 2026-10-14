@@ -82,15 +82,15 @@ def _allow_ptrace() -> None:
 
 
 async def _sampled(sched: ContinuousBatchScheduler, prompts: list[list[int]], max_tokens: int, out: Path,
-                   pyspy: tuple[str, float, int]) -> tuple[list, int]:
+                   pyspy: tuple[str, float, int, list[str]]) -> tuple[list, int]:
     """Repeat the workload for `seconds` while py-spy samples this process; one stack dump halfway. (results, rounds)"""
-    exe, seconds, rate = pyspy
+    exe, seconds, rate, extra = pyspy
     _allow_ptrace()
     pid = str(os.getpid())
     with open(out / "pyspy-record.log", "w") as log:
         rec = subprocess.Popen([exe, "record", "--pid", pid, "--duration", str(int(seconds)), "--rate", str(rate),
                                 "--format", "speedscope", "--output", str(out / "pyspy.speedscope.json"),
-                                "--nonblocking"], stdout=log, stderr=log)
+                                "--nonblocking", *extra], stdout=log, stderr=log)
 
     async def dump():
         await asyncio.sleep(seconds / 2)
@@ -134,7 +134,7 @@ def outcomes(results: list, max_tokens: int) -> dict:
 
 async def run(backend: InferenceBackend, settings: Settings, prompts: list[list[int]],
               max_tokens: int, out: Path, warmup: int | None = None, source: dict | None = None,
-              profiler: str = "torch", pyspy: tuple[str, float, int] | None = None) -> Path:
+              profiler: str = "torch", pyspy: tuple[str, float, int, list[str]] | None = None) -> Path:
     """Profile `prompts` through the served scheduler config on `backend`; return the bundle directory.
     `warmup` requests (default: as many as the window) are fired together first, outside the window.
     `profiler`: torch (torch.profiler trace), cuda-range (window marked for nsys/ncu), pyspy (`pyspy` = exe, s, Hz)."""
@@ -219,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seconds", type=float, default=20.0, help="pyspy: how long to sample under load")
     ap.add_argument("--rate", type=int, default=100, help="pyspy: samples per second")
     ap.add_argument("--pyspy-bin", default="py-spy")
+    ap.add_argument("--pyspy-arg", action="append", default=[], help="pyspy: extra `py-spy record` flag (repeatable)")
     args = ap.parse_args(argv)
 
     # The served configuration, from the same env the server reads; only the workload is ours.
@@ -245,7 +246,7 @@ def main(argv: list[str] | None = None) -> int:
             prompts = [tok.encode_messages(m, thinking=args.enable_thinking) for m in w["messages"]]
             source = {**w["source"], "thinking": args.enable_thinking}
     out = asyncio.run(run(backend, settings, prompts, args.max_tokens, Path(args.out), warmup=args.warmup,
-                          source=source, profiler=args.profiler, pyspy=(args.pyspy_bin, args.seconds, args.rate)))
+                          source=source, profiler=args.profiler, pyspy=(args.pyspy_bin, args.seconds, args.rate, args.pyspy_arg)))
     print(out)
     return 0
 

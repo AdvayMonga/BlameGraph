@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lab import agent, engine, ledger, target
+from lab import agent, engine, experiments, ledger, target, worker
 from lab.budget import Budget, BudgetExceeded
 from lab.safety import grader
 from lab.task import Task
@@ -33,6 +33,9 @@ class Session:
     ledger_root: Path
     profile_runner: object = None          # None: lab.tools.default_profile_runner
     task: Task | None = None
+    workbench: str | None = None           # the agent's container: paused while the tools measure
+    worker: object = None                  # None: lab.worker.load() per toolbox
+    remote_workspace: str | None = None    # the workspace's mirror on a Remote worker, where the agent works
 
 
 @dataclass
@@ -89,7 +92,7 @@ def _baseline(s: Session) -> str:
     head = f"Baseline (base commit {c['commit']}, {c['split']} split, {c['tier']} tier, record {b['id']})"
     if r["verdict"] != "ok":
         return f"{head}: not measured; {r['reason']}"
-    return f"{head}:\n{json.dumps(r['metrics'])}"
+    return f"{head}:\n{json.dumps(r['metrics'])}\nCalibrated (ceiling = physical bound from measured peaks; reference = the reference engine measured the same way):\n{json.dumps(r.get('calibrated') or {})}"
 
 
 def brief(cfg: RunConfig, s: Session, snapshot_id: str, n: int) -> str:
@@ -101,6 +104,8 @@ def brief(cfg: RunConfig, s: Session, snapshot_id: str, n: int) -> str:
             f"Referee (this run so far):\n{json.dumps(referee(s), default=str)}\n\n"
             f"{_baseline(s)}\n\n"
             f"Last session of this run:\n{json.dumps(last[0]) if last else 'none'}\n\n"
+            f"Hypotheses of this run (your records: expected, measured, gap, reflection):\n"
+            f"{json.dumps(experiments.summary(s.ledger_root, s.run_id)) or '[]'}\n\n"
             "Every record of this and earlier runs is readable with the `ledger` tool.")
 
 
@@ -121,26 +126,38 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
     done = sum(1 for _ in ledger.records(cfg.ledger_root, run=run_id, kind="session"))
     base_files = grader.base_files(cfg.repo, base)
     summary = {"run": run_id, "base": base, "sessions": 0, "stopped": None, "spent_usd": budget.spent_usd}
+    wk = worker.load()
+    remote = wk if isinstance(wk, worker.Remote) else None      # then the agent works on that host, not here
+    if remote and not getattr(provider, "remote", False):       # its edits here would be overwritten by the mirror
+        raise ValueError(f"provider {provider.name!r} works on this machine; it cannot run with LAB_WORKER=ssh")
+    rws = remote.workspace_path(run_id) if remote else None
     if cfg.baseline:
-        Toolbox(Session(run_id, f"{run_id}-baseline", run_dir, ws, budget, cfg.ledger_root, task=cfg.task)).baseline(base)
+        Toolbox(Session(run_id, f"{run_id}-baseline", run_dir, ws, budget, cfg.ledger_root, task=cfg.task,
+                        worker=remote)).baseline(base)
 
     for n in range(done + 1, done + cfg.max_sessions + 1):
         if budget.remaining_usd < MIN_SESSION_USD:
             summary["stopped"] = "budget"
             break
-        s = Session(run_id, f"{run_id}-s{n}", run_dir, ws, budget, cfg.ledger_root, task=cfg.task)
+        s = Session(run_id, f"{run_id}-s{n}", run_dir, ws, budget, cfg.ledger_root, task=cfg.task,
+                    workbench=f"lab-workbench-{run_id}-s{n}", worker=remote, remote_workspace=rws)
         tools = Toolbox(s)
         snap = ws.snapshot()
         spec = agent.AgentSpec(system="", prompt=brief(cfg, s, snap.id, n), workspace=ws.path,
                                scratch=run_dir / "scratch" / s.session_id, tools=tools.specs(),
                                base_files=base_files, max_turns=cfg.max_turns,
-                               max_budget_usd=min(cfg.session_usd, budget.remaining_usd))
+                               max_budget_usd=min(cfg.session_usd, budget.remaining_usd), workbench=s.workbench,
+                               remote=remote, remote_workspace=rws)
         spec.system = system_prompt(target.load(), spec)
         t0 = time.monotonic()
         try:
+            if remote:
+                remote.push(ws.path, rws)
             reply = provider.run(spec)
         except Exception as e:                  # a provider that raises still gets charged and recorded
             reply = agent.AgentReply(None, spec.max_budget_usd, 0, f"provider raised: {e}", True)
+        if remote:
+            remote.pull(rws, ws.path)           # what the agent left on the worker is what is snapshotted
         clean_pristine(run_dir)
         try:
             budget.charge(reply.cost_usd, s.session_id)
@@ -154,7 +171,7 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
         status = (reply.output or {}).get("status") if reply.output else None
         ledger.append({"kind": "session", "run": run_id, "session": s.session_id, "provider": provider.name,
                        "model": spec.model, "snapshot": end.id, "snapshot_blob": end.blob, "patch": end.patch,
-                       "cost": {"usd": reply.cost_usd, "estimated": reply.cost_estimated},
+                       "cost": {"usd": reply.cost_usd, "estimated": reply.cost_estimated, "tokens": reply.usage},
                        "turns": reply.turns, "seconds": time.monotonic() - t0,
                        "status": status, "error": reply.error, "violation": tools.violation,
                        "claim": {"note": (reply.output or {}).get("note")}}, cfg.ledger_root)
