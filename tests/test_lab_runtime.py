@@ -167,6 +167,9 @@ def test_restore_and_profile_tools(cfg, monkeypatch):
     monkeypatch.setattr(labtools, "default_profile_runner", fake_profile)
     first = {}
     def script(n, ws: Path):
+        if n > 1:                                   # the closing call on the unreflected profile
+            yield ("reply", AgentReply({"status": "stop", "note": None}, 0.0, 1, None))
+            return
         (ws / "src/inference_server/engine.py").write_text("def speed():\n    return 5\n")
         yield ("call", "test")
         first["snap"] = next(ledger.records(cfg.ledger_root, kind="test"))["snapshot"]
@@ -269,3 +272,56 @@ def test_a_provider_that_works_locally_is_refused_with_a_remote_worker(cfg, monk
     monkeypatch.setattr(worker, "load", lambda **k: Far())
     with pytest.raises(ValueError, match="cannot run with LAB_WORKER=ssh"):
         session.run(cfg, ScriptedProvider(lambda n, ws: iter(())))
+
+
+def _unreflected(cfg, n_session):
+    """A hypothesis and a measured record on it, as a measured tool would leave them."""
+    h = next(ledger.records(cfg.ledger_root, kind="hypothesis"))
+    return ledger.append({"kind": "bench", "run": h["run"], "session": h["session"], "tool": "bench",
+                          "experiment": {"hypothesis": h["id"], "actual": 2.0, "gap": 1.0,
+                                         "expect": {"metric": "single_stream", "value": 1.0, "unit": "absolute",
+                                                    "why": "w"}}}, cfg.ledger_root)
+
+
+def test_a_session_left_unreflected_gets_one_reflection_only_call(cfg):
+    from lab.budget import Budget
+
+    def script(n, ws: Path):
+        if n == 1:
+            yield ("call", "hypothesis", {"hypothesis": "h", "rationale": "r"})
+            _unreflected(cfg, n)
+            yield ("reply", AgentReply({"status": "stop", "note": None}, 0.5, 5, None))
+        else:
+            rec = list(ledger.records(cfg.ledger_root, kind="bench"))[-1]
+            yield ("call", "reflect", {"record": rec["id"], "reflection": "twice the prediction"})
+            yield ("reply", AgentReply({"status": "continue", "note": None}, 0.1, 2, None))
+    p = ScriptedProvider(script)
+    out = session.run(cfg, p)
+    assert out["stopped"] == "agent" and out["sessions"] == 1 and out["spent_usd"] == pytest.approx(0.6)
+    c = p.specs[1]
+    assert sorted(t.name for t in c.tools) == ["ledger", "reflect"] and c.builtin == []
+    assert c.max_turns == session.CLOSING_TURNS and c.max_budget_usd == session.CLOSING_USD
+    assert '"actual": 2.0' in c.prompt and '"rationale": "r"' in c.prompt and "- `reflect`:" in c.system
+    assert "- `bench`:" not in c.system
+    sess = next(ledger.records(cfg.ledger_root, kind="session"))
+    assert sess["closing"]["reflected"] is True and sess["closing"]["usd"] == 0.1
+    assert sess["cost"]["usd"] == pytest.approx(0.6)
+    assert Budget.resume(2.0, out["run"], cfg.ledger_root).spent_usd == pytest.approx(0.6)
+    assert [r["kind"] for r in ledger.records(cfg.ledger_root)] == ["hypothesis", "bench", "reflection", "session"]
+
+
+def test_no_closing_call_when_nothing_is_pending_or_no_budget_is_left(cfg):
+    def quiet(n, ws: Path):
+        yield ("reply", AgentReply({"status": "stop", "note": None}, 0.1, 1, None))
+    p = ScriptedProvider(quiet)
+    session.run(cfg, p)
+    assert len(p.specs) == 1 and "closing" not in next(ledger.records(cfg.ledger_root, kind="session"))
+
+    def spent(n, ws: Path):
+        yield ("call", "hypothesis", {"hypothesis": "h", "rationale": "r"})
+        _unreflected(cfg, n)
+        yield ("reply", AgentReply({"status": "stop", "note": None}, 2.0, 1, None))
+    p = ScriptedProvider(spent)
+    session.run(cfg, p)
+    assert len(p.specs) == 1
+    assert list(ledger.records(cfg.ledger_root, kind="session"))[-1]["closing"]["skipped"] == "budget"

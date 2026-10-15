@@ -51,7 +51,14 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `experiments.py` (decided 2026-10-11: no measured number without the agent's reasoning and no reasoning without
   the number; measured tools require an open `hypothesis` record and an `expect` {metric, value, unit, why}, the
   record keeps both with the computed gap, and the next measured call is refused until a `reflection` on the last
-  one is filed; the brief lists the run's hypotheses with their measurements and reflections) +
+  one is filed; the brief lists the run's hypotheses with their measurements and reflections; a session that ends
+  with its last measurement unreflected is followed by one call (`session.closing`: $0.50, 4 turns, tools `reflect`
+  and `ledger` only, prompt = that record's facts), kept under the session record's `closing`; run ids starting
+  `researcher-` are a person's, and no agent view (`ledger` tool, `agent.duckdb`) shows their records) +
+  `experiment.py` (`python -m lab.experiment start|baseline|hypothesis|call|reflect`: a change made outside the lab,
+  e.g. on a branch, recorded like the agent's: a `researcher-` run whose workspace is base + the change's files inside
+  the write surface (the rest listed as `left_out` in the start record), measured through the lab's own Toolbox
+  under the same hypothesis/expect/reflection rules) +
   `calibrate.py` (every measured number with its context, decided 2026-10-11: `% of ceiling` from `validity/ceiling`
   on measured peaks, `% of reference` from `knowledge/reference/<target>/<regime>.json` written by `lab.validate`
   with `perf_reference` (the correctness reference minus its determinism switches, which are slow by design),
@@ -122,7 +129,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   submit's held-out passive data, held-out traces + seed, `archive` for
   anything else; zstd, `heldout/` prefix for held-out material), `index.py` (DuckDB tables rebuilt from the ledger and
   blobs: records, regimes, heldout_aggregates, noise, client_rows, engine_rows, device_samples, kernels, ops;
-  `all.duckdb` adds heldout_rows for the researcher; the agent's `agent.duckdb` never has them and is queried with
+  `all.duckdb` adds heldout_rows for the researcher; the agent's `agent.duckdb` never has them nor researcher runs'
+  records, and is queried with
   external access off and configuration locked). Controller-only: VMs never hold store keys (`lab/RUNTIME.md`).
   CLI: `python -m store push|pull [--blobs] [--corpus]|index|sql "..." [--agent]|archive PATH.. [--heldout]`.
 - `feedback/` — what each side gets after a session. `report.py`: `feedback(path)` → `{for_agent: {integrity, facts}, for_researcher: {assertions, blame}}` (lab ledgers: `lab_feedback`, `for_agent.facts = {harness}` only, `for_researcher.activity` holds the derived facts); `python -m feedback PATH [--run RUN_ID] [--agent-text]`. Accepts an InferenceBench run dir, a BlameGraph session ledger, or an inference-server lab ledger (detected from its first line). Integrity carries `evidence` per violated rule (rule, plain detail, concrete refs: hashes, measurement ids, offending values and limits).

@@ -14,7 +14,8 @@ What works now. Rewritten in place, never appended: when something changes, edit
 | Evaluator | on main: `check_kernel` + `time_kernel`, validated on the H200, not wired into the loop. On `feat/kernel-loop`: cascade judge + held-out gate, hardened 2026-10-15 | missing: fast step-time + logit check (no server) | partial: `bench` + `equiv`; no noise bands measured for this engine yet | have: `bench` regimes |
 
 Across layers, built: the end-to-end judge, calibration (`lab/calibrate.py`), experiment records
-(`lab/experiments.py`), the workbench/measurement sandbox, the GPU VM tooling.
+(`lab/experiments.py`; a closing reflection call per session; a person's experiments via `lab/experiment.py`, hidden
+from the agent), the workbench/measurement sandbox, the GPU VM tooling.
 
 ## Validated on a real GPU (evidence in `RUNS.md`)
 - Correctness gate, dev and full tier (2026-10-04, 2026-10-05).
