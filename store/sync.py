@@ -4,7 +4,8 @@ are never rewritten:
   ledger/<start>-<end>.jsonl.zst      byte range [start, end) of ledger.jsonl, whole lines only
   blobs/<name>.zst | .tar.zst         one ledger blob (file | directory), named as in the ledger
   archive/<name>-<hash>.tar.zst       anything else kept (GPU run reports, correctness outputs)
-  heldout/guard/state-<n>.json.zst    the holdout guard's state after its n-th query
+  heldout/guard/<version>/state-<n>.json   the holdout guard's state after its n-th query (validity/holdout.py
+                                      writes these itself, write-once; nothing here touches them)
   heldout/private/<run>/<dir>.tar.zst submit's held-out passive data (lab/LEDGER.md)
   heldout/corpus/<version>/<class>/heldout.jsonl.zst   the held-out traces, which are not in git
   heldout/corpus/<version>/seed.zst   the corpus build seed, which reproduces them
@@ -144,17 +145,13 @@ def pull_ledger(root: Path, remote: Remote) -> int:
 
 
 def push(root: Path, remote: Remote, runs: Path | None = None, corpus: Path | None = None) -> dict:
-    """Ledger, blobs, guard state, held-out passive data and held-out traces; returns what went up."""
+    """Ledger, blobs, held-out passive data and held-out traces; returns what went up."""
     root = Path(root)
-    out = {"ledger_bytes": push_ledger(root, remote), "blobs": 0, "guard": 0, "heldout_private": 0, "corpus": 0}
+    out = {"ledger_bytes": push_ledger(root, remote), "blobs": 0, "heldout_private": 0, "corpus": 0}
     have = set(remote.keys("blobs/"))
     for p in sorted((root / "blobs").iterdir()) if (root / "blobs").is_dir() else []:
         if ".tmp-" not in p.name:
             out["blobs"] += _put(remote, blob_key(p), p, have)
-    state = root / "holdout_state.json"
-    if state.exists():
-        n = json.loads(state.read_text())["n_queries"]
-        out["guard"] += _put(remote, f"heldout/guard/state-{n:06d}.json.zst", state, set(remote.keys("heldout/guard/")))
     if runs and Path(runs).is_dir():
         have = set(remote.keys("heldout/private/"))
         for d in sorted(Path(runs).glob("*/heldout-private/*")):
@@ -171,21 +168,15 @@ def push(root: Path, remote: Remote, runs: Path | None = None, corpus: Path | No
 
 
 def pull(root: Path, remote: Remote, blobs: bool = False, corpus: Path | None = None) -> dict:
-    """The ledger; with `blobs`, every blob missing locally; with `corpus`, its held-out traces; the guard state
-    only when there is none locally (an older copy must never replace a newer one)."""
+    """The ledger; with `blobs`, every blob missing locally; with `corpus`, its held-out traces."""
     root = Path(root)
-    out = {"ledger_bytes": pull_ledger(root, remote), "blobs": 0, "guard": 0, "corpus": 0}
+    out = {"ledger_bytes": pull_ledger(root, remote), "blobs": 0, "corpus": 0}
     if blobs:
         for key in remote.keys("blobs/"):
             name = Path(key).name.removesuffix(".zst").removesuffix(".tar")
             if not (root / "blobs" / name).exists():
                 _get(remote, key, root / "blobs" / name)
                 out["blobs"] += 1
-    state = root / "holdout_state.json"
-    guard = remote.keys("heldout/guard/")
-    if guard and not state.exists():
-        _get(remote, guard[-1], state)
-        out["guard"] = 1
     if corpus:
         version = corpus_version(Path(corpus))
         for key in remote.keys(f"heldout/corpus/{version}/"):
