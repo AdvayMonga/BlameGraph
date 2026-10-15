@@ -115,6 +115,8 @@ def test_paged_decode_reference_matches_dense_attention():
     assert torch.allclose(out[i], dense, atol=1e-5) and out.shape == (3, 8, 16) and int(lens[0]) == 11
     flops, nbytes = t.cost(shape, torch.bfloat16)
     assert flops > 0 and nbytes > 0
+    real = t.cost(shape, torch.bfloat16, (q, k, v, table, lens))          # the bound for these exact lengths
+    assert real[1] < nbytes and real[0] == 4 * 8 * int(lens.sum()) * 16
 
 
 def test_capture_records_calls_and_the_split_holds_out_the_largest():

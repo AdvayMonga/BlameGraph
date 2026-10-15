@@ -23,7 +23,7 @@ def shape_of(call):
     return tuple(call["args"][0]["shape"])
 
 
-def cost(shape, dtype):
+def cost(shape, dtype, inputs=None):
     rows, dim = shape
     b = torch.finfo(dtype).bits // 8
     return 4 * rows * dim, (2 * rows * dim + dim) * b          # read x and w, write y

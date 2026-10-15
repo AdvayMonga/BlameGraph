@@ -55,11 +55,12 @@ def shape_of(call):
     return (N, Hq, Hkv, D, bs, max(a[4]["values"]))
 
 
-def cost(shape, dtype):
-    """Read q and every live K/V once, write the output; 4 FLOPs per (head, key, dim) for QK and PV."""
+def cost(shape, dtype, inputs=None):
+    """Read q and every live K/V once, write the output; 4 FLOPs per (head, key, dim) for QK and PV. With inputs, the
+    keys are their real sequence lengths; without, every sequence at L, which overstates the work."""
     N, Hq, Hkv, D, bs, L = shape
     b = torch.finfo(dtype).bits // 8
-    keys = N * L                                            # an upper bound: every sequence at L
+    keys = int(inputs[4].sum()) if inputs is not None else N * L
     return 4 * Hq * keys * D, (2 * Hkv * keys * D + 2 * N * Hq * D) * b
 
 

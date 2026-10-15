@@ -20,7 +20,8 @@ class Task:
     reference: Callable                     # reference(*inputs) -> output tensor(s)
     make_inputs: Callable                   # make_inputs(shape, dtype, device, generator) -> tuple of tensors
     shape_of: Callable                      # shape_of(captured call dict) -> shape tuple, or None to skip the call
-    cost: Callable                          # cost(shape, dtype) -> (flops, bytes) one call must do and move
+    cost: Callable                          # cost(shape, dtype, inputs=None) -> (flops, bytes) a call must do and
+                                            # move; with inputs, for those exact inputs (e.g. real sequence lengths)
     call: Callable = None                   # call(fn, *inputs) -> fn's output (adds scalars); default fn(*inputs)
     heldout_axes: tuple[int, ...] = ()      # shape axes whose largest values are held out as a region
     edge_shapes: Callable = None            # edge_shapes(shape) -> shapes; default: the checker's

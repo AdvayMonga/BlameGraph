@@ -57,11 +57,13 @@ def _peaks(device: str):
     return peaks.load(torch.cuda.get_device_name(torch.device(device)))
 
 
-def _pct_of_roofline(task: Task, shape, dtype, ms: float, hw) -> float | None:
+def _pct_of_roofline(task: Task, shape, dtype, ms: float, hw, device: str = "cpu", n_buffers: int = 4) -> float | None:
+    """The bound for the very inputs the timer rotated through (time_kernel's seeds 0..n_buffers-1), averaged."""
     if hw is None or not ms:
         return None
-    flops, nbytes = task.cost(shape, dtype)
-    bound_s = max(flops / hw.bf16_flops, nbytes / hw.bw_bytes_s)
+    costs = [task.cost(shape, dtype, task.make_inputs(shape, dtype, "cpu", torch.Generator().manual_seed(i)))
+             for i in range(n_buffers)]
+    bound_s = sum(max(f / hw.bf16_flops, b / hw.bw_bytes_s) for f, b in costs) / n_buffers
     return bound_s / (ms / 1e3) * 100
 
 
