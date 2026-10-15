@@ -1,7 +1,9 @@
 """Record what an engine's kernels are actually called with: wrap Python entry points ("module:function") for the
 duration of a block and log every call's argument shapes, dtypes and small integer tensors (sequence lengths, block
 tables, expert offsets); keep the first call of each shape signature whole when it fits a byte cap, as real inputs.
-Synchronizes to read integer tensors, so it is for a capture run, never a timed one."""
+Synchronizes to read integer tensors, so it is for a capture run, never a timed one. Calls replayed from a CUDA graph
+never reach Python: capture with the engine's graphs off (the example engine: CUSTOM_BACKEND_CUDA_GRAPH=0) to see every
+call; a call made while a graph records is logged by shape only."""
 from __future__ import annotations
 
 import contextlib
@@ -16,10 +18,15 @@ import torch
 SMALL_INT = 4096           # integer tensors up to this many elements are logged by value
 
 
-def _describe(x) -> dict:
+def _capturing() -> bool:
+    """Inside a CUDA graph recording no tensor may be read back: such calls are logged by shape only."""
+    return torch.cuda.is_available() and torch.cuda.is_current_stream_capturing()
+
+
+def _describe(x, graph: bool = False) -> dict:
     if isinstance(x, torch.Tensor):
         d = {"shape": list(x.shape), "dtype": str(x.dtype).removeprefix("torch."), "contiguous": x.is_contiguous()}
-        if not x.is_floating_point() and x.numel() <= SMALL_INT:
+        if not graph and not x.is_floating_point() and x.numel() <= SMALL_INT:
             d["values"] = x.detach().flatten().tolist()
         return d
     if isinstance(x, (int, float, bool, str)) or x is None:
@@ -51,10 +58,13 @@ def capture(targets: list[str], out: Path, sample_bytes: int = 64 * 2**20):
     def wrap(name, fn):
         @functools.wraps(fn)
         def traced(*args, **kwargs):
-            call = {"fn": name, "args": [_describe(a) for a in args],
-                    "kwargs": {k: _describe(v) for k, v in kwargs.items()}}
+            graph = _capturing()
+            call = {"fn": name, "args": [_describe(a, graph) for a in args],
+                    "kwargs": {k: _describe(v, graph) for k, v in kwargs.items()}}
+            if graph:
+                call["during_graph_capture"] = True
             sig = signature(call)
-            if sig not in seen:
+            if sig not in seen and not graph:
                 seen.add(sig)
                 tensors = [a for a in (*args, *kwargs.values()) if isinstance(a, torch.Tensor)]
                 size = sum(t.numel() * t.element_size() for t in tensors)

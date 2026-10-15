@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Layer-1 GPU validation, run on the VM from this environment's dir with the engine's venv on PATH:
 #   python -m lab.vm run --env --keep -- bash kernels/evolve/validate_gpu.sh [ITERATIONS]
-# 1. capture the engine's paged decode calls under two corpus classes (real shapes, real inputs)
+# 1. capture the engine's paged decode calls under two corpus classes (real shapes, real inputs), CUDA graphs off:
+#    replayed graphs never reach Python, so with them on most calls would be invisible
 # 2. split them into seen / held-out regions
 # 3. judge the engine's own kernel against the reference on both (correctness on the GPU, the baseline timing)
 # 4. a short OpenEvolve run on the seen shapes (model calls: ANTHROPIC_API_KEY must be set; 0 iterations skips it)
@@ -23,6 +24,7 @@ echo "== 1. capture"
 for spec in steady_interactive:64 long_context:24; do     # long_context's seen split holds ~30 requests
   cls=${spec%%:*}; n=${spec##*:}
   ls -d "$OUT/profile-$cls"/*/captures >/dev/null 2>&1 && continue      # already captured
+  CUSTOM_BACKEND_CUDA_GRAPH=0 \
   python -m lab.profile --corpus-class "$cls" --requests "$n" --max-tokens 64 --capture "$ENTRY" --out "$OUT/profile-$cls" \
     > "$OUT/profile-$cls.log" 2>&1 || { tail -20 "$OUT/profile-$cls.log"; exit 1; }
 done
