@@ -159,9 +159,12 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `kernels/shapes.py` (shapes and call counts from captures; held-out = whole regions above the 80th percentile on the
   task's axes, never random samples), `kernels/evolve/` (the layer-1 generator, a replication of OpenEvolve 0.4.0 =
   open AlphaEvolve: `python -m kernels.evolve run|gate|split`; the starting program is the engine's kernel module;
-  a two-stage cascade, each stage a fresh process (`core.judge`: stage 1 = two shapes, one seed; stage 2 = the full
-  check on seen shapes + timing against the baseline, score = call-weighted geometric-mean speedup); selection never
-  sees held-out shapes, `gate` judges them; `validate_gpu.sh` = the GPU validation; tolerances from the target's
+  a two-stage cascade, each stage a fresh jailed process (`kernels.evolve.jailed`: the jail gets the candidate, its
+  config and a copied harness, never this repo; `core.judge`: stage 1 = two shapes, one seed; stage 2 = the full
+  check on seen shapes + timing against the baseline, score = call-weighted geometric-mean speedup); a candidate is
+  refused if its source reaches for an exploit route (`core.screen`) and scores 0 if it leaves any function the
+  checker or timer uses patched (`core._watched`; the timer binds its own at import); the exploit canaries in
+  `tests/test_kernels_evolve.py` must all score 0; selection never sees held-out shapes, `gate` judges them; `validate_gpu.sh` = the GPU validation; tolerances from the target's
   `[kernels]`). `lab/capture.py` + `lab.profile --capture MODULE:FUNCTION` (the `profile` tool's `capture`): every
   call's argument shapes and small int tensors, the first call per shape kept whole as real inputs.
 - `regimes/` — load generation: drives a live OpenAI-compatible server the eight ways it gets used, client-side.

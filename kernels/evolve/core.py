@@ -27,8 +27,9 @@ FORBIDDEN = {
     r"torch\.cuda\.(Stream|stream|Event|set_stream|current_stream)\b|\.elapsed_time\b|\bcuda\.Event\b":
         "streams or timer events",
     r"\btime\.(perf_counter|time|monotonic|sleep)\b|\bimport time\b|\bfrom time\b": "the clock",
-    r"\bsys\.modules\b|\bbuiltins\b|__builtins__|\bimportlib\b|\bsetattr\s*\(\s*(torch|kernels|time)\b":
-        "patching modules",
+    r"\bsys\.modules\b|\bbuiltins\b|__builtins__|\bimportlib\b|__import__|\bsetattr\s*\(|__setattr__|__dict__"
+    r"|\bglobals\s*\(|\bvars\s*\(|\b(torch|triton|time|math|statistics)(\.\w+)+\s*=(?!=)": "patching modules",
+    r"(?<![.\w])(eval|exec|compile)\s*\(|__subclasses__|\btypes\.(FunctionType|CodeType)\b": "code built at run time",
     r"\bkernels\.(check|timing|evolve)\b|\bfrom kernels\b|\bimport kernels\b": "the evaluator itself",
     r"\bopen\s*\(|\bos\.(system|popen|fork|exec\w*|spawn\w*|kill|remove|unlink|open|write|dup2?)\b|\bsubprocess\b"
     r"|\bsocket\b|\burllib\b|\brequests\b": "files, processes or the network",
@@ -39,6 +40,36 @@ def screen(source: str) -> list[str]:
     """Reasons a program is refused before it runs (static: a pattern anywhere in the source)."""
     import re
     return [f"uses {why}: `{m.group(0)}`" for pat, why in FORBIDDEN.items() if (m := re.search(pat, source))]
+
+
+def _watched(task: Task) -> dict:
+    """What the checker and the timer stand on: the libraries' public functions, the evaluator's and the task's own
+    modules (all of their functions), and the tensor and event classes (any attribute, added ones too)."""
+    import statistics
+    import time
+    import kernels.check
+    import kernels.tasks
+    import kernels.timing
+    mods = [torch, torch.cuda, torch.nn.functional, time, math, statistics, kernels.check, kernels.timing,
+            kernels.tasks, sys.modules[__name__], sys.modules[task.reference.__module__]]
+    out = {}
+    for m in mods:
+        own = m.__name__.startswith("kernels")
+        for k, v in vars(m).items():
+            if (callable(v) or isinstance(v, type(math))) and not k.startswith("__") and (own or not k.startswith("_")):
+                out[f"{m.__name__}.{k}"] = id(v)
+    for c in (torch.Tensor, torch.cuda.Event):
+        out.update({f"{c.__module__}.{c.__qualname__}.{k}": id(v) for k, v in vars(c).items()})
+    return out
+
+
+def _patched(before: dict, task: Task) -> list[str]:
+    """Names in `before` that now point elsewhere or are gone, and attributes added to the watched classes."""
+    now = _watched(task)
+    cls = (f"{c.__module__}.{c.__qualname__}." for c in (torch.Tensor, torch.cuda.Event))
+    prefixes = tuple(cls)
+    return sorted([k for k, v in before.items() if now.get(k) != v] +
+                  [k for k in now if k not in before and k.startswith(prefixes)])
 
 
 def load_program(path: Path):
@@ -99,11 +130,24 @@ def _shown(c: dict, b: dict) -> bool:
 def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | None, device: str,
           tolerances: dict | None, stage: int, iters: int = 30) -> dict:
     """stage 1: correctness on the two most frequent seen shapes, one seed. stage 2: the full check on every seen shape
-    (held-out shapes only when given, which selection never does), then timing against the baseline."""
+    (held-out shapes only when given, which selection never does), then timing against the baseline. A candidate that
+    leaves any function the evaluator watches patched scores 0, whatever it measured."""
     refused = screen(Path(program).read_text())
     if refused:
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
                 "artifacts": {"error": "refused before running: " + "; ".join(refused)}}
+    task.baseline()                              # the engine's import-time effects happen before the snapshot
+    before = _watched(task)
+    out = _judge(task, program, seen, heldout, weights, device, tolerances, stage, iters)
+    patched = _patched(before, task)
+    if patched:
+        return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
+                "artifacts": {"error": "patched what the evaluator uses: " + ", ".join(patched[:20])}}
+    return out
+
+
+def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | None, device: str,
+           tolerances: dict | None, stage: int, iters: int) -> dict:
     try:
         cand = task.bind(load_program(program))
     except Exception as e:                       # noqa: BLE001  a program that does not load scores 0

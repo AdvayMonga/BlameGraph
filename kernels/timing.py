@@ -8,13 +8,19 @@ import torch
 
 from .check import _gen
 
+# Bound at import, before any candidate loads: a candidate that patches the clock, the events or the syncs on their
+# modules changes nothing the timer calls.
+_perf_counter, _quantiles = time.perf_counter, statistics.quantiles
+_Event, _record, _elapsed = torch.cuda.Event, torch.cuda.Event.record, torch.cuda.Event.elapsed_time
+_cuda_sync, _mps_sync = torch.cuda.synchronize, torch.mps.synchronize
+
 
 def _sync(device):
     kind = torch.device(device).type
     if kind == "cuda":
-        torch.cuda.synchronize(device)
+        _cuda_sync(device)
     elif kind == "mps":
-        torch.mps.synchronize()
+        _mps_sync()
 
 
 def time_kernel(fn, make_inputs, shape, dtype, device="cpu", iters=50, warmup=5, n_buffers=4, fresh=False,
@@ -35,20 +41,20 @@ def time_kernel(fn, make_inputs, shape, dtype, device="cpu", iters=50, warmup=5,
             flush.zero_()
         _sync(device)
         if cuda:
-            start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
-            start.record()
+            start, end = _Event(enable_timing=True), _Event(enable_timing=True)
+            _record(start)
             fn(*inputs)
-            end.record()
+            _record(end)
             _sync(device)
-            ms = start.elapsed_time(end)
+            ms = _elapsed(start, end)
         else:
-            t0 = time.perf_counter()
+            t0 = _perf_counter()
             fn(*inputs)
             _sync(device)
-            ms = (time.perf_counter() - t0) * 1e3
+            ms = (_perf_counter() - t0) * 1e3
         if i >= warmup:
             times.append(ms)
-    p25, med, p75 = statistics.quantiles(times, n=4)
+    p25, med, p75 = _quantiles(times, n=4)
     return {"median_ms": med, "iqr_ms": p75 - p25, "p25_ms": p25, "p75_ms": p75, "iters": iters,
             "n_buffers": n_buffers, "fresh": fresh, "device": str(device), "clock": "cuda_events" if cuda else "host"}
 

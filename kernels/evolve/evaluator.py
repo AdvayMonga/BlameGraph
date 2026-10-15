@@ -1,5 +1,5 @@
-"""OpenEvolve's evaluator: a two-stage cascade, each stage a fresh process running kernels.evolve.core, so no
-candidate shares a process with the timer, the reference or another candidate. Reads its config from
+"""OpenEvolve's evaluator: a two-stage cascade, each stage a fresh jailed process (kernels.evolve.jailed running
+kernels.evolve.core), so no candidate outlives its evaluation, shares a process with another, or sees this repo. Reads its config from
 $KERNEL_EVAL_CONFIG (written by kernels.evolve.run). Facts only go back to the model: gate reasons, errors, timings.
 
 Remote: with $KERNEL_EVAL_SSH (a JSON argv prefix, e.g. ["ssh", "-i", KEY, "lab@host"]) and $KERNEL_EVAL_REMOTE (a
@@ -26,11 +26,11 @@ def _run(program_path: str, stage: int) -> EvaluationResult:
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(ROOT), os.environ.get("PYTHONPATH")]))
     remote = os.environ.get("KERNEL_EVAL_SSH")
     if remote:
-        cmd = json.loads(remote) + [os.environ.get("KERNEL_EVAL_REMOTE", "") + " python -m kernels.evolve.core "
+        cmd = json.loads(remote) + [os.environ.get("KERNEL_EVAL_REMOTE", "") + " python -m kernels.evolve.jailed "
                                     + shlex.quote(os.environ["KERNEL_EVAL_REMOTE_CONFIG"]) + f" - {stage}"]
         stdin = Path(program_path).read_text()
     else:
-        cmd = [sys.executable, "-m", "kernels.evolve.core", os.environ["KERNEL_EVAL_CONFIG"], program_path, str(stage)]
+        cmd = [sys.executable, "-m", "kernels.evolve.jailed", os.environ["KERNEL_EVAL_CONFIG"], program_path, str(stage)]
         stdin = None
     try:
         p = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=TIMEOUT_S, env=env, cwd=ROOT)

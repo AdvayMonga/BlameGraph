@@ -11,6 +11,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("LAB_TARGET", str(ROOT / "targets" / "inference-server.toml"))
+os.environ.setdefault("LAB_ENGINE_PYTHON", sys.executable)
+os.environ.setdefault("LAB_NO_JAIL", "1")          # no srt or container jail on a dev box; the jail's argv is tested
 
 import torch  # noqa: E402
 
@@ -177,6 +180,72 @@ def test_remote_evaluation_sends_the_source_on_stdin_and_never_a_key():
             os.environ.clear()
             os.environ.update(old)
         assert r.metrics["correct"] == 1.0 and (Path(d) / "keys").read_text().strip() == "0"
+
+
+RIGHT = "    xf = x.float()\n    return (xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + 1e-6) * w.float()).to(x.dtype)\n"
+# Published exploit routes (Sakana, CUDA-L1, METR, KernelBot) as toy kernels: each must score 0, for the reason given.
+CANARIES = {
+    "timer via __import__": ("import torch\n__import__('time').perf_counter = lambda: 0.0\n"
+                             "def kernel(x, w):\n" + RIGHT, "refused"),
+    "timer statistics patched through an alias": ("import torch\nimport statistics as s\n"
+                                                  "s.quantiles = lambda t, n: [0.0, 1e-9, 1e-9]\n"
+                                                  "def kernel(x, w):\n" + RIGHT, "patched"),
+    "checker's tensor op patched through an alias": ("import torch as T\nT.Tensor.abs = lambda self: self * 0\n"
+                                                     "def kernel(x, w):\n    return x.clone()\n", "patched"),
+    "sync made a no-op": ("import torch\nimport torch as T\nT.cuda.synchronize = lambda *a, **k: None\n"
+                          "def kernel(x, w):\n" + RIGHT, "patched"),
+    "the reference imported": ("from kernels.tasks.toy_rmsnorm import reference as kernel\n", "refused"),
+    "background thread": ("import threading, torch\ndef kernel(x, w):\n" + RIGHT, "refused"),
+    "output never written": ("import torch\ndef kernel(x, w):\n    return torch.empty_like(x)\n", "correctness"),
+    "answers cached by pointer": ("import torch\n_c = {}\ndef kernel(x, w):\n    k = (x.data_ptr(), tuple(x.shape))\n"
+                                  "    if k not in _c:\n        _c[k] = _f(x, w)\n    return _c[k]\n"
+                                  "def _f(x, w):\n" + RIGHT, "memoization"),
+    "right on seen shapes only": ("import torch\ndef kernel(x, w):\n    if x.shape[0] > 64:\n"
+                                  "        return torch.zeros_like(x)\n" + RIGHT, "heldout"),
+}
+
+
+def test_exploit_canaries_all_score_zero():
+    from kernels.evolve.jailed import judge_jailed
+    t = load("toy_rmsnorm")
+    cfg = {"task": t.name, "seen": [list(s) for s in t.seen_default], "heldout": [list(s) for s in t.heldout_default],
+           "device": "cpu", "iters": 3}
+    assert judge_jailed(cfg, "import torch\ndef kernel(x, w):\n" + RIGHT, 2)["metrics"]["correct"] == 1.0
+    for name, (src, why) in CANARIES.items():
+        r = judge_jailed(cfg, src, 2)
+        said = (r["artifacts"].get("error") or "") + (r["artifacts"].get("gates") or "")
+        assert r["metrics"]["combined_score"] == 0.0, name
+        want = {"refused": "refused before running", "patched": "patched what the evaluator uses"}.get(why, why)
+        assert want in said, (name, said[:800])
+
+
+def test_the_jail_sees_a_fresh_tree_and_a_copied_harness_never_this_repo():
+    from kernels.evolve import jailed
+    from lab.safety import container, grader, jail
+    with tempfile.TemporaryDirectory() as d:
+        h = jailed.stage_harness(Path(d) / "h")
+        names = {p.relative_to(h).as_posix() for p in h.rglob("*") if p.is_file()}
+        assert "kernels/evolve/core.py" in names and "lab/target.py" in names and "validity/peaks.py" in names
+        assert not any(n.startswith(("lab/ledger", "lab/runs", "corpus", "data")) or n.endswith(".env") for n in names)
+    seen, saved = {}, (jail.backend, container.available, container._docker, grader.subprocess.run)
+
+    def fake_run(argv, **kw):                       # stands in for docker: `run` answers, cleanup is a no-op
+        if argv[1] != "run":
+            return grader.subprocess.CompletedProcess(argv, 0, "", "")
+        seen["argv"], seen["config"] = argv, json.loads(Path(argv[argv.index("kernels.evolve.core") + 1]).read_text())
+        return grader.subprocess.CompletedProcess(argv, 0, '\n{"metrics": {"combined_score": 1.0}, "artifacts": {}}\n', "")
+    jail.backend, container.available, container._docker = (lambda: "container"), (lambda: True), (lambda: "docker")
+    grader.subprocess.run = fake_run
+    try:
+        t = load("toy_rmsnorm")
+        r = jailed.judge_jailed({"task": t.name, "seen": [[8, 256]], "device": "cpu"}, "def kernel(x, w): ...\n", 1)
+    finally:
+        jail.backend, container.available, container._docker, grader.subprocess.run = saved
+    argv, mounts = seen["argv"], [a for a in seen["argv"] if a.startswith("type=bind")]
+    assert r["metrics"]["combined_score"] == 1.0 and argv[:2] == ["docker", "run"]
+    assert argv[argv.index("--network") + 1] == "none" and "heldout" not in seen["config"]
+    assert any("harness" in m and m.endswith(",readonly") for m in mounts)
+    assert not any(f"src={ROOT}," in m for m in mounts)          # this repo is never mounted
 
 
 def _scripted_class():

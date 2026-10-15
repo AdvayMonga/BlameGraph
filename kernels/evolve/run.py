@@ -19,7 +19,7 @@ from pathlib import Path
 import torch
 
 from kernels import shapes as shapes_mod
-from kernels.evolve.core import judge
+from kernels.evolve.jailed import judge_jailed
 from kernels.tasks import TASKS, load
 
 HERE = Path(__file__).resolve().parent
@@ -70,8 +70,9 @@ def main(argv: list[str] | None = None) -> int:
         print(shapes_mod.write(a.write, sets))
         return 0
     if a.cmd == "gate":
-        out = judge(task, Path(a.program), sets["seen"], sets["heldout"], sets.get("calls"), a.device,
-                    {getattr(torch, k): tuple(v) for k, v in tol.items()} or None, stage=2)
+        out = judge_jailed({"task": task.name, "seen": [list(s) for s in sets["seen"]],
+                            "heldout": [list(s) for s in sets["heldout"]], "weights": sets.get("calls"),
+                            "device": a.device, "tolerances": tol}, Path(a.program).read_text(), 2, timeout_s=3600)
         print(json.dumps(out, indent=1))
         return 0 if out["metrics"]["correct"] else 1
     out = Path(a.out)
