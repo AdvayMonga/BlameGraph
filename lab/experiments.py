@@ -13,6 +13,13 @@ from lab import ledger
 
 MEASURED = ("bench", "equiv", "submit", "profile", "trace", "kernel", "hostprof")
 UNITS = ("absolute", "change_pct")
+# Runs made outside the lab by a researcher (`python -m lab.experiment`): their text is a person's, so no agent view
+# (the `ledger` tool, the agent's SQL index) shows any of their records.
+RESEARCHER = "researcher-"
+
+
+def researcher(run: str | None) -> bool:
+    return isinstance(run, str) and run.startswith(RESEARCHER)
 
 EXPECT_SCHEMA = {
     "type": "object", "required": ["metric", "value", "unit", "why"],

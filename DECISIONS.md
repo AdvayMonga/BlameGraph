@@ -3,6 +3,14 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-15 — Every experiment keeps its reasoning, a person's ones included, hidden from the agent
+A session that ends with its last measurement unreflected gets one short reflection-only call (tools `reflect` and
+`ledger`, that record's facts as the prompt). Changes made outside the lab (e.g. inference-server #106, #108) are
+recorded with `python -m lab.experiment` as `researcher-` runs: hypothesis, expect, the lab's own measurement, the
+gap and a reflection. No agent view shows those runs. Why: every experiment should carry its hypothesis, rationale,
+prediction and post-analysis; a person's text reaching the agent would be human judgment (2026-10-09). The kernel
+loop's candidates still carry no reasoning (offered, not chosen).
+
 ## 2026-10-15 — State, decisions and runs kept in three files
 `STATE.md` (what works now, rewritten in place), `DECISIONS.md` (this file, append-only), `RUNS.md` (every GPU run,
 append-only). `CLAUDE.md` keeps instructions and layout. Why: `CLAUDE.md` had grown to 330 lines mixing all four, so

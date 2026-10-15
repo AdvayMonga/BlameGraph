@@ -165,7 +165,8 @@ class Toolbox(EvalTools, ProfTools):
 
     def ledger_tool(self, args: dict) -> str:
         match = {k: v for k, v in args.items() if k in ("kind", "session", "snapshot", "tool") and v}
-        rows = list(ledger.records(self.s.ledger_root, **match))
+        rows = [r for r in ledger.records(self.s.ledger_root, **match)
+                if experiments.researcher(self.s.run_id) or not experiments.researcher(r.get("run"))]
         last = int(args.get("last") or 20)
         return "\n".join(json.dumps(r) for r in rows[-last:]) or "(no records)"
 
