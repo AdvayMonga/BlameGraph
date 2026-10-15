@@ -304,9 +304,11 @@ reference (588 seen + 357 held-out cases) and runs at 1.7-4.8% of the roofline (
 split-K decode kernel (one program per KV head serving its 8 query heads, each K/V tile loaded once, `tl.dot`), 3.88x
 call-weighted over all 196 seen shapes (2.7-4.3x, up to 19% of roofline), passing every gate incl. held-out. One of
 four iterations failed stage 1 and was dropped. Evidence: `knowledge/evidence/kernels-2026-10-14/`. Not yet shown:
-the engine-level gain (step-time share of decode attention) and `equiv`. Found on the way: the long_context capture ran at
-~5 calls/s with the GPU idle and one CPU core busy; capture itself does ~80k calls/s on CPU, so the cause is elsewhere
-(unprofiled; next GPU run: py-spy on it). long_context's seen split holds ~30 requests, calls inside
+the engine-level gain (step-time share of decode attention) and `equiv`. End to end (2026-10-15, short tier, one run each): single_stream TPOT p99
+21.6 -> 15.4 ms, saturated goodput 0.100 -> 0.158 req/s; engine PR inference-server #106 (draft; equiv not run). Found on
+the way: the long_context capture crawls (~5 calls/s) because the engine's radix prefix cache evicts by scanning the
+whole tree per leaf, once per block needed (`paged_kv_cache._evict_lru_leaf` via `reclaim`: ~100% of scheduler time in
+long-context prefill, py-spy): a layer-3 bug in the engine, not capture's. long_context's seen split holds ~30 requests, calls inside
 a CUDA graph recording cannot be read, Claude rejects OpenEvolve's temperature (`kernels/evolve/llm.py`).
 
 ## Next
