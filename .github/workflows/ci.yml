@@ -25,7 +25,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install pytest pytest-asyncio ruff
+      - run: pip install pytest pytest-asyncio ruff boto3 "duckdb>=1.1" zstandard "moto>=5"   # store/ and its tests
       - name: Lint
         run: ruff check .
       - name: Lab tests
