@@ -25,29 +25,36 @@ from the agent), the workbench/measurement sandbox, the GPU VM tooling.
 - The agent loop end to end, one session, `LAB_WORKER=ssh` (2026-10-10).
 - Jails, workbench, quiet, exclusivity, dependency build, ncu: `lab.gpucheck` (2026-10-13).
 - Ceilings below every measurement (2026-10-13).
+- Launch profiles (#33): two engine starts back to back, the profiled launch measured apart (2026-10-15).
+- `python -m regimes run` single_stream, saturated, long_prompt against the engine (2026-10-15).
 
 ## Built, not yet run on a GPU
 - `python -m lab.validate` (reference, good/bad launches, noise bands): tested on fakes only.
-- `python -m regimes run all` against the engine and against vLLM.
+- `python -m regimes run all` against the engine and against vLLM (three regimes ran 2026-10-15; the other four not).
 - A real `python -m lab.session --task ...` run.
 - `validity/tier_agreement.py`: needs real short/full runs.
 - Remote worker (`LAB_WORKER=ssh`): used in the one-session dry run only.
 
-## Where the engine stands (2026-10-13)
-Engine vs plain vLLM: single_stream TPOT p99 21 ms vs 4.1 ms (7% vs 37% of ceiling), saturated 0.097 vs 5.8 req/s
-(0.5% vs 19%), long prompt invalid (111 requests without a response) vs 68 req/s (94%).
+## Where the engine stands (2026-10-15, inference-server #107, not merged)
+Engine vs plain vLLM (2026-10-13 for vLLM): single_stream TPOT p99 15.6 ms vs 4.1 ms, saturated 0.37 vs 5.8 req/s,
+long prompt 2.66 vs 68 req/s; every regime valid. The decode step is launch-bound (~2,300 kernels per step after
+fusion; the CUTLASS grouped GEMM 3.5 ms of 13.3); prefill attention is torch SDPA. The gate on this state is
+inconclusive (429s at concurrency 32); fp8 experts and a Triton MoE GEMM exist, off by default (`RUNS.md` 2026-10-15).
 
 ## In flight (branches not on main)
 | Branch | Worktree | What | Status |
 |---|---|---|---|
 | `lab/profiles` | `BlameGraph-wt/profiles` | Launch profiles: a config per regime | Not merged |
 | `target/batch-size` | `BlameGraph-wt/batch` | The engine's own batch size, not a pinned 32 | One commit, not merged |
-| `gpu/session` | `BlameGraph-wt/gpu` | Merges `lab/profiles` + `target/batch-size` | Active 2026-10-15; purpose not recorded |
+| `gpu/session` | `BlameGraph-wt/gpu` | Merges `lab/profiles` + `target/batch-size`: the tree pushed to the VM for the 2026-10-15 session | Disposable; not for merging |
+| `docs/gpu-1015` | `BlameGraph-wt/docs1015` | This session's RUNS.md/STATE.md entries | PR open |
 
 ## Open problems
 - BF16 puzzle: plain BF16 matched the reference on Nebius at concurrency 128 but diverged on Verda at 32
   (`RUNS.md` 2026-10-05). Don't treat a BF16 rerun as a noise sample until resolved.
-- `equiv` at tier dev takes > 46 min on this engine (vLLM ~10 min); the tool descriptions' "10 min at tier dev" is wrong.
+- `equiv` at tier dev: ~26 min on inference-server #107 at concurrency 32, but 12/1,585 items were 429-rejected
+  (inconclusive); run at concurrency 16 or raise `MAX_QUEUE_WAIT_S`.
+- inference-server #107's Triton MoE grouped GEMM asserts inside the decode CUDA graph under load (exact in eager mode).
 - The engine's radix prefix cache evicts by scanning the whole tree per leaf (~100% of scheduler time in long-context
   prefill): a layer-3 engine bug (`RUNS.md` 2026-10-14/15).
 - `session.py --run` re-resolves `base` from HEAD rather than the run's original base; resuming after the engine moved
@@ -60,6 +67,9 @@ Engine vs plain vLLM: single_stream TPOT p99 21 ms vs 4.1 ms (7% vs 37% of ceili
 - The corpus's long_prompt_short_output window repeats each prompt ~5x, which rewards prefix caching.
 
 ## Next
+- GPU (Nebius): the gate on inference-server #107 at concurrency 16; debug its MoE kernel in the decode graph (3.5 ms
+  of the 13 ms step); then the remaining launch overhead (per-layer graph-replay copies, routing gather/scatter) and
+  fp8 once the step is bandwidth-bound. Merge #107 with the evolved decode kernel (#106).
 - GPU, needs spend approval: resolve the BF16 puzzle (dev tier at concurrency 32 and 128 on one VM, ~20 min, ~$1.50);
   first real `python -m regimes run all` against the engine and against vLLM.
 - GPU, with approval and the auto-stop armed: `python -m lab.validate --target targets/inference-server.toml`
