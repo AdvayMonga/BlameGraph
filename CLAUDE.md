@@ -13,7 +13,8 @@ Hard rule from the user: the loop may receive **facts only, never heuristics or 
 the limits, tiers, policy, noise bands, corpus version the referee measures against). Nothing derived from the
 records (counts, best measured, claims vs evidence) goes to the agent; that is `for_researcher.activity`.
 Decided 2026-10-09: no knowledge base of beliefs, hand-written or the agent's (a belief bounded by its evidence is a
-measurement row; anything more is a generalization). `knowledge/` was removed (tag `archive/knowledge-base`); the
+measurement row; anything more is a generalization). The findings in `knowledge/` were removed (tag
+`archive/knowledge-base`); what stays there is measurement (`knowledge/peaks/`, `knowledge/reference/`). The
 agent reads raw data only, through `ledger` and `query` (read-only SQL over every run, `store/index.py`).
 The task (`lab/task.py`, `--task task.toml`: goal, objective regimes, constraints) is stated in full in the brief,
 and a submit returns its `score` under that task: the win condition is known, never inferred. The system prompt is
@@ -253,7 +254,7 @@ Holds only the engine and its stack: `src/` (engine, control plane), engine test
 (`scripts/bench/tune_triton_launch.py`, `scripts/gpu_tests/checks.py`, `scripts/tools/smoke_custom.py`). The
 combined pre-split tree is tag `archive/pre-split` there. Its shim serves `prompt_logprobs` (contract in
 `correctness/client.py`). Everything that runs, measures or judges it lives here; the user builds the agent's tools
-(e.g. a knowledge tool) themselves, so don't add agent tools without asking. Corpus classes for the regimes the
+themselves, so don't add agent tools without asking. Corpus classes for the regimes the
 corpus lacks (short/long output, overload, shared prefix) belong in `corpus/build_corpus.py`; the regimes synthesize
 them from existing records meanwhile.
 
@@ -310,17 +311,17 @@ the dependency build (after allowing pypi.nvidia.com); ncu (after linking the re
 user can read GPU performance counters on that image.
 
 ## Next
-Store (2026-10-09, branch `storage/r2`): needs an R2 bucket + API token (`LAB_STORE`, `LAB_STORE_ENDPOINT`,
-`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`), then `python -m store push` and `archive` of `data/derived`,
-`data/equiv*`, `data/h200-run-*`, `data/engine-h200-*`. The holdout guard lives in the store (one budget per corpus
-version, `heldout/guard/<version>/`), so a host without `LAB_STORE` (a VM `--env` session) cannot submit. The index is rebuilt in full when the
+Store: bucket `bg-data` is set up (`.env`: `LAB_STORE`, `LAB_STORE_ENDPOINT`, `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`) and holds the ledger, its blobs, the corpus's held-out traces + seed, and archives of
+`data/derived`, `data/equiv*`, `data/h200-run-*`, `data/engine-h200-*`, `data/agent-traces` (2026-10-14). The holdout
+guard lives in the store (one budget per corpus version, `heldout/guard/<version>/`), so a host without `LAB_STORE`
+(a VM `--env` session) cannot submit. The index is rebuilt in full when the
 ledger grows; make it incremental when that gets slow. DCGM device samples are indexed as raw lines.
 GPU (needs spend approval): resolve the BF16 puzzle (plain BF16 on the dev tier at concurrency 32 and 128 on one VM,
 ~20 min, ~$1.50); first real run of `python -m regimes run all` against the engine and against vLLM.
 GPU, with approval (and the auto-stop armed): `python -m lab.validate --target targets/inference-server.toml`
 (reference, FP8/INT8 good, Int4 bad, noise bands for all 8 regimes; ~3-4 h; serves unjailed, so not blocked), then
-a first `python -m lab.session --task ...` dry run with a tiny budget, which waits on the rest of `lab/RUNTIME.md`
-(the controller/worker split; the agent's CLI still runs under srt, which has no GPU on Linux). Both engine branches from the 2026-10-06 report (`integ/gpu-session-5`,
+a real `python -m lab.session --task ...` run (the dry run is above). Both engine branches from the 2026-10-06 report (`integ/gpu-session-5`,
 `engine/gpu-validated`) were judged by the old gate: re-judge with `python -m correctness verdict` on their saved
 results before deciding anything. lab `session.py --run` re-resolves
 `base` from HEAD rather than the run's original base (pre-existing; resuming after the engine moved would misaudit);
@@ -331,5 +332,9 @@ single_stream TPOT p99 4.1 ms (37% of ceiling), saturated 5.8 req/s (19%), long 
 21 ms (7%), 0.097 req/s (0.5%), long prompt invalid (111 requests without a response). Stored in
 `knowledge/reference/inference-server/`. Finding for the corpus: long_prompt_short_output's window repeats each
 prompt ~5x (23,185 requests over 4,794 prompts), which rewards prefix caching.
+Agent regime (planned 2026-10-14, not built): long-horizon agent traffic as a ninth regime scored on goodput;
+text from Exgentic agent-llm-traces v2, timing and tool gaps from FreeInference (samples in `data/agent-traces/`).
+Undecided: 32k cap vs 128k with YaRN (the engine rejects rope scaling; a new correctness reference), Exgentic v2's
+missing license vs v1, the per-turn latency limit.
 The agent's tool set is the user's design: ask first. README stays a few one-line
 feature bullets, not a dev doc.
