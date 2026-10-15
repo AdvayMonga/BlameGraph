@@ -41,7 +41,7 @@ def test_start_takes_the_change_inside_the_write_surface_and_lists_the_rest(tb, 
     rb = experiment.toolbox(run, tb.s.ledger_root, tmp_path / "runs")
     assert "return 2" in (rb.s.workspace.path / "src/inference_server/engine.py").read_text()
     assert (rb.s.workspace.path / "README.md").read_text() == "# tiny\n"
-    assert rb.s.budget.cap_usd == 10.0 and rec["snapshot"] != "base"
+    assert rb.s.budget.cap_usd == 10.0 and rec["snapshot"] != "base" and rec["result"]["author"] == "Res Earcher"
 
 
 def test_a_researcher_measurement_follows_the_agents_rules(tb, tmp_path, run):

@@ -59,7 +59,7 @@ def start(repo: Path, base: str, change: str, budget_usd: float, root: Path = le
     ledger.append({"kind": "note", "run": run, "session": f"{run}-researcher", "tool": "start",
                    "args": {"repo": str(repo), "base": base, "change": change, "budget_usd": budget_usd},
                    "snapshot": snap.id, "snapshot_blob": snap.blob, "patch": snap.patch,
-                   "result": {"author": _git(repo, "config", "user.name").strip() or None, "applied": applied,
+                   "result": {"author": _git(repo, "log", "-1", "--format=%an", change).strip(), "applied": applied,
                               "left_out": left_out},
                    "cost": {"usd": 0.0, "seconds": 0.0}}, root)
     return run
