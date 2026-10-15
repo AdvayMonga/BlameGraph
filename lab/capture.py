@@ -1,6 +1,6 @@
 """Record what an engine's kernels are actually called with: wrap Python entry points ("module:function") for the
-duration of a block and log every call's argument shapes, dtypes and small integer tensors (sequence lengths, block
-tables, expert offsets); keep the first call of each shape signature whole when it fits a byte cap, as real inputs.
+duration of a block and log every call's argument shapes, dtypes and small 1-D integer tensors (sequence lengths, expert
+offsets; block tables by shape only); keep the first call of each shape signature whole when it fits a byte cap, as real inputs.
 Synchronizes to read integer tensors, so it is for a capture run, never a timed one. Calls replayed from a CUDA graph
 never reach Python: capture with the engine's graphs off (the example engine: CUSTOM_BACKEND_CUDA_GRAPH=0) to see every
 call; a call made while a graph records is logged by shape only."""
@@ -26,8 +26,8 @@ def _capturing() -> bool:
 def _describe(x, graph: bool = False) -> dict:
     if isinstance(x, torch.Tensor):
         d = {"shape": list(x.shape), "dtype": str(x.dtype).removeprefix("torch."), "contiguous": x.is_contiguous()}
-        if not graph and not x.is_floating_point() and x.numel() <= SMALL_INT:
-            d["values"] = x.detach().flatten().tolist()
+        if not graph and not x.is_floating_point() and x.dim() == 1 and x.numel() <= SMALL_INT:
+            d["values"] = x.detach().tolist()        # lengths and offsets; 2-D tables are shape only (cost per call)
         return d
     if isinstance(x, (int, float, bool, str)) or x is None:
         return {"value": x}
