@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -187,19 +189,40 @@ def _rsync(vm: VM, *args: str) -> None:
 
 
 def push(vm: VM, record: Record) -> None:
-    """Both working trees, minus .git and everything .gitignore excludes (secrets, weights, venvs, ledger, runs)."""
+    """Both working trees, minus .git and everything .gitignore excludes (secrets, weights, venvs, ledger, runs),
+    except the held-out traces, which submit needs and git no longer holds."""
     # .venv is named explicitly: a gitignore-only exclusion did not protect it from --delete on the VM.
-    for local, remote in ((engine.repo(), vm.remote_dir), (engine.ENV_ROOT, vm.env_dir)):
+    for local, remote, keep in ((engine.repo(), vm.remote_dir, []),
+                                (engine.ENV_ROOT, vm.env_dir, ["--include=corpus/*/heldout.jsonl"])):
         # lab/runs is named explicitly too: it holds the worker's cache and the agent's live workspaces there.
         _rsync(vm, "--delete", "--exclude=.git", "--exclude=.venv", "--exclude=__pycache__", "--exclude=/lab/runs",
-               "--filter=:- .gitignore",
+               *keep, "--filter=:- .gitignore",
                f"{local}/", f"{ssh_target(vm, record)}:{remote}/")
 
 
-def fetch(vm: VM, record: Record, remote: str, local: Path, base: str | None = None) -> None:
+def fetch(vm: VM, record: Record, remote: str, local: Path, base: str | None = None, *extra: str) -> None:
     """`remote` is relative to `base` on the VM (default the engine dir)."""
     local.mkdir(parents=True, exist_ok=True)
-    _rsync(vm, f"{ssh_target(vm, record)}:{base or vm.remote_dir}/{remote}/", f"{local}/")
+    _rsync(vm, *extra, f"{ssh_target(vm, record)}:{base or vm.remote_dir}/{remote}/", f"{local}/")
+
+
+def collect(vm: VM, record: Record) -> None:
+    """Bring a lab run home before the VM goes: its ledger merged into this one, its run dirs (minus the trees that
+    can be rebuilt), then everything pushed to the store when LAB_STORE is set."""
+    from lab import ledger
+    staging = Path(tempfile.mkdtemp(prefix="vm-ledger-"))
+    try:
+        fetch(vm, record, "lab/ledger", staging, vm.env_dir, "--exclude=index/")
+        print(f"[lab.vm] merged {ledger.merge(staging, ledger.ROOT)} ledger records", file=sys.stderr)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    fetch(vm, record, "lab/runs", engine.ENV_ROOT / "lab" / "runs", vm.env_dir,
+          "--exclude=workspace/", "--exclude=pristine/", "--exclude=base-tree-*/", "--exclude=scratch/")
+    if os.environ.get("LAB_STORE"):
+        from store import sync
+        from store.remote import open_remote
+        print(f"[lab.vm] stored {sync.push(ledger.ROOT, open_remote(), runs=engine.ENV_ROOT / 'lab' / 'runs')}",
+              file=sys.stderr)
 
 
 def local_sha() -> str | None:
@@ -242,6 +265,11 @@ def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | Non
             fetch(vm, record, fetch_dir, local or engine.ENV_ROOT / "lab" / "runs", base=cwd)
         except ProviderError as e:
             print(f"[lab.vm] fetch failed: {e}", file=sys.stderr)
+    if where == "env":
+        try:
+            collect(vm, record)
+        except Exception as e:                  # never skip the stop below over a failed copy
+            print(f"[lab.vm] collect failed: {e}", file=sys.stderr)
     if keep:
         arm(vm, record, minutes)
     else:

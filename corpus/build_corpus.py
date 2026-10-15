@@ -2,7 +2,7 @@
 
     uv sync --extra dev --extra corpus
     .venv/bin/python corpus/fetch_traces.py           # once: raw inputs into the cache
-    .venv/bin/python corpus/build_corpus.py [--seed 20261001]
+    .venv/bin/python corpus/build_corpus.py [--seed N]    # default: the secret seed in corpus/.seed
 
 Timing and sessions come from BurstGPT (`BurstGPT_3.csv`; mixed classes also draw on the earlier,
 session-less `BurstGPT_1.csv` and `_2.csv`): every arrival, its session (API-log
@@ -13,7 +13,9 @@ whose templated prompt length (the build tokenizer, Qwen3 by default, enable_thi
 closest to the trace's Request tokens, turns strictly increasing within a session. Turn k > 0
 is a real `[user, assistant, ..., user]` message list. No conversation is used twice.
 
-Same seed + same cached inputs + same tokenizer = same bytes (the test asserts it). Anything
+Same seed + same cached inputs + same tokenizer = same bytes (the test asserts it). The seed is
+secret: it is kept in corpus/.seed and the store's heldout/ prefix, never in git, because the
+held-out split is reproducible from it. Anything
 else is a NEW corpus version. Do not hand-edit a trace.
 """
 
@@ -28,6 +30,7 @@ import json
 import math
 import random
 import re
+import secrets
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -47,7 +50,6 @@ from lab.corpus import (  # noqa: E402
     write_trace,
 )
 
-DEFAULT_SEED = 20261001
 DEFAULT_TOKENIZER = "tokenizers/Qwen3-30B-A3B"     # relative to the cache, or any HF id/path
 TOKENIZER_LABEL = f"Qwen/Qwen3-30B-A3B@{QWEN3_REV[:12]}"
 BURSTGPT_CSV = "burstgpt/BurstGPT_3.csv"
@@ -72,7 +74,7 @@ NOTES_TMPL = (
     "no conversation containing a credential-like string (SECRET_RE). "
     "Azure LLM inference trace 2024 (CC-BY-4.0) is fetched as a cross-source check only, not "
     "a split (no sessions; see corpus/README.md). Tokenizer {tok}, chat template "
-    "enable_thinking=False, prompt cap {cap}, max_tokens {mt}. Seed {seed}. Splits: seen = even "
+    "enable_thinking=False, prompt cap {cap}, max_tokens {mt}. Seed: secret. Splits: seen = even "
     "weeks of the trace, heldout = odd weeks. `dilation` per trace: arrival_s = real offset x "
     "dilation; replay with --rate-scale <dilation> for real timing. Each request's "
     "build_prompt_tokens is its templated length under this tokenizer. mixed_* requests carry "
@@ -488,7 +490,7 @@ def build_trace(window: list[Arrival], spec: ClassSpec, split: str, dil: float, 
 
 # ------------------------------------------------------------------ corpus
 
-def build_corpus(out: Path, seed: int = DEFAULT_SEED, cache: Path = DEFAULT_CACHE,
+def build_corpus(out: Path, seed: int, cache: Path = DEFAULT_CACHE,
                  tokenizer: str = DEFAULT_TOKENIZER, verbose: bool = False) -> Manifest:
     """Write every (class, split) trace and the manifest. Class c, split s uses seed + 100c + s;
     conversations are drawn in that order, so reordering classes is a new corpus version."""
@@ -513,8 +515,7 @@ def build_corpus(out: Path, seed: int = DEFAULT_SEED, cache: Path = DEFAULT_CACH
             if verbose:
                 _report(spec, split, window, dil, trace, lens)
     tok = TOKENIZER_LABEL if tokenizer == DEFAULT_TOKENIZER else tokenizer
-    notes = NOTES_TMPL.format(wc=WILDCHAT_REV[:12], tok=tok, cap=PROMPT_CAP, mt=MAX_TOKENS,
-                              seed=seed)
+    notes = NOTES_TMPL.format(wc=WILDCHAT_REV[:12], tok=tok, cap=PROMPT_CAP, mt=MAX_TOKENS)
     m = build_manifest({s.cls.name: s.cls for s in specs}, out, notes=notes, dilation=dils)
     (out / "manifest.json").write_text(json.dumps(m.to_dict(), indent=2) + "\n")
     return m
@@ -560,7 +561,7 @@ def azure_check(cache: Path) -> None:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(Path(__file__).resolve().parent))
-    ap.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    ap.add_argument("--seed", type=int, help="default: the secret seed in <out>/.seed, drawn at random when absent")
     ap.add_argument("--cache", default=str(DEFAULT_CACHE))
     ap.add_argument("--tokenizer", default=DEFAULT_TOKENIZER,
                     help="tokenizer dir relative to the cache, or an HF id; a different one is "
@@ -570,7 +571,11 @@ if __name__ == "__main__":
     args = ap.parse_args()
     if args.azure_check:
         sys.exit(azure_check(Path(args.cache).expanduser()))
-    m = build_corpus(Path(args.out), args.seed, Path(args.cache), args.tokenizer, verbose=True)
+    seed_file = Path(args.out) / ".seed"
+    if args.seed is None and not seed_file.exists():
+        seed_file.write_text(f"{secrets.randbits(31)}\n")
+    seed = args.seed if args.seed is not None else int(seed_file.read_text())
+    m = build_corpus(Path(args.out), seed, Path(args.cache), args.tokenizer, verbose=True)
     print(f"corpus_version {m.corpus_version}")
     for name, c in m.classes.items():
         slo = f"ttft<{c.slo_ttft_ms:.0f}ms" if c.slo_ttft_ms else "per-request regime SLO"

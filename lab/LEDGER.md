@@ -17,7 +17,7 @@ on write. Every record: `id`, `at`, `schema` (set by the writer), `kind`, `run`,
 | `equiv` | `equiv` | `config: {split: seen, tier}`; `verdict: pass\|fail\|inconclusive`, `passed`, `reasons`, `gates`, `metrics` (accuracy with CI, length, consistency, divergence, per-task flips, unanswered), `thresholds`, `artifacts` |
 | `submit` | `submit` | **held-out shape**: no `result`; top-level `config: {split: heldout, tier: full}` and `metrics: {regime: {base, new, delta_pct, band_pct, verdict}}`, scalars only. The ledger refuses anything else that mentions the held-out split. |
 | `baseline` | the loop, once per run before the first session | `config: {split: seen, tier: short, commit}`; `verdict: ok` with `metrics` and `calibrated` shaped like `bench`'s (the base commit under bench's default regimes: the task's objective and constrained ones, from the cache submit compares against), or `verdict: error`, `reason` |
-| `finding` | `lab.ledger seed` | a `knowledge/` entry, whole, as `claim`; `source`, `content_sha` |
+| `noise` | `lab.validate` | `config: {split: seen, tier}`; `result`: regime, band_pct, values, runs, model, target, server, corpus_version, measured_at |
 | `note` | `note`, `restore`, refusals | free text, or `{verdict: refused, reason}` |
 | `hypothesis` | `hypothesis` | the agent's text: `hypothesis` (bottleneck and proposed change), `rationale`, optional `abandon_if`, `from_record` |
 | `reflection` | `reflect` | the agent's text on one measured record: `record`, `reflection` (why it matched or differed from `expect`), optional `alternative` |

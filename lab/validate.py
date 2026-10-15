@@ -7,7 +7,7 @@
    checks the gate separates them: every good must PASS, every bad must FAIL (inconclusive counts as neither).
 3. Serves the target's *engine* (the base commit, from its repo) and runs the chosen regimes `noise_runs` times on
    the seen split, short tier, to measure each regime's run-to-run band on the thing submit will judge; writes
-   knowledge/noise/<regime>.json (tagged with the target and `server: engine`), which `submit` reads.
+   a `noise` ledger record per regime (tagged with the target and `server: engine`), which `submit` reads.
 Exit status 0 only if the gate separated and every band was measured. Nothing here is jailed: these are the
 operator's own launches, not the agent's.
 
@@ -25,7 +25,7 @@ import sys
 import time
 from pathlib import Path
 
-from lab import calibrate, gpu, serve, target
+from lab import calibrate, gpu, ledger, serve, target
 
 
 def band_pct(values: list[float]) -> float | None:
@@ -36,19 +36,20 @@ def band_pct(values: list[float]) -> float | None:
     return 2 * statistics.stdev(vals) / abs(statistics.mean(vals)) * 100
 
 
-def write_noise(regime: str, values: list[float], t: target.Target, extra: dict | None = None) -> dict:
+def write_noise(regime: str, values: list[float], t: target.Target, extra: dict | None = None,
+                root: Path = ledger.ROOT) -> dict:
+    """One regime's band as a `noise` ledger record; returns its fields."""
     from regimes.workload import corpus_version
-    target.noise_dir().mkdir(parents=True, exist_ok=True)
     d = {"regime": regime, "band_pct": band_pct(values), "values": values, "runs": len(values), "model": t.model,
          "target": t.name, "server": "engine", "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,
          "measured_at": time.strftime("%Y-%m-%dT%H:%M:%S"), **(extra or {})}
-    (target.noise_dir() / f"{regime}.json").write_text(json.dumps(d, indent=1) + "\n")
+    ledger.append({"kind": "noise", "config": {"split": "seen", "tier": d.get("tier")}, "result": d}, root)
     return d
 
 
 def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: list[str] | None = None,
              out: Path | None = None, encoder=None, log_dir: Path | None = None,
-             reference_regimes: bool = True) -> dict:
+             reference_regimes: bool = True, root: Path = ledger.ROOT) -> dict:
     from correctness import client, run as crun, tasks
     from correctness.gate import Thresholds
     from regimes import suite
@@ -93,7 +94,7 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
                     values[n].append(r["value"] if r["valid"] else None)
             srv.exclusive()                     # a band from a shared GPU would skew every submit
         for n in names:
-            report["noise"][n] = write_noise(n, values[n], t, {"tier": "short", "split": "seen"})
+            report["noise"][n] = write_noise(n, values[n], t, {"tier": "short", "split": "seen"}, root)
     report["bands_measured"] = all(d["band_pct"] is not None for d in report["noise"].values()) if names and noise_runs else None
     # 4. the reference engine under the same regimes, once, without its determinism switches: what every bench is shown next to
     if reference_regimes and names:

@@ -14,4 +14,6 @@ venv/
 # lab state: the ledger and run outputs stay local
 lab/ledger/
 lab/runs/
-knowledge/evidence/benchmarks/results/
+# held-out traces and the corpus seed live in the store (python -m store pull --corpus), never in git
+corpus/*/heldout.jsonl
+corpus/.seed

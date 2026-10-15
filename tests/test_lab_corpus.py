@@ -42,6 +42,9 @@ HAVE_RAW = all(os.path.exists(RAW / f)
 REQUIRE_RAW = os.environ.get("CORPUS_REQUIRE_RAW") == "1"
 needs_raw = pytest.mark.skipif(not HAVE_RAW and not REQUIRE_RAW, reason=f"raw traces absent "
                                f"from {RAW}; run corpus/fetch_traces.py")
+# held-out traces are not in git (`python -m store pull --corpus`); tests that read them skip without them
+HAVE_HELDOUT = all(os.path.exists(CORPUS_DIR / name / "heldout.jsonl") for name in CLASSES)
+needs_heldout = pytest.mark.skipif(not HAVE_HELDOUT, reason="held-out traces absent; python -m store pull --corpus")
 BUDGET_FLOOR = 1024
 CONTEXT = 32768             # Qwen3-30B-A3B native context: prompt + budget must fit
 
@@ -67,6 +70,7 @@ def _all(name):
 # ---------------------------------------------------------------- the committed corpus
 
 @pytest.mark.needs_host
+@needs_heldout
 def test_committed_corpus_verifies_and_every_class_is_non_empty():
     m = load_manifest(CORPUS_DIR)
     assert set(m.classes) == set(CLASSES)
@@ -83,9 +87,11 @@ def test_committed_corpus_verifies_and_every_class_is_non_empty():
 @needs_raw
 @pytest.mark.needs_host
 def test_committed_corpus_is_what_the_builder_produces(tmp_path):
-    """Provenance: the data on disk came from build_corpus.py at the default seed from the
+    """Provenance: the data on disk came from build_corpus.py at the secret seed (corpus/.seed) from the
     pinned raw inputs, byte for byte. A changed input or class table is a new version."""
-    rebuilt = bc.build_corpus(tmp_path)
+    if not (CORPUS_DIR / ".seed").exists():
+        pytest.skip("no corpus/.seed: pull it with `python -m store pull --corpus`")
+    rebuilt = bc.build_corpus(tmp_path, int((CORPUS_DIR / ".seed").read_text()))
     committed = load_manifest(CORPUS_DIR)
     assert rebuilt.files == committed.files
     assert rebuilt.corpus_version == committed.corpus_version
@@ -104,6 +110,7 @@ def test_build_is_deterministic_in_the_seed(tmp_path):
 
 
 @pytest.mark.needs_host
+@needs_heldout
 def test_seen_and_heldout_are_disjoint():
     for name in CLASSES:
         _, seen = load_trace(name, "seen", CORPUS_DIR)
@@ -116,6 +123,7 @@ def test_seen_and_heldout_are_disjoint():
 
 
 @pytest.mark.needs_host
+@needs_heldout
 def test_every_request_respects_the_floor_the_cap_and_the_context():
     """Checked on the committed bytes alone: build_prompt_tokens is the build tokenizer's count."""
     for name in CLASSES:
@@ -127,6 +135,7 @@ def test_every_request_respects_the_floor_the_cap_and_the_context():
 
 
 @pytest.mark.needs_host
+@needs_heldout
 def test_only_mixed_requests_carry_a_regime_and_it_names_a_class():
     for name in CLASSES:
         for r in _all(name):
@@ -152,6 +161,7 @@ def test_no_committed_corpus_file_contains_a_credential():
 
 
 @pytest.mark.needs_host
+@needs_heldout
 def test_no_oracle_is_set():
     for name in CLASSES:
         for r in _all(name):
@@ -160,6 +170,7 @@ def test_no_oracle_is_set():
 
 
 @pytest.mark.needs_host
+@needs_heldout
 def test_multi_turn_requests_carry_real_assistant_turns():
     n_multi = 0
     for name in CLASSES:
@@ -220,11 +231,13 @@ def test_changed_class_slo_is_a_new_version(tmp_path):
     assert corpus_version(m.files, m.classes) == m.corpus_version
 
 
-def test_missing_trace_is_refused(tmp_path):
+def test_a_missing_trace_is_refused_only_when_it_is_loaded(tmp_path):
     _mini_corpus(tmp_path)
     (tmp_path / "long_context" / "heldout.jsonl").unlink()
-    with pytest.raises(CorpusError, match="missing"):
-        load_manifest(tmp_path)
+    load_manifest(tmp_path)
+    assert load_trace("long_context", "seen", tmp_path)[1]
+    with pytest.raises(CorpusError, match="missing; held-out traces are not in git"):
+        load_trace("long_context", "heldout", tmp_path)
 
 
 def test_sample_is_seeded_and_carries_its_provenance(tmp_path):
