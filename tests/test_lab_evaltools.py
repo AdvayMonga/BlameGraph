@@ -509,3 +509,28 @@ def test_a_profile_launch_that_fails_is_flagged_and_the_measurement_goes_on(lab,
     assert m["invalid_reasons"] == ["profile launch failed: engine did not start: exited with 1"]
     assert m["general"]["valid"] and out["profiles_failed"] == {"single_stream": "engine did not start: exited with 1"}
     assert next(ledger.records(s.ledger_root, kind="bench"))["result"]["verdict"] == "ok"
+
+
+def test_a_profiles_file_that_does_not_parse_is_a_recorded_refusal(lab):
+    tb, s = lab
+    _profile(s, "[single_stream\n")
+    assert tb.equiv({"profile": "single_stream"}).startswith("equiv refused: src/inference_server/profiles.toml does not parse")
+    assert list(ledger.records(s.ledger_root, kind="equiv"))[-1]["result"]["verdict"] == "refused"
+
+
+def test_submit_says_which_heldout_profile_launch_failed_and_how_only(lab, monkeypatch):
+    tb, s = lab
+    _profile(s, "[single_stream]\nMAX_BATCH_SIZE = 1\n")
+    tb.equiv({"tier": "full"}); tb.equiv({"tier": "full", "profile": "single_stream"}); tb.bench({"regimes": ["single_stream"]})
+    real = serve.Served.__enter__
+
+    def enter(self):
+        if self.env_extra.get("ENGINE_PROFILE"):
+            raise serve.NotReady("exited with 1; log: /private/held-out/serve.log")
+        return real(self)
+    monkeypatch.setattr(serve.Served, "__enter__", enter)
+    out = json.loads(tb.submit({}))
+    assert out["profiles_failed"] == {"single_stream": "engine did not start"}
+    assert out["metrics"]["single_stream"]["verdict"] == "unknown"
+    rec = next(r for r in ledger.records(s.ledger_root, kind="submit") if r.get("config", {}).get("split") == "heldout")
+    assert rec["config"]["profiles_failed"] == {"single_stream": "engine did not start"}

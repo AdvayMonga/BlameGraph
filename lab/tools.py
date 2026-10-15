@@ -254,7 +254,9 @@ class Toolbox(EvalTools, ProfTools):
         prof = (f" Launch profiles: the engine's {tg.profiles} holds [general] and optional tables named after regimes. "
                 f"Every regime is measured on the general launch; a regime whose table is non-empty is also measured "
                 f"in its own engine start with {tg.profile_env}=<regime>, and that number is its headline (the general "
-                f"one is reported beside it)." if tg.profiles else "")
+                f"one is reported beside it). The harness sets only {tg.profile_env}; what a table does is the engine's "
+                f"code (as shipped, it writes the table over the launch env, including the target's settings)."
+                if tg.profiles else "")
         specs = [
             ToolSpec("test", "Lint and run the test suite on a pristine copy of your current workspace, inside the "
                      "referee's jail. Returns PASS or FAIL, lint and test status, and the tail of each output." + offline

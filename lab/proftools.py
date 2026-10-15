@@ -173,7 +173,7 @@ class ProfTools:
                      "profiles `launch_count` with section set `set` (any `ncu --list-sets` name); `ncu_args` are "
                      "appended as further ncu flags. Stores the .ncu-rep and its raw metrics CSV in the ledger; returns "
                      "the head of the CSV. Refused where ncu is not installed."
-                     + note + note + gpu("about 1.5 min measured at 4-8 launches on an H200; each profiled launch is replayed once per metric pass, so it grows with launch_count and set=full"),
+                     + note + gpu("about 1.5 min measured at 4-8 launches on an H200; each profiled launch is replayed once per metric pass, so it grows with launch_count and set=full"),
                      _schema(**extra, kernel_regex={"type": "string"},
                              launch_skip={"type": "integer", "minimum": 0, "default": 0},
                              launch_count={"type": "integer", "minimum": 1, "default": 8},

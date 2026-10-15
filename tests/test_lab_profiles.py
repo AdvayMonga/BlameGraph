@@ -46,3 +46,13 @@ def test_a_file_that_does_not_parse_fails_the_measurement(tmp_path):
 def test_the_file_and_its_env_var_go_together(tmp_path):
     with pytest.raises(ValueError, match="go together"):
         _target(tmp_path, 'profiles = "profiles.toml"\n')
+
+
+def test_refusal_names_why_and_never_raises(tmp_path):
+    t = _target(tmp_path)
+    (tmp_path / "profiles.toml").write_text("[cold_start]\nMAX_BATCH_SIZE = 1\n[single_stream]\nMAX_BATCH_SIZE = 1\n")
+    assert profiles.refusal(tmp_path, t, None) is None and profiles.refusal(tmp_path, t, "single_stream") is None
+    assert "is not a regime" in profiles.refusal(tmp_path, t, "cold_open")
+    assert profiles.refusal(tmp_path, t, "saturated") == "no [saturated] table with settings in profiles.toml"
+    (tmp_path / "profiles.toml").write_text("[single_stream\n")
+    assert profiles.refusal(tmp_path, t, "single_stream").startswith("profiles.toml does not parse")

@@ -31,12 +31,20 @@ def launches(tree: Path, t: target.Target, names: list[str]) -> list[tuple[str |
 
 
 def refusal(tree: Path, t: target.Target, profile: str | None) -> str | None:
-    """Why `profile` cannot be served from `tree`, or None (no profile is the general launch)."""
+    """Why `profile` cannot be served from `tree`, or None (no profile is the general launch). Never raises: a file
+    that does not parse is a reason too, so the refusal is recorded like any other."""
+    from regimes import suite
     if not profile:
         return None
     if not t.profiles:
         return "this target names no profiles file"
-    if profile not in overrides(tree, t):
+    if profile not in suite.REGIMES:
+        return f"{profile!r} is not a regime; one of {sorted(suite.REGIMES)}"
+    try:
+        own = overrides(tree, t)
+    except ValueError as e:                       # tomllib.TOMLDecodeError
+        return f"{t.profiles} does not parse: {e}"
+    if profile not in own:
         return f"no [{profile}] table with settings in {t.profiles}"
     return None
 

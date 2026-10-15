@@ -311,6 +311,8 @@ class EvalTools:
             # A contaminated run raises here, before the holdout guard: it spends no query.
             private = self.s.run_dir / "heldout-private" / f"{snap.id}-{time.strftime('%Y%m%dT%H%M%S')}"
             r = self._measure(tree, private, "serve-submit.log", names=names, split="heldout", tier="full", passive=True)
+            # which profile launches failed and how (did not start / the exception's type), never its text
+            failed = {p: why.split(":", 1)[0] for p, why in (r.get("profiles_failed") or {}).items()}
             new = headline(r["results"])
             cal_path = self.s.run_dir / f"base-seen-{BENCH_TIER}.calibrated.json"
             seen_cal = json.loads(cal_path.read_text()) if cal_path.exists() else {}
@@ -330,10 +332,10 @@ class EvalTools:
             result = _failed(e)
             self._record("submit", "submit", args, result, snap)
             return _said("submit", result)
-        rec = self._record_heldout("submit", "submit", args, {"tier": "full", **({"profiles": own} if own else {})},
-                                   metrics, snap)
+        config = {"tier": "full", **({"profiles": own} if own else {}), **({"profiles_failed": failed} if failed else {})}
+        rec = self._record_heldout("submit", "submit", args, config, metrics, snap)
         out = {"snapshot": snap.id, "split": "heldout", "tier": "full", "metrics": metrics, "record": rec["id"],
-               **_killed(r)}
+               **({"profiles_failed": failed} if failed else {}), **_killed(r)}
         task = getattr(self.s, "task", None)
         if task is not None:                       # the task's own win condition, applied to these aggregates
             from lab.task import score
