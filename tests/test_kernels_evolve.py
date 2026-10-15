@@ -93,6 +93,8 @@ def test_noise_rule_and_physics_alarm():
     t = load("toy_rmsnorm")
     same = judge(t, SEED, list(t.seen_default), [], None, "cpu", None, 2, iters=3)
     assert same["metrics"]["raw_speedup"] > 0 and "beyond_noise" in json.loads(same["artifacts"]["timings"])[0]
+    err = json.loads(same["artifacts"]["error_vs_reference"])["candidate"]
+    assert err["max_abs"]["float32"] is not None and err["cases"] > 0
     from validity.peaks import Peaks
     fast = Peaks("toy", 1.0, 1.0, 1e9, "spec")      # a 1 FLOP/s, 1 B/s machine: any real time beats its bound
     orig = core._peaks

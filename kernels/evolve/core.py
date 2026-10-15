@@ -122,6 +122,12 @@ def _peak_bytes(fn, inputs, device) -> int | None:
     return torch.cuda.max_memory_allocated() - base
 
 
+def _error(result: dict) -> dict:
+    """Max abs and rel error against the reference over the seen-shape cases, per dtype."""
+    ev = result["gates"]["correctness_seen"]["evidence"]
+    return {"max_abs": ev["max_abs"], "max_rel": ev["max_rel"], "cases": ev["cases"]}
+
+
 def _shown(c: dict, b: dict) -> bool:
     """A difference counts when the medians differ by more than the two runs' half-IQRs: the timer's own noise."""
     return abs(b["median_ms"] - c["median_ms"]) > (c["iqr_ms"] + b["iqr_ms"]) / 2
@@ -177,6 +183,11 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
                 "artifacts": {"gates": json.dumps(gates, indent=1)}}
     base_fn = task.baseline()
     base = task.bind(base_fn) if base_fn else ref
+    error = {"candidate": _error(r)}                # a fact, not a gate: lower precision inside a kernel is allowed
+    if base_fn:
+        error["baseline"] = _error(check_kernel(ref, base, task.make_inputs, seen, [], dtypes=task.dtypes,
+                                                device=device, seeds=(0, 1, 2), tolerances=tolerances,
+                                                edge_shapes=[], repeats=1, layouts=()))
     hw, dtype, rows, logs, raw = _peaks(device), task.dtypes[0], [], 0.0, 0.0
     inputs0 = task.make_inputs(seen[0], dtype, device, torch.Generator().manual_seed(0))
     pc, pb = _peak_bytes(cand, inputs0, device), _peak_bytes(base, inputs0, device)
@@ -212,7 +223,7 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
                         "min_pct_of_roofline": min((x["pct_of_roofline"] for x in rows if x["pct_of_roofline"]),
                                                    default=0.0)},
             "artifacts": {"timings": json.dumps(rows, indent=1), "gates": json.dumps(gates, indent=1),
-                          "baseline": task.entry or "reference"}}
+                          "error_vs_reference": json.dumps(error, indent=1), "baseline": task.entry or "reference"}}
 
 
 def main() -> int:
