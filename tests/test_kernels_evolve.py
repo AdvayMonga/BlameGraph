@@ -62,7 +62,7 @@ def test_the_screen_refuses_exploit_routes_and_passes_real_kernels():
                 "import time\n", "sys.modules['kernels'].timing = 1\n", "from kernels import timing\n",
                 "os.system('id')\n", "open('/etc/passwd')\n", "import ctypes\n", "inspect.stack()\n"):
         assert screen(src), src
-    ev = ROOT / "knowledge" / "evidence" / "kernels-2026-10-14" / "paged_decode_best.py"
+    ev = ROOT / "tests" / "fixtures" / "paged_decode_evolved.py"     # the best program of the 2026-10-14 run
     assert screen(SEED.read_text()) == [] and screen(ev.read_text()) == []
     assert screen("x = os.environ.get('A', '0')\n") == []
     t = load("toy_rmsnorm")

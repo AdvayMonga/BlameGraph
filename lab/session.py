@@ -4,6 +4,7 @@ tools, and record what it did."""
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import subprocess
 import time
@@ -20,6 +21,9 @@ from lab.workspace import Workspace
 
 SYSTEM = (Path(__file__).parent / "prompts" / "system.md").read_text()      # a template, filled by system_prompt
 MIN_SESSION_USD = 0.25
+CLOSING_USD = 0.50          # the reflection-only call after a session that left a measurement unreflected
+CLOSING_TURNS = 4
+CLOSING_TOOLS = ("reflect", "ledger")
 
 
 @dataclass
@@ -81,7 +85,8 @@ def system_prompt(t: target.Target, spec: agent.AgentSpec) -> str:
         env=json.dumps(t.engine.env), write=globs(t.write), add_only=globs(t.add_only), deny=globs(ALWAYS_DENY),
         tools="\n".join(f"- `{x.name}`: {x.description}" for x in spec.tools),
         session_usd=spec.max_budget_usd, max_turns=spec.max_turns, timeout_s=spec.timeout_s,
-        min_session_usd=MIN_SESSION_USD, holdout=HOLDOUT_BUDGET)
+        min_session_usd=MIN_SESSION_USD, holdout=HOLDOUT_BUDGET, closing_usd=CLOSING_USD, closing_turns=CLOSING_TURNS,
+        closing_tools=" and ".join(f"`{x}`" for x in CLOSING_TOOLS))
 
 
 def _baseline(s: Session) -> str:
@@ -107,6 +112,38 @@ def brief(cfg: RunConfig, s: Session, snapshot_id: str, n: int) -> str:
             f"Hypotheses of this run (your records: expected, measured, gap, reflection):\n"
             f"{json.dumps(experiments.summary(s.ledger_root, s.run_id)) or '[]'}\n\n"
             "Every record of this and earlier runs is readable with the `ledger` tool.")
+
+
+def closing_prompt(s: Session, rec: dict) -> str:
+    """The facts of the unreflected record: its hypothesis, the prediction, the measurement and the gap."""
+    x = rec["experiment"]
+    h = experiments.hypotheses(s.ledger_root, s.run_id).get(x["hypothesis"], {})
+    return (f"Session {s.session_id} of run {s.run_id} ended with no reflection on measured record {rec['id']}. "
+            f"This call records that reflection with `reflect`; its tools are {' and '.join(f'`{t}`' for t in CLOSING_TOOLS)}.\n\n"
+            f"Hypothesis {x['hypothesis']}:\n{json.dumps({k: h[k] for k in ('hypothesis', 'rationale', 'abandon_if') if k in h})}\n\n"
+            f"Record {rec['id']} ({rec.get('tool')}):\n"
+            f"{json.dumps({k: x[k] for k in ('expect', 'actual', 'actual_missing', 'gap', 'gap_pct_of_expected', 'noise_band_pct') if k in x})}")
+
+
+def closing(provider: agent.Provider, spec: agent.AgentSpec, tools: Toolbox, s: Session) -> dict | None:
+    """After a session that left its last measurement unreflected: one short call whose only tools are `reflect` and
+    `ledger`. Returns what the session record keeps under `closing`, or None when nothing was pending."""
+    rec = experiments.pending(s.ledger_root, s.run_id)
+    if rec is None:
+        return None
+    usd = min(CLOSING_USD, s.budget.remaining_usd)
+    if usd <= 0:
+        return {"record": rec["id"], "skipped": "budget"}
+    c = dataclasses.replace(spec, prompt=closing_prompt(s, rec), builtin=[], max_turns=CLOSING_TURNS,
+                            max_budget_usd=usd, tools=[t for t in tools.specs() if t.name in CLOSING_TOOLS])
+    c.system = system_prompt(target.load(), c)
+    try:
+        reply = provider.run(c)
+    except Exception as e:                      # charged at its cap, like a session whose provider raised
+        reply = agent.AgentReply(None, usd, 0, f"provider raised: {e}", True)
+    return {"record": rec["id"], "reflected": experiments.pending(s.ledger_root, s.run_id) is None,
+            "usd": reply.cost_usd, "estimated": reply.cost_estimated, "tokens": reply.usage, "turns": reply.turns,
+            "error": reply.error}
 
 
 def _resolve(repo: Path, ref: str) -> str:
@@ -168,13 +205,22 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
         end = ws.snapshot()
         if end.violations and not tools.violation:      # a Bash write outside the surface, with no tool call after
             tools.violation = "; ".join(end.violations)
+        close = None if tools.violation or over else closing(provider, spec, tools, s)
+        if close and "usd" in close:            # within the remaining budget by construction; a cap overshoot ends the run
+            try:
+                budget.charge(close["usd"], f"{s.session_id} closing")
+            except BudgetExceeded as e:
+                budget.spent_usd += close["usd"]
+                over = str(e)
         status = (reply.output or {}).get("status") if reply.output else None
         ledger.append({"kind": "session", "run": run_id, "session": s.session_id, "provider": provider.name,
                        "model": spec.model, "snapshot": end.id, "snapshot_blob": end.blob, "patch": end.patch,
-                       "cost": {"usd": reply.cost_usd, "estimated": reply.cost_estimated, "tokens": reply.usage},
+                       "cost": {"usd": reply.cost_usd + ((close or {}).get("usd") or 0.0),
+                                "estimated": reply.cost_estimated, "tokens": reply.usage},
                        "turns": reply.turns, "seconds": time.monotonic() - t0,
                        "status": status, "error": reply.error, "violation": tools.violation,
-                       "claim": {"note": (reply.output or {}).get("note")}}, cfg.ledger_root)
+                       "claim": {"note": (reply.output or {}).get("note")},
+                       **({"closing": close} if close else {})}, cfg.ledger_root)
         summary["sessions"] = n - done
         summary["spent_usd"] = budget.spent_usd
         if tools.violation:

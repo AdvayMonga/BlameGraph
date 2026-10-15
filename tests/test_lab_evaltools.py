@@ -71,6 +71,7 @@ def _reference(url: str, out: Path, n: int = 40):
 @pytest.fixture
 def lab(tmp_path, monkeypatch):
     monkeypatch.setenv("LAB_NO_JAIL", "1")
+    monkeypatch.setenv("LAB_STORE", str(tmp_path / "store"))          # where the shared holdout guard lives
     repo = make_repo(tmp_path)
     # a reference from the same fake engine, dev and full tiers
     import socket
@@ -202,8 +203,17 @@ def test_submit_needs_full_equiv_and_a_bench_then_records_one_aggregate_per_metr
                       "pct_of_ceiling_new", "ceiling_from", "reference_missing"} and m["verdict"] == "unknown_band"
     rec = next(r for r in ledger.records(s.ledger_root, kind="submit") if r.get("config", {}).get("split") == "heldout")
     assert "result" not in rec and rec["metrics"] == out["metrics"]        # the ledger's held-out shape, nothing else
-    state = json.loads((s.ledger_root / "holdout_state.json").read_text())
-    assert state["n_queries"] == 1 and (s.run_dir / "base-heldout-full.json").exists()
+    from lab import evaltools
+    assert evaltools.holdout_guard(target.load()).state()["n_queries"] == 1
+    assert (s.run_dir / "base-heldout-full.json").exists()
+
+
+def test_submit_is_refused_where_there_is_no_shared_heldout_budget(lab, monkeypatch):
+    tb, s = lab
+    tb.equiv({"tier": "full"}); tb.bench({"regimes": ["single_stream"]})
+    monkeypatch.delenv("LAB_STORE")
+    assert tb.submit({}).startswith("submit refused: no shared held-out budget on this host")
+    assert not (s.run_dir / "base-heldout-full.json").exists()             # refused before anything was measured
 
 
 def test_inconclusive_equiv_is_neither_passing_nor_failing(lab, monkeypatch):
@@ -232,12 +242,12 @@ def test_submit_reports_no_heldout_delta_without_a_seen_delta(lab, monkeypatch, 
     m = out["metrics"]["single_stream"]
     assert m["delta_pct"] is None and m["new"] is None and m["verdict"] == "unknown"     # nothing held-out leaks
     # a noise band from another target is ignored
-    nd = tmp_path / "noise2"; nd.mkdir()
-    (nd / "single_stream.json").write_text(json.dumps({"band_pct": 1.0, "target": "other", "server": "engine"}))
-    monkeypatch.setattr(target, "NOISE_DIR", nd)
-    assert evaltools.noise_band_pct("single_stream", target.load()) is None
-    (nd / "single_stream.json").write_text(json.dumps({"band_pct": 1.0, "target": target.load().name, "server": "engine"}))
-    assert evaltools.noise_band_pct("single_stream", target.load()) == 1.0
+    root = tmp_path / "noise-ledger"
+    band = {"regime": "single_stream", "band_pct": 1.0, "server": "engine"}
+    ledger.append({"kind": "noise", "result": {**band, "target": "other"}}, root)
+    assert evaltools.noise_band_pct("single_stream", target.load(), root) is None
+    ledger.append({"kind": "noise", "result": {**band, "target": target.load().name}}, root)
+    assert evaltools.noise_band_pct("single_stream", target.load(), root) == 1.0
 
 
 def test_submit_scores_the_task(lab, tmp_path):

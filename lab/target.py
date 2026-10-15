@@ -10,13 +10,6 @@ from pathlib import Path
 
 ENV_ROOT = Path(__file__).resolve().parents[1]
 TARGETS_DIR = ENV_ROOT / "targets"
-NOISE_DIR = ENV_ROOT / "knowledge" / "noise"       # per-regime run-to-run bands, written by lab.validate, read by submit
-
-
-def noise_dir() -> Path:
-    return NOISE_DIR
-
-
 class NoTarget(RuntimeError):
     pass
 

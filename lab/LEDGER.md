@@ -9,7 +9,7 @@ on write. Every record: `id`, `at`, `schema` (set by the writer), `kind`, `run`,
 
 | kind | written by | `result` (or shape) |
 |---|---|---|
-| `session` | the loop | provider, model, turns, seconds, status (`stop`/`continue`), error, `violation`, `claim.note` |
+| `session` | the loop | provider, model, turns, seconds, status (`stop`/`continue`), error, `violation`, `claim.note`, optional `closing: {record, reflected, usd, estimated, tokens, turns, error}` or `{record, skipped: budget}` (the reflection-only call after a session that left `record` unreflected; `cost.usd` includes its `usd`) |
 | `test` | `test` | `lint`, `tests` (bools), returncode, output tails, `changed`, `scratch_left_out` |
 | `profile` | `profile` | `bundle` (ledger blob of the profiler output), `workspace_copy`, seconds |
 | `profile` | `trace`, `kernel`, `hostprof` | `bundle` (blob of the instrument's output dir), `workspace_copy`, `instrument` (resolved binary), `argv` (every command run), returncode, seconds, output tail |
@@ -17,8 +17,9 @@ on write. Every record: `id`, `at`, `schema` (set by the writer), `kind`, `run`,
 | `equiv` | `equiv` | `config: {split: seen, tier}`; `verdict: pass\|fail\|inconclusive`, `passed`, `reasons`, `gates`, `metrics` (accuracy with CI, length, consistency, divergence, per-task flips, unanswered), `thresholds`, `artifacts` |
 | `submit` | `submit` | **held-out shape**: no `result`; top-level `config: {split: heldout, tier: full}` and `metrics: {regime: {base, new, delta_pct, band_pct, verdict}}`, scalars only. The ledger refuses anything else that mentions the held-out split. |
 | `baseline` | the loop, once per run before the first session | `config: {split: seen, tier: short, commit}`; `verdict: ok` with `metrics` and `calibrated` shaped like `bench`'s (the base commit under bench's default regimes: the task's objective and constrained ones, from the cache submit compares against), or `verdict: error`, `reason` |
-| `finding` | `lab.ledger seed` | a `knowledge/` entry, whole, as `claim`; `source`, `content_sha` |
+| `noise` | `lab.validate` | `config: {split: seen, tier}`; `result`: regime, band_pct, values, runs, model, target, server, corpus_version, measured_at |
 | `note` | `note`, `restore`, refusals | free text, or `{verdict: refused, reason}` |
+| `note` (`tool: start`) | `python -m lab.experiment start` | a researcher run: `args: {repo, base, change, budget_usd}`, `result: {author, applied, left_out}` |
 | `hypothesis` | `hypothesis` | the agent's text: `hypothesis` (bottleneck and proposed change), `rationale`, optional `abandon_if`, `from_record` |
 | `reflection` | `reflect` | the agent's text on one measured record: `record`, `reflection` (why it matched or differed from `expect`), optional `alternative` |
 
@@ -26,7 +27,9 @@ Every measured record (`bench`, `equiv`, `submit`, `profile`, including `trace`/
 agent carries `experiment: {hypothesis, expect: {metric, value, unit: absolute|change_pct, why}, actual, gap,
 gap_pct_of_expected, noise_band_pct}`, or `actual_missing` saying why the lab could not compute the measured
 counterpart (`lab/experiments.py`). The agent's measured tools refuse a call without an open hypothesis and an
-`expect`, and while the run's latest measured record has no `reflection`.
+`expect`, and while the run's latest measured record has no `reflection`. Runs whose id starts `researcher-` are
+experiments a person made outside the lab (`lab/experiment.py`), with the same records; the agent's `ledger` tool and
+SQL index leave them out.
 
 A tool that could not run writes `{verdict: refused | error, reason}` and the agent sees that text; it never
 crashes the session. `bench`, `equiv`, `submit` and `baseline` also write `refused` when a process already held

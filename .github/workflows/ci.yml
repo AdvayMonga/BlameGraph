@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read          # gh pr diff, for the regimes test's path check
 
 concurrency:
   group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
@@ -25,7 +26,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install pytest pytest-asyncio ruff
+      - run: pip install pytest pytest-asyncio ruff boto3 "duckdb>=1.1" zstandard "moto>=5"   # store/ and its tests
       - name: Lint
         run: ruff check .
       - name: Lab tests
@@ -44,11 +45,27 @@ jobs:
           python-version: "3.11"
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pip install pandas pyarrow huggingface_hub
+      # test_regimes.py takes ~4 of the job's 5 min: on PRs it runs only when the PR touches what it drives.
+      - name: Does this PR touch the regimes?
+        id: regimes
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=$(gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --name-only)
+          if echo "$files" | grep -qE '^(regimes/|canaries/|corpus/|lab/corpus\.py|lab/target\.py|tests/test_regimes\.py|tests/fake_engine\.py|\.github/workflows/)'; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Script tests
+        env:
+          SKIP_REGIMES: ${{ steps.regimes.outputs.skip }}
         run: |
           set -e
           for t in tests/test_*.py; do
             case "$t" in tests/test_lab_*) continue ;; esac
+            if [ "$t" = tests/test_regimes.py ] && [ "$SKIP_REGIMES" = true ]; then echo "== $t skipped (PR doesn't touch it)"; continue; fi
             echo "== $t"; python "$t"
           done
 
@@ -62,7 +79,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install pytest pytest-asyncio "pyarrow>=17"
+      - run: pip install pytest pytest-asyncio "pyarrow>=17" transformers jinja2
       - name: Cache raw traces
         uses: actions/cache@v4
         with:
