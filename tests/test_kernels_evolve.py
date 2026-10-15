@@ -53,6 +53,23 @@ def test_judge_scores_a_correct_kernel_and_zeroes_a_wrong_one():
         assert "no callable `kernel`" in judge(t, missing, list(t.seen_default), [], None, "cpu", None, 1)["artifacts"]["error"]
 
 
+def test_the_screen_refuses_exploit_routes_and_passes_real_kernels():
+    from kernels.evolve.core import screen
+    for src in ("import gc\n", "torch.cuda.Stream()\n", "x.elapsed_time(y)\n", "import threading\n",
+                "import time\n", "sys.modules['kernels'].timing = 1\n", "from kernels import timing\n",
+                "os.system('id')\n", "open('/etc/passwd')\n", "import ctypes\n", "inspect.stack()\n"):
+        assert screen(src), src
+    ev = ROOT / "knowledge" / "evidence" / "kernels-2026-10-14" / "paged_decode_best.py"
+    assert screen(SEED.read_text()) == [] and screen(ev.read_text()) == []
+    assert screen("x = os.environ.get('A', '0')\n") == []
+    t = load("toy_rmsnorm")
+    with tempfile.TemporaryDirectory() as d:
+        bad = Path(d) / "bad.py"
+        bad.write_text("import gc\ndef kernel(x, w):\n    return x\n")
+        r = judge(t, bad, list(t.seen_default), [], None, "cpu", None, 1)
+        assert r["metrics"]["combined_score"] == 0.0 and "refused before running" in r["artifacts"]["error"]
+
+
 def test_value_distributions_catch_a_kernel_tuned_to_one_scale():
     t = load("toy_rmsnorm")
     with tempfile.TemporaryDirectory() as d:

@@ -17,6 +17,30 @@ from kernels import check_kernel, time_kernel
 from kernels.tasks import Task, load
 
 
+# What the published exploits used (Sakana's reused buffers, CUDA-L1's extra streams, METR's timer overwrite, KernelBot's
+# patched elapsed_time and background launches): a candidate's source may not reach for any of it.
+FORBIDDEN = {
+    r"\bgc\b": "the garbage collector (finding the reference's tensors)",
+    r"\binspect\b|\bsys\._getframe|\bf_back\b|\bf_locals\b": "frame introspection",
+    r"\bctypes\b|\bcffi\b": "raw memory access",
+    r"\bthreading\b|\bmultiprocessing\b|\bconcurrent\b|\basyncio\b": "background work outside the timed call",
+    r"torch\.cuda\.(Stream|stream|Event|set_stream|current_stream)\b|\.elapsed_time\b|\bcuda\.Event\b":
+        "streams or timer events",
+    r"\btime\.(perf_counter|time|monotonic|sleep)\b|\bimport time\b|\bfrom time\b": "the clock",
+    r"\bsys\.modules\b|\bbuiltins\b|__builtins__|\bimportlib\b|\bsetattr\s*\(\s*(torch|kernels|time)\b":
+        "patching modules",
+    r"\bkernels\.(check|timing|evolve)\b|\bfrom kernels\b|\bimport kernels\b": "the evaluator itself",
+    r"\bopen\s*\(|\bos\.(system|popen|fork|exec\w*|spawn\w*|kill|remove|unlink|open|write|dup2?)\b|\bsubprocess\b"
+    r"|\bsocket\b|\burllib\b|\brequests\b": "files, processes or the network",
+}
+
+
+def screen(source: str) -> list[str]:
+    """Reasons a program is refused before it runs (static: a pattern anywhere in the source)."""
+    import re
+    return [f"uses {why}: `{m.group(0)}`" for pat, why in FORBIDDEN.items() if (m := re.search(pat, source))]
+
+
 def load_program(path: Path):
     spec = importlib.util.spec_from_file_location(f"candidate_{abs(hash(str(path)))}", path)
     mod = importlib.util.module_from_spec(spec)
@@ -74,6 +98,10 @@ def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | 
           tolerances: dict | None, stage: int, iters: int = 30) -> dict:
     """stage 1: correctness on the two most frequent seen shapes, one seed. stage 2: the full check on every seen shape
     (held-out shapes only when given, which selection never does), then timing against the baseline."""
+    refused = screen(Path(program).read_text())
+    if refused:
+        return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
+                "artifacts": {"error": "refused before running: " + "; ".join(refused)}}
     try:
         cand = task.bind(load_program(program))
     except Exception as e:                       # noqa: BLE001  a program that does not load scores 0
