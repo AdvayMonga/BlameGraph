@@ -100,6 +100,30 @@ def test_capture_records_calls_and_the_split_holds_out_the_largest():
         assert back["seen"] == s["seen"]
 
 
+def test_remote_evaluation_sends_the_source_on_stdin_and_never_a_key():
+    try:
+        from kernels.evolve import evaluator
+    except ImportError:
+        print("skip: openevolve not installed")
+        return
+    t = load("toy_rmsnorm")
+    with tempfile.TemporaryDirectory() as d:
+        cfg = Path(d) / "eval.json"
+        cfg.write_text(json.dumps({"task": t.name, "seen": [list(s) for s in t.seen_default], "device": "cpu", "iters": 3}))
+        fake_ssh = Path(d) / "ssh"                  # stands in for ssh: runs the remote shell string here
+        fake_ssh.write_text("#!/bin/sh\nshift\nenv | grep -c _API_KEY > " + str(Path(d) / "keys") + "\nexec sh -c \"$@\"\n")
+        fake_ssh.chmod(0o755)
+        old = dict(os.environ)
+        os.environ.update(KERNEL_EVAL_SSH=json.dumps([str(fake_ssh), "host"]), KERNEL_EVAL_REMOTE=f"cd {ROOT} &&",
+                          KERNEL_EVAL_REMOTE_CONFIG=str(cfg), KERNEL_EVAL_CONFIG=str(cfg), ANTHROPIC_API_KEY="sk-x")
+        try:
+            r = evaluator.evaluate_stage1(str(SEED))
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+        assert r.metrics["correct"] == 1.0 and (Path(d) / "keys").read_text().strip() == "0"
+
+
 def _scripted_class():
     """A stand-in model, at module level so OpenEvolve's worker processes can unpickle it: odd calls (counted in a
     file, since every worker has its own instance) return the cheat, even calls the real speedup."""

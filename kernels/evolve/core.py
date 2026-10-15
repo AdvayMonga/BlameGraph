@@ -87,8 +87,17 @@ def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | 
 
 
 def main() -> int:
-    """python -m kernels.evolve.core CONFIG.json PROGRAM STAGE  ->  one JSON object on stdout."""
-    cfg, program, stage = json.loads(Path(sys.argv[1]).read_text()), Path(sys.argv[2]), int(sys.argv[3])
+    """python -m kernels.evolve.core CONFIG.json PROGRAM|- STAGE  ->  one JSON object on stdout ("-": the program's
+    source on stdin, as a remote evaluation sends it)."""
+    cfg, stage = json.loads(Path(sys.argv[1]).read_text()), int(sys.argv[3])
+    if sys.argv[2] == "-":
+        import tempfile
+        fd, name = tempfile.mkstemp(suffix=".py", prefix="candidate-")
+        with open(fd, "w") as f:
+            f.write(sys.stdin.read())
+        program = Path(name)
+    else:
+        program = Path(sys.argv[2])
     task = load(cfg["task"])
     tol = {getattr(torch, k): tuple(v) for k, v in (cfg.get("tolerances") or {}).items()}
     out = judge(task, program, [tuple(s) for s in cfg["seen"]], [tuple(s) for s in cfg.get("heldout", [])],

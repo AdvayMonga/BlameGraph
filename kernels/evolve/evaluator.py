@@ -1,10 +1,16 @@
 """OpenEvolve's evaluator: a two-stage cascade, each stage a fresh process running kernels.evolve.core, so no
 candidate shares a process with the timer, the reference or another candidate. Reads its config from
-$KERNEL_EVAL_CONFIG (written by kernels.evolve.run). Facts only go back to the model: gate reasons, errors, timings."""
+$KERNEL_EVAL_CONFIG (written by kernels.evolve.run). Facts only go back to the model: gate reasons, errors, timings.
+
+Remote: with $KERNEL_EVAL_SSH (a JSON argv prefix, e.g. ["ssh", "-i", KEY, "lab@host"]) and $KERNEL_EVAL_REMOTE (a
+shell prefix run there, e.g. "cd ~/BlameGraph && PATH=... "), each stage runs on the GPU host with the program's
+source on stdin and $KERNEL_EVAL_REMOTE_CONFIG as its config, so the model's key stays on this machine. No API key is
+ever in a candidate's environment."""
 from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -16,11 +22,18 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _run(program_path: str, stage: int) -> EvaluationResult:
-    cfg = os.environ["KERNEL_EVAL_CONFIG"]
-    env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(ROOT), os.environ.get("PYTHONPATH")]))}
+    env = {k: v for k, v in os.environ.items() if not k.endswith("_API_KEY")}       # candidates never see a key
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(ROOT), os.environ.get("PYTHONPATH")]))
+    remote = os.environ.get("KERNEL_EVAL_SSH")
+    if remote:
+        cmd = json.loads(remote) + [os.environ.get("KERNEL_EVAL_REMOTE", "") + " python -m kernels.evolve.core "
+                                    + shlex.quote(os.environ["KERNEL_EVAL_REMOTE_CONFIG"]) + f" - {stage}"]
+        stdin = Path(program_path).read_text()
+    else:
+        cmd = [sys.executable, "-m", "kernels.evolve.core", os.environ["KERNEL_EVAL_CONFIG"], program_path, str(stage)]
+        stdin = None
     try:
-        p = subprocess.run([sys.executable, "-m", "kernels.evolve.core", cfg, program_path, str(stage)],
-                           capture_output=True, text=True, timeout=TIMEOUT_S, env=env, cwd=ROOT)
+        p = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=TIMEOUT_S, env=env, cwd=ROOT)
     except subprocess.TimeoutExpired:
         return EvaluationResult({"combined_score": 0.0, "correct": 0.0, "stage": stage},
                                 {"error": f"evaluation exceeded {TIMEOUT_S:.0f} s"})
