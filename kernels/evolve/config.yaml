@@ -1,0 +1,31 @@
+# OpenEvolve config for kernel tasks. Models are reached through Anthropic's OpenAI-compatible endpoint with the key
+# from $ANTHROPIC_API_KEY (kernels.evolve.run maps it). A fast model proposes most edits, a strong one the rest.
+max_iterations: 20
+checkpoint_interval: 10
+random_seed: 42
+diff_based_evolution: true
+max_code_length: 60000          # the example engine's attention module is ~20k characters
+llm:
+  api_base: "https://api.anthropic.com/v1/"
+  models:
+    - name: "claude-haiku-4-5-20251001"
+      weight: 0.8
+    - name: "claude-opus-5-5"
+      weight: 0.2
+  temperature: 0.7
+  max_tokens: 16000
+  timeout: 300
+database:
+  population_size: 200
+  archive_size: 50
+  num_islands: 3
+  similarity_threshold: 0.95    # near-duplicate programs are not evaluated
+evaluator:
+  cascade_evaluation: true
+  cascade_thresholds: [0.5]     # stage 1 (2 shapes, one seed) must pass before stage 2 (all seen shapes + timing)
+  parallel_evaluations: 1       # one GPU: candidates are timed one at a time
+  timeout: 900
+prompt:
+  num_top_programs: 3
+  num_diverse_programs: 2
+  include_artifacts: true       # gate reasons, errors and per-shape timings go back to the model

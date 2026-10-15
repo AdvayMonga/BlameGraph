@@ -28,11 +28,11 @@ layer's share of time × its distance from the ceiling as a fact. Layer 1 first.
 | | 1. Kernels | 2. Model execution | 3. Runtime | 4. Serving |
 |---|---|---|---|---|
 | In the example engine | `models/paged_attention_kernel.py`, MoE grouped GEMM, norm/rope, sampling | `models/qwen3_moe.py`, `backends/custom_torch_backend.py`, `launch_table.py`, `quant.py` | `scheduler.py`, `scheduling_policy.py`, `kv_cache/` | `server.py`, `openai_shim.py`, tokenizer, startup, `control_plane/` |
-| Data | partial: `check_kernel` makes random inputs at chosen shapes; missing the shapes the engine actually calls, logged from real runs | partial: correctness task sets + corpus; missing a small fixed batch for logit checks and a list of step configurations | partial: corpus (public, repeats prompts); the load generator (separate work) replaces it | have: same workloads + the cold-start command |
+| Data | built, GPU check pending: `lab.profile --capture` logs real call shapes and inputs; `kernels/shapes.py` splits them | partial: correctness task sets + corpus; missing a small fixed batch for logit checks and a list of step configurations | partial: corpus (public, repeats prompts); the load generator (separate work) replaces it | have: same workloads + the cold-start command |
 | Simulator | not needed (the real kernel runs in seconds; the roofline is the bound) | partial: analytic step floors (`validity/ceiling.py`); missing a measured step-time model | missing: scheduler simulator (real `scheduler.py` on a fake clock and backend, step times from layer 2's model) | not needed |
-| Hypothesis generator | missing (evolutionary: fast evaluator, many candidates) | missing (hypothesis-driven + knob search) | missing (hypothesis-driven, simulator-screened) | not needed: the general agent |
+| Hypothesis generator | built, GPU check pending: OpenEvolve replication (`kernels/evolve/`) | missing (hypothesis-driven + knob search) | missing (hypothesis-driven, simulator-screened) | not needed: the general agent |
 | Measurement tools | have: `time_kernel`, ncu `kernel`, nsys `trace`, % of bandwidth peak | have: `profile`, `trace`, kernel share of time, step floors | have: `bench` client rows, engine telemetry, timeline, py-spy | have: `bench` cold_start/overload, serve logs, telemetry |
-| Evaluator | partial: `kernels/check_kernel` + `time_kernel` built and validated on the H200, not wired into the loop | missing: fast step-time + logit check (no server) | partial: `bench` + `equiv`; no noise bands measured for this engine yet | have: `bench` regimes |
+| Evaluator | built: `kernels/evolve/core.judge` (cascade, own process per candidate) + `gate` for held-out shapes | missing: fast step-time + logit check (no server) | partial: `bench` + `equiv`; no noise bands measured for this engine yet | have: `bench` regimes |
 
 Across layers, built: the end-to-end judge, calibration (`lab/calibrate.py`), experiment records
 (`lab/experiments.py`), the workbench/measurement sandbox, the GPU VM tooling.
@@ -153,6 +153,17 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   bandwidth and bf16 GEMM measured once per GPU+driver into `knowledge/peaks/<gpu>.json`, run by `vm-setup.sh`; spec
   sheet as the labelled fallback), `repeat_audit.py`: repeated-request audit (MLPerf TEST04-style), judges decode time per token, not TTFT, so prefix caching passes and replayed answers fail; `python -m validity repeat --url URL`. `tier_agreement.py`: `tier_agreement(changes)`: Spearman, Kendall tau-b, bootstrap CI, out-of-band disagreements; short tier usable if n ≥ 8, rho ≥ 0.8, CI low ≥ 0.5. `holdout.py`: `HoldoutGuard` (Thresholdout query budget, state persisted atomically under a file lock, deterministic from seed) and `SealedSplit` (hash manifest, one logged unseal per corpus version). Keep sigma small relative to the threshold.
 - `kernels/` — kernel equivalence: `check_kernel` (seen + held-out shapes, per-dtype tolerances, edge cases incl. non-contiguous and NaN/Inf, inputs unchanged, no aliasing, memoization, determinism) and `time_kernel` / `check_memoization` (sync, rotated buffers, L2 flush on CUDA). Validated on CPU, MPS and CUDA (H200, 2026-10-04): all tests pass; the timer resolves ~20 µs kernels at ~9% IQR, 0.2 ms at 1.5%. `make_inputs` gets a seeded CPU generator (generate on CPU, then `.to(device)`).
+  `kernels/tasks/` (a kernel task: the engine entry point it replaces = the baseline, a reference, an input builder,
+  how to read a shape from a captured call, the held-out axes, the layouts its callers pass, bytes and FLOPs per call
+  for the roofline; `toy_rmsnorm` for CPU, `paged_decode` = the example engine's `paged_decode_attention`),
+  `kernels/shapes.py` (shapes and call counts from captures; held-out = whole regions above the 80th percentile on the
+  task's axes, never random samples), `kernels/evolve/` (the layer-1 generator, a replication of OpenEvolve 0.4.0 =
+  open AlphaEvolve: `python -m kernels.evolve run|gate|split`; the starting program is the engine's kernel module;
+  a two-stage cascade, each stage a fresh process (`core.judge`: stage 1 = two shapes, one seed; stage 2 = the full
+  check on seen shapes + timing against the baseline, score = call-weighted geometric-mean speedup); selection never
+  sees held-out shapes, `gate` judges them; `validate_gpu.sh` = the GPU validation; tolerances from the target's
+  `[kernels]`). `lab/capture.py` + `lab.profile --capture MODULE:FUNCTION` (the `profile` tool's `capture`): every
+  call's argument shapes and small int tensors, the first call per shape kept whole as real inputs.
 - `regimes/` — load generation: drives a live OpenAI-compatible server the eight ways it gets used, client-side.
   `client.py` (one streamed chat request: TTFT from *scheduled* send to first real token, TPOT = (E2E − TTFT)/(n − 1),
   status ok / error (explicit 4xx or 503 rejection) / silent_drop / truncated / crash (other 5xx, no response,

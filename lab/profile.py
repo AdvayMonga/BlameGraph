@@ -10,8 +10,10 @@ import json
 import logging
 import os
 import random
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -23,7 +25,7 @@ from inference_server.config import Settings, load_settings
 from inference_server.scheduler import ContinuousBatchScheduler, ScheduledRequest
 from inference_server.server import build_backend, build_scheduler
 from inference_server.timeline import Timeline
-from lab import bundle, gpu
+from lab import bundle, capture, gpu
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +222,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--rate", type=int, default=100, help="pyspy: samples per second")
     ap.add_argument("--pyspy-bin", default="py-spy")
     ap.add_argument("--pyspy-arg", action="append", default=[], help="pyspy: extra `py-spy record` flag (repeatable)")
+    ap.add_argument("--capture", action="append", default=[], metavar="MODULE:FUNCTION",
+                    help="record every call's argument shapes and the first call per shape whole (repeatable); "
+                         "it synchronizes, so the window's times are not representative")
+    ap.add_argument("--capture-bytes", type=int, default=64 * 2**20, help="largest call kept whole as a sample")
     args = ap.parse_args(argv)
 
     # The served configuration, from the same env the server reads; only the workload is ours.
@@ -245,8 +251,14 @@ def main(argv: list[str] | None = None) -> int:
                                   Path(args.corpus_dir) if args.corpus_dir else corpus.CORPUS_DIR)
             prompts = [tok.encode_messages(m, thinking=args.enable_thinking) for m in w["messages"]]
             source = {**w["source"], "thinking": args.enable_thinking}
-    out = asyncio.run(run(backend, settings, prompts, args.max_tokens, Path(args.out), warmup=args.warmup,
-                          source=source, profiler=args.profiler, pyspy=(args.pyspy_bin, args.seconds, args.rate, args.pyspy_arg)))
+    staged = Path(tempfile.mkdtemp(prefix="capture-", dir=Path(args.out).parent if Path(args.out).parent.exists() else None))
+    with (capture.capture(args.capture, staged, args.capture_bytes) if args.capture else contextlib.nullcontext()):
+        out = asyncio.run(run(backend, settings, prompts, args.max_tokens, Path(args.out), warmup=args.warmup,
+                              source=source, profiler=args.profiler, pyspy=(args.pyspy_bin, args.seconds, args.rate, args.pyspy_arg)))
+    if args.capture:
+        shutil.move(str(staged), str(Path(out) / "captures"))
+    else:
+        shutil.rmtree(staged, ignore_errors=True)
     print(out)
     return 0
 

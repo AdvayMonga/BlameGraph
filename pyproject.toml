@@ -11,6 +11,7 @@ correctness = ["huggingface_hub", "pandas", "pyarrow", "transformers"]   # task 
 workloads = ["huggingface_hub", "pandas", "pyarrow"]                # python -m workloads fetch
 corpus = ["pyarrow>=17"]                                      # corpus/fetch_traces.py reads WildChat shards
 kernels = ["torch>=2.4"]
+evolve = ["torch>=2.4", "openevolve==0.4.0"]           # kernels/evolve: the layer-1 generator
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.16.9"]
 
 [tool.setuptools]
