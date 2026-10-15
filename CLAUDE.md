@@ -15,7 +15,8 @@ records (counts, best measured, claims vs evidence) goes to the agent; that is `
 Decided 2026-10-09: no knowledge base of beliefs, hand-written or the agent's (a belief bounded by its evidence is a
 measurement row; anything more is a generalization). The findings in `knowledge/` were removed (tag
 `archive/knowledge-base`); what stays there is measurement (`knowledge/peaks/`, `knowledge/reference/`). The
-agent reads raw data only, through `ledger` and `query` (read-only SQL over every run, `store/index.py`).
+agent reads raw data only, through `ledger`, `query` (read-only SQL over every run, `store/index.py`) and `search`
+(text search over every run's experiments, `lab/search.py`).
 The task (`lab/task.py`, `--task task.toml`: goal, objective regimes, constraints) is stated in full in the brief,
 and a submit returns its `score` under that task: the win condition is known, never inferred. The system prompt is
 generated per session (`session.system_prompt`: template `lab/prompts/system.md` filled from the target spec and the
@@ -67,7 +68,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   missing; bench, baseline, profile and kernel records carry a `calibrated` block, the brief shows the baseline's;
   submit's held-out aggregates carry the ceiling from the base's seen-split shape and % of it, never anything computed
   from held-out requests; harness facts carry peaks and floors for the GPU the ledger last measured on),
-  `tools.py` (metered tools: test, profile, ledger, query, budget, restore, note; every record's `cost` has wall seconds, and
+  `tools.py` (metered tools: test, profile, ledger, query, search, budget, restore, note; every record's `cost` has wall seconds, and
   GPU tools charge them at `LAB_GPU_USD_PER_HOUR` / the target's `[cost] gpu_usd_per_hour` to the run's budget) +
   `proftools.py` (trace = nsys, kernel = ncu, hostprof = py-spy, each wrapping lab.profile's workload in the jail
   with validated args) + `evaltools.py` (bench → `regimes` on
@@ -124,6 +125,13 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `build_corpus.py` / `fetch_traces.py` rebuild it; any change is a new `corpus_version`. Since 2026-10-09 (version
   `131149…`) the held-out traces and the build seed (`corpus/.seed`, which reproduces them) are gitignored and live in
   the store (`python -m store pull --corpus`); the previous version's held-out split was public in git.
+- `lab/search.py` — the `search` tool (2026-10-15): one document per `hypothesis` record across every run, with its
+  measurements (expect, actual, gap, GPU, config) and reflections, ranked by reciprocal-rank fusion of BM25 (English
+  stopwords dropped) and cosine similarity of local `BAAI/bge-base-en-v1.5` embeddings (fastembed 0.9.0, ONNX on CPU,
+  weights in `<ledger>/index/models`, vectors cached by content hash in `<ledger>/index/embeddings/`); researcher runs
+  hidden from the agent; without fastembed it ranks by BM25 and says why. `LAB_TEST_REAL_EMBEDDINGS=1` runs the
+  real-model test. It finds paraphrases ("tokens generated slowly" -> per-token latency) but not domain synonyms
+  (fp8 -> quantization).
 - `store/` — the data store (2026-10-09). `remote.py` (`LAB_STORE` = `s3://<bucket>` with `LAB_STORE_ENDPOINT` for
   Cloudflare R2, or a directory; write-once keys), `sync.py` (`push`/`pull`: ledger as byte-range segments, blobs,
   submit's held-out passive data, held-out traces + seed, `archive` for
