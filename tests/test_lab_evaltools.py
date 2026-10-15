@@ -234,12 +234,12 @@ def test_submit_reports_no_heldout_delta_without_a_seen_delta(lab, monkeypatch, 
     m = out["metrics"]["single_stream"]
     assert m["delta_pct"] is None and m["new"] is None and m["verdict"] == "unknown"     # nothing held-out leaks
     # a noise band from another target is ignored
-    nd = tmp_path / "noise2"; nd.mkdir()
-    (nd / "single_stream.json").write_text(json.dumps({"band_pct": 1.0, "target": "other", "server": "engine"}))
-    monkeypatch.setattr(target, "NOISE_DIR", nd)
-    assert evaltools.noise_band_pct("single_stream", target.load()) is None
-    (nd / "single_stream.json").write_text(json.dumps({"band_pct": 1.0, "target": target.load().name, "server": "engine"}))
-    assert evaltools.noise_band_pct("single_stream", target.load()) == 1.0
+    root = tmp_path / "noise-ledger"
+    band = {"regime": "single_stream", "band_pct": 1.0, "server": "engine"}
+    ledger.append({"kind": "noise", "result": {**band, "target": "other"}}, root)
+    assert evaltools.noise_band_pct("single_stream", target.load(), root) is None
+    ledger.append({"kind": "noise", "result": {**band, "target": target.load().name}}, root)
+    assert evaltools.noise_band_pct("single_stream", target.load(), root) == 1.0
 
 
 def test_submit_scores_the_task(lab, tmp_path):

@@ -17,7 +17,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
-KINDS = {"test", "equiv", "bench", "profile", "submit", "finding", "session", "note", "baseline"}
+KINDS = {"test", "equiv", "bench", "profile", "submit", "finding", "session", "note", "baseline", "noise"}
 TOOL_KINDS = ("test", "equiv", "bench", "profile", "submit")
 
 

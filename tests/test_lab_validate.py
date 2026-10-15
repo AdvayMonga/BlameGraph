@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from lab import target, validate
+from lab import ledger, target, validate
 from regimes import suite
 
 FAKE = Path(__file__).resolve().parent / "fake_engine.py"
@@ -50,7 +50,6 @@ good = {{ same = "python {FAKE} --port {{port}} --out-tokens 6" }}
 bad = {{ wrong4 = "python {FAKE} --port {{port}} --out-tokens 6 --wrong-every 4" }}
 ''')
     monkeypatch.setenv("LAB_TARGET", str(t)); monkeypatch.setenv("LAB_ENGINE_PYTHON", sys.executable)
-    monkeypatch.setattr(target, "NOISE_DIR", tmp_path / "noise")
     target._cache.clear()
     saved = dict(suite.TIERS["short"]); suite.TIERS["short"].update(probe_s=1.0, final_s=1.5)
     yield target.load()
@@ -64,14 +63,16 @@ def test_validate_separates_and_measures_bands(spec, tmp_path, monkeypatch):
     monkeypatch.setattr(tasks, "load", lambda names, tier="dev", **kw: items)
     from lab import calibrate
     monkeypatch.setattr(calibrate, "REFERENCE_DIR", tmp_path / "reference")
-    rep = validate.validate(spec, noise_runs=2, regimes=["single_stream"], out=tmp_path / "out", encoder=Enc())
+    rep = validate.validate(spec, noise_runs=2, regimes=["single_stream"], out=tmp_path / "out", encoder=Enc(),
+                            root=tmp_path / "ledger")
     ref = json.loads((tmp_path / "reference" / spec.name / "single_stream.json").read_text())
     assert ref["server"] == "reference" and ref["fingerprint"]["tier"] == "short" and "single_stream" in rep["reference_regimes"]
     assert ref["value"] is not None and ref["shape"]["prompt_tokens_mean"] > 0
     assert rep["candidates"]["same"]["verdict"] == "pass"
     assert rep["candidates"]["wrong4"]["verdict"] == "fail", rep["candidates"]["wrong4"]
     assert rep["gate_separates"] is True
-    noise = json.loads((tmp_path / "noise" / "single_stream.json").read_text())
+    [rec] = ledger.records(tmp_path / "ledger", kind="noise")
+    noise = rec["result"]
     assert noise["runs"] == 2 and noise["band_pct"] is not None and rep["bands_measured"] is True
     assert noise["server"] == "engine" and noise["target"] == spec.name
     assert (tmp_path / "ref" / "outputs.jsonl").exists() and (tmp_path / "out" / "report.json").exists()

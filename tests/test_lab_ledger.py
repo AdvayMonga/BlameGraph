@@ -1,8 +1,9 @@
-"""lab.ledger appends stamped records, stores blobs by hash, guards held-out detail, and seeds findings."""
+"""lab.ledger appends stamped records, stores blobs by hash, guards held-out detail, and merges another ledger."""
 
 from __future__ import annotations
 
 import json
+
 
 import pytest
 
@@ -62,15 +63,37 @@ def test_blobs_dedupe_by_content(tmp_path):
     assert ledger.put_blob(b"diff", root, ".patch") == ledger.put_blob(b"diff", root, ".patch")
 
 
-def test_seed_is_lossless_and_idempotent(tmp_path):
-    kb = tmp_path / "knowledge"
-    kb.mkdir()
-    entry = {"id": "kb-1", "summary": "s", "validity_range": {"model": "m"}}
-    (kb / "kb-1.json").write_text(json.dumps(entry))
-    root = tmp_path / "ledger"
-    assert ledger.seed(kb, root) == 1 and ledger.seed(kb, root) == 0
-    [r] = ledger.records(root)
-    assert r["kind"] == "finding" and r["author"] == "human" and r["claim"] == entry
+def test_merge_adds_only_new_records_and_blobs(tmp_path):
+    root, vm = tmp_path / "local", tmp_path / "vm"
+    mine = ledger.append({"kind": "note", "run": "a"}, root)
+    d = tmp_path / "bundle"; d.mkdir(); (d / "meta.json").write_text("{}")
+    rel = ledger.put_blob(d, vm)
+    theirs = [ledger.append({"kind": "profile", "run": "b", "result": {"bundle": rel}}, vm),
+              ledger.append({"kind": "note", "run": "b"}, vm)]
+    assert ledger.merge(vm, root) == 2 and ledger.merge(vm, root) == 0
+    assert [r["id"] for r in ledger.records(root)] == [mine["id"]] + [r["id"] for r in theirs]
+    assert (root / rel / "meta.json").exists()
+
+
+def test_merge_refuses_a_record_the_ledger_would_not_accept(tmp_path):
+    root, vm = tmp_path / "local", tmp_path / "vm"
+    ledger.append({"kind": "note", "run": "b"}, vm)
+    with open(vm / "ledger.jsonl", "a") as f:       # written around append, as agent code on the VM could
+        f.write(json.dumps({"id": "ev-x", "at": "t", "schema": 1, "kind": "submit", "config": {"split": "heldout"},
+                            "metrics": {"ttft": {"new": {"per_request": [1, 2]}}}}) + "\n")
+    with pytest.raises(ledger.LedgerError, match="ev-x refused, nothing merged"):
+        ledger.merge(vm, root)
+    assert not list(ledger.records(root))
+
+
+def test_merge_keeps_legacy_findings_readable(tmp_path):
+    root, vm = tmp_path / "local", tmp_path / "vm"
+    ledger.append({"kind": "note", "run": "b"}, vm)
+    with open(vm / "ledger.jsonl", "a") as f:
+        f.write(json.dumps({"id": "ev-f", "at": "t", "schema": 1, "kind": "finding", "claim": "old"}) + "\n")
+    assert ledger.merge(vm, root) == 2
+    with pytest.raises(ledger.LedgerError):
+        ledger.append({"kind": "finding", "claim": "new"}, root)       # never written any more
 
 
 def test_root_is_anchored_on_the_repo_not_cwd():
@@ -114,17 +137,6 @@ def test_dir_blob_hash_distinguishes_layouts_and_empty(tmp_path):
             ledger.put_blob(b"", root)}
     assert len(rels) == 4
     assert not list((root / "blobs").glob("*.tmp-*"))
-
-
-def test_seed_reseeds_a_changed_finding(tmp_path):
-    kb = tmp_path / "knowledge"
-    kb.mkdir()
-    (kb / "kb-1.json").write_text(json.dumps({"id": "kb-1", "status": "open"}))
-    root = tmp_path / "ledger"
-    assert ledger.seed(kb, root) == 1
-    (kb / "kb-1.json").write_text(json.dumps({"id": "kb-1", "status": "rejected"}))
-    assert ledger.seed(kb, root) == 1 and ledger.seed(kb, root) == 0
-    assert [r["claim"]["status"] for r in ledger.records(root)] == ["open", "rejected"]
 
 
 def test_ids_use_utc_date_and_long_suffix(tmp_path):

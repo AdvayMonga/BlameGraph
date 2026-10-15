@@ -2,8 +2,7 @@
 
 Design for the next version of the research side of this repo: an open environment in which an
 agent improves the inference engine, replacing the fixed loop in `research/method/`. Written
-2026-10-02 from a design discussion; it describes intent, not what exists yet. Measured findings
-in `knowledge/` still stand.
+2026-10-02 from a design discussion; it describes intent, not what exists yet.
 
 ## Why
 
@@ -85,10 +84,12 @@ is us deciding what matters. Keep digests as a convenience on request, never as 
 ### 3. Knowledge base (last)
 
 Most of it is free: the ledger the environment writes anyway (diff, score, trace, test result per
-attempt) is the raw knowledge base. Distillation over it is the part that depends on everything
-else and is built last. Now: record everything raw and lossless so distillation has data. Models
-fail cold at "improve inference"; by attempt two hundred they are not cold, and that is what the
-ledger provides. The hand-written findings in `knowledge/` become seed records.
+attempt) is the raw knowledge base. Models fail cold at "improve inference"; by attempt two hundred
+they are not cold, and that is what the ledger provides. Decided 2026-10-09: no distilled base of
+beliefs, neither hand-written nor the agent's (a belief bounded by its evidence is a measurement row;
+anything more is a generalization). The findings in `knowledge/` were removed (tag `archive/knowledge-base`);
+what stays there is measurement, not belief: `knowledge/peaks/` (GPU peaks per driver) and `knowledge/reference/`
+(the reference engine under the regimes). The agent queries the raw data with SQL (`query`, `store/index.py`).
 
 ### 4. CI
 
@@ -139,7 +140,7 @@ agent likes it or not.
 | profile | the raw trace, and a digest on request |
 | review | code review of its own change, optional |
 | ledger | past attempts, diffs, scores; `restore <attempt>` puts the workspace back |
-| knowledge | measured findings |
+| query | SQL over every run's raw data |
 | budget | what is left |
 | submit | audit, pristine tests, held-out bench, record; the only thing that produces a win |
 | spawn | a sub-session with the same jail and a slice of the budget; the model decides how to fan out |
@@ -156,8 +157,7 @@ ideas and data carry over, modules do not. The lab treats the engine as a black 
 HTTP API (a launch command, a port, a health check) and its write surface for the agent is
 `src/inference_server/` alone.
 
-What carries over as ideas and data: the measured findings in `knowledge/` as seed ledger records;
-clock state travels with every number (determinism) and cost is counted from process start
+What carries over as ideas and data: clock state travels with every number (determinism) and cost is counted from process start
 (accounting); the corpus, regenerated as templated traces.
 
 `research/` was removed on 2026-10-02 (tag `archive/research-loop` keeps it for the head to head).

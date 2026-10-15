@@ -45,6 +45,7 @@ ncu --version 2>/dev/null | head -1 || true
 
 echo "== py-spy (hostprof) and srt, the agent CLI's jail until lab/RUNTIME.md's split (Node >= 20, bubblewrap, socat, ripgrep)"
 uv pip install -q --python .venv/bin/python py-spy && .venv/bin/py-spy --version
+uv pip install -q --python .venv/bin/python duckdb zstandard    # the agent's query tool (store/index.py)
 if ! command -v srt >/dev/null; then
   $SUDO apt-get install -y -qq bubblewrap socat ripgrep xz-utils >/dev/null
   if ! node -e 'process.exit(+process.versions.node.split(".")[0] < 20)' 2>/dev/null; then
