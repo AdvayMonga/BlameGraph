@@ -87,7 +87,12 @@ def main(argv: list[str] | None = None) -> int:
     if "OPENAI_API_KEY" not in os.environ and "ANTHROPIC_API_KEY" in os.environ:
         os.environ["OPENAI_API_KEY"] = os.environ["ANTHROPIC_API_KEY"]     # the config's endpoint is Anthropic's
     from openevolve import run_evolution
-    res = run_evolution(str(program), str(HERE / "evaluator.py"), a.config, iterations=a.iterations,
+    from openevolve.config import load_config
+    from kernels.evolve.llm import init_client
+    config = load_config(a.config)
+    if "anthropic.com" in (config.llm.api_base or ""):       # Claude refuses a temperature; OpenEvolve always sends one
+        config.llm.update_model_params({"init_client": init_client}, overwrite=True)
+    res = run_evolution(str(program), str(HERE / "evaluator.py"), config, iterations=a.iterations,
                         output_dir=str(out / "openevolve"), cleanup=False)
     (out / "best_program.py").write_text(res.best_code)
     (out / "best_metrics.json").write_text(json.dumps(res.metrics, indent=1, default=str))

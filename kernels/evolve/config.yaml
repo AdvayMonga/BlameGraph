@@ -12,7 +12,6 @@ llm:
       weight: 0.8
     - name: "claude-opus-5-5"
       weight: 0.2
-  temperature: 0.7
   max_tokens: 16000
   timeout: 300
 database:

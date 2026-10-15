@@ -296,6 +296,18 @@ jail GPU, quiet, exclusivity, hostprof; workbench (after blocking only 169.254.1
 the dependency build (after allowing pypi.nvidia.com); ncu (after linking the real /opt/nvidia install). The jail's
 user can read GPU performance counters on that image.
 
+## Layer-1 GPU validation (Nebius H200, 2026-10-14)
+`kernels/evolve` on `paged_decode`: capture (steady_interactive, 64 requests, graphs off: 27,216 calls, all contiguous;
+batch 1-9, contexts 2.7k-3.4k) → 196 seen / 119 held-out shapes. The engine's own kernel passes every gate against the
+reference (588 seen + 357 held-out cases) and runs at 1.7-4.8% of the roofline (launch/latency bound). OpenEvolve,
+4 iterations (Haiku 4.5 + Opus 5.5, controller on the laptop, candidates judged on the VM over SSH): best = a GQA-packed
+split-K decode kernel (one program per KV head serving its 8 query heads, each K/V tile loaded once, `tl.dot`), 3.88x
+call-weighted over all 196 seen shapes (2.7-4.3x, up to 19% of roofline), passing every gate incl. held-out. One of
+four iterations failed stage 1 and was dropped. Evidence: `knowledge/evidence/kernels-2026-10-14/`. Not yet shown:
+the engine-level gain (step-time share of decode attention) and `equiv`. Found on the way: capture is too slow for
+long contexts (~5 calls/s: block-table values per call), long_context's seen split holds ~30 requests, calls inside
+a CUDA graph recording cannot be read, Claude rejects OpenEvolve's temperature (`kernels/evolve/llm.py`).
+
 ## Next
 GPU (needs spend approval): resolve the BF16 puzzle (plain BF16 on the dev tier at concurrency 32 and 128 on one VM,
 ~20 min, ~$1.50); first real run of `python -m regimes run all` against the engine and against vLLM.
