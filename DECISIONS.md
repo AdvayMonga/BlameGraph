@@ -3,6 +3,12 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-15 — A `search` tool over experiments, with embeddings from day one
+The agent gets `search`: every run's hypotheses with their measurements and reflections, ranked by BM25 fused with
+local embeddings (`lab/search.py`). Why: the user wanted the better-recall version from the start rather than
+keyword-only. The model runs locally (no key, nothing sent out) and is pinned, so rankings are reproducible.
+Kernel-archive entries and research claims are not in it.
+
 ## 2026-10-15 — Every experiment keeps its reasoning, a person's ones included, hidden from the agent
 A session that ends with its last measurement unreflected gets one short reflection-only call (tools `reflect` and
 `ledger`, that record's facts as the prompt). Changes made outside the lab (e.g. inference-server #106, #108) are

@@ -13,7 +13,8 @@ What works now. Rewritten in place, never appended: when something changes, edit
 | Measurement tools | have: `time_kernel`, ncu `kernel`, nsys `trace`, % of bandwidth peak | have: `profile`, `trace`, kernel share of time, step floors | have: `bench` client rows, engine telemetry, timeline, py-spy | have: `bench` cold_start/overload, serve logs, telemetry |
 | Evaluator | on main: `check_kernel` + `time_kernel`, validated on the H200, not wired into the loop. On `feat/kernel-loop`: cascade judge + held-out gate, hardened 2026-10-15 | missing: fast step-time + logit check (no server) | partial: `bench` + `equiv`; no noise bands measured for this engine yet | have: `bench` regimes |
 
-Across layers, built: the end-to-end judge, calibration (`lab/calibrate.py`), experiment records
+Across layers, built: the end-to-end judge, `search` over every run's experiments (BM25 + local embeddings,
+`lab/search.py`; the store's ledger holds no experiment records yet), calibration (`lab/calibrate.py`), experiment records
 (`lab/experiments.py`; a closing reflection call per session; a person's experiments via `lab/experiment.py`, hidden
 from the agent), the workbench/measurement sandbox, the GPU VM tooling.
 
