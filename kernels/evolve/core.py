@@ -37,9 +37,46 @@ FORBIDDEN = {
 
 
 def screen(source: str) -> list[str]:
-    """Reasons a program is refused before it runs (static: a pattern anywhere in the source)."""
+    """Reasons a program is refused before it runs (static: a pattern anywhere in the source, plus `_writes_into`)."""
     import re
-    return [f"uses {why}: `{m.group(0)}`" for pat, why in FORBIDDEN.items() if (m := re.search(pat, source))]
+    return ([f"uses {why}: `{m.group(0)}`" for pat, why in FORBIDDEN.items() if (m := re.search(pat, source))] +
+            [f"assigns into what it imported: `{w}`" for w in _writes_into(source)])
+
+
+def _writes_into(source: str) -> list[str]:
+    """Attribute writes or deletes whose root is an imported name, a name bound to one (`m = torch.cuda`), or a call
+    (`type(x).abs = f`): patching a library under any alias. Writes on other objects (`self.x = 1`) are left alone."""
+    import ast
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []                                # loading reports it
+    nodes = list(ast.walk(tree))
+    held = {(a.asname or a.name).split(".")[0] for n in nodes if isinstance(n, (ast.Import, ast.ImportFrom))
+            for a in n.names}
+
+    def root(e):
+        while isinstance(e, (ast.Attribute, ast.Subscript)):
+            e = e.value
+        return e
+    grew = True
+    while grew:                                  # names bound to an imported name or an attribute chain of one
+        grew = False
+        for n in nodes:
+            if isinstance(n, (ast.Assign, ast.AnnAssign, ast.NamedExpr)) and n.value is not None:
+                r = root(n.value) if isinstance(n.value, (ast.Name, ast.Attribute)) else None
+                if isinstance(r, ast.Name) and r.id in held:
+                    for t in (n.targets if isinstance(n, ast.Assign) else [n.target]):
+                        if isinstance(t, ast.Name) and t.id not in held:
+                            held.add(t.id)
+                            grew = True
+    out = []
+    for n in nodes:
+        if isinstance(n, ast.Attribute) and isinstance(n.ctx, (ast.Store, ast.Del)):
+            r = root(n)
+            if isinstance(r, ast.Call) or (isinstance(r, ast.Name) and r.id in held):
+                out.append(ast.unparse(n))
+    return out
 
 
 def _watched(task: Task) -> dict:
@@ -143,22 +180,35 @@ def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | 
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
                 "artifacts": {"error": "refused before running: " + "; ".join(refused)}}
     task.baseline()                              # the engine's import-time effects happen before the snapshot
-    before = _watched(task)
-    out = _judge(task, program, seen, heldout, weights, device, tolerances, stage, iters)
-    patched = _patched(before, task)
-    if patched:
+    before, patched = _watched(task), []
+
+    def checkpoint() -> bool:
+        """Record anything patched since the snapshot; True once anything has been."""
+        patched.extend(n for n in _patched(before, task) if n not in patched)
+        return bool(patched)
+    out = _judge(task, program, seen, heldout, weights, device, tolerances, stage, iters, checkpoint)
+    if checkpoint():
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
                 "artifacts": {"error": "patched what the evaluator uses: " + ", ".join(patched[:20])}}
     return out
 
 
 def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | None, device: str,
-           tolerances: dict | None, stage: int, iters: int) -> dict:
+           tolerances: dict | None, stage: int, iters: int, checkpoint) -> dict:
+    """The gates and timing; returns {} as soon as `checkpoint` finds a patch (judge reports it)."""
     try:
-        cand = task.bind(load_program(program))
+        timed = task.bind(load_program(program))
     except Exception as e:                       # noqa: BLE001  a program that does not load scores 0
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
                 "artifacts": {"error": f"load failed: {type(e).__name__}: {e}"}}
+    if checkpoint():
+        return {}
+
+    def cand(*xs):                               # checked after every call the checker makes, before it compares
+        out = timed(*xs)
+        if checkpoint():
+            raise RuntimeError("the candidate patched what the evaluator uses")
+        return out
     ref = task.reference
     shapes = seen[:2] if stage == 1 else seen
     try:
@@ -190,7 +240,9 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
                                                 edge_shapes=[], repeats=1, layouts=()))
     hw, dtype, rows, logs, raw = _peaks(device), task.dtypes[0], [], 0.0, 0.0
     inputs0 = task.make_inputs(seen[0], dtype, device, torch.Generator().manual_seed(0))
-    pc, pb = _peak_bytes(cand, inputs0, device), _peak_bytes(base, inputs0, device)
+    pc, pb = _peak_bytes(timed, inputs0, device), _peak_bytes(base, inputs0, device)
+    if checkpoint():
+        return {}
     if pc is not None and pc > MEMORY_FACTOR * pb + MEMORY_SLACK:
         gates["peak_memory"] = {"passed": False, "reason": f"peak {pc / 2**20:.0f} MiB vs baseline {pb / 2**20:.0f} MiB "
                                 f"(> {MEMORY_FACTOR}x + {MEMORY_SLACK // 2**20} MiB)"}
@@ -200,7 +252,7 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
         gates["peak_memory"] = {"passed": True, "reason": f"peak {pc / 2**20:.0f} MiB vs baseline {pb / 2**20:.0f} MiB"}
     total = sum((weights or {}).get(json.dumps(list(s)), 1) for s in seen)
     for s in seen:
-        c = time_kernel(cand, task.make_inputs, s, dtype, device, iters=iters)
+        c = time_kernel(timed, task.make_inputs, s, dtype, device, iters=iters)    # unwrapped: no check in the window
         b = time_kernel(base, task.make_inputs, s, dtype, device, iters=iters)
         speed = b["median_ms"] / c["median_ms"] if c["median_ms"] else 0.0
         shown = _shown(c, b)
