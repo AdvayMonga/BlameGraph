@@ -20,8 +20,10 @@ export PYTHONPATH="$PWD:$ENGINE/src${PYTHONPATH:+:$PYTHONPATH}"
 python -c "import openevolve" 2>/dev/null || "$HOME/.local/bin/uv" pip install -q --python "$(command -v python)" "openevolve==0.4.0"
 
 echo "== 1. capture"
-for cls in steady_interactive long_context; do
-  python -m lab.profile --corpus-class "$cls" --requests 64 --max-tokens 64 --capture "$ENTRY" --out "$OUT/profile-$cls" \
+for spec in steady_interactive:64 long_context:24; do     # long_context's seen split holds ~30 requests
+  cls=${spec%%:*}; n=${spec##*:}
+  ls -d "$OUT/profile-$cls"/*/captures >/dev/null 2>&1 && continue      # already captured
+  python -m lab.profile --corpus-class "$cls" --requests "$n" --max-tokens 64 --capture "$ENTRY" --out "$OUT/profile-$cls" \
     > "$OUT/profile-$cls.log" 2>&1 || { tail -20 "$OUT/profile-$cls.log"; exit 1; }
 done
 CAPS=$(ls -d "$OUT"/profile-*/*/captures | sed 's/^/--captures /' | tr '\n' ' ')
