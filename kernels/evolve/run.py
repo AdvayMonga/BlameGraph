@@ -59,6 +59,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--iterations", type=int, default=20)
     r.add_argument("--config", default=str(HERE / "config.yaml"))
     r.add_argument("--initial")
+    r.add_argument("--timing-shapes", type=int, default=8, help="seen shapes used for selection (by calls)")
     sub.choices["gate"].add_argument("--program", required=True)
     sub.choices["split"].add_argument("--write", required=True)
     a = ap.parse_args(argv)
@@ -75,6 +76,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if out["metrics"]["correct"] else 1
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
+    sets = shapes_mod.select(task, sets, a.timing_shapes)
     cfg_path = out / "eval_config.json"          # selection never sees the held-out shapes
     cfg_path.write_text(json.dumps({"task": task.name, "seen": [list(s) for s in sets["seen"]],
                                     "weights": sets.get("calls"), "device": a.device, "tolerances": tol}))

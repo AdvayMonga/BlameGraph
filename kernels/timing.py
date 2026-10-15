@@ -20,10 +20,12 @@ def _sync(device):
 def time_kernel(fn, make_inputs, shape, dtype, device="cpu", iters=50, warmup=5, n_buffers=4, fresh=False,
                 seed=0) -> dict:
     """Median and IQR (ms) of fn(*inputs) over n_buffers rotated input sets; fresh=True refills them with new
-    values before every call. Each call is synchronized before and after; L2 is flushed between calls on CUDA."""
+    values before every call. Each call is synchronized before and after; L2 is flushed between calls on CUDA, where
+    CUDA events time the call on the device (host clock jitter swamps a ~10 µs kernel)."""
     bufs = [make_inputs(shape, dtype, device, _gen(seed + i)) for i in range(n_buffers)]
     flush = torch.empty(256 * 2**20, dtype=torch.int8, device=device) if torch.device(device).type == "cuda" else None
     times = []
+    cuda = torch.device(device).type == "cuda"
     for i in range(warmup + iters):
         inputs = bufs[i % n_buffers]
         if fresh:
@@ -32,14 +34,23 @@ def time_kernel(fn, make_inputs, shape, dtype, device="cpu", iters=50, warmup=5,
         if flush is not None:
             flush.zero_()
         _sync(device)
-        t0 = time.perf_counter()
-        fn(*inputs)
-        _sync(device)
+        if cuda:
+            start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+            start.record()
+            fn(*inputs)
+            end.record()
+            _sync(device)
+            ms = start.elapsed_time(end)
+        else:
+            t0 = time.perf_counter()
+            fn(*inputs)
+            _sync(device)
+            ms = (time.perf_counter() - t0) * 1e3
         if i >= warmup:
-            times.append((time.perf_counter() - t0) * 1e3)
+            times.append(ms)
     p25, med, p75 = statistics.quantiles(times, n=4)
     return {"median_ms": med, "iqr_ms": p75 - p25, "p25_ms": p25, "p75_ms": p75, "iters": iters,
-            "n_buffers": n_buffers, "fresh": fresh, "device": str(device)}
+            "n_buffers": n_buffers, "fresh": fresh, "device": str(device), "clock": "cuda_events" if cuda else "host"}
 
 
 def check_memoization(fn, make_inputs, shape, dtype, device="cpu", iters=30, warmup=3, ratio=0.5) -> dict:

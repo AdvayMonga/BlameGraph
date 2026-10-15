@@ -40,6 +40,30 @@ def split(task: Task, counts: Counter, quantile: float = 0.8) -> dict:
             "cut": {str(k): v for k, v in cut.items()}, "calls": {json.dumps(list(s)): n for s, n in counts.items()}}
 
 
+def select(task: Task, sets: dict, k: int = 8, bins: int = 4) -> dict:
+    """At most `k` seen shapes for selection, chosen by calls: shapes are bucketed by the other axes plus a quantile bin
+    of each held-out axis, the most-called shape stands for its bucket, and it carries the bucket's calls as its weight.
+    The held-out set is untouched; `gate` still judges every held-out shape."""
+    seen, calls = sets["seen"], sets.get("calls") or {}
+    if len(seen) <= k:
+        return sets
+    n = {s: calls.get(json.dumps(list(s)), 1) for s in seen}
+    edges = {}
+    for ax in task.heldout_axes:
+        vals = sorted(s[ax] for s in seen)
+        edges[ax] = [vals[min(len(vals) - 1, int(q * len(vals) / bins))] for q in range(1, bins)]
+
+    def key(s):
+        rest = tuple(v for i, v in enumerate(s) if i not in edges)
+        return rest + tuple(sum(s[ax] > e for e in edges[ax]) for ax in sorted(edges))
+    buckets: dict = {}
+    for s in seen:
+        buckets.setdefault(key(s), []).append(s)
+    reps = sorted(((max(b, key=lambda s: n[s]), sum(n[s] for s in b)) for b in buckets.values()), key=lambda x: -x[1])[:k]
+    return {**sets, "seen": [s for s, _ in reps], "calls": {json.dumps(list(s)): w for s, w in reps},
+            "selected_from": len(seen)}
+
+
 def write(path: Path, sets: dict) -> Path:
     Path(path).write_text(json.dumps({k: [list(s) for s in v] if k in ("seen", "heldout") else v
                                       for k, v in sets.items()}, indent=1))

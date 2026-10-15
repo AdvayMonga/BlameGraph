@@ -53,6 +53,38 @@ def test_judge_scores_a_correct_kernel_and_zeroes_a_wrong_one():
         assert "no callable `kernel`" in judge(t, missing, list(t.seen_default), [], None, "cpu", None, 1)["artifacts"]["error"]
 
 
+def test_value_distributions_catch_a_kernel_tuned_to_one_scale():
+    t = load("toy_rmsnorm")
+    with tempfile.TemporaryDirectory() as d:
+        clamp = Path(d) / "clamp.py"                 # right for N(0,1) inputs, wrong once values grow
+        clamp.write_text("import torch\ndef kernel(x, w):\n"
+                         "    if torch.isfinite(x).all() and x.abs().max() > 8:\n        return x.clone()\n"
+                         "    xf = x.float()\n"
+                         "    return (xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + 1e-6) * w.float()).to(x.dtype)\n")
+        r = judge(t, clamp, list(t.seen_default), [], None, "cpu", None, 2, iters=3)
+        g = json.loads(r["artifacts"]["gates"])
+        assert r["metrics"]["combined_score"] == 0.0 and g["values_x3"]["passed"] is False
+
+
+def test_noise_rule_and_physics_alarm():
+    from kernels.evolve import core
+    assert not core._shown({"median_ms": 1.0, "iqr_ms": 0.2}, {"median_ms": 1.1, "iqr_ms": 0.2})
+    assert core._shown({"median_ms": 0.5, "iqr_ms": 0.05}, {"median_ms": 1.0, "iqr_ms": 0.05})
+    t = load("toy_rmsnorm")
+    same = judge(t, SEED, list(t.seen_default), [], None, "cpu", None, 2, iters=3)
+    assert same["metrics"]["raw_speedup"] > 0 and "beyond_noise" in json.loads(same["artifacts"]["timings"])[0]
+    from validity.peaks import Peaks
+    fast = Peaks("toy", 1.0, 1.0, 1e9, "spec")      # a 1 FLOP/s, 1 B/s machine: any real time beats its bound
+    orig = core._peaks
+    core._peaks = lambda device: fast
+    try:
+        r = judge(t, SEED, list(t.seen_default), [], None, "cpu", None, 2, iters=3)
+    finally:
+        core._peaks = orig
+    g = json.loads(r["artifacts"]["gates"])
+    assert r["metrics"]["combined_score"] == 0.0 and g["physics"]["passed"] is False
+
+
 def test_paged_decode_reference_matches_dense_attention():
     t = load("paged_decode")
     shape = (3, 8, 2, 16, 4, 11)
@@ -96,6 +128,10 @@ def test_capture_records_calls_and_the_split_holds_out_the_largest():
         s = shapes.split(task, counts)
         assert s["source"] == "captures" and (256, 32, 4, 128, 16, 17 * 256) in s["heldout"]
         assert max(x[0] for x in s["seen"]) < min(x[0] for x in s["heldout"])
+        sel = shapes.select(task, s, k=3)
+        assert len(sel["seen"]) == 3 and sel["selected_from"] == len(s["seen"]) and sel["heldout"] == s["heldout"]
+        assert sum(sel["calls"].values()) <= sum(counts[x] for x in s["seen"])
+        assert shapes.select(task, s, k=99) is s
         back = shapes.read(shapes.write(Path(d) / "s.json", s))
         assert back["seen"] == s["seen"]
 
