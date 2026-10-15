@@ -7,11 +7,11 @@ What works now. Rewritten in place, never appended: when something changes, edit
 | | 1. Kernels | 2. Model execution | 3. Runtime | 4. Serving |
 |---|---|---|---|---|
 | In the example engine | `models/paged_attention_kernel.py`, MoE grouped GEMM, norm/rope, sampling | `models/qwen3_moe.py`, `backends/custom_torch_backend.py`, `launch_table.py`, `quant.py` | `scheduler.py`, `scheduling_policy.py`, `kv_cache/` | `server.py`, `openai_shim.py`, tokenizer, startup, `control_plane/` |
-| Data | on main partial: `check_kernel` makes random inputs at chosen shapes. On `feat/kernel-loop`: real call shapes and inputs captured from runs, validated on GPU | partial: correctness task sets + corpus; missing a small fixed batch for logit checks and a list of step configurations | partial: corpus (public, repeats prompts); the load generator (separate work) replaces it | have: same workloads + the cold-start command |
+| Data | have: real call shapes and inputs captured from runs (`lab.profile --capture`, `kernels/shapes.py` splits them), validated on GPU; long-context shapes thin (~30 seen requests) | partial: correctness task sets + corpus; missing a small fixed batch for logit checks and a list of step configurations | partial: corpus (public, repeats prompts); the load generator (separate work) replaces it | have: same workloads + the cold-start command |
 | Simulator | not needed (the real kernel runs in seconds; the roofline is the bound) | partial: analytic step floors (`validity/ceiling.py`); missing a measured step-time model | missing: scheduler simulator (real `scheduler.py` on a fake clock and backend, step times from layer 2's model) | not needed |
-| Hypothesis generator | on `feat/kernel-loop`: OpenEvolve replication, validated on GPU (`RUNS.md` 2026-10-14/15) | missing (hypothesis-driven + knob search) | missing (hypothesis-driven, simulator-screened) | not needed: the general agent |
+| Hypothesis generator | have: OpenEvolve replication (`kernels/evolve/`), validated on GPU (`RUNS.md` 2026-10-14/15); one task with real shapes (`paged_decode`) | missing (hypothesis-driven + knob search) | missing (hypothesis-driven, simulator-screened) | not needed: the general agent |
 | Measurement tools | have: `time_kernel`, ncu `kernel`, nsys `trace`, % of bandwidth peak | have: `profile`, `trace`, kernel share of time, step floors | have: `bench` client rows, engine telemetry, timeline, py-spy | have: `bench` cold_start/overload, serve logs, telemetry |
-| Evaluator | on main: `check_kernel` + `time_kernel`, validated on the H200, not wired into the loop. On `feat/kernel-loop`: cascade judge + held-out gate, hardened 2026-10-15 | missing: fast step-time + logit check (no server) | partial: `bench` + `equiv`; no noise bands measured for this engine yet | have: `bench` regimes |
+| Evaluator | have: cascade judge + held-out gate (`kernels/evolve/core.py`), hardened 2026-10-15; candidates judged in the jail (`kernels/evolve/jailed.py`), untested on a GPU | missing: fast step-time + logit check (no server) | partial: `bench` + `equiv`; no noise bands measured for this engine yet | have: `bench` regimes |
 
 Across layers, built: the end-to-end judge, `search` over every run's experiments (BM25 + local embeddings,
 `lab/search.py`; the store's ledger holds no experiment records yet), calibration (`lab/calibrate.py`), experiment records
@@ -40,7 +40,6 @@ Engine vs plain vLLM: single_stream TPOT p99 21 ms vs 4.1 ms (7% vs 37% of ceili
 ## In flight (branches not on main)
 | Branch | Worktree | What | Status |
 |---|---|---|---|
-| `feat/kernel-loop` | `BlameGraph-wt/kernels` | Layer-1 kernel generator (tasks, capture, OpenEvolve, hardened evaluator) | GPU-validated; engine PR inference-server #106 draft, equiv not run |
 | `lab/profiles` | `BlameGraph-wt/profiles` | Launch profiles: a config per regime | Not merged |
 | `target/batch-size` | `BlameGraph-wt/batch` | The engine's own batch size, not a pinned 32 | One commit, not merged |
 | `gpu/session` | `BlameGraph-wt/gpu` | Merges `lab/profiles` + `target/batch-size` | Active 2026-10-15; purpose not recorded |
@@ -65,8 +64,8 @@ Engine vs plain vLLM: single_stream TPOT p99 21 ms vs 4.1 ms (7% vs 37% of ceili
   first real `python -m regimes run all` against the engine and against vLLM.
 - GPU, with approval and the auto-stop armed: `python -m lab.validate --target targets/inference-server.toml`
   (~3-4 h; serves unjailed, so not blocked), then a real `python -m lab.session --task ...` run.
-- Layer 1: the improvement list in `data/notes/kernel-generator-improvements.md` (local; partly done on
-  `feat/kernel-loop` since it was written).
+- Layer 1: the improvement list in `data/notes/kernel-generator-improvements.md` (local). Engine PR
+  inference-server #106 (the evolved kernel) is merged, its `equiv` not run; the jailed evaluator needs a GPU run.
 - Agent regime: undecided items in `DECISIONS.md` 2026-10-14.
 
 ## Store

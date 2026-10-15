@@ -90,9 +90,10 @@ def _summary(cases) -> tuple[bool, str, dict]:
 
 def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes, dtypes=(torch.float32,),
                  device="cpu", seeds=(0, 1, 2), tolerances=None, edge_shapes=None, require_deterministic=False,
-                 repeats=3) -> dict:
+                 repeats=3, layouts=("strided", "transposed")) -> dict:
     """Return {"passed", "reasons", "gates": {name: {passed, reason, evidence}}} for candidate vs reference.
-    make_inputs(shape, dtype, device, generator) -> tuple of tensors; generator is a seeded CPU torch.Generator."""
+    make_inputs(shape, dtype, device, generator) -> tuple of tensors; generator is a seeded CPU torch.Generator.
+    `layouts`: the non-contiguous input variants to test, for a kernel whose callers pass such inputs."""
     tol = {**TOLERANCES, **(tolerances or {})}
     mutated, aliased, nondet = [], [], []
 
@@ -135,6 +136,8 @@ def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes,
     memo = []
     for dt in dtypes:
         for name, f in (("strided", _strided), ("transposed", _transposed)):
+            if name not in layouts:
+                continue
             edge.append(run(s0, dt, sd0, tuple(f(t) for t in make_inputs(s0, dt, device, _gen(sd0))), name))
         inputs = make_inputs(s0, dt, device, _gen(sd0))
         _poison(inputs)

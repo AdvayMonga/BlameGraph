@@ -5,7 +5,7 @@ local and archived in the store (`python -m store pull`).
 
 | Date | Venue | What | GPU cost | Result | Evidence |
 |---|---|---|---|---|---|
-| 2026-10-14/15 | Nebius H200 | Layer-1 kernel loop on `paged_decode` (branch `feat/kernel-loop`) | not recorded | GQA-packed decode kernel 3.88x on 196 seen shapes, passes held-out; end to end single_stream TPOT p99 21.6 -> 15.4 ms, saturated 0.100 -> 0.158 req/s (short tier, one run each); equiv not run | `knowledge/evidence/kernels-2026-10-14/` (on the branch), engine PR inference-server #106 (draft) |
+| 2026-10-14/15 | Nebius H200 | Layer-1 kernel loop on `paged_decode` (branch `feat/kernel-loop`) | not recorded | GQA-packed decode kernel 3.88x on 196 seen shapes, passes held-out; end to end single_stream TPOT p99 21.6 -> 15.4 ms, saturated 0.100 -> 0.158 req/s (short tier, one run each); equiv not run | store `archive/kernels-2026-10-14-622240de7cc1b4aa.tar.zst` (gate results, best program, shapes), engine PR inference-server #106 |
 | 2026-10-13 | Nebius H200 | Ceilings vs measurements, vLLM and the engine | not recorded | Every floor below every measurement; engine at 0.5-7% of ceiling, vLLM 19-94% | `knowledge/reference/inference-server/` |
 | 2026-10-13 | Nebius H200 (x3) | `python -m lab.gpucheck` | not recorded | Every item passes after three fixes | below |
 | 2026-10-10 | Nebius H200 | First agent dry run, one session | $2.53 model + ~1 h 20 min GPU | Loop works end to end on the GPU; single_stream TPOT p99 21.4 -> 13.1 ms, not submitted | below |

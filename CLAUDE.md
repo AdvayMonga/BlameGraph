@@ -174,6 +174,20 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   bandwidth and bf16 GEMM measured once per GPU+driver into `knowledge/peaks/<gpu>.json`, run by `vm-setup.sh`; spec
   sheet as the labelled fallback), `repeat_audit.py`: repeated-request audit (MLPerf TEST04-style), judges decode time per token, not TTFT, so prefix caching passes and replayed answers fail; `python -m validity repeat --url URL`. `tier_agreement.py`: `tier_agreement(changes)`: Spearman, Kendall tau-b, bootstrap CI, out-of-band disagreements; short tier usable if n ≥ 8, rho ≥ 0.8, CI low ≥ 0.5. `holdout.py`: `HoldoutGuard` (Thresholdout query budget; state n is a write-once object in the store, a query writes n + 1 and retries on a lost race, so one budget per corpus version is shared by every run and machine; seed drawn once with state 0, kept only in the store) and `SealedSplit` (hash manifest, one logged unseal per corpus version). Keep sigma small relative to the threshold.
 - `kernels/` — kernel equivalence: `check_kernel` (seen + held-out shapes, per-dtype tolerances, edge cases incl. non-contiguous and NaN/Inf, inputs unchanged, no aliasing, memoization, determinism) and `time_kernel` / `check_memoization` (sync, rotated buffers, L2 flush on CUDA). Validated on CPU, MPS and CUDA (H200, 2026-10-04): all tests pass; the timer resolves ~20 µs kernels at ~9% IQR, 0.2 ms at 1.5%. `make_inputs` gets a seeded CPU generator (generate on CPU, then `.to(device)`).
+  `kernels/tasks/` (a kernel task: the engine entry point it replaces = the baseline, a reference, an input builder,
+  how to read a shape from a captured call, the held-out axes, the layouts its callers pass, bytes and FLOPs per call
+  for the roofline; `toy_rmsnorm` for CPU, `paged_decode` = the example engine's `paged_decode_attention`),
+  `kernels/shapes.py` (shapes and call counts from captures; held-out = whole regions above the 80th percentile on the
+  task's axes, never random samples), `kernels/evolve/` (the layer-1 generator, a replication of OpenEvolve 0.4.0 =
+  open AlphaEvolve: `python -m kernels.evolve run|gate|split`; the starting program is the engine's kernel module;
+  a two-stage cascade, each stage a fresh jailed process (`kernels.evolve.jailed`: the jail gets the candidate, its
+  config and a copied harness, never this repo; `core.judge`: stage 1 = two shapes, one seed; stage 2 = the full
+  check on seen shapes + timing against the baseline, score = call-weighted geometric-mean speedup); a candidate is
+  refused if its source reaches for an exploit route (`core.screen`) and scores 0 if it leaves any function the
+  checker or timer uses patched (`core._watched`; the timer binds its own at import); the exploit canaries in
+  `tests/test_kernels_evolve.py` must all score 0; selection never sees held-out shapes, `gate` judges them; `validate_gpu.sh` = the GPU validation; tolerances from the target's
+  `[kernels]`). `lab/capture.py` + `lab.profile --capture MODULE:FUNCTION` (the `profile` tool's `capture`): every
+  call's argument shapes and small int tensors, the first call per shape kept whole as real inputs.
 - `regimes/` — load generation: drives a live OpenAI-compatible server the eight ways it gets used, client-side.
   `client.py` (one streamed chat request: TTFT from *scheduled* send to first real token, TPOT = (E2E − TTFT)/(n − 1),
   status ok / error (explicit 4xx or 503 rejection) / silent_drop / truncated / crash (other 5xx, no response,
