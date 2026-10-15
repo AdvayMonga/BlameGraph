@@ -129,7 +129,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   the store (`python -m store pull --corpus`); the previous version's held-out split was public in git.
 - `store/` — the data store (2026-10-09). `remote.py` (`LAB_STORE` = `s3://<bucket>` with `LAB_STORE_ENDPOINT` for
   Cloudflare R2, or a directory; write-once keys), `sync.py` (`push`/`pull`: ledger as byte-range segments, blobs,
-  holdout guard state per query count, submit's held-out passive data, held-out traces + seed, `archive` for
+  submit's held-out passive data, held-out traces + seed, `archive` for
   anything else; zstd, `heldout/` prefix for held-out material), `index.py` (DuckDB tables rebuilt from the ledger and
   blobs: records, regimes, heldout_aggregates, noise, client_rows, engine_rows, device_samples, kernels, ops;
   `all.duckdb` adds heldout_rows for the researcher; the agent's `agent.duckdb` never has them and is queried with
@@ -166,7 +166,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   bound for speedups, cold start or sessions/s; assumptions (one token per step, uniform routing, declared dtypes)
   are in each `basis`, so a value above 100% means one of them does not hold; `pct_of`, `ceiling_gain` = Amdahl) + `peaks.py` (`python -m validity peaks`: HBM
   bandwidth and bf16 GEMM measured once per GPU+driver into `knowledge/peaks/<gpu>.json`, run by `vm-setup.sh`; spec
-  sheet as the labelled fallback), `repeat_audit.py`: repeated-request audit (MLPerf TEST04-style), judges decode time per token, not TTFT, so prefix caching passes and replayed answers fail; `python -m validity repeat --url URL`. `tier_agreement.py`: `tier_agreement(changes)`: Spearman, Kendall tau-b, bootstrap CI, out-of-band disagreements; short tier usable if n ≥ 8, rho ≥ 0.8, CI low ≥ 0.5. `holdout.py`: `HoldoutGuard` (Thresholdout query budget, state persisted atomically under a file lock, deterministic from seed) and `SealedSplit` (hash manifest, one logged unseal per corpus version). Keep sigma small relative to the threshold.
+  sheet as the labelled fallback), `repeat_audit.py`: repeated-request audit (MLPerf TEST04-style), judges decode time per token, not TTFT, so prefix caching passes and replayed answers fail; `python -m validity repeat --url URL`. `tier_agreement.py`: `tier_agreement(changes)`: Spearman, Kendall tau-b, bootstrap CI, out-of-band disagreements; short tier usable if n ≥ 8, rho ≥ 0.8, CI low ≥ 0.5. `holdout.py`: `HoldoutGuard` (Thresholdout query budget; state n is a write-once object in the store, a query writes n + 1 and retries on a lost race, so one budget per corpus version is shared by every run and machine; seed drawn once with state 0, kept only in the store) and `SealedSplit` (hash manifest, one logged unseal per corpus version). Keep sigma small relative to the threshold.
 - `kernels/` — kernel equivalence: `check_kernel` (seen + held-out shapes, per-dtype tolerances, edge cases incl. non-contiguous and NaN/Inf, inputs unchanged, no aliasing, memoization, determinism) and `time_kernel` / `check_memoization` (sync, rotated buffers, L2 flush on CUDA). Validated on CPU, MPS and CUDA (H200, 2026-10-04): all tests pass; the timer resolves ~20 µs kernels at ~9% IQR, 0.2 ms at 1.5%. `make_inputs` gets a seeded CPU generator (generate on CPU, then `.to(device)`).
 - `regimes/` — load generation: drives a live OpenAI-compatible server the eight ways it gets used, client-side.
   `client.py` (one streamed chat request: TTFT from *scheduled* send to first real token, TPOT = (E2E − TTFT)/(n − 1),
@@ -303,9 +303,9 @@ user can read GPU performance counters on that image.
 ## Next
 Store: bucket `bg-data` is set up (`.env`: `LAB_STORE`, `LAB_STORE_ENDPOINT`, `AWS_ACCESS_KEY_ID`,
 `AWS_SECRET_ACCESS_KEY`) and holds the ledger, its blobs, the corpus's held-out traces + seed, and archives of
-`data/derived`, `data/equiv*`, `data/h200-run-*`, `data/engine-h200-*`, `data/agent-traces` (2026-10-14). Open: a VM `--env` session starts with a fresh holdout
-guard (state is not pushed to the VM, and the default seed is the ledger path, which differs there); the
-controller/worker split (`lab/RUNTIME.md`) keeps the guard on the controller. The index is rebuilt in full when the
+`data/derived`, `data/equiv*`, `data/h200-run-*`, `data/engine-h200-*`, `data/agent-traces` (2026-10-14). The holdout
+guard lives in the store (one budget per corpus version, `heldout/guard/<version>/`), so a host without `LAB_STORE`
+(a VM `--env` session) cannot submit. The index is rebuilt in full when the
 ledger grows; make it incremental when that gets slow. DCGM device samples are indexed as raw lines.
 GPU (needs spend approval): resolve the BF16 puzzle (plain BF16 on the dev tier at concurrency 32 and 128 on one VM,
 ~20 min, ~$1.50); first real run of `python -m regimes run all` against the engine and against vLLM.

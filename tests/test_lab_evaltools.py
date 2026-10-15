@@ -71,6 +71,7 @@ def _reference(url: str, out: Path, n: int = 40):
 @pytest.fixture
 def lab(tmp_path, monkeypatch):
     monkeypatch.setenv("LAB_NO_JAIL", "1")
+    monkeypatch.setenv("LAB_STORE", str(tmp_path / "store"))          # where the shared holdout guard lives
     repo = make_repo(tmp_path)
     # a reference from the same fake engine, dev and full tiers
     import socket
@@ -202,8 +203,17 @@ def test_submit_needs_full_equiv_and_a_bench_then_records_one_aggregate_per_metr
                       "pct_of_ceiling_new", "ceiling_from", "reference_missing"} and m["verdict"] == "unknown_band"
     rec = next(r for r in ledger.records(s.ledger_root, kind="submit") if r.get("config", {}).get("split") == "heldout")
     assert "result" not in rec and rec["metrics"] == out["metrics"]        # the ledger's held-out shape, nothing else
-    state = json.loads((s.ledger_root / "holdout_state.json").read_text())
-    assert state["n_queries"] == 1 and (s.run_dir / "base-heldout-full.json").exists()
+    from lab import evaltools
+    assert evaltools.holdout_guard(target.load()).state()["n_queries"] == 1
+    assert (s.run_dir / "base-heldout-full.json").exists()
+
+
+def test_submit_is_refused_where_there_is_no_shared_heldout_budget(lab, monkeypatch):
+    tb, s = lab
+    tb.equiv({"tier": "full"}); tb.bench({"regimes": ["single_stream"]})
+    monkeypatch.delenv("LAB_STORE")
+    assert tb.submit({}).startswith("submit refused: no shared held-out budget on this host")
+    assert not (s.run_dir / "base-heldout-full.json").exists()             # refused before anything was measured
 
 
 def test_inconclusive_equiv_is_neither_passing_nor_failing(lab, monkeypatch):

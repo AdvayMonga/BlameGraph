@@ -8,11 +8,12 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from store.remote import DirRemote  # noqa: E402
 from validity.holdout import HoldoutGuard, Refused, SealedSplit  # noqa: E402
 
 
-def _guard(d, budget=10, threshold=0.05, sigma=0.001, seed=0, name="state.json"):
-    return HoldoutGuard(Path(d) / name, budget=budget, threshold=threshold, sigma=sigma, seed=seed)
+def _guard(d, budget=10, threshold=0.05, sigma=0.001, seed=0, name="g"):
+    return HoldoutGuard(DirRemote(d), f"heldout/guard/{name}", budget=budget, threshold=threshold, sigma=sigma, seed=seed)
 
 
 def test_small_gap_reports_seen_and_spends_nothing():
@@ -51,8 +52,8 @@ def test_state_survives_reload():
         s = g2.state()
         assert s["budget_left"] == 2 and s["n_queries"] == 2 and len(s["log"]) == 2, s
         assert all({"t", "i", "value", "used_heldout", "budget_left"} == set(e) for e in s["log"])  # inputs omitted
-        assert g2.query(0.9, 0.6)["budget_left"] == 1
-        assert not list(Path(d).glob("*.tmp"))
+        assert g2.query(0.9, 0.6)["budget_left"] == 1 and "seed" not in s
+        assert not [p for p in Path(d).rglob("*") if ".tmp-" in p.name]
         try:
             _guard(d, budget=100)  # a reload cannot reset the budget
             raise AssertionError("expected ValueError")
@@ -63,7 +64,7 @@ def test_state_survives_reload():
 def test_deterministic_given_seed():
     queries = [(0.8, 0.8), (0.9, 0.6), (0.7, 0.72), (0.95, 0.5), (0.6, 0.62)]
     with tempfile.TemporaryDirectory() as d:
-        a, b, c = _guard(d, name="a.json"), _guard(d, name="b.json"), _guard(d, seed=1, name="c.json")
+        a, b, c = _guard(d, name="a"), _guard(d, name="b"), _guard(d, seed=1, name="c")
         ra, rb, rc = ([g.query(*q) for q in queries] for g in (a, b, c))
         assert ra == rb
         assert [r["value"] for r in ra] != [r["value"] for r in rc]
@@ -102,7 +103,7 @@ def test_adaptive_attacker_gains_far_less_with_guard():
     with tempfile.TemporaryDirectory() as d:
         for seed in range(8):
             direct.append(_hill_climb(seed))
-            g = _guard(d, budget=20, threshold=0.08, sigma=0.005, seed=seed, name=f"{seed}.json")
+            g = _guard(d, budget=20, threshold=0.08, sigma=0.005, seed=seed, name=f"{seed}")
             guarded.append(_hill_climb(seed, g))
     mean_direct, mean_guarded = sum(direct) / 8, sum(guarded) / 8
     assert mean_direct > 0.06, direct  # querying held-out directly overfits it
@@ -136,19 +137,27 @@ def test_sealed_split_detects_changes_and_unseals_once():
         assert SealedSplit(d / "sealed.json").unseal("v2 final", "referee") == [d / "b.jsonl"]  # new version unseals
 
 
-def test_parallel_queries_lose_nothing():
-    import tempfile, threading
-    from validity.holdout import HoldoutGuard
+def test_parallel_writers_share_one_budget_and_lose_nothing():
+    import threading
     with tempfile.TemporaryDirectory() as d:
-        path = Path(d) / "g.json"
-        HoldoutGuard(path, budget=1000, threshold=0.05, sigma=0.001, seed=1)
-        def worker():
-            g = HoldoutGuard(path, budget=1000, threshold=0.05, sigma=0.001, seed=1)
-            for _ in range(25):
-                g.query(0.5, 0.5)
-        ts = [threading.Thread(target=worker) for _ in range(8)]
+        _guard(d, budget=1000)
+        def worker():                        # a separate guard per thread: separate runs or machines on one store
+            g = _guard(d, budget=1000)
+            for _ in range(10):
+                g.query(0.9, 0.5)            # every query spends
+        ts = [threading.Thread(target=worker) for _ in range(6)]
         [t.start() for t in ts]; [t.join() for t in ts]
-        assert HoldoutGuard(path, budget=1000, threshold=0.05, sigma=0.001, seed=1).state()["n_queries"] == 200
+        s = _guard(d, budget=1000).state()
+        assert s["n_queries"] == 60 and s["budget_left"] == 940 and [e["i"] for e in s["log"]] == list(range(1, 61))
+
+
+def test_a_guard_is_one_per_prefix_and_its_seed_never_leaves_the_store():
+    with tempfile.TemporaryDirectory() as d:
+        a = _guard(d, name="v1", seed=None)
+        a.query(0.9, 0.5)
+        assert _guard(d, name="v1", seed=None).state()["budget_left"] == 9      # the same guard, not a fresh one
+        assert _guard(d, name="v2", seed=None).state()["budget_left"] == 10     # a new corpus version starts over
+        assert "seed" not in a.state()
 
 
 if __name__ == "__main__":
