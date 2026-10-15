@@ -87,8 +87,9 @@ Most of it is free: the ledger the environment writes anyway (diff, score, trace
 attempt) is the raw knowledge base. Models fail cold at "improve inference"; by attempt two hundred
 they are not cold, and that is what the ledger provides. Decided 2026-10-09: no distilled base of
 beliefs, neither hand-written nor the agent's (a belief bounded by its evidence is a measurement row;
-anything more is a generalization). `knowledge/` was removed (tag `archive/knowledge-base`); the agent
-queries the raw data with SQL (`query`, `store/index.py`).
+anything more is a generalization). The findings in `knowledge/` were removed (tag `archive/knowledge-base`);
+what stays there is measurement, not belief: `knowledge/peaks/` (GPU peaks per driver) and `knowledge/reference/`
+(the reference engine under the regimes). The agent queries the raw data with SQL (`query`, `store/index.py`).
 
 ### 4. CI
 

@@ -66,9 +66,15 @@ class S3Remote(Remote):
             raise
 
     def put(self, key: str, path: Path) -> bool:
-        if self.exists(key):
-            return False
-        self.s3.upload_file(str(path), self.bucket, key)      # multipart above 8 MB; same key always same content
+        """A conditional put (If-None-Match: *): the bucket itself refuses a second write of a key."""
+        from botocore.exceptions import ClientError
+        try:
+            with open(path, "rb") as fh:
+                self.s3.put_object(Bucket=self.bucket, Key=key, Body=fh, IfNoneMatch="*")
+        except ClientError as e:
+            if e.response["Error"]["Code"] in ("PreconditionFailed", "412", "ConditionalRequestConflict"):
+                return False
+            raise
         return True
 
     def get(self, key: str, path: Path) -> None:

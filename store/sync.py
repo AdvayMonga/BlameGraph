@@ -89,6 +89,14 @@ def _segments(remote: Remote) -> list[tuple[int, int, str]]:
     return segs
 
 
+def _same(remote: Remote, seg: tuple[int, int, str], local: bytes) -> bool:
+    """Whether `local` holds the remote segment's bytes at its range: the same ledger, not one of equal length."""
+    start, end, key = seg
+    with tempfile.TemporaryDirectory() as d:
+        _get(remote, key, Path(d) / "part")
+        return local[start:end] == (Path(d) / "part").read_bytes()
+
+
 def push_ledger(root: Path, remote: Remote) -> int:
     """Upload the whole lines appended since the last push; returns bytes uploaded."""
     f = Path(root) / "ledger.jsonl"
@@ -100,6 +108,9 @@ def push_ledger(root: Path, remote: Remote) -> int:
     done = segs[-1][1] if segs else 0
     if end < done:
         raise RuntimeError(f"local ledger ({end} bytes) is behind the remote ({done}); pull first")
+    if segs and not _same(remote, segs[-1], data):
+        raise RuntimeError(f"local ledger differs from the remote in bytes {segs[-1][0]}-{segs[-1][1]}: not the same "
+                           "ledger; pull into an empty ledger dir instead")
     if end == done:
         return 0
     with tempfile.TemporaryDirectory() as d:
@@ -116,6 +127,9 @@ def pull_ledger(root: Path, remote: Remote) -> int:
     segs = _segments(remote)
     if size and not any(end == size for _, end, _ in segs) and size < (segs[-1][1] if segs else 0):
         raise RuntimeError(f"local ledger ({size} bytes) ends inside a remote segment: it has diverged")
+    upto = [s for s in segs if s[1] <= size]
+    if upto and not _same(remote, upto[-1], f.read_bytes()):
+        raise RuntimeError(f"local ledger differs from the remote in bytes {upto[-1][0]}-{upto[-1][1]}: it has diverged")
     added = 0
     f.parent.mkdir(parents=True, exist_ok=True)
     for start, end, key in segs:

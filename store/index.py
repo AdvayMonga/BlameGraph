@@ -190,10 +190,10 @@ def build(root: Path, db: Path, heldout_runs: Path | None = None) -> dict:
 
 
 def agent_db(root: Path) -> Path:
-    """The agent's index, rebuilt whenever the ledger has grown since the last build."""
+    """The agent's index, rebuilt whenever the ledger has grown or blobs have arrived since the last build."""
     db, stamp = Path(root) / "index" / "agent.duckdb", Path(root) / "index" / "agent.stamp"
-    f = Path(root) / "ledger.jsonl"
-    now = str(f.stat().st_size if f.exists() else 0)
+    f, blobs = Path(root) / "ledger.jsonl", Path(root) / "blobs"
+    now = f"{f.stat().st_size if f.exists() else 0}:{len(list(blobs.iterdir())) if blobs.is_dir() else 0}"
     if not db.exists() or not stamp.exists() or stamp.read_text() != now:
         build(root, db)
         stamp.write_text(now)

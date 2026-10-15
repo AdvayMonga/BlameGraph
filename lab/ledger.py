@@ -19,6 +19,7 @@ SCHEMA = 1
 ROOT = Path(__file__).resolve().parents[1] / "lab" / "ledger"
 KINDS = {"test", "equiv", "bench", "profile", "submit", "session", "note", "baseline", "noise", "hypothesis",
          "reflection"}
+LEGACY_KINDS = {"finding"}             # in older ledgers: read and merged, never written
 WRITER_FIELDS = {"id", "at", "schema"}
 # A held-out record is one aggregate per metric and nothing else: these fields, scalar values.
 HELDOUT_FIELDS = {"kind", "config", "metrics", "run", "session", "snapshot", "snapshot_blob", "patch",
@@ -58,10 +59,10 @@ def _mentions_heldout(obj: Any) -> bool:
     return False
 
 
-def _check(record: dict) -> None:
+def _check(record: dict, kinds: set[str] = KINDS) -> None:
     """Integrity rules only: known kind, writer-owned fields, no held-out detail beyond one aggregate per metric."""
-    if record.get("kind") not in KINDS:
-        raise LedgerError(f"unknown kind {record.get('kind')!r}; one of {sorted(KINDS)}")
+    if record.get("kind") not in kinds:
+        raise LedgerError(f"unknown kind {record.get('kind')!r}; one of {sorted(kinds)}")
     if WRITER_FIELDS & record.keys():
         raise LedgerError(f"{sorted(WRITER_FIELDS & record.keys())} are set by the writer")
     config = record.get("config")
@@ -183,10 +184,18 @@ def records(root: Path = ROOT, **match: Any) -> Iterator[dict]:
 
 def merge(src: Path, root: Path = ROOT) -> int:
     """Records and blobs of another ledger dir (one fetched from a VM) that `root` lacks, in their order; returns
-    the records added. Record ids and blob names are unique, so merging twice adds nothing."""
+    the records added. Record ids and blob names are unique, so merging twice adds nothing. Every new record passes
+    the same integrity check as an appended one (it comes from the VM, where agent code runs), or nothing is merged."""
     with _lock(root):
         have = {r["id"] for r in records(root)}
         new = [r for r in records(src) if r["id"] not in have]
+        for r in new:
+            if WRITER_FIELDS - r.keys():
+                raise LedgerError(f"record {r.get('id')!r} lacks {sorted(WRITER_FIELDS - r.keys())}")
+            try:
+                _check({k: v for k, v in r.items() if k not in WRITER_FIELDS}, KINDS | LEGACY_KINDS)
+            except LedgerError as e:
+                raise LedgerError(f"record {r['id']} refused, nothing merged: {e}") from None
         for p in sorted((Path(src) / "blobs").iterdir()) if (Path(src) / "blobs").is_dir() else []:
             dest = Path(root) / "blobs" / p.name
             if dest.exists() or ".tmp-" in p.name:

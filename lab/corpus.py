@@ -156,14 +156,15 @@ def build_manifest(classes: dict[str, WorkloadClass], corpus_dir: Path, notes: s
 
 
 def load_manifest(corpus_dir: Path = CORPUS_DIR) -> Manifest:
-    """Read `manifest.json` and verify every trace hash; refuse the corpus on any mismatch."""
+    """Read `manifest.json` and verify the hash of every trace present; refuse the corpus on any mismatch. A missing
+    trace is refused only when it is loaded (`load_trace`): held-out traces are not in git (`store pull --corpus`)."""
     m = Manifest.from_dict(json.loads((corpus_dir / "manifest.json").read_text()))
     if m.schema_version != CORPUS_SCHEMA_VERSION:
         raise CorpusError(f"corpus schema_version {m.schema_version} != {CORPUS_SCHEMA_VERSION}")
     for rel, expected in m.files.items():
         p = corpus_dir / rel
         if not p.exists():
-            raise CorpusError(f"trace {rel} listed in the manifest is missing")
+            continue
         actual = file_sha256(p)
         if actual != expected:
             raise CorpusError(f"trace {rel} sha256 {actual[:12]} != manifest {expected[:12]}: a "
@@ -186,7 +187,11 @@ def load_trace(class_name: str, split: str,
     m = load_manifest(corpus_dir)
     if class_name not in m.classes:
         raise CorpusError(f"unknown workload class {class_name!r}; have {sorted(m.classes)}")
-    return m, read_trace(corpus_dir / m.classes[class_name].trace_file(split))
+    rel = m.classes[class_name].trace_file(split)
+    if not (corpus_dir / rel).exists():
+        raise CorpusError(f"trace {rel} listed in the manifest is missing"
+                          + ("; held-out traces are not in git: `python -m store pull --corpus`" if split == "heldout" else ""))
+    return m, read_trace(corpus_dir / rel)
 
 
 def sample(class_name: str, split: str, seed: int, n: int, corpus_dir: Path = CORPUS_DIR) -> dict[str, Any]:

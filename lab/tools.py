@@ -17,6 +17,7 @@ from lab.proftools import ProfTools
 from lab.safety import grader
 
 # Tools that occupy the GPU: their wall time is charged at the venue's rate. The rest cost $0.
+QUERY_MAX_BYTES = 64_000           # a query's reply: whole rows up to this, so one call cannot flood the context
 GPU_TOOLS = frozenset({"profile", "trace", "kernel", "hostprof", "bench", "equiv", "submit", "baseline"})
 
 
@@ -173,7 +174,12 @@ class Toolbox(EvalTools, ProfTools):
             out = index.query(index.agent_db(self.s.ledger_root), args["sql"])
         except Exception as e:                      # a bad query is the agent's to read, never a crash
             return f"query failed: {type(e).__name__}: {e}"[:2000]
-        return json.dumps(out, default=str)
+        text = json.dumps(out, default=str)
+        while len(text) > QUERY_MAX_BYTES and out["rows"]:      # whole rows only, so the reply stays valid JSON
+            out["rows"] = out["rows"][:len(out["rows"]) // 2]
+            out["truncated"] = True
+            text = json.dumps({**out, "truncated_at_bytes": QUERY_MAX_BYTES}, default=str)
+        return text
 
     def budget(self, args: dict) -> str:
         b = self.s.budget
@@ -280,7 +286,8 @@ class Toolbox(EvalTools, ProfTools):
                      "client_rows (per-request client rows of every bench and equiv, record_id = records.id), "
                      "engine_rows (the engine's per-request telemetry, trace_id = 'bg-' || client_rows.id), "
                      "device_samples (GPU samples over each served window), kernels and ops (profile bundles). "
-                     "`DESCRIBE <table>` lists a table's columns. Returns columns and up to 200 rows as JSON." + free,
+                     "`DESCRIBE <table>` lists a table's columns. Returns columns and up to 200 rows as JSON, cut to whole "
+                     f"rows under {QUERY_MAX_BYTES // 1000} kB (`truncated` says when rows were dropped)." + free,
                      {"type": "object", "required": ["sql"], "properties": {"sql": {"type": "string"}}}, self.query),
             ToolSpec("budget", "Returns the run's dollar cap, spent and remaining. Every record's `cost` holds the "
                      "measured seconds and dollars of that call." + free, obj, self.budget),

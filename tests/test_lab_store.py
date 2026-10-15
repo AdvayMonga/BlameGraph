@@ -111,6 +111,38 @@ def test_pull_refuses_a_diverged_ledger(lab, tmp_path):
         sync.pull_ledger(other, remote)
 
 
+def test_push_and_pull_refuse_a_different_ledger_of_the_same_or_greater_length(lab, tmp_path):
+    root, _ = lab
+    remote = DirRemote(tmp_path / "bucket")
+    sync.push_ledger(root, remote)
+    other = tmp_path / "other"; other.mkdir()
+    data = (root / "ledger.jsonl").read_bytes()
+    (other / "ledger.jsonl").write_bytes(data.replace(b'"r1"', b'"r9"') + b'{"kind": "note"}\n')   # longer, unrelated
+    with pytest.raises(RuntimeError, match="not the same ledger"):
+        sync.push_ledger(other, remote)
+    with pytest.raises(RuntimeError, match="diverged"):
+        sync.pull_ledger(other, remote)
+    assert sync.push_ledger(root, remote) == 0                                  # the real one still matches
+
+
+def test_the_query_reply_is_capped_in_whole_rows(lab, monkeypatch):
+    from lab import tools
+    root, _ = lab
+    monkeypatch.setattr(tools, "QUERY_MAX_BYTES", 300)
+    tb = types.SimpleNamespace(s=types.SimpleNamespace(ledger_root=root))
+    out = json.loads(Toolbox.query(tb, {"sql": "SELECT * FROM records"}))
+    assert out["truncated"] and out["truncated_at_bytes"] == 300 and len(json.dumps(out)) <= 400
+
+
+def test_the_agents_index_is_rebuilt_when_blobs_arrive(lab):
+    root, _ = lab
+    db = index.agent_db(root)
+    stamp = (root / "index" / "agent.stamp").read_text()
+    (root / "blobs" / "late.jsonl").write_text("")
+    index.agent_db(root)
+    assert (root / "index" / "agent.stamp").read_text() != stamp and db.exists()
+
+
 def test_s3_remote_round_trip(lab, tmp_path, monkeypatch):
     moto = pytest.importorskip("moto")
     import boto3
