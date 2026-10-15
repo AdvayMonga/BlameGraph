@@ -270,9 +270,12 @@ class Toolbox(EvalTools, ProfTools):
                      "corpus class (`corpus_class`, default steady_interactive; `seed`) or on synthetic token ids "
                      "(`synthetic`, `prompt_len`); `max_tokens` default 32. Stores the raw bundle (event timeline, chrome "
                      "trace, op and kernel tables, memory, GPU samples, provenance) in the ledger and copies it into your "
-                     "workspace under lab/runs/, left out of your change. Returns the bundle path and its file names."
+                     "workspace under lab/runs/, left out of your change. `capture`: \"module:function\" entry points whose every "
+                     "call's argument shapes (and one whole call per shape) go into the bundle's captures/; it "
+                     "synchronizes, so that bundle's times are not representative. Returns the bundle path and its file names."
                      + gpu("1-7 min measured at 16 requests x 64 tokens on an H200 (7 min when the weights were still loading from disk)"),
-                     {"type": "object", "properties": {"corpus_class": {"type": "string"}, "seed": {"type": "integer"},
+                     {"type": "object", "properties": {"capture": {"type": "array", "items": {"type": "string"}},
+                                                       "corpus_class": {"type": "string"}, "seed": {"type": "integer"},
                                                        "synthetic": {"type": "boolean"}, "requests": {"type": "integer"},
                                                        "prompt_len": {"type": "integer"},
                                                        "max_tokens": {"type": "integer"}}}, self.profile),
@@ -343,7 +346,7 @@ def _names(names) -> str:
     return ", ".join(f"`{n}`" for n in names)
 
 
-HARNESS = ("__init__.py", "profile.py", "bundle.py", "gpu.py")     # all lab.profile imports from the environment
+HARNESS = ("__init__.py", "profile.py", "bundle.py", "gpu.py", "capture.py")     # all lab.profile imports from the environment
 HARNESS_DIR = "_harness"
 DEFAULT_CORPUS_CLASS = "steady_interactive"   # targets name no corpus class of their own
 
