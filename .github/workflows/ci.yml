@@ -62,7 +62,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install pytest pytest-asyncio "pyarrow>=17" transformers
+      - run: pip install pytest pytest-asyncio "pyarrow>=17" transformers jinja2
       - name: Cache raw traces
         uses: actions/cache@v4
         with:
