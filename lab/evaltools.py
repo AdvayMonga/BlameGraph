@@ -18,7 +18,6 @@ in the same cache submit compares against.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import tempfile
 import time
@@ -124,10 +123,24 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
         "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,
         "ceilings": _ceiling_facts(t, ledger_root),
     }
-    if ledger_root and (Path(ledger_root) / "holdout_state.json").exists():
-        st = json.loads((Path(ledger_root) / "holdout_state.json").read_text())
-        facts["heldout_queries_left"] = st.get("budget_left")
+    try:
+        facts["heldout_queries_left"] = holdout_guard(t).state()["budget_left"]
+    except Exception:                            # noqa: BLE001  no store here, or unreachable: the fact is absent
+        pass
     return facts
+
+
+def holdout_guard(t: target.Target) -> HoldoutGuard:
+    """The one Thresholdout guard of the target's corpus version, shared by every run and machine through the store
+    (LAB_STORE). Refused where there is no store: a local budget would start over on every machine."""
+    from regimes.workload import corpus_version
+    from store.remote import NoRemote, open_remote
+    try:
+        remote = open_remote()
+    except NoRemote as e:
+        raise Refused(f"no shared held-out budget on this host ({e})") from None
+    version = corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else "no-corpus"   # synthetic workloads
+    return HoldoutGuard(remote, f"heldout/guard/{version}", HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT)
 
 
 def _ceiling_facts(t: target.Target, ledger_root: Path | None) -> dict:
@@ -272,9 +285,9 @@ class EvalTools:
         seen = benches[-1]["result"]["metrics"]
         try:
             names = [n for n in _regimes(args, tuple(seen)) if n in seen]
+            guard = holdout_guard(t)            # before anything is measured: no budget here is a cheap refusal
             base = self.base_heldout(t, names)
             base_seen = self.base_seen(t, names)
-            guard = self.holdout_guard()
             tree = self._pristine()
             # held-out passive data stays operator-only: never a blob, never in the record, never inside the jail.
             # A contaminated run raises here, before the holdout guard: it spends no query.
@@ -349,11 +362,6 @@ class EvalTools:
             log.unlink()
         artifacts.write_rows(work, equiv_rows(out))
         return artifacts.store(work, self.s.ledger_root)
-
-    def holdout_guard(self) -> HoldoutGuard:
-        seed = os.environ.get("LAB_HOLDOUT_SEED") or f"{self.s.ledger_root}"
-        return HoldoutGuard(self.s.ledger_root / "holdout_state.json", HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT,
-                            HOLDOUT_SIGMA_PCT, seed)
 
     def _base_measure(self, t: target.Target, names: list[str], split: str, tier: str) -> dict:
         """The base commit measured like a candidate, once per run per split; cached outside the jail."""

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import threading
 from pathlib import Path
 
 
@@ -29,9 +30,14 @@ class DirRemote(Remote):
         if dest.exists():
             return False
         dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_name(dest.name + f".tmp-{os.getpid()}")
+        tmp = dest.with_name(dest.name + f".tmp-{os.getpid()}-{threading.get_ident()}")
         shutil.copyfile(path, tmp)
-        os.replace(tmp, dest)
+        try:
+            os.link(tmp, dest)                  # atomic and refuses an existing name: write-once under races
+        except FileExistsError:
+            return False
+        finally:
+            os.unlink(tmp)
         return True
 
     def get(self, key: str, path: Path) -> None:

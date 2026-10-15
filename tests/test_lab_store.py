@@ -34,7 +34,6 @@ def _lab(root, runs):
                    "metrics": {"saturated": {"base": 16.0, "new": 18.0, "delta_pct": 12.5, "band_pct": 4.0,
                                              "verdict": "improved"}}}, root)
     ledger.append({"kind": "noise", "result": {"regime": "saturated", "band_pct": 4.0, "values": [1, 2], "target": "t"}}, root)
-    (root / "holdout_state.json").write_text(json.dumps({"n_queries": 3, "budget_left": 97}))
     private = runs / "r1" / "heldout-private" / "s1-20261009T120000"
     private.mkdir(parents=True)
     (private / "client_rows.jsonl").write_text(json.dumps({"id": 0, "ttft_s": 9.9}) + "\n")
@@ -65,11 +64,11 @@ def test_push_then_pull_restores_everything(lab, tmp_path):
     (corpus / "manifest.json").write_text(json.dumps({"corpus_version": "v9"}))
     (corpus / "c1" / "heldout.jsonl").write_text('{"secret": 1}\n'); (corpus / ".seed").write_text("42\n")
     out = sync.push(root, remote, runs=runs, corpus=corpus)
-    assert out["blobs"] == 3 and out["guard"] == 1 and out["heldout_private"] == 1 and out["corpus"] == 2
-    assert sync.push(root, remote, runs=runs, corpus=corpus) == {"ledger_bytes": 0, "blobs": 0, "guard": 0,
+    assert out["blobs"] == 3 and out["heldout_private"] == 1 and out["corpus"] == 2
+    assert sync.push(root, remote, runs=runs, corpus=corpus) == {"ledger_bytes": 0, "blobs": 0,
                                                                 "heldout_private": 0, "corpus": 0}
     keys = remote.keys("")
-    assert "heldout/corpus/v9/c1/heldout.jsonl.zst" in keys and "heldout/guard/state-000003.json.zst" in keys
+    assert "heldout/corpus/v9/c1/heldout.jsonl.zst" in keys
     assert "heldout/private/r1/s1-20261009T120000.tar.zst" in keys
     assert not [k for k in keys if not k.startswith("heldout/") and "secret" in k]
 
@@ -77,7 +76,7 @@ def test_push_then_pull_restores_everything(lab, tmp_path):
     (tmp_path / "corpus2").mkdir(); (tmp_path / "corpus2" / "manifest.json").write_text(json.dumps({"corpus_version": "v9"}))
     got = sync.pull(fresh, remote, blobs=True, corpus=tmp_path / "corpus2")
     assert (fresh / "ledger.jsonl").read_bytes() == (root / "ledger.jsonl").read_bytes()
-    assert got["blobs"] == 3 and got["guard"] == 1 and got["corpus"] == 2
+    assert got["blobs"] == 3 and got["corpus"] == 2
     assert (tmp_path / "corpus2" / ".seed").read_text() == "42\n"
     assert sorted(p.name for p in (fresh / "blobs").iterdir()) == sorted(p.name for p in (root / "blobs").iterdir())
     assert (tmp_path / "corpus2" / "c1" / "heldout.jsonl").read_text() == '{"secret": 1}\n'
@@ -95,10 +94,6 @@ def test_ledger_goes_up_in_write_once_segments(lab, tmp_path):
     fresh = tmp_path / "fresh"
     sync.pull_ledger(fresh, remote)
     assert [r["id"] for r in ledger.records(fresh)] == [r["id"] for r in ledger.records(root)]
-    # the guard state is never replaced by an older remote copy
-    (fresh / "holdout_state.json").write_text(json.dumps({"n_queries": 50}))
-    sync.push(root, remote); sync.pull(fresh, remote)
-    assert json.loads((fresh / "holdout_state.json").read_text())["n_queries"] == 50
 
 
 def test_pull_refuses_a_diverged_ledger(lab, tmp_path):
