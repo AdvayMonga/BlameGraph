@@ -29,17 +29,7 @@ each needs data, a simulator, a hypothesis generator, measurement tools and an e
 end-to-end judge (`equiv` + `submit` + the held-out guard). The agent chooses which layer to work on; it is given each
 layer's share of time × its distance from the ceiling as a fact. Layer 1 first.
 
-| | 1. Kernels | 2. Model execution | 3. Runtime | 4. Serving |
-|---|---|---|---|---|
-| In the example engine | `models/paged_attention_kernel.py`, MoE grouped GEMM, norm/rope, sampling | `models/qwen3_moe.py`, `backends/custom_torch_backend.py`, `launch_table.py`, `quant.py` | `scheduler.py`, `scheduling_policy.py`, `kv_cache/` | `server.py`, `openai_shim.py`, tokenizer, startup, `control_plane/` |
-| Data | partial: `check_kernel` makes random inputs at chosen shapes; missing the shapes the engine actually calls, logged from real runs | partial: correctness task sets + corpus; missing a small fixed batch for logit checks and a list of step configurations | partial: corpus (public, repeats prompts); the load generator (separate work) replaces it | have: same workloads + the cold-start command |
-| Simulator | not needed (the real kernel runs in seconds; the roofline is the bound) | partial: analytic step floors (`validity/ceiling.py`); missing a measured step-time model | missing: scheduler simulator (real `scheduler.py` on a fake clock and backend, step times from layer 2's model) | not needed |
-| Hypothesis generator | missing (evolutionary: fast evaluator, many candidates) | missing (hypothesis-driven + knob search) | missing (hypothesis-driven, simulator-screened) | not needed: the general agent |
-| Measurement tools | have: `time_kernel`, ncu `kernel`, nsys `trace`, % of bandwidth peak | have: `profile`, `trace`, kernel share of time, step floors | have: `bench` client rows, engine telemetry, timeline, py-spy | have: `bench` cold_start/overload, serve logs, telemetry |
-| Evaluator | partial: `kernels/check_kernel` + `time_kernel` built and validated on the H200, not wired into the loop | missing: fast step-time + logit check (no server) | partial: `bench` + `equiv`; no noise bands measured for this engine yet | have: `bench` regimes |
-
-Across layers, built: the end-to-end judge, calibration (`lab/calibrate.py`), experiment records
-(`lab/experiments.py`), the workbench/measurement sandbox, the GPU VM tooling.
+Status of each layer's parts: `STATE.md`.
 
 ## Layout
 Top-level packages, run from the repo root (no install step; `pyproject.toml` lists optional extras and holds the
@@ -206,39 +196,6 @@ dashboard, Laya experiments, report/IRT/benchmark-audit scripts, loop tool (ledg
 there rather than re-deriving. Trace quirks (codex truncation, sandbox exit-126, no timestamps) are handled in
 `traces.py`/`experiment.py`.
 
-## Decided eval conventions (2026-10-02; change only with the user)
-Target: Qwen3-30B-A3B (MoE) on one H200 (Verda; the user has no H100 access), **thinking off**. Engine under optimization: the user's own engine (inference-server). Reference for correctness: unmodified vLLM, BF16, `VLLM_BATCH_INVARIANT=1`. No method specifications to the agent (Bitter Lesson):
-the benchmark defines objective + correctness + validity only, checked end to end (no internal-invariant checks).
-- **Regimes (8):** single stream, saturated, bursty, long prompt/short output, short prompt/long output, shared
-  prefix multi-turn, overload, cold start. All always run; the task picks the objective (one, several, or all, with
-  optional "don't get worse than X" limits). Each regime is a seeded recipe; workloads sampled fresh per run;
-  seen / held-out (query budget) / sealed splits; corpus versioned.
-- **Metrics (client-side, per-request rows):** TTFT from scheduled send to first *real* token; TPOT =
-  (E2E − TTFT)/(n − 1); tokens re-counted with the reference tokenizer; goodput = max rate with ≥99% of requests
-  meeting both TTFT and TPOT limits (p99); failures; peak memory as a limit, not an objective; cost = goodput per
-  GPU-second from process start; joules/token. Latency limits (MLPerf Llama-3.1-8B, checked at p99):
-  conversational TTFT ≤ 2000 ms / TPOT ≤ 100 ms (saturated, bursty, long prompt, long output, shared prefix,
-  overload); interactive TTFT ≤ 500 ms / TPOT ≤ 30 ms (single stream). Check at calibration whether the
-  long-prompt regime's prompt lengths fit 2000 ms TTFT on the unmodified baseline.
-- **Load:** open-loop Poisson for bursty/overload/limit-finding; closed-loop doubling concurrency sweep for
-  saturated; concurrency 1 for single stream; warmup outside the window; full tier ≥600 s per regime; short tier
-  validated by rank correlation with the full tier; client must be shown not to be the bottleneck.
-- **Overload:** explicit error = handled but not goodput; truncation, silent drop, or crash = invalid.
-- **Cold start:** process launch → first correct token; weights on disk allowed, compile caches empty; warm-cache
-  figure reported alongside.
-- **Correctness gate (quantization allowed, MLPerf-style: purely mathematical, original weights, no retraining/
-  distillation/pruning):** MLPerf's accuracy rule (decided 2026-10-04): (1) pooled task score ≥ 99% of the
-  BF16 reference's, over every item of MMLU-Pro, MATH, a unit-tested code set and long-context retrieval; (2) output
-  length ≥ 90% of reference; (3) consistency (first token, single EOS, token count match the text). Teacher-forced
-  KL divergence and per-task paired flips (McNemar) are reported as facts, not gated. Tiers: `dev` (~1.6k items) while
-  iterating, where the 99% line is within noise (~±0.7%); `full` (~18.6k, ~±0.2%) for final tests. Reference runs in batch-invariant mode
-  (`VLLM_BATCH_INVARIANT=1` / SGLang `--enable-deterministic-inference`); the agent's server need not be deterministic.
-- **Validity:** noise bands per regime from repeated unchanged runs; clocks and engine/driver versions recorded;
-  comparisons refused across hardware, versions, or corpus versions; MLPerf-style repeated-request audit (same
-  request must not get >10% faster) as an anti-caching canary.
-- **Canaries:** honest regressions (slower kernel, KV leak, fewer admissions, slower startup) and adversarial
-  cheats (cached answers, early EOS, silent drops, pre-clock work, benchmark-pattern detection); each must be flagged.
-
 ## The engine repo (inference-server, after the 2026-10-06 split)
 Holds only the engine and its stack: `src/` (engine, control plane), engine tests, `monitoring/`, and engine tools
 (`scripts/bench/tune_triton_launch.py`, `scripts/gpu_tests/checks.py`, `scripts/tools/smoke_custom.py`). The
@@ -248,83 +205,14 @@ themselves, so don't add agent tools without asking. Corpus classes for the regi
 corpus lacks (short/long output, overload, shared prefix) belong in `corpus/build_corpus.py`; the regimes synthesize
 them from existing records meanwhile.
 
-## Full-tier recalibration (H200, Nebius, 2026-10-05)
-Policy confirmed, nothing tuned. 18,606 items, vLLM 0.30.0, concurrency 128, 3 h 40 min, ~$16.50. Local only:
-`data/h200-run-20261005/REPORT.md`, `data/equiv-full/`. Pooled score ratio: plain BF16 1.0000, FP8 (DeepGEMM off)
-1.0009, INT8 `nytopop/Qwen3-30B-A3B.w8a8` 0.9993, FP8 (DeepGEMM on, nvcc 13.0) 1.0034 — all PASS; GPTQ-Int4 0.9869
-FAIL (MMLU-Pro 0.9807, p = 3e-5). FP8/INT8 each lose and gain ~800 answers in balance: that churn is the realistic
-noise. Consistency clean on every run.
-Open: plain BF16 matched the batch-invariant reference exactly here (18,602/18,606 identical, KL 0.0), but on Verda at
-concurrency 32 it diverged on 466/490 MMLU-Pro answers (median 13% into the answer). Logs show both BF16 servers plain
-(non-invariant compile path, requests served by the BF16 server); the reference reproduced across both days and
-clouds (691/691 same-prompt answers identical). Differences: venue, driver 580.126 vs 580.173, concurrency 32 vs 128.
-Don't treat a BF16 rerun as a noise sample until resolved.
+## State, decisions, runs
+Where things stand is in three files; keep them current as part of every change:
+- `STATE.md` — what works now, branches in flight, open problems, next. **Rewrite** the affected line; never append history.
+- `DECISIONS.md` — one dated entry per decision (what, why, what it replaced), newest first, append-only. The eval
+  conventions (2026-10-02) are there; change any decision only with the user.
+- `RUNS.md` — every GPU run: a row (date, venue, cost, result, evidence) and its details, append-only.
 
-## Calibration, dev tier (H200, Verda, 2026-10-04)
-Ran via inference-server's `lab/vm.py`: vLLM 0.30.0, torch 2.13 + CUDA 13.0, clocks locked 1980 MHz, 83 min, $6.75.
-Report and outputs are local only: `data/h200-run-20261004/REPORT.md`, `data/equiv/` (ref, candidates, `thresholds.json`).
-Dev tier. Candidates: plain BF16 (no batch-invariant mode), official FP8 (served with `VLLM_USE_DEEP_GEMM=0`: the
-image's nvcc 12.8 is too old for DeepGEMM), official GPTQ-Int4. KL: BF16 3.7e-7, FP8 3.0e-3, Int4 1.4e-2 (clean
-separation). Per task, accuracy can't separate at this size: plain BF16 alone flips 8.2% of MMLU-Pro answers and
-loses 1.9% there; no task reaches significance. Pooled score ratio (the adopted MLPerf rule): BF16 1.0008, FP8
-1.0072, Int4 0.9847 (fails 0.99; McNemar p 0.049). The KL/flip-rate thresholds derived that day were superseded by
-the MLPerf policy.
-INT8 (`JunHowie/Qwen3-30B-A3B-GPTQ-Int8`) was skipped: vLLM 0.30 can't load act-order GPTQ MoE experts. Every
-consistency result is void: the client counted vLLM's role chunk as a fake first token (fixed on
-`fix/calibration-findings`). Repeat audit passes on the honest server and fails the `cache` canary.
+@STATE.md
+@DECISIONS.md
 
-## Profiler tools on the H200 (Nebius, 2026-10-08)
-Unjailed, all four work on the real engine (16 requests × 64 tokens): `profile` ~7 min (first call: weights loading from disk), `trace` 44 s, `kernel` 90-99 s,
-`hostprof` 64 s (30 s sampling, 2,981 samples ≈ 100 Hz × 30 s, scheduler thread in the dump); ~$0.87 of GPU time.
-`launch_count` honoured; ncu durations are ~1.8× nsys's on a tiny kernel (base clocks), DRAM figures physical.
-Fixed from the run: the tools now pass the target's engine env (they had loaded the engine's default model);
-nsys traces CUDA-graph nodes (it had missed every decode kernel: 46,720 vs torch's 860,365 launches);
-`kernels.json` drops record_function annotations (they had doubled its total). srt always mounts a fresh minimal
-`/dev` and has no device passthrough, so nothing in an srt jail sees the GPU (`No CUDA GPUs are available`), and
-each srt jail on Linux has its own network namespace, so a jailed server is unreachable. Decided 2026-10-08: on
-Linux the jail is a container with the NVIDIA runtime (`lab/safety/container.py`, `lab/RUNTIME.md`); its GPU
-check (`vm-setup.sh` prints `jail: gpu ok`) has not run yet. The agent's CLI still runs under srt, which on Ubuntu
-24.04 needs `kernel.apparmor_restrict_unprivileged_userns=0` (in `vm-setup.sh`).
-
-## First agent dry run (Nebius H200, 2026-10-10)
-`LAB_WORKER=ssh`, laptop controller, `claude-fable-5-1`, one session ($2.53 as the proxy priced it, 24 turns, 465 s;
-~1 h 20 min of GPU for the whole run). Validated on the real GPU: the GPU in the network-less jail, metadata blocked,
-base and candidate served jailed through the port bridge, `profile`, `trace` (after mounting nsys's install root),
-`test` (after caching the tests' gpt2 tokenizer), the remote workbench over `ssh -R`, the proxy's pricing. The agent
-fused RMSNorm/RoPE in Triton and added a batch-1 decode graph: seen-split short-tier `single_stream` tpot p99 21.4 ->
-13.1 ms; not submitted, correctness not run (equiv needs `data/equiv/ref`, absent in a worktree). A base dev-tier equiv
-on this engine took > 46 min for 774 of 1,597 items at concurrency 16 (vLLM: ~10 min): the tool descriptions' "10 min
-at tier dev" is wrong for this engine. Workbench processes cannot change clocks or power limits on that platform.
-`python -m lab.gpucheck` then passed every item on Nebius H200s (2026-10-13, three runs, fixes between them):
-jail GPU, quiet, exclusivity, hostprof; workbench (after blocking only 169.254.169.254: the /16 took DNS with it);
-the dependency build (after allowing pypi.nvidia.com); ncu (after linking the real /opt/nvidia install). The jail's
-user can read GPU performance counters on that image.
-
-## Next
-Store: bucket `bg-data` is set up (`.env`: `LAB_STORE`, `LAB_STORE_ENDPOINT`, `AWS_ACCESS_KEY_ID`,
-`AWS_SECRET_ACCESS_KEY`) and holds the ledger, its blobs, the corpus's held-out traces + seed, and archives of
-`data/derived`, `data/equiv*`, `data/h200-run-*`, `data/engine-h200-*`, `data/agent-traces` (2026-10-14). The holdout
-guard lives in the store (one budget per corpus version, `heldout/guard/<version>/`), so a host without `LAB_STORE`
-(a VM `--env` session) cannot submit. The index is rebuilt in full when the
-ledger grows; make it incremental when that gets slow. DCGM device samples are indexed as raw lines.
-GPU (needs spend approval): resolve the BF16 puzzle (plain BF16 on the dev tier at concurrency 32 and 128 on one VM,
-~20 min, ~$1.50); first real run of `python -m regimes run all` against the engine and against vLLM.
-GPU, with approval (and the auto-stop armed): `python -m lab.validate --target targets/inference-server.toml`
-(reference, FP8/INT8 good, Int4 bad, noise bands for all 8 regimes; ~3-4 h; serves unjailed, so not blocked), then
-a real `python -m lab.session --task ...` run (the dry run is above). Both engine branches from the 2026-10-06 report (`integ/gpu-session-5`,
-`engine/gpu-validated`) were judged by the old gate: re-judge with `python -m correctness verdict` on their saved
-results before deciding anything. lab `session.py --run` re-resolves
-`base` from HEAD rather than the run's original base (pre-existing; resuming after the engine moved would misaudit);
-`validity/tier_agreement.py` needs real short/full runs. Ceilings checked on an H200 (Nebius, driver 580.173,
-2026-10-13; peaks 4.14 TB/s, 794 TFLOP/s bf16): every floor below every measurement once goodput charges only the
-prefill the server reports as uncached (vLLM's prefix cache made a prefill-inclusive bound read 147-471%). Plain vLLM:
-single_stream TPOT p99 4.1 ms (37% of ceiling), saturated 5.8 req/s (19%), long prompt 68 req/s (94%); the engine:
-21 ms (7%), 0.097 req/s (0.5%), long prompt invalid (111 requests without a response). Stored in
-`knowledge/reference/inference-server/`. Finding for the corpus: long_prompt_short_output's window repeats each
-prompt ~5x (23,185 requests over 4,794 prompts), which rewards prefix caching.
-Agent regime (planned 2026-10-14, not built): long-horizon agent traffic as a ninth regime scored on goodput;
-text from Exgentic agent-llm-traces v2, timing and tool gaps from FreeInference (samples in `data/agent-traces/`).
-Undecided: 32k cap vs 128k with YaRN (the engine rejects rope scaling; a new correctness reference), Exgentic v2's
-missing license vs v1, the per-turn latency limit.
-The agent's tool set is the user's design: ask first. README stays a few one-line
-feature bullets, not a dev doc.
+The agent's tool set is the user's design: ask first. README stays a few one-line feature bullets, not a dev doc.
