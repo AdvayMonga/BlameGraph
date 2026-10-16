@@ -5,6 +5,9 @@ local and archived in the store (`python -m store pull`).
 
 | Date | Venue | What | GPU cost | Result | Evidence |
 |---|---|---|---|---|---|
+| 2026-10-16 | Nebius H200 (`lab-gpu-2`) | Engine session 2: mixed prefill + async decode measured (inference-server #110, #111) and three fixes; the kernel loop's Phase A/B ran on the same VM (its own entry) | ~4 h (~$18) | saturated 1.11 -> 1.87 req/s (conc 64 within limits), single_stream TPOT p99 9.5 -> 9.26 ms, 0 OOMs; gate PASS 1,597/1,597 (ratio 1.0032, CI 0.989-1.017) | `data/engine-h200-20261016/REPORT.md`, below |
+| 2026-10-16 | Nebius H200 (`lab-gpu-2`) | Engine wide-batch work (inference-server #109) | ~2 h | single_stream TPOT p99 9.6 ms, saturated 1.07-1.65 req/s (conc 64 marginal), long_prompt 6.25; gate PASS | `data/engine-h200-20261015/nebius2/`, below |
+| 2026-10-16 | Nebius H200 | Engine: MoE kernel on, gate to PASS (inference-server #107 merged) | ~2 h | single_stream TPOT p99 11.5 ms, saturated 0.95 req/s, long_prompt 6.25 req/s; gate PASS 1,597/1,597 at 16 in flight | `data/engine-h200-20261015/nebius/`, below |
 | 2026-10-16 | Nebius H200 (`lab-gpu-2`, the engine session's VM) | Layer-1 loop validated on a GPU (#46-#58), then OpenEvolve on `moe_gemm` through `ship` | ~$9.3 GPU (~2 h 5 min of kernel steps) + ~$1 model (estimate) | Every new evaluator piece runs; engine kernels pass every gate. Evolved `moe_gemm` 1.087x seen / 1.094x held-out, all gates pass; shipped as an engine branch, end-to-end judge not run | laptop `lab/runs/kernels-validate*/`, `lab/runs/kernels-moe/`, ledger `ev-20261016-9969664d6bb0`, inference-server `kernels/moe_gemm-20261016-154523` |
 | 2026-10-15 | Verda H200 | Manual engine serving fixes (inference-server #107), #33 profiles check | ~$24 (4 h 25 min) | single_stream TPOT p99 21 -> 15.6 ms, saturated 0.097 -> 0.37 req/s, long_prompt invalid -> 2.66 req/s; gate inconclusive at concurrency 32 | `data/engine-h200-20261015/`, below |
 | 2026-10-14/15 | Nebius H200 | Layer-1 kernel loop on `paged_decode` (branch `feat/kernel-loop`) | not recorded | GQA-packed decode kernel 3.88x on 196 seen shapes, passes held-out; end to end single_stream TPOT p99 21.6 -> 15.4 ms, saturated 0.100 -> 0.158 req/s (short tier, one run each); equiv not run | store `archive/kernels-2026-10-14-622240de7cc1b4aa.tar.zst` (gate results, best program, shapes), engine PR inference-server #106 |
@@ -15,6 +18,51 @@ local and archived in the store (`python -m store pull`).
 | 2026-10-05 | Nebius H200 | Full-tier correctness recalibration | ~$16.50 | Policy confirmed; FP8/INT8 pass, Int4 fails | `data/h200-run-20261005/REPORT.md`, `data/equiv-full/` |
 | 2026-10-04 | Verda H200 | Dev-tier correctness calibration | $6.75 | Gate separates Int4; consistency results void | `data/h200-run-20261004/REPORT.md`, `data/equiv/` |
 
+## 2026-10-16 — Engine session 2: mixed prefill + async decode (Nebius H200 `lab-gpu-2`, inference-server #110, #111)
+Tree `engine/gpu-session-2` = main eb7b683 + #110 + #111, one change at a time on the short tier (saturated,
+single_stream): base 1.11 req/s / 9.5 ms; mixed alone 1.10; mixed + async 1.20 (decode step at batch 128 33.9 ->
+27.8 ms, batch 1 9.0 ms); + fp8 experts 1.23 (~4% at wide batch, nothing at batch 1: the step is launch-bound).
+Then three fixes found from the engine timeline and the OOM tracebacks, each measured: (1) a 51-row mixed wave took
+the per-row attention path (3.3 s) — per-row only for waves of <= 4 rows -> 1.83 req/s, but 152 OOMs at concurrency
+256 (256-row waves); (2) many-row waves in row groups under 65k tokens -> 1.85, 74 OOMs left, now in the MoE down
+projection asking 3.39 GiB = 54 rows x 2048 padded tokens x 8 experts x 2048 x 2 B: the mixed step ran its padding
+tokens through the experts; (3) the MoE routes only the wave's real tokens -> **1.87 req/s, 0 OOMs**, conc 64 within
+limits, conc 128 fails on TTFT p99 4.0 s alone (TPOT p99 94 ms). single_stream TPOT p99 9.26 ms. Gate (dev tier,
+32 in flight, 17 min) PASS: 1,597 answered, ref 1,243 / cand 1,247 correct, ratio 1.0032 (CI95 0.989-1.017), lost
+37 gained 41, length ratio 0.997. The fixes are on #110's branch; #110/#111 carry the numbers. Next lead: the worst
+mixed prefill steps are 3.1 s for 116 rows x ~17 tokens with cached prefixes (`mixasync4/timeline`) — the many-row
+attention path caps TTFT at concurrency 128. Ops: the engine venv imports the main checkout, so worktree tests need
+`PYTHONPATH=src`; syncing BlameGraph main to the VM with `--delete` removed its gitignored data once (restored).
+
+## 2026-10-16 — Engine wide-batch work (Nebius H200 `lab-gpu-2`, inference-server #109)
+Saturated after #107 (0.99 req/s) passed at concurrency 32 and failed 64 on both limits (TTFT p99 3.9 s, TPOT 150 ms).
+Decode profiles at batch 1/16/32: the step is launch-bound, not bandwidth-bound (the MoE GEMM 2.4-5 ms of it).
+py-spy on the scheduler thread under the saturated load: 50% in the per-row Python loop of the SDPA prefill
+(a 10k-token wave of 19 prompts took 1.3 s; its kernels 0.2 s), ~20% in the decode state's per-layer joins, leaves
+and block allocations (~400 `.item()` syncs a step at batch 128). Fixes: prefill attention over the whole wave
+(one gather, one masked SDPA per layer; few long rows keep flash per row, since the masked path halved long_prompt),
+the decode state as one `[layers, rows, cols]` table, fused q/k/v GEMM, cached index vectors. Results: single_stream
+TPOT p99 11.5 -> 9.6 ms; decode step 9.7 ms at batch 1, 14 at 8, 19 at 16, 43 at 128 (was 24 / 35-60); saturated
+1.65 req/s in one run (conc 64 within limits, TTFT p99 1.92 s) and 1.07 in the next on the same engine (TTFT p99
+3.43 s): a prefill wave still blocks decode and the stalls are bursty, so conc 64 straddles the 2 s line; long_prompt
+6.25 req/s. Gate (dev tier, 16 in flight) PASS 1,597/1,597. #109 merged. Built afterwards off the GPU, awaiting
+measurement one at a time: inference-server #110 (`PREFILL_MODE=mixed`, bounded multi-row prefill between decode
+steps, for saturated at concurrency 64-128) and #111 (`ASYNC_DECODE=1`, step n launched on n-1's device tokens, host
+work overlapped); then fp8 experts at wide batch (`CUSTOM_BACKEND_QUANT=fp8`), then a Triton `moe_align` + fused MoE
+epilogue built live. The slowest prefill waves (a 6-prompt 8.5k-token wave at 1.5 s) and long-prompt cache hits need
+a profile before anything is built for them.
+
+## 2026-10-16 — Engine: MoE kernel on, the gate to PASS (Nebius H200, inference-server #107 merged)
+The Triton MoE grouped GEMM's device-side assert was the routing kernel returning an out-of-range expert id (the
+BLOCK_E sentinel) for NaN rows, which the decode graph's dummy rows carry; clamped, and the kernel runs with no
+errors under load. With it (and main's evolved paged_decode #106 merged): single_stream TPOT p99 15.6 -> 11.5 ms
+(decode step p50 10.9 ms, batch 4 12.7 ms), saturated 0.37 -> 0.95 req/s, long_prompt 2.66 -> 6.25 req/s, short
+tier, seen split, bf16. Gate (dev tier, 16 in flight): inconclusive twice on the same item, `mbpp-783`, which the
+telemetry showed completed (261 tokens) but in 635 s of decode, one step per 2.4 s, 15 min into the run: the radix
+cache's one-scan-per-block eviction once the cache was full (the bug found by the kernel-loop session, fixed in
+inference-server #108). With #108 merged: PASS, 1,597/1,597 answered, slowest decode 75 s. #107 merged to the
+engine's main. Lessons added to the ops notes: `pkill -f` in an ssh command kills the ssh shell when the pattern
+appears in the same command line; edit VM scripts locally and scp them.
 ## 2026-10-16 — Layer-1 loop on a GPU: validation, then `moe_gemm` through `ship` (Nebius H200)
 Run by the engine session on its VM (`lab-gpu-2`), BlameGraph main `a303313` then `0420b37`; engine = branch
 `engine/gpu-session-2` (`eb7b683` + #110/#111 behind flags; `moe_kernel.py` and `paged_attention_kernel.py` as on
