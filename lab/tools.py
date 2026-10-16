@@ -353,15 +353,19 @@ class Toolbox(EvalTools, ProfTools):
                                                        "seed": {"type": "integer"}}}, self.bench),
             ToolSpec("equiv", "Serve your current workspace and run the correctness gate against the reference "
                      "model's outputs at `tier` dev (default) or full. Returns pass, fail or inconclusive with every "
-                     "metric. submit requires a passing full-tier equiv on the snapshot"
+                     "metric. `tier` quick generates nothing: the engine scores the dev reference's own answers "
+                     "teacher-forced (its sequences.jsonl, a few hundred) and returns the divergence (KL mean, p99 and "
+                     "worst sequence, top-1 agreement, reference-token logprob shift) as facts, with no verdict; "
+                     "measured cost not yet known. "
+                     f"submit requires a passing {tg.submit_tier}-tier equiv on the snapshot"
                      + (", and one for each regime it measures under its own profile (`profile`: that regime's name; "
                         "default the general launch)" if tg.profiles else "") + ". Takes one engine start plus "
                      "generating the tier's task set, 32 requests in flight." + gpu("10 min at tier dev on unmodified vLLM and ~95 min on the example engine (about 17 items/min, measured at 16 requests in flight, H200); the full tier is about 12x the items"),
-                     {"type": "object", "properties": {"tier": {"type": "string", "enum": ["dev", "full"]},
+                     {"type": "object", "properties": {"tier": {"type": "string", "enum": ["quick", "dev", "full"]},
                                                        **({"profile": {"type": "string"}} if tg.profiles else {})}},
                      self.equiv),
             ToolSpec("submit", "Measure your current workspace on the held-out split at the full tier and compare it "
-                     "with the base commit measured the same way. Needs a passing full-tier equiv and a completed "
+                     f"with the base commit measured the same way. Needs a passing {tg.submit_tier}-tier equiv and a completed "
                      "short-tier seen bench on this snapshot. `regimes`: default those of that bench. The only thing "
                      "that can produce a win. Returns one aggregate per regime (base, new, delta %, noise band % (measured on "
                      "the base engine's general config), "

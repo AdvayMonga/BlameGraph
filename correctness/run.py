@@ -51,7 +51,8 @@ def _jsonl_read(path: Path) -> list[dict]:
 
 
 TRACE_PREFIX = "eq"          # X-Trace-Id of a gate request: eq-<item id>, so equiv rows join engine telemetry
-RETRIES = 6                 # a 429/503 (the server shedding under the gate's load) is retried with backoff
+RETRIES = 12                # a 429/503 (the server shedding under the gate's load) is retried with backoff, ~6 min in all:
+                            # 6 (~1 min) left 12/1,585 unanswered on inference-server #107 at 32 in flight (RUNS.md 2026-10-15)
 
 
 def _retrying(fn, *args, **kw):
@@ -130,6 +131,47 @@ def _score_concurrency(concurrency: int) -> int:
     return max(1, concurrency // 4)
 
 
+def _divergence(ref: Path, url: str, model: str, top_k: int, api: client.Api, workers: int) -> tuple:
+    """(summary or None, unscored): the candidate scored teacher-forced on the reference's own sequences."""
+    seqs = _jsonl_read(ref / "sequences.jsonl")
+    unscored: list[str] = []
+
+    def comp(s):
+        try:
+            return compare_positions(_positions(s["ref"]),
+                                     _retrying(client.score_tokens, url, model, s["ids"], s["start"], top_k, api))
+        except client.NoLogprobs:
+            raise
+        except Exception as e:
+            unscored.append(f"{s['id']}: {type(e).__name__}: {e}"[:200])
+            return None
+
+    try:
+        with ThreadPoolExecutor(workers) as ex:
+            scored = [c for c in ex.map(comp, seqs) if c is not None]
+    except client.NoLogprobs as e:
+        return None, [str(e)]
+    div = divergence_summary(scored) if scored else None
+    if div is not None:
+        div["sequences_unscored"] = len(unscored)
+    return div, unscored
+
+
+def quick(ref_dir: str | Path, url: str, model: str, out_path: str | Path, api: client.Api = client.DEFAULT) -> dict:
+    """The fast check: the candidate scores the reference's own answers teacher-forced (prefill only, nothing
+    generated) and reports how far its next-token distributions are from the reference's. Facts, no verdict: the
+    gate is the generated-answer test (`candidate`)."""
+    ref = Path(ref_dir)
+    meta = json.loads((ref / "meta.json").read_text())
+    div, unscored = _divergence(ref, url, model, meta["top_k"], api, CANDIDATE_SCORE_MAX)
+    metrics = {**(div or {}), **({"divergence_unscored": unscored[:5]} if unscored else {})}
+    result = {"verdict": "facts", "passed": None, "reasons": [] if div else ["no divergence: " + "; ".join(unscored[:1])],
+              "gates": {}, "metrics": metrics, "thresholds": {}}
+    out_path = Path(out_path); out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps({"result": result}, indent=1, default=str))
+    return result
+
+
 def candidate(ref_dir: str | Path, url: str, model: str, out_path: str | Path, encoder: Encoder,
               thresholds: Thresholds | None = None, probe_n: int = 20, concurrency: int = 16,
               score_item: Callable | None = None, config: dict | None = None,
@@ -158,27 +200,7 @@ def candidate(ref_dir: str | Path, url: str, model: str, out_path: str | Path, e
     length = length_ratio([len(encoder.encode(ref_out[i].get("text") or "")) for i in ids],
                           [len(encoder.encode(answered[i].get("text") or "")) for i in ids])
     # divergence on the reference's own tokens (a fact, not a gate); skipped when the engine exposes no logprobs
-    seqs = _jsonl_read(ref / "sequences.jsonl")
-    unscored: list[str] = []
-
-    def comp(s):
-        try:
-            return compare_positions(_positions(s["ref"]),
-                                     _retrying(client.score_tokens, url, model, s["ids"], s["start"], meta["top_k"], api))
-        except client.NoLogprobs:
-            raise
-        except Exception as e:
-            unscored.append(f"{s['id']}: {type(e).__name__}: {e}"[:200])
-            return None
-
-    try:
-        with ThreadPoolExecutor(min(_score_concurrency(concurrency), CANDIDATE_SCORE_MAX)) as ex:
-            scored = [c for c in ex.map(comp, seqs) if c is not None]
-        div = divergence_summary(scored) if scored else None
-        if div is not None:
-            div["sequences_unscored"] = len(unscored)
-    except client.NoLogprobs as e:
-        div, unscored = None, [str(e)]
+    div, unscored = _divergence(ref, url, model, meta["top_k"], api, min(_score_concurrency(concurrency), CANDIDATE_SCORE_MAX))
     # consistency, on a streamed probe of the first items; a shed or errored probe is counted, not fatal
     probe, probe_errors = [], []
     for it in items[:probe_n]:

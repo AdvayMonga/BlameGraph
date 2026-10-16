@@ -3,6 +3,15 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-15 — Submit takes a dev-tier equiv for the example engine; a quick equiv tier
+Equiv's time is the engine generating answers: ~95 min at tier dev on inference-server, so the full tier (~11.5M
+output tokens) would be ~8-17 h. To get a first working run, the target names the tier submit requires
+(`[correctness] submit_tier`, default full; `dev` in `targets/inference-server.toml`): ±0.7% precision instead of
+±0.2%. Back to full once the engine is fast. Equiv sends 32 requests at once (was 16, #43). Equiv's new tier `quick`
+scores the reference's answers teacher-forced (no generation) and returns divergence facts with no verdict, so a
+change can be checked in minutes while iterating. Why: the user wants one working end-to-end product before
+improvements.
+
 ## 2026-10-15 — A `search` tool over experiments, with embeddings from day one
 The agent gets `search`: every run's hypotheses with their measurements and reflections, ranked by BM25 fused with
 local embeddings (`lab/search.py`). Why: the user wanted the better-recall version from the start rather than
