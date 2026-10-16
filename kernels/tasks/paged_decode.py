@@ -10,7 +10,7 @@ import math
 
 import torch
 
-from kernels.tasks import Task
+from kernels.tasks import Task, randn
 
 
 def _call(fn, q, k_pool, v_pool, block_tables, seq_lens):
@@ -41,10 +41,8 @@ def make_inputs(shape, dtype, device, g, lens=None):
     per = (L + bs - 1) // bs
     blocks = N * per + 1
     table = torch.randperm(blocks, generator=g)[: N * per].view(N, per).to(torch.int32)
-    q = torch.randn(N, Hq, D, generator=g).to(dtype)
-    k = torch.randn(blocks, Hkv, bs, D, generator=g).to(dtype)
-    v = torch.randn(blocks, Hkv, bs, D, generator=g).to(dtype)
-    return tuple(t.to(device) for t in (q, k, v, table, lens))
+    q, k, v = (randn(sz, g, device, dtype) for sz in ((N, Hq, D), (blocks, Hkv, bs, D), (blocks, Hkv, bs, D)))
+    return q, k, v, table.to(device), lens.to(device)
 
 
 def make_real(shape, dtype, device, g, ints):
@@ -78,7 +76,7 @@ def edge_shapes(shape):
 # Qwen3-30B-A3B: 32 query heads, 4 KV heads, head dim 128; the engine's block size is read from captures.
 TASK = Task("paged_decode", "inference_server.models.paged_attention_kernel:paged_decode_attention", reference,
             make_inputs, shape_of, cost, call=_call, make_real=make_real, graphs=True,
-            kernel_names=(r"_paged_decode(_splitk)?_kernel", r"_splitk_combine_kernel"), heldout_axes=(0, 5), edge_shapes=edge_shapes,
+            kernel_names=(r"_paged_decode(_splitk)?_kernel", r"_gqa_decode\w*_kernel", r"_splitk_combine(_vec)?_kernel"), heldout_axes=(0, 5), edge_shapes=edge_shapes,
             dtypes=(torch.bfloat16,), layouts=(),        # the engine passes contiguous tensors only
             seen_default=((1, 32, 4, 128, 16, 512), (8, 32, 4, 128, 16, 1024), (32, 32, 4, 128, 16, 2048)),
             heldout_default=((64, 32, 4, 128, 16, 4096), (128, 32, 4, 128, 16, 8192)))

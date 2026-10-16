@@ -135,6 +135,17 @@ def test_paged_decode_checks_with_no_edge_shapes_do_not_fall_back_to_the_default
     assert r["passed"]
 
 
+def test_split_holds_out_a_region_even_when_calls_pile_up_at_the_largest_value():
+    from collections import Counter
+    from kernels.tasks import randn
+    t = load("moe_gemm")
+    counts = Counter({(m, 64, 96, 8, m, 1): (1000 if m == 512 else 3) for m in range(8, 513, 8)})
+    s = shapes.split(t, counts)
+    assert s["cut_by"] == "distinct" and s["heldout"] and max(x[0] for x in s["seen"]) < min(x[0] for x in s["heldout"])
+    g1, g2 = torch.Generator().manual_seed(3), torch.Generator().manual_seed(3)
+    assert torch.equal(randn((4, 5), g1, "cpu", torch.float32), randn((4, 5), g2, "cpu", torch.float32))
+
+
 def test_real_sequence_lengths_replace_synthetic_ones_where_captured():
     t = load("paged_decode")
     shape, other = (3, 8, 2, 16, 4, 11), (2, 8, 2, 16, 4, 9)
@@ -181,12 +192,13 @@ def test_share_of_the_window_per_task_and_the_kernels_no_task_covers():
         (b / "kernels.json").write_text(json.dumps({"kernels": [
             {"name": "fused_moe_kernel", "count": 10, "total_us": 500_000.0},
             {"name": "_paged_decode_splitk_kernel", "count": 10, "total_us": 150_000.0},
-            {"name": "_splitk_combine_kernel", "count": 10, "total_us": 50_000.0},
+            {"name": "_gqa_decode_splitk_kernel", "count": 10, "total_us": 30_000.0},          # #106's names
+            {"name": "_splitk_combine_vec_kernel", "count": 10, "total_us": 20_000.0},
             {"name": "rms_norm_kernel", "count": 10, "total_us": 20_000.0}]}))
         r = shares(b, [load("paged_decode"), load("toy_rmsnorm")])
         pd = r["tasks"]["paged_decode"]
         assert abs(pd["share_of_window"] - 0.2) < 1e-9 and abs(pd["speedup_if_free"] - 1.25) < 1e-9
-        assert len(pd["kernels"]) == 2 and r["tasks"]["toy_rmsnorm"]["share_of_window"] == 0
+        assert len(pd["kernels"]) == 3 and r["tasks"]["toy_rmsnorm"]["share_of_window"] == 0
         assert [k["name"] for k in r["unmatched"]] == ["fused_moe_kernel", "rms_norm_kernel"]
         assert main(["share", "--profile", str(b)]) == 0
 
@@ -236,6 +248,52 @@ def test_ship_commits_the_module_on_a_new_engine_branch_without_touching_its_tre
             raise AssertionError("shipped without a held-out gate")
         except ValueError:
             pass
+
+
+def test_moe_gemm_task_reference_routing_capture_and_judge():
+    import dataclasses
+    from kernels.tasks import moe_gemm as mg
+    g = torch.Generator().manual_seed(0)
+    M, K, N, E, T = 37, 32, 24, 8, 9
+    sorted_e = torch.sort(torch.randint(0, E, (M,), generator=g)).values
+    tok, sorted_ids, expert_ids = mg._routing(M, E, T, 1, g, sorted_e)
+    assert sorted_ids.numel() == M + E * 15 and int((sorted_ids < M).sum()) == M
+    a, w = torch.randn(T, K, generator=g), torch.randn(E, N, K, generator=g)
+    out = mg.reference(a, tok, w, sorted_ids, expert_ids)
+    loop = torch.stack([a[tok[i]] @ w[sorted_e[i]].T for i in range(M)])
+    assert torch.allclose(out, loop, atol=1e-4)
+    rows = torch.randn(M, K, generator=g)                                   # down projection: rows given directly
+    empty = torch.empty(0, dtype=torch.int64)
+    assert torch.allclose(mg.reference(rows, empty, w, sorted_ids, expert_ids),
+                          torch.stack([rows[i] @ w[sorted_e[i]].T for i in range(M)]), atol=1e-4)
+    seen = {}
+    mg._call(lambda *x, **k: seen.update(args=x, kw=k), rows, empty, w, sorted_ids, expert_ids)
+    assert seen["args"][1] is None and seen["args"][5] == M and seen["kw"] == {"block_m": 16}
+    call = {"fn": "x", "args": [{"shape": [T, K]}, {"shape": [M], "values": tok.tolist()}, {"shape": [E, N, K]},
+                                {"shape": [sorted_ids.numel()], "values": sorted_ids.tolist()},
+                                {"shape": [expert_ids.numel()], "values": expert_ids.tolist()}, {"value": M}],
+            "kwargs": {}}
+    t = load("moe_gemm")
+    shape = t.shape_of(call)
+    assert shape == (M, K, N, E, T, 1)
+    assert t.shape_of({**call, "args": [{"shape": [M, K]}, {"value": None}, *call["args"][2:]]}) == (M, K, N, E, M, 0)
+    ints = [x["values"] for x in call["args"] if "values" in x]
+    real = t.with_ints({json.dumps(list(shape)): ints}).make_inputs(shape, torch.float32, "cpu", g)
+    assert real[1].tolist() == tok.tolist() and real[3].tolist() == sorted_ids.tolist()
+    assert t.cost(shape, torch.bfloat16, real)[1] <= t.cost(shape, torch.bfloat16)[1] and t.graphs
+    toy = dataclasses.replace(t, entry=None)                    # the engine's Triton kernel needs CUDA: reference baseline
+    with tempfile.TemporaryDirectory() as d:
+        prog = Path(d) / "k.py"
+        prog.write_text("import torch\n\n\ndef kernel(a, tok, w, sorted_ids, expert_ids, M, block_m=16):\n"
+            "    bm = block_m\n    E, N, _ = w.shape\n"
+            "    expert = torch.full((sorted_ids.numel(),), E, dtype=torch.long)\n"
+            "    expert[: expert_ids.numel() * bm] = expert_ids.long().repeat_interleave(bm)\n"
+            "    real = (sorted_ids < M) & (expert < E)\n    ids, ex = sorted_ids[real].long(), expert[real]\n"
+            "    rows = a[tok[ids]] if tok is not None else a[ids]\n"
+            "    out = torch.empty(M, N, dtype=torch.float32)\n"
+            "    out[ids] = torch.einsum('mk,mnk->mn', rows.float(), w[ex].float())\n    return out.to(a.dtype)\n")
+        r = judge(toy, prog, list(t.seen_default), list(t.heldout_default), None, "cpu", None, 2, iters=3)
+    assert r["metrics"]["correct"] == 1.0, r["artifacts"]
 
 
 def test_paged_decode_reference_matches_dense_attention():
@@ -336,7 +394,7 @@ def test_remote_evaluation_sends_the_source_on_stdin_and_never_a_key():
         fake_ssh.chmod(0o755)
         old = dict(os.environ)
         os.environ.update(KERNEL_EVAL_SSH=json.dumps([str(fake_ssh), "host"]), KERNEL_EVAL_REMOTE=f"cd {ROOT} &&",
-                          KERNEL_EVAL_REMOTE_CONFIG=str(cfg), KERNEL_EVAL_CONFIG=str(cfg), ANTHROPIC_API_KEY="sk-x")
+                          KERNEL_EVAL_CONFIG=str(cfg), ANTHROPIC_API_KEY="sk-x")       # config travels on stdin
         try:
             r = evaluator.evaluate_stage1(str(SEED))
         finally:
