@@ -88,13 +88,29 @@ def test_value_distributions_catch_a_kernel_tuned_to_one_scale():
         assert r["metrics"]["combined_score"] == 0.0 and g["values_x3"]["passed"] is False
 
 
+def load_program_text(src: str):
+    from kernels.evolve.core import load_program
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "k.py"
+        p.write_text(src)
+        return load_program(p)
+
+
 def test_noise_rule_and_physics_alarm():
     from kernels.evolve import core
-    assert not core._shown({"median_ms": 1.0, "iqr_ms": 0.2}, {"median_ms": 1.1, "iqr_ms": 0.2})
-    assert core._shown({"median_ms": 0.5, "iqr_ms": 0.05}, {"median_ms": 1.0, "iqr_ms": 0.05})
+    assert not core._shown({"median": 1.05, "p25": 0.97, "p75": 1.1})
+    assert core._shown({"median": 2.0, "p25": 1.8, "p75": 2.2}) and core._shown({"median": 0.5, "p25": 0.4, "p75": 0.6})
+    from kernels import time_pair
+    t0 = load("toy_rmsnorm")
+    slow = load_program_text("import torch\ndef kernel(x, w):\n    for _ in range(20):\n        y = x.float() @ x.float().T\n"
+                             "    return x\n")
+    p = time_pair(slow, t0.reference, t0.make_inputs, (64, 256), torch.float32, iters=9, warmup=1)
+    assert p["ratio"]["median"] < 1 and p["a"]["median_ms"] > p["b"]["median_ms"]       # a is slower: ratio below 1
     t = load("toy_rmsnorm")
     same = judge(t, SEED, list(t.seen_default), [], None, "cpu", None, 2, iters=3)
     assert same["metrics"]["raw_speedup"] > 0 and "beyond_noise" in json.loads(same["artifacts"]["timings"])[0]
+    held = judge(t, SEED, list(t.seen_default), list(t.heldout_default), None, "cpu", None, 2, iters=3)
+    assert held["metrics"]["heldout_speedup"] > 0 and len(json.loads(held["artifacts"]["heldout_timings"])) == 2
     err = json.loads(same["artifacts"]["error_vs_reference"])["candidate"]
     assert err["max_abs"]["float32"] is not None and err["cases"] > 0
     from validity.peaks import Peaks
@@ -366,6 +382,9 @@ def test_openevolve_finds_the_known_good_edit_and_rejects_the_cheat():
         assert stored and stored[0]["id"] == rec["id"] and len(rec["result"]["candidates"]) >= 1
         assert all({"id", "parent", "metrics"} <= x.keys() for x in rec["result"]["candidates"])
         assert (Path(d) / "ledger" / rec["result"]["trace"]).exists() and rec["config"]["split"] == "seen"
+        from kernels.evolve.run import retime
+        code, metrics, retimed = retime(Path(d) / "oe" / "evolution_trace.jsonl", 2)
+        assert "rsqrt" in code and metrics["correct"] == 1.0 and all(len(x["scores"]) == 3 for x in retimed)
         print("best", res.best_score)
 
 

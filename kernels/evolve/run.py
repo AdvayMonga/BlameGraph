@@ -47,8 +47,8 @@ How a program is judged:
 seeds, edge shapes, NaN/Inf inputs, inputs scaled by {', '.join(f'{k:g}' for k in core.SCALES)}), inputs left \
 unchanged, no output aliasing, no answers kept across calls; then peak memory at most {core.MEMORY_FACTOR}x the \
 baseline's + {core.MEMORY_SLACK // 2**20} MiB; then timing against {base}.
-- Score: the call-weighted geometric mean of the speedup over the seen shapes; a shape whose difference is within \
-the timer's spread counts as 1.0. A failed gate scores 0; so does a time at which the kernel would run at \
+- Score: the call-weighted geometric mean of the speedup over the seen shapes, the program and the baseline timed \
+in pairs on the same inputs; a shape where the middle half of the paired ratios includes 1 counts as 1.0. A failed gate scores 0; so does a time at which the kernel would run at \
 over {core.PHYSICS_MARGIN_PCT}% of its roofline bound. Held-out shapes are judged separately and are not part of the score.
 - Refused before running: source that uses {refused}, or writes into anything it imports. Scores 0: anything the \
 evaluator uses found patched.
@@ -92,6 +92,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--config", default=str(HERE / "config.yaml"))
     r.add_argument("--initial")
     r.add_argument("--timing-shapes", type=int, default=8, help="seen shapes used for selection (by calls)")
+    r.add_argument("--retime", type=int, default=3, help="top candidates re-timed 3x each before one is promoted")
     sub.choices["gate"].add_argument("--program", required=True)
     sub.choices["split"].add_argument("--write", required=True)
     a = ap.parse_args(argv)
@@ -132,17 +133,49 @@ def main(argv: list[str] | None = None) -> int:
         config.llm.update_model_params({"init_client": init_client}, overwrite=True)
     res = run_evolution(str(program), str(HERE / "evaluator.py"), config, iterations=a.iterations,
                         output_dir=str(out / "openevolve"), cleanup=False)
-    (out / "best_program.py").write_text(res.best_code)
-    (out / "best_metrics.json").write_text(json.dumps(res.metrics, indent=1, default=str))
-    rec = record(task, sets, config, a.iterations, a.device, out / "openevolve" / "evolution_trace.jsonl",
-                 out / "best_program.py", res.metrics)
+    trace = out / "openevolve" / "evolution_trace.jsonl"
+    code, metrics, retimed = retime(trace, a.retime) if a.retime else (None, None, [])
+    (out / "best_program.py").write_text(code or res.best_code)
+    (out / "best_metrics.json").write_text(json.dumps(metrics or res.metrics, indent=1, default=str))
+    rec = record(task, sets, config, a.iterations, a.device, trace, out / "best_program.py", metrics or res.metrics,
+                 retimed=retimed)
     print(json.dumps({"best_score": res.best_score, "metrics": res.metrics, "out": str(out), "ledger": rec["id"]},
                      default=str))
     return 0
 
 
+def retime(trace: Path, k: int, repeats: int = 3) -> tuple[str | None, dict | None, list]:
+    """The top `k` candidates by score re-judged `repeats` times through the evaluator (stage 2, local or remote);
+    the one with the highest median score is promoted. One timing of each is what selection saw, and one timing can
+    win by noise. Returns (code, metrics of its median run, every re-timing)."""
+    import statistics
+    import tempfile
+    from kernels.evolve import evaluator
+    rows = [json.loads(x) for x in trace.read_text().splitlines() if x.strip()] if trace.exists() else []
+    best: dict = {}
+    for r in rows:
+        if r.get("child_code") and (r.get("child_metrics") or {}).get("combined_score", 0) > 0:
+            best.setdefault(r["child_id"], r)
+    top = sorted(best.values(), key=lambda r: -r["child_metrics"]["combined_score"])[:k]
+    out = []
+    for r in top:
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+            f.write(r["child_code"])
+        runs = [evaluator.evaluate_stage2(f.name).metrics for _ in range(repeats)]
+        Path(f.name).unlink()
+        scores = [m.get("combined_score", 0.0) for m in runs]
+        med = statistics.median(scores)
+        out.append({"id": r["child_id"], "selected_score": r["child_metrics"]["combined_score"], "scores": scores,
+                    "median": med, "code": r["child_code"],
+                    "metrics": min(runs, key=lambda m: abs(m.get("combined_score", 0.0) - med))})
+    if not out:
+        return None, None, []
+    win = max(out, key=lambda x: x["median"])
+    return win["code"], win["metrics"], [{k: v for k, v in x.items() if k not in ("code", "metrics")} for x in out]
+
+
 def record(task, sets: dict, config, iterations: int, device: str, trace: Path, best: Path, best_metrics: dict,
-           root: Path | None = None) -> dict:
+           root: Path | None = None, retimed: list | None = None) -> dict:
     """One `kernels` ledger record per run: every evaluated candidate's seen-shape metrics and lineage, the trace and
     the best program as blobs. Held-out shapes stay out (`gate` judges them; its output stays in the run dir)."""
     import time
@@ -156,7 +189,7 @@ def record(task, sets: dict, config, iterations: int, device: str, trace: Path, 
         "config": {"split": "seen", "task": task.name, "entry": task.entry, "iterations": iterations,
                    "device": device, "seen_shapes": len(sets["seen"]), "selected_from": sets.get("selected_from"),
                    "models": [{"name": m.name, "weight": m.weight} for m in config.llm.models]},
-        "result": {"best": best_metrics, "candidates": cands,
+        "result": {"best": best_metrics, "candidates": cands, "retimed": retimed or [],
                    "trace": ledger.put_blob(trace, root, ".jsonl") if trace.exists() else None,
                    "best_program": ledger.put_blob(best, root, ".py")}}, root)
 
