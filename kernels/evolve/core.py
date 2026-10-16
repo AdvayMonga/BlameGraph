@@ -13,7 +13,7 @@ from pathlib import Path
 
 import torch
 
-from kernels import check_kernel, time_kernel
+from kernels import check_kernel, time_pair
 from kernels.tasks import Task, load
 
 
@@ -165,9 +165,9 @@ def _error(result: dict) -> dict:
     return {"max_abs": ev["max_abs"], "max_rel": ev["max_rel"], "cases": ev["cases"]}
 
 
-def _shown(c: dict, b: dict) -> bool:
-    """A difference counts when the medians differ by more than the two runs' half-IQRs: the timer's own noise."""
-    return abs(b["median_ms"] - c["median_ms"]) > (c["iqr_ms"] + b["iqr_ms"]) / 2
+def _shown(ratio: dict) -> bool:
+    """A difference counts when the middle half of the paired baseline/candidate ratios lies on one side of 1."""
+    return ratio["p25"] > 1 or ratio["p75"] < 1
 
 
 def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | None, device: str,
@@ -238,7 +238,7 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
         error["baseline"] = _error(check_kernel(ref, base, task.make_inputs, seen, [], dtypes=task.dtypes,
                                                 device=device, seeds=(0, 1, 2), tolerances=tolerances,
                                                 edge_shapes=[], repeats=1, layouts=()))
-    hw, dtype, rows, logs, raw = _peaks(device), task.dtypes[0], [], 0.0, 0.0
+    hw, dtype = _peaks(device), task.dtypes[0]
     inputs0 = task.make_inputs(seen[0], dtype, device, torch.Generator().manual_seed(0))
     pc, pb = _peak_bytes(timed, inputs0, device), _peak_bytes(base, inputs0, device)
     if checkpoint():
@@ -250,32 +250,42 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
                 "artifacts": {"gates": json.dumps(gates, indent=1)}}
     if pc is not None:
         gates["peak_memory"] = {"passed": True, "reason": f"peak {pc / 2**20:.0f} MiB vs baseline {pb / 2**20:.0f} MiB"}
-    total = sum((weights or {}).get(json.dumps(list(s)), 1) for s in seen)
-    for s in seen:
-        c = time_kernel(timed, task.make_inputs, s, dtype, device, iters=iters)    # unwrapped: no check in the window
-        b = time_kernel(base, task.make_inputs, s, dtype, device, iters=iters)
-        speed = b["median_ms"] / c["median_ms"] if c["median_ms"] else 0.0
-        shown = _shown(c, b)
-        w = (weights or {}).get(json.dumps(list(s)), 1) / total
-        logs += w * math.log(max(speed if shown else 1.0, 1e-9))      # inside the noise: no change claimed
-        raw += w * math.log(max(speed, 1e-9))
-        rows.append({"shape": list(s), "candidate_ms": c["median_ms"], "candidate_iqr_ms": c["iqr_ms"],
-                     "baseline_ms": b["median_ms"], "baseline_iqr_ms": b["iqr_ms"], "speedup": speed, "weight": w,
-                     "beyond_noise": shown, "clock": c.get("clock"),
-                     "pct_of_roofline": _pct_of_roofline(task, s, dtype, c["median_ms"], hw)})
-    over = [x for x in rows if (x["pct_of_roofline"] or 0) > PHYSICS_MARGIN_PCT]
+    rows, score, raw = _timed(task, timed, base, seen, weights, dtype, device, iters, hw)
+    held = _timed(task, timed, base, heldout, weights, dtype, device, iters, hw) if heldout else None   # gate only
+    over = [x for x in rows + (held[0] if held else []) if (x["pct_of_roofline"] or 0) > PHYSICS_MARGIN_PCT]
     if over:
         gates["physics"] = {"passed": False, "reason": f"{len(over)} shapes measured faster than the roofline bound "
                             f"(max {max(x['pct_of_roofline'] for x in over):.0f}%): work was skipped or not timed"}
         return {"metrics": {"combined_score": 0.0, "correct": 1.0, "stage": stage},
                 "artifacts": {"timings": json.dumps(rows, indent=1), "gates": json.dumps(gates, indent=1)}}
-    score = math.exp(logs)
-    return {"metrics": {"combined_score": score, "correct": 1.0, "speedup": score, "raw_speedup": math.exp(raw),
-                        "stage": stage,
-                        "min_pct_of_roofline": min((x["pct_of_roofline"] for x in rows if x["pct_of_roofline"]),
-                                                   default=0.0)},
-            "artifacts": {"timings": json.dumps(rows, indent=1), "gates": json.dumps(gates, indent=1),
-                          "error_vs_reference": json.dumps(error, indent=1), "baseline": task.entry or "reference"}}
+    metrics = {"combined_score": score, "correct": 1.0, "speedup": score, "raw_speedup": raw, "stage": stage,
+               "min_pct_of_roofline": min((x["pct_of_roofline"] for x in rows if x["pct_of_roofline"]), default=0.0)}
+    artifacts = {"timings": json.dumps(rows, indent=1), "gates": json.dumps(gates, indent=1),
+                 "error_vs_reference": json.dumps(error, indent=1), "baseline": task.entry or "reference"}
+    if held:                                     # a fact for the researcher; never part of the score
+        metrics["heldout_speedup"], metrics["heldout_raw_speedup"] = held[1], held[2]
+        artifacts["heldout_timings"] = json.dumps(held[0], indent=1)
+    return {"metrics": metrics, "artifacts": artifacts}
+
+
+def _timed(task, cand, base, shapes, weights, dtype, device, iters, hw) -> tuple[list, float, float]:
+    """Per-shape paired timings against the baseline, and the call-weighted geometric-mean speedup with gains inside
+    the noise counted as 1.0 (and without that rule)."""
+    rows, logs, raw = [], 0.0, 0.0
+    total = sum((weights or {}).get(json.dumps(list(s)), 1) for s in shapes)
+    for s in shapes:
+        p = time_pair(cand, base, task.make_inputs, s, dtype, device, iters=iters)    # unwrapped: no check in the window
+        c, b, speed = p["a"], p["b"], p["ratio"]["median"]
+        shown = _shown(p["ratio"])
+        w = (weights or {}).get(json.dumps(list(s)), 1) / total
+        logs += w * math.log(max(speed if shown else 1.0, 1e-9))
+        raw += w * math.log(max(speed, 1e-9))
+        rows.append({"shape": list(s), "candidate_ms": c["median_ms"], "candidate_iqr_ms": c["iqr_ms"],
+                     "baseline_ms": b["median_ms"], "baseline_iqr_ms": b["iqr_ms"], "speedup": speed,
+                     "speedup_p25": p["ratio"]["p25"], "speedup_p75": p["ratio"]["p75"], "weight": w,
+                     "beyond_noise": shown, "clock": p["clock"],
+                     "pct_of_roofline": _pct_of_roofline(task, s, dtype, c["median_ms"], hw)})
+    return rows, math.exp(logs), math.exp(raw)
 
 
 def main() -> int:

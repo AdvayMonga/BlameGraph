@@ -5,6 +5,6 @@ NaN/Inf), memoization (inputs overwritten in place), inputs unchanged, no aliasi
 only if required). `time_kernel` times honestly; `check_memoization` compares repeated vs fresh inputs.
 """
 from .check import TOLERANCES, check_kernel
-from .timing import check_memoization, time_kernel
+from .timing import check_memoization, time_kernel, time_pair
 
-__all__ = ["TOLERANCES", "check_kernel", "check_memoization", "time_kernel"]
+__all__ = ["TOLERANCES", "check_kernel", "check_memoization", "time_kernel", "time_pair"]
