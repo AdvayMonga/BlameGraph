@@ -1,0 +1,17 @@
+# Current program
+- Score: {fitness_score}
+- Feature coordinates: {feature_coords}
+- Measured against its parent: {improvement_areas}
+
+{artifacts}
+
+# Earlier programs
+{evolution_history}
+
+# Program
+```{language}
+{current_program}
+```
+
+# Output format
+The complete new program in one ```{language} block. It must define `kernel` with the same inputs and outputs.

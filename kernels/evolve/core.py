@@ -13,7 +13,7 @@ from pathlib import Path
 
 import torch
 
-from kernels import check_kernel, time_kernel
+from kernels import check_kernel, time_pair
 from kernels.tasks import Task, load
 
 
@@ -24,10 +24,11 @@ FORBIDDEN = {
     r"\binspect\b|\bsys\._getframe|\bf_back\b|\bf_locals\b": "frame introspection",
     r"\bctypes\b|\bcffi\b": "raw memory access",
     r"\bthreading\b|\bmultiprocessing\b|\bconcurrent\b|\basyncio\b": "background work outside the timed call",
-    r"torch\.cuda\.(Stream|stream|Event|set_stream|current_stream)\b|\.elapsed_time\b|\bcuda\.Event\b":
+    r"torch\.cuda\.(Stream|stream|Event|set_stream|current_stream)\b|\.elapsed_time\b|\bcuda\.Event\b"
+    r"|\b(Stream|ExternalStream|Event|CUDAGraph|current_stream|set_stream|_sleep)\b":
         "streams or timer events",
     r"\btime\.(perf_counter|time|monotonic|sleep)\b|\bimport time\b|\bfrom time\b": "the clock",
-    r"\bsys\.modules\b|\bbuiltins\b|__builtins__|\bimportlib\b|__import__|\bsetattr\s*\(|__setattr__|__dict__"
+    r"\bsys\.modules\b|\bbuiltins\b|__builtins__|\bimportlib\b|__import__|\b(set|get)attr\s*\(|__setattr__|__dict__"
     r"|\bglobals\s*\(|\bvars\s*\(|\b(torch|triton|time|math|statistics)(\.\w+)+\s*=(?!=)": "patching modules",
     r"(?<![.\w])(eval|exec|compile)\s*\(|__subclasses__|\btypes\.(FunctionType|CodeType)\b": "code built at run time",
     r"\bkernels\.(check|timing|evolve)\b|\bfrom kernels\b|\bimport kernels\b": "the evaluator itself",
@@ -37,9 +38,47 @@ FORBIDDEN = {
 
 
 def screen(source: str) -> list[str]:
-    """Reasons a program is refused before it runs (static: a pattern anywhere in the source)."""
+    """Reasons a program is refused before it runs (static: a pattern anywhere in the source, plus `_writes_into`)."""
     import re
-    return [f"uses {why}: `{m.group(0)}`" for pat, why in FORBIDDEN.items() if (m := re.search(pat, source))]
+    return ([f"uses {why}: `{m.group(0)}`" for pat, why in FORBIDDEN.items() if (m := re.search(pat, source))] +
+            [f"assigns into what it imported: `{w}`" for w in _writes_into(source)])
+
+
+def _writes_into(source: str) -> list[str]:
+    """Attribute writes or deletes whose root is an imported name, a name bound to one (`m = torch.cuda`) or to a call
+    (`T = type(x)`), or a call (`type(x).abs = f`): patching a library under any alias. Writes on other objects
+    (`self.x = 1`, a parameter's attribute) are left alone."""
+    import ast
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []                                # loading reports it
+    nodes = list(ast.walk(tree))
+    held = {(a.asname or a.name).split(".")[0] for n in nodes if isinstance(n, (ast.Import, ast.ImportFrom))
+            for a in n.names}
+
+    def root(e):
+        while isinstance(e, (ast.Attribute, ast.Subscript)):
+            e = e.value
+        return e
+    grew = True
+    while grew:                                  # names bound to an imported name or an attribute chain of one
+        grew = False
+        for n in nodes:
+            if isinstance(n, (ast.Assign, ast.AnnAssign, ast.NamedExpr)) and n.value is not None:
+                r = root(n.value) if isinstance(n.value, (ast.Name, ast.Attribute, ast.Call)) else None
+                if isinstance(r, ast.Call) or (isinstance(r, ast.Name) and r.id in held):
+                    for t in (n.targets if isinstance(n, ast.Assign) else [n.target]):
+                        if isinstance(t, ast.Name) and t.id not in held:
+                            held.add(t.id)
+                            grew = True
+    out = []
+    for n in nodes:
+        if isinstance(n, ast.Attribute) and isinstance(n.ctx, (ast.Store, ast.Del)):
+            r = root(n)
+            if isinstance(r, ast.Call) or (isinstance(r, ast.Name) and r.id in held):
+                out.append(ast.unparse(n))
+    return out
 
 
 def _watched(task: Task) -> dict:
@@ -58,7 +97,7 @@ def _watched(task: Task) -> dict:
         for k, v in vars(m).items():
             if (callable(v) or isinstance(v, type(math))) and not k.startswith("__") and (own or not k.startswith("_")):
                 out[f"{m.__name__}.{k}"] = id(v)
-    for c in (torch.Tensor, torch.cuda.Event):
+    for c in (torch.Tensor, torch.cuda.Event, torch.cuda.CUDAGraph):
         out.update({f"{c.__module__}.{c.__qualname__}.{k}": id(v) for k, v in vars(c).items()})
     return out
 
@@ -66,7 +105,7 @@ def _watched(task: Task) -> dict:
 def _patched(before: dict, task: Task) -> list[str]:
     """Names in `before` that now point elsewhere or are gone, and attributes added to the watched classes."""
     now = _watched(task)
-    cls = (f"{c.__module__}.{c.__qualname__}." for c in (torch.Tensor, torch.cuda.Event))
+    cls = (f"{c.__module__}.{c.__qualname__}." for c in (torch.Tensor, torch.cuda.Event, torch.cuda.CUDAGraph))
     prefixes = tuple(cls)
     return sorted([k for k, v in before.items() if now.get(k) != v] +
                   [k for k in now if k not in before and k.startswith(prefixes)])
@@ -122,9 +161,15 @@ def _peak_bytes(fn, inputs, device) -> int | None:
     return torch.cuda.max_memory_allocated() - base
 
 
-def _shown(c: dict, b: dict) -> bool:
-    """A difference counts when the medians differ by more than the two runs' half-IQRs: the timer's own noise."""
-    return abs(b["median_ms"] - c["median_ms"]) > (c["iqr_ms"] + b["iqr_ms"]) / 2
+def _error(result: dict) -> dict:
+    """Max abs and rel error against the reference over the seen-shape cases, per dtype."""
+    ev = result["gates"]["correctness_seen"]["evidence"]
+    return {"max_abs": ev["max_abs"], "max_rel": ev["max_rel"], "cases": ev["cases"]}
+
+
+def _shown(ratio: dict) -> bool:
+    """A difference counts when the middle half of the paired baseline/candidate ratios lies on one side of 1."""
+    return ratio["p25"] > 1 or ratio["p75"] < 1
 
 
 def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | None, device: str,
@@ -137,22 +182,35 @@ def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | 
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
                 "artifacts": {"error": "refused before running: " + "; ".join(refused)}}
     task.baseline()                              # the engine's import-time effects happen before the snapshot
-    before = _watched(task)
-    out = _judge(task, program, seen, heldout, weights, device, tolerances, stage, iters)
-    patched = _patched(before, task)
-    if patched:
+    before, patched = _watched(task), []
+
+    def checkpoint() -> bool:
+        """Record anything patched since the snapshot; True once anything has been."""
+        patched.extend(n for n in _patched(before, task) if n not in patched)
+        return bool(patched)
+    out = _judge(task, program, seen, heldout, weights, device, tolerances, stage, iters, checkpoint)
+    if checkpoint():
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
                 "artifacts": {"error": "patched what the evaluator uses: " + ", ".join(patched[:20])}}
     return out
 
 
 def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | None, device: str,
-           tolerances: dict | None, stage: int, iters: int) -> dict:
+           tolerances: dict | None, stage: int, iters: int, checkpoint) -> dict:
+    """The gates and timing; returns {} as soon as `checkpoint` finds a patch (judge reports it)."""
     try:
-        cand = task.bind(load_program(program))
+        timed = task.bind(load_program(program))
     except Exception as e:                       # noqa: BLE001  a program that does not load scores 0
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
                 "artifacts": {"error": f"load failed: {type(e).__name__}: {e}"}}
+    if checkpoint():
+        return {}
+
+    def cand(*xs):                               # checked after every call the checker makes, before it compares
+        out = timed(*xs)
+        if checkpoint():
+            raise RuntimeError("the candidate patched what the evaluator uses")
+        return out
     ref = task.reference
     shapes = seen[:2] if stage == 1 else seen
     try:
@@ -163,7 +221,8 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
     except Exception:                            # noqa: BLE001
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
                 "artifacts": {"error": "checker raised:\n" + traceback.format_exc()[-3000:]}}
-    gates = {k: {"passed": g["passed"], "reason": g["reason"]} for k, g in r["gates"].items()}
+    gates = {k: {"passed": g["passed"], "reason": g["reason"], "cases": (g.get("evidence") or {}).get("cases")}
+             for k, g in r["gates"].items()}
     if r["passed"] and stage > 1:                 # other value distributions, on the two most frequent seen shapes
         for k in SCALES:
             v = check_kernel(ref, cand, _scaled(task.make_inputs, k), seen[:2], [], dtypes=task.dtypes, device=device,
@@ -177,9 +236,16 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
                 "artifacts": {"gates": json.dumps(gates, indent=1)}}
     base_fn = task.baseline()
     base = task.bind(base_fn) if base_fn else ref
-    hw, dtype, rows, logs, raw = _peaks(device), task.dtypes[0], [], 0.0, 0.0
+    error = {"candidate": _error(r)}                # a fact, not a gate: lower precision inside a kernel is allowed
+    if base_fn:
+        error["baseline"] = _error(check_kernel(ref, base, task.make_inputs, seen, [], dtypes=task.dtypes,
+                                                device=device, seeds=(0, 1, 2), tolerances=tolerances,
+                                                edge_shapes=[], repeats=1, layouts=()))
+    hw, dtype = _peaks(device), task.dtypes[0]
     inputs0 = task.make_inputs(seen[0], dtype, device, torch.Generator().manual_seed(0))
-    pc, pb = _peak_bytes(cand, inputs0, device), _peak_bytes(base, inputs0, device)
+    pc, pb = _peak_bytes(timed, inputs0, device), _peak_bytes(base, inputs0, device)
+    if checkpoint():
+        return {}
     if pc is not None and pc > MEMORY_FACTOR * pb + MEMORY_SLACK:
         gates["peak_memory"] = {"passed": False, "reason": f"peak {pc / 2**20:.0f} MiB vs baseline {pb / 2**20:.0f} MiB "
                                 f"(> {MEMORY_FACTOR}x + {MEMORY_SLACK // 2**20} MiB)"}
@@ -187,32 +253,59 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
                 "artifacts": {"gates": json.dumps(gates, indent=1)}}
     if pc is not None:
         gates["peak_memory"] = {"passed": True, "reason": f"peak {pc / 2**20:.0f} MiB vs baseline {pb / 2**20:.0f} MiB"}
-    total = sum((weights or {}).get(json.dumps(list(s)), 1) for s in seen)
-    for s in seen:
-        c = time_kernel(cand, task.make_inputs, s, dtype, device, iters=iters)
-        b = time_kernel(base, task.make_inputs, s, dtype, device, iters=iters)
-        speed = b["median_ms"] / c["median_ms"] if c["median_ms"] else 0.0
-        shown = _shown(c, b)
-        w = (weights or {}).get(json.dumps(list(s)), 1) / total
-        logs += w * math.log(max(speed if shown else 1.0, 1e-9))      # inside the noise: no change claimed
-        raw += w * math.log(max(speed, 1e-9))
-        rows.append({"shape": list(s), "candidate_ms": c["median_ms"], "candidate_iqr_ms": c["iqr_ms"],
-                     "baseline_ms": b["median_ms"], "baseline_iqr_ms": b["iqr_ms"], "speedup": speed, "weight": w,
-                     "beyond_noise": shown, "clock": c.get("clock"),
-                     "pct_of_roofline": _pct_of_roofline(task, s, dtype, c["median_ms"], hw)})
-    over = [x for x in rows if (x["pct_of_roofline"] or 0) > PHYSICS_MARGIN_PCT]
+    try:
+        rows, score, raw = _timed(task, timed, base, seen, weights, dtype, device, iters, hw, tolerances)
+        held = (_timed(task, timed, base, heldout, weights, dtype, device, iters, hw, tolerances)   # gate only
+                if heldout else None)
+    except Exception as e:                       # noqa: BLE001  cannot be captured, or wrong output while timed
+        gates["timing"] = {"passed": False, "reason": (f"{type(e).__name__}: {e}")[:2000] +
+                           (" (timed as a CUDA graph replay: the kernel must capture and stay correct)"
+                            if task.graphs else "")}
+        return {"metrics": {"combined_score": 0.0, "correct": 1.0, "stage": stage},
+                "artifacts": {"gates": json.dumps(gates, indent=1)}}
+    over = [x for x in rows + (held[0] if held else []) if (x["pct_of_roofline"] or 0) > PHYSICS_MARGIN_PCT]
     if over:
         gates["physics"] = {"passed": False, "reason": f"{len(over)} shapes measured faster than the roofline bound "
                             f"(max {max(x['pct_of_roofline'] for x in over):.0f}%): work was skipped or not timed"}
         return {"metrics": {"combined_score": 0.0, "correct": 1.0, "stage": stage},
                 "artifacts": {"timings": json.dumps(rows, indent=1), "gates": json.dumps(gates, indent=1)}}
-    score = math.exp(logs)
-    return {"metrics": {"combined_score": score, "correct": 1.0, "speedup": score, "raw_speedup": math.exp(raw),
-                        "stage": stage,
-                        "min_pct_of_roofline": min((x["pct_of_roofline"] for x in rows if x["pct_of_roofline"]),
-                                                   default=0.0)},
-            "artifacts": {"timings": json.dumps(rows, indent=1), "gates": json.dumps(gates, indent=1),
-                          "baseline": task.entry or "reference"}}
+    metrics = {"combined_score": score, "correct": 1.0, "speedup": score, "raw_speedup": raw, "stage": stage,
+               "min_pct_of_roofline": min((x["pct_of_roofline"] for x in rows if x["pct_of_roofline"]), default=0.0)}
+    artifacts = {"timings": json.dumps(rows, indent=1), "gates": json.dumps(gates, indent=1),
+                 "error_vs_reference": json.dumps(error, indent=1), "baseline": task.entry or "reference"}
+    if held:                                     # a fact for the researcher; never part of the score
+        metrics["heldout_speedup"], metrics["heldout_raw_speedup"] = held[1], held[2]
+        artifacts["heldout_timings"] = json.dumps(held[0], indent=1)
+    return {"metrics": metrics, "artifacts": artifacts}
+
+
+def _timed(task, cand, base, shapes, weights, dtype, device, iters, hw, tolerances=None) -> tuple[list, float, float]:
+    """Per-shape paired timings against the baseline, and the call-weighted geometric-mean speedup with gains inside
+    the noise counted as 1.0 (and without that rule). Raises if the timed calls' output differs from the reference:
+    a kernel that does less only when timed (e.g. while a CUDA graph captures it) is caught here."""
+    from kernels.check import TOLERANCES, _compare
+    atol, rtol = {**TOLERANCES, **(tolerances or {})}[dtype]
+    rows, logs, raw = [], 0.0, 0.0
+    total = sum((weights or {}).get(json.dumps(list(s)), 1) for s in shapes)
+    for s in shapes:
+        p = time_pair(cand, base, task.make_inputs, s, dtype, device, iters=iters,      # unwrapped: no check in
+                      graphs=task.graphs)                                              # the window
+        for inputs, out in zip(p["inputs"], p["outputs_a"]):
+            d = _compare(task.reference(*[t.clone() for t in inputs]), out, atol, rtol)
+            if not d["ok"]:
+                raise ValueError(f"the timed calls' output differs from the reference at shape {list(s)}: "
+                                 f"{d.get('error') or ('max_abs %.3g, max_rel %.3g' % (d['max_abs'], d['max_rel']))}")
+        c, b, speed = p["a"], p["b"], p["ratio"]["median"]
+        shown = _shown(p["ratio"])
+        w = (weights or {}).get(json.dumps(list(s)), 1) / total
+        logs += w * math.log(max(speed if shown else 1.0, 1e-9))
+        raw += w * math.log(max(speed, 1e-9))
+        rows.append({"shape": list(s), "candidate_ms": c["median_ms"], "candidate_iqr_ms": c["iqr_ms"],
+                     "baseline_ms": b["median_ms"], "baseline_iqr_ms": b["iqr_ms"], "speedup": speed,
+                     "speedup_p25": p["ratio"]["p25"], "speedup_p75": p["ratio"]["p75"], "weight": w,
+                     "beyond_noise": shown, "clock": p["clock"],
+                     "pct_of_roofline": _pct_of_roofline(task, s, dtype, c["median_ms"], hw)})
+    return rows, math.exp(logs), math.exp(raw)
 
 
 def main() -> int:
@@ -227,7 +320,7 @@ def main() -> int:
         program = Path(name)
     else:
         program = Path(sys.argv[2])
-    task = load(cfg["task"])
+    task = load(cfg["task"]).with_ints(cfg.get("ints"))      # captured int args (real sequence lengths) where given
     tol = {getattr(torch, k): tuple(v) for k, v in (cfg.get("tolerances") or {}).items()}
     out = judge(task, program, [tuple(s) for s in cfg["seen"]], [tuple(s) for s in cfg.get("heldout", [])],
                 cfg.get("weights"), cfg.get("device", "cpu"), tol or None, stage, cfg.get("iters", 30))

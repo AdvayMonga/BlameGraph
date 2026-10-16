@@ -27,8 +27,12 @@ the decode state as one `[layers, rows, cols]` table, fused q/k/v GEMM, cached i
 TPOT p99 11.5 -> 9.6 ms; decode step 9.7 ms at batch 1, 14 at 8, 19 at 16, 43 at 128 (was 24 / 35-60); saturated
 1.65 req/s in one run (conc 64 within limits, TTFT p99 1.92 s) and 1.07 in the next on the same engine (TTFT p99
 3.43 s): a prefill wave still blocks decode and the stalls are bursty, so conc 64 straddles the 2 s line; long_prompt
-6.25 req/s. Gate (dev tier, 16 in flight) PASS 1,597/1,597. #109 merged. Next: prefill/decode overlap (mixed
-batching), the slowest waves (a 6-prompt 8.5k-token wave at 1.5 s), fp8 once bandwidth-bound.
+6.25 req/s. Gate (dev tier, 16 in flight) PASS 1,597/1,597. #109 merged. Built afterwards off the GPU, awaiting
+measurement one at a time: inference-server #110 (`PREFILL_MODE=mixed`, bounded multi-row prefill between decode
+steps, for saturated at concurrency 64-128) and #111 (`ASYNC_DECODE=1`, step n launched on n-1's device tokens, host
+work overlapped); then fp8 experts at wide batch (`CUSTOM_BACKEND_QUANT=fp8`), then a Triton `moe_align` + fused MoE
+epilogue built live. The slowest prefill waves (a 6-prompt 8.5k-token wave at 1.5 s) and long-prompt cache hits need
+a profile before anything is built for them.
 
 ## 2026-10-16 — Engine: MoE kernel on, the gate to PASS (Nebius H200, inference-server #107 merged)
 The Triton MoE grouped GEMM's device-side assert was the routing kernel returning an out-of-range expert id (the
@@ -118,7 +122,7 @@ Policy confirmed, nothing tuned. 18,606 items, vLLM 0.30.0, concurrency 128, 3 h
 1.0009, INT8 `nytopop/Qwen3-30B-A3B.w8a8` 0.9993, FP8 (DeepGEMM on, nvcc 13.0) 1.0034 — all PASS; GPTQ-Int4 0.9869
 FAIL (MMLU-Pro 0.9807, p = 3e-5). FP8/INT8 each lose and gain ~800 answers in balance: that churn is the realistic
 noise. Consistency clean on every run.
-Open (→ STATE): plain BF16 matched the batch-invariant reference exactly here (18,602/18,606 identical, KL 0.0), but
+Open: plain BF16 matched the batch-invariant reference exactly here (18,602/18,606 identical, KL 0.0), but
 on Verda at concurrency 32 it diverged on 466/490 MMLU-Pro answers (median 13% into the answer). Logs show both BF16
 servers plain (non-invariant compile path, requests served by the BF16 server); the reference reproduced across both
 days and clouds (691/691 same-prompt answers identical). Differences: venue, driver 580.126 vs 580.173, concurrency
