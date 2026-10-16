@@ -64,4 +64,4 @@ def load(name: str) -> Task:
     return importlib.import_module(f"kernels.tasks.{name}").TASK
 
 
-TASKS = ("toy_rmsnorm", "paged_decode")
+TASKS = ("toy_rmsnorm", "paged_decode", "moe_gemm")

@@ -238,6 +238,52 @@ def test_ship_commits_the_module_on_a_new_engine_branch_without_touching_its_tre
             pass
 
 
+def test_moe_gemm_task_reference_routing_capture_and_judge():
+    import dataclasses
+    from kernels.tasks import moe_gemm as mg
+    g = torch.Generator().manual_seed(0)
+    M, K, N, E, T = 37, 32, 24, 8, 9
+    sorted_e = torch.sort(torch.randint(0, E, (M,), generator=g)).values
+    tok, sorted_ids, expert_ids = mg._routing(M, E, T, 1, g, sorted_e)
+    assert sorted_ids.numel() == M + E * 15 and int((sorted_ids < M).sum()) == M
+    a, w = torch.randn(T, K, generator=g), torch.randn(E, N, K, generator=g)
+    out = mg.reference(a, tok, w, sorted_ids, expert_ids)
+    loop = torch.stack([a[tok[i]] @ w[sorted_e[i]].T for i in range(M)])
+    assert torch.allclose(out, loop, atol=1e-4)
+    rows = torch.randn(M, K, generator=g)                                   # down projection: rows given directly
+    empty = torch.empty(0, dtype=torch.int64)
+    assert torch.allclose(mg.reference(rows, empty, w, sorted_ids, expert_ids),
+                          torch.stack([rows[i] @ w[sorted_e[i]].T for i in range(M)]), atol=1e-4)
+    seen = {}
+    mg._call(lambda *x, **k: seen.update(args=x, kw=k), rows, empty, w, sorted_ids, expert_ids)
+    assert seen["args"][1] is None and seen["args"][5] == M and seen["kw"] == {"block_m": 16}
+    call = {"fn": "x", "args": [{"shape": [T, K]}, {"shape": [M], "values": tok.tolist()}, {"shape": [E, N, K]},
+                                {"shape": [sorted_ids.numel()], "values": sorted_ids.tolist()},
+                                {"shape": [expert_ids.numel()], "values": expert_ids.tolist()}, {"value": M}],
+            "kwargs": {}}
+    t = load("moe_gemm")
+    shape = t.shape_of(call)
+    assert shape == (M, K, N, E, T, 1)
+    assert t.shape_of({**call, "args": [{"shape": [M, K]}, {"value": None}, *call["args"][2:]]}) == (M, K, N, E, M, 0)
+    ints = [x["values"] for x in call["args"] if "values" in x]
+    real = t.with_ints({json.dumps(list(shape)): ints}).make_inputs(shape, torch.float32, "cpu", g)
+    assert real[1].tolist() == tok.tolist() and real[3].tolist() == sorted_ids.tolist()
+    assert t.cost(shape, torch.bfloat16, real)[1] <= t.cost(shape, torch.bfloat16)[1] and t.graphs
+    toy = dataclasses.replace(t, entry=None)                    # the engine's Triton kernel needs CUDA: reference baseline
+    with tempfile.TemporaryDirectory() as d:
+        prog = Path(d) / "k.py"
+        prog.write_text("import torch\n\n\ndef kernel(a, tok, w, sorted_ids, expert_ids, M, block_m=16):\n"
+            "    bm = block_m\n    E, N, _ = w.shape\n"
+            "    expert = torch.full((sorted_ids.numel(),), E, dtype=torch.long)\n"
+            "    expert[: expert_ids.numel() * bm] = expert_ids.long().repeat_interleave(bm)\n"
+            "    real = (sorted_ids < M) & (expert < E)\n    ids, ex = sorted_ids[real].long(), expert[real]\n"
+            "    rows = a[tok[ids]] if tok is not None else a[ids]\n"
+            "    out = torch.empty(M, N, dtype=torch.float32)\n"
+            "    out[ids] = torch.einsum('mk,mnk->mn', rows.float(), w[ex].float())\n    return out.to(a.dtype)\n")
+        r = judge(toy, prog, list(t.seen_default), list(t.heldout_default), None, "cpu", None, 2, iters=3)
+    assert r["metrics"]["correct"] == 1.0, r["artifacts"]
+
+
 def test_paged_decode_reference_matches_dense_attention():
     t = load("paged_decode")
     shape = (3, 8, 2, 16, 4, 11)
