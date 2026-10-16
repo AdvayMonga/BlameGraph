@@ -3,6 +3,12 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+
+## 2026-10-16 — No status file
+`STATE.md` is removed; the record is `DECISIONS.md` and `RUNS.md`, both append-only. Why: a rewritten-in-place
+status file went stale between sessions (it still listed merged engine PRs as open). Replaces the three-file entry of
+2026-10-15.
+
 ## 2026-10-15 — Kernel-level precision: no global switches, precision inside a kernel allowed
 A candidate kernel may not change process-wide numerics (e.g. `torch.backends.cuda.matmul.allow_tf32 = True`): the
 source screen refuses it (`kernels/evolve/core.screen`). Lower precision inside the kernel (e.g. FP8 math) is allowed
@@ -50,7 +56,7 @@ One engine, a config per regime in a TOML file of the engine's tree, each profil
 Make the loop rely less on the raw model and more on per-layer machinery. Four layers (kernels, model execution,
 runtime, serving), each with data, a simulator, a hypothesis generator, measurement tools and an evaluator, all
 answering to one end-to-end judge (`equiv` + `submit` + the held-out guard). The agent chooses the layer, given each
-layer's share of time × distance from the ceiling as a fact. Layer 1 first. Status per cell: `STATE.md`.
+layer's share of time × distance from the ceiling as a fact. Layer 1 first.
 
 ## 2026-10-14 — Agent regime planned (not built)
 Long-horizon agent traffic as a ninth regime scored on goodput; text from Exgentic agent-llm-traces v2, timing and
