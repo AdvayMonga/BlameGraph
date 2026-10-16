@@ -132,7 +132,7 @@ def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes,
         gates[name] = {"passed": ok, "reason": reason, "evidence": ev}
 
     s0, sd0 = seen_shapes[0], seeds[0]
-    edge = cases(edge_shapes or _edge_shapes(s0), seeds[:1])
+    edge = cases(_edge_shapes(s0) if edge_shapes is None else edge_shapes, seeds[:1])     # [] = none
     memo = []
     for dt in dtypes:
         for name, f in (("strided", _strided), ("transposed", _transposed)):

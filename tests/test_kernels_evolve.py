@@ -65,8 +65,10 @@ def test_the_screen_refuses_exploit_routes_and_passes_real_kernels():
     ev = ROOT / "tests" / "fixtures" / "paged_decode_evolved.py"     # the best program of the 2026-10-14 run
     assert screen(SEED.read_text()) == [] and screen(ev.read_text()) == []
     assert screen("x = os.environ.get('A', '0')\n") == []
-    assert screen("import torch\nx = torch.empty(3)\nx.tag = 1\nclass A:\n    def f(self):\n        self.a = 1\n") == []
+    assert screen("import torch\nclass A:\n    def f(self, x):\n        self.a = 1\n        x.b = 2\n") == []
+    assert screen("import torch\nx = torch.empty(3)\nx.tag = 1\n")             # bound to a call: refused
     assert screen("import torch\nm = torch.cuda\nm.synchronize = None\n") and screen("def k(x):\n    type(x).f = 1\n")
+    assert screen("def k(x):\n    T = type(x)\n    T.zero_ = None\n") and screen("from torch.cuda import Stream\n")
     t = load("toy_rmsnorm")
     with tempfile.TemporaryDirectory() as d:
         bad = Path(d) / "bad.py"
@@ -123,6 +125,14 @@ def test_noise_rule_and_physics_alarm():
         core._peaks = orig
     g = json.loads(r["artifacts"]["gates"])
     assert r["metrics"]["combined_score"] == 0.0 and g["physics"]["passed"] is False
+
+
+def test_paged_decode_checks_with_no_edge_shapes_do_not_fall_back_to_the_defaults():
+    from kernels import check_kernel
+    t = load("paged_decode")                    # its default edge shapes (Hq = 1 < Hkv) are not valid GQA inputs
+    r = check_kernel(t.reference, t.reference, t.make_inputs, [(2, 8, 2, 16, 4, 11)], [], dtypes=(torch.float32,),
+                     edge_shapes=[], repeats=1, layouts=())
+    assert r["passed"]
 
 
 def test_real_sequence_lengths_replace_synthetic_ones_where_captured():
@@ -313,6 +323,8 @@ CANARIES = {
     "answers cached by pointer": ("import torch\n_c = {}\ndef kernel(x, w):\n    k = (x.data_ptr(), tuple(x.shape))\n"
                                   "    if k not in _c:\n        _c[k] = _f(x, w)\n    return _c[k]\n"
                                   "def _f(x, w):\n" + RIGHT, "memoization"),
+    "a module reached through getattr": ("import torch\nc = getattr(torch, 'cuda')\ndef kernel(x, w):\n" + RIGHT,
+                                         "refused"),
     "right on seen shapes only": ("import torch\ndef kernel(x, w):\n    if x.shape[0] > 64:\n"
                                   "        return torch.zeros_like(x)\n" + RIGHT, "heldout"),
 }
@@ -330,6 +342,17 @@ def test_exploit_canaries_all_score_zero():
         assert r["metrics"]["combined_score"] == 0.0, name
         want = {"refused": "refused before running", "patched": "patched what the evaluator uses"}.get(why, why)
         assert want in said, (name, said[:800])
+
+
+def test_a_kernel_right_while_checked_and_wrong_while_timed_scores_zero():
+    from kernels.evolve.jailed import judge_jailed
+    t = load("toy_rmsnorm")                      # wrong from the 5th call on one input object: only timing gets there
+    src = ("import torch\n_seen = []\ndef kernel(x, w):\n    n = sum(1 for t in _seen if t is x)\n"
+           "    _seen.append(x)\n    if n >= 4:\n        return torch.zeros_like(x)\n" + RIGHT)
+    r = judge_jailed({"task": t.name, "seen": [list(s) for s in t.seen_default], "device": "cpu", "iters": 20}, src, 2)
+    gates = json.loads(r["artifacts"]["gates"])
+    assert r["metrics"]["combined_score"] == 0.0 and gates["correctness_seen"]["passed"]
+    assert "differs from the reference" in gates["timing"]["reason"]
 
 
 def test_the_jail_sees_a_fresh_tree_and_a_copied_harness_never_this_repo():
