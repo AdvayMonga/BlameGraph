@@ -211,7 +211,10 @@ def test_ship_commits_the_module_on_a_new_engine_branch_without_touching_its_tre
                    "# EVOLVE-BLOCK-END\n\nkernel = faster\n")
         assert module_source(program, "entry").endswith("entry = faster\n")
         assert "EVOLVE" not in module_source(initial_program(load("toy_rmsnorm")), "kernel")
-        ok = {"metrics": {"correct": 1.0}, "artifacts": {"gates": json.dumps({"correctness_heldout": {"passed": True}})}}
+        ok = {"metrics": {"correct": 1.0},
+              "artifacts": {"gates": json.dumps({"correctness_heldout": {"passed": True, "cases": 6},
+                                                 "physics": {"passed": True}})}}
+        assert module_source("def kernel(x):\n    return x\n", "entry").endswith("entry = kernel\n")    # a rewrite
         old = dict(os.environ)
         os.environ.update(GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t", GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t")
         try:
@@ -223,6 +226,11 @@ def test_ship_commits_the_module_on_a_new_engine_branch_without_touching_its_tre
         assert git("diff", "--name-only", out["base"], "kernels/test").split() == ["src/fake_pkg/mod.py"]
         assert "the user's edit" in (repo / "src" / "fake_pkg" / "mod.py").read_text()       # working tree untouched
         assert git("rev-parse", "--abbrev-ref", "HEAD").strip() != "kernels/test"
+        from kernels.evolve.ship import gate_passed
+        flagged = json.loads(ok["artifacts"]["gates"])
+        assert not gate_passed({**ok, "artifacts": {"gates": json.dumps({**flagged, "physics": {"passed": False}})}})
+        assert not gate_passed({**ok, "artifacts": {"gates": json.dumps(
+            {**flagged, "correctness_heldout": {"passed": True, "cases": 0}})}})      # held-out set empty
         try:
             ship(task, program, {"metrics": {"correct": 1.0}, "artifacts": {"gates": "{}"}}, repo, branch="kernels/x")
             raise AssertionError("shipped without a held-out gate")

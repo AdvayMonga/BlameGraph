@@ -133,7 +133,8 @@ def main(argv: list[str] | None = None) -> int:
                             "device": a.device, "tolerances": tol, "ints": _ints(sets, ("seen", "heldout"))},
                            Path(a.program).read_text(), 2, timeout_s=3600)
         print(json.dumps(out, indent=1))
-        return 0 if out["metrics"]["correct"] else 1
+        from kernels.evolve.ship import gate_passed
+        return 0 if gate_passed(out) else 1
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     sets = shapes_mod.select(task, sets, a.timing_shapes)

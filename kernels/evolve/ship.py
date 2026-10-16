@@ -27,14 +27,18 @@ def module_source(program: str, attr: str) -> str:
     src, _, tail = body.partition("# EVOLVE-BLOCK-END\n")
     name = re.search(r"^kernel\s*=\s*(\w+)\s*$", tail or src, re.M)
     src = re.sub(r"^kernel\s*=\s*\w+\s*$", "", src, flags=re.M).rstrip("\n") + "\n"
-    if name and name.group(1) != attr:
-        src += f"\n{attr} = {name.group(1)}\n"
+    target = name.group(1) if name else "kernel" if re.search(r"^def kernel\(", src, re.M) else None
+    if target and target != attr:                # a full rewrite may define `kernel` itself
+        src += f"\n{attr} = {target}\n"
     return src
 
 
-def passed_heldout(gate: dict) -> bool:
+def gate_passed(gate: dict) -> bool:
+    """Every gate passed (correctness, physics, memory, timing/capture) and the held-out check judged > 0 cases."""
     gates = json.loads(gate.get("artifacts", {}).get("gates") or "{}")
-    return gate.get("metrics", {}).get("correct") == 1.0 and gates.get("correctness_heldout", {}).get("passed") is True
+    held = gates.get("correctness_heldout") or {}
+    return (gate.get("metrics", {}).get("correct") == 1.0 and bool(gates) and
+            all(g.get("passed") is True for g in gates.values()) and (held.get("cases") or 0) > 0)
 
 
 def _module_path(repo: Path, base: str, module: str) -> str:
@@ -47,8 +51,8 @@ def _module_path(repo: Path, base: str, module: str) -> str:
 
 def ship(task, program: str, gate: dict, repo: Path, base: str = "HEAD", branch: str | None = None) -> dict:
     """The engine branch: {branch, base, commit, path}. Refuses a program without a passing held-out gate."""
-    if not passed_heldout(gate):
-        raise ValueError("the program has no passing held-out gate (`python -m kernels.evolve gate`)")
+    if not gate_passed(gate):
+        raise ValueError("the program has no fully passing gate on held-out shapes (`python -m kernels.evolve gate`)")
     module, _, attr = task.entry.partition(":")
     base = _git(repo, "rev-parse", base)
     path = _module_path(repo, base, module)
