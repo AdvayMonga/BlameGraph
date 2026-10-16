@@ -170,7 +170,8 @@ class Toolbox(EvalTools, ProfTools):
 
     def ledger_tool(self, args: dict) -> str:
         match = {k: v for k, v in args.items() if k in ("kind", "session", "snapshot", "tool") and v}
-        rows = list(ledger.records(self.s.ledger_root, **match))
+        rows = [r for r in ledger.records(self.s.ledger_root, **match)
+                if experiments.researcher(self.s.run_id) or not experiments.researcher(r.get("run"))]
         last = int(args.get("last") or 20)
         return "\n".join(json.dumps(r) for r in rows[-last:]) or "(no records)"
 
@@ -185,6 +186,24 @@ class Toolbox(EvalTools, ProfTools):
             out["rows"] = out["rows"][:len(out["rows"]) // 2]
             out["truncated"] = True
             text = json.dumps({**out, "truncated_at_bytes": QUERY_MAX_BYTES}, default=str)
+        return text
+
+    def search(self, args: dict) -> str:
+        from lab import search
+        if not hasattr(self, "_embedder"):         # loaded once per toolbox; a missing model is a fact in each reply
+            try:
+                self._embedder, self._no_embedder = search.FastEmbed(self.s.ledger_root / "index" / "models"), None
+            except Exception as e:                  # noqa: BLE001
+                self._embedder, self._no_embedder = None, f"{type(e).__name__}: {e}"[:500]
+        out = search.search(self.s.ledger_root, str(args.get("query") or ""), args.get("k") or 10, self._embedder,
+                            researcher=experiments.researcher(self.s.run_id))
+        if self._no_embedder:
+            out["embeddings_unavailable"] = self._no_embedder
+        text = json.dumps(out, default=str)
+        while len(text) > QUERY_MAX_BYTES and out["results"]:     # whole results only, like `query`
+            out["results"] = out["results"][:len(out["results"]) // 2]
+            out["truncated"] = True
+            text = json.dumps(out, default=str)
         return text
 
     def budget(self, args: dict) -> str:
@@ -281,10 +300,13 @@ class Toolbox(EvalTools, ProfTools):
                      "corpus class (`corpus_class`, default steady_interactive; `seed`) or on synthetic token ids "
                      "(`synthetic`, `prompt_len`); `max_tokens` default 32. Stores the raw bundle (event timeline, chrome "
                      "trace, op and kernel tables, memory, GPU samples, provenance) in the ledger and copies it into your "
-                     "workspace under lab/runs/, left out of your change. Returns the bundle path and its file names."
+                     "workspace under lab/runs/, left out of your change. `capture`: \"module:function\" entry points whose every "
+                     "call's argument shapes (and one whole call per shape) go into the bundle's captures/; it "
+                     "synchronizes, so that bundle's times are not representative. Returns the bundle path and its file names."
                      + (PROFILE_ARG if tg.profiles else "")
                      + gpu("1-7 min measured at 16 requests x 64 tokens on an H200 (7 min when the weights were still loading from disk)"),
-                     {"type": "object", "properties": {"corpus_class": {"type": "string"}, "seed": {"type": "integer"},
+                     {"type": "object", "properties": {"capture": {"type": "array", "items": {"type": "string"}},
+                                                       "corpus_class": {"type": "string"}, "seed": {"type": "integer"},
                                                        "synthetic": {"type": "boolean"}, "requests": {"type": "integer"},
                                                        "prompt_len": {"type": "integer"},
                                                        "max_tokens": {"type": "integer"},
@@ -305,6 +327,15 @@ class Toolbox(EvalTools, ProfTools):
                      "`DESCRIBE <table>` lists a table's columns. Returns columns and up to 200 rows as JSON, cut to whole "
                      f"rows under {QUERY_MAX_BYTES // 1000} kB (`truncated` says when rows were dropped)." + free,
                      {"type": "object", "required": ["sql"], "properties": {"sql": {"type": "string"}}}, self.query),
+            ToolSpec("search", "Search the experiments of every run on this ledger by text. One document per "
+                     "`hypothesis` record: its hypothesis, rationale and abandon_if, and each measurement made under it "
+                     "(record id, tool, snapshot, config, GPU, `expect`, measured value, gap, reflection, alternative), "
+                     "all as stored. `query` (text), `k` results (default 10, at most 50). Ranked by reciprocal-rank "
+                     "fusion of BM25 over the words and cosine similarity of local embeddings (model named in the "
+                     "reply). Returns JSON: each result's rank under each order and the document; cut to whole results "
+                     f"under {QUERY_MAX_BYTES // 1000} kB." + free,
+                     {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"},
+                                                                             "k": {"type": "integer"}}}, self.search),
             ToolSpec("budget", "Returns the run's dollar cap, spent and remaining. Every record's `cost` holds the "
                      "measured seconds and dollars of that call." + free, obj, self.budget),
             ToolSpec("restore", "Put the workspace back to a snapshot id from the ledger ('base' resets it to the base "
@@ -362,7 +393,7 @@ def _names(names) -> str:
     return ", ".join(f"`{n}`" for n in names)
 
 
-HARNESS = ("__init__.py", "profile.py", "bundle.py", "gpu.py")     # all lab.profile imports from the environment
+HARNESS = ("__init__.py", "profile.py", "bundle.py", "gpu.py", "capture.py")     # all lab.profile imports from the environment
 HARNESS_DIR = "_harness"
 DEFAULT_CORPUS_CLASS = "steady_interactive"   # targets name no corpus class of their own
 

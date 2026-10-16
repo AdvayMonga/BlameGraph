@@ -11,7 +11,8 @@ blobs are the data, so a new table or column is a rebuild, never a migration.
   kernels, ops        profile bundles' CUDA kernel and operator tables
   heldout_rows        submit's per-request held-out rows: researcher index only, never the agent's
 
-Two files under <ledger>/index/: agent.duckdb (everything but heldout_rows) and all.duckdb (researcher).
+Two files under <ledger>/index/: agent.duckdb (everything but heldout_rows and researcher runs' records) and
+all.duckdb (researcher).
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from typing import Iterable, Iterator
 
 import duckdb
 
-from lab import artifacts, ledger
+from lab import artifacts, experiments, ledger
 
 QUERY_TIMEOUT_S = 60
 MAX_ROWS = 200
@@ -166,10 +167,11 @@ def _heldout_rows(runs: Path) -> Iterator[dict]:
             yield {"run": p.parents[2].name, "serve": p.parent.name, **json.loads(line)}
 
 
-def build(root: Path, db: Path, heldout_runs: Path | None = None) -> dict:
-    """Rebuild `db` from the ledger at `root`; with `heldout_runs`, add heldout_rows from its run dirs. Returns the
-    row count per table and the blobs that were not on disk (pull them to index their rows)."""
-    recs = list(ledger.records(root))
+def build(root: Path, db: Path, heldout_runs: Path | None = None, agent: bool = False) -> dict:
+    """Rebuild `db` from the ledger at `root`; with `heldout_runs`, add heldout_rows from its run dirs; `agent` leaves
+    out researcher runs. Returns the row count per table and the blobs that were not on disk (pull them to index
+    their rows)."""
+    recs = [r for r in ledger.records(root) if not (agent and experiments.researcher(r.get("run")))]
     missing: list[str] = []
     db = Path(db)
     db.parent.mkdir(parents=True, exist_ok=True)
@@ -195,7 +197,7 @@ def agent_db(root: Path) -> Path:
     f, blobs = Path(root) / "ledger.jsonl", Path(root) / "blobs"
     now = f"{f.stat().st_size if f.exists() else 0}:{len(list(blobs.iterdir())) if blobs.is_dir() else 0}"
     if not db.exists() or not stamp.exists() or stamp.read_text() != now:
-        build(root, db)
+        build(root, db, agent=True)
         stamp.write_text(now)
     return db
 

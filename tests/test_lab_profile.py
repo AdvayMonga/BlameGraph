@@ -121,6 +121,18 @@ def test_main_profiles_a_presampled_corpus_workload(tmp_path, stub_backend_cls, 
     assert meta["workload_hash"] == bundle.workload_hash([[2, 0], [5, 0]], 2)
 
 
+def test_main_captures_the_calls_of_named_functions_into_the_bundle(tmp_path, stub_backend_cls, monkeypatch):
+    monkeypatch.setattr(profile, "build_backend", lambda s: (stub_backend_cls(), None))
+    out = tmp_path / "o"
+    assert profile.main(["--synthetic", "--requests", "2", "--prompt-len", "4", "--max-tokens", "2", "--out", str(out),
+                         "--capture", "lab.bundle:workload_hash"]) == 0
+    b = next(p for p in out.iterdir() if p.is_dir())
+    calls = [json.loads(x) for x in (b / "captures" / "calls.jsonl").read_text().splitlines()]
+    assert calls and calls[0]["fn"] == "lab.bundle:workload_hash" and calls[0]["args"][1] == {"value": 2}
+    assert bundle.workload_hash.__name__ == "workload_hash" and not hasattr(bundle.workload_hash, "__wrapped__")
+    assert not [p for p in out.iterdir() if p.name.startswith("capture-")]       # staging dir moved, not left
+
+
 def test_main_needs_an_explicit_workload_source():
     with pytest.raises(SystemExit):
         profile.main([])

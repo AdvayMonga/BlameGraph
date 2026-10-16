@@ -165,7 +165,8 @@ def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
         runs = tree / "lab" / "runs"
         n = int(a.get("requests", 8))
         argv = [engine.python(), "-m", "lab.profile", "--requests", str(n), "--max-tokens", str(a.get("max_tokens", 32)),
-                "--out", str(runs), *T.workload_flags(a, harness, n)]
+                "--out", str(runs), *T.workload_flags(a, harness, n),
+                *[w for f in a.get("capture") or [] for w in ("--capture", str(f))]]
         proc = (hooks.get("profile_runner") or T.default_profile_runner)(tree, argv, **prof)
         bundles = sorted(runs.glob("*")) if runs.exists() else []
         if bundles:
