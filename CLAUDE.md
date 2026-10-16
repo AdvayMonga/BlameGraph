@@ -82,7 +82,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   GPU tools charge them at `LAB_GPU_USD_PER_HOUR` / the target's `[cost] gpu_usd_per_hour` to the run's budget) +
   `proftools.py` (trace = nsys, kernel = ncu, hostprof = py-spy, each wrapping lab.profile's workload in the jail
   with validated args) + `evaltools.py` (bench → `regimes` on
-  the seen split; equiv → `correctness` candidate vs the target's reference; submit → held-out full tier vs the
+  the seen split; equiv → `correctness` candidate vs the target's reference, 32 requests in flight (scoring at 4); submit → held-out full tier vs the
   base commit, one aggregate per regime through the Thresholdout guard; nothing is measured while another process holds
   the GPU (`refused`), and a process other than the engine on the GPU mid-run makes it `contaminated` (never evidence,
   never the cached base; `serve.Served.exclusive()`); all three serve the pristine tree via

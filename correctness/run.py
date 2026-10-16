@@ -121,6 +121,9 @@ def reference(url: str, model: str, out_dir: str | Path, items: list[dict], enco
     return meta
 
 
+CANDIDATE_SCORE_MAX = 4    # scoring on a candidate engine stays where it was (16 // 4) while generation goes wider
+
+
 def _score_concurrency(concurrency: int) -> int:
     """Teacher-forced scoring holds a [prompt, vocab] logits tensor per request: a quarter of the generation
     concurrency, so a 32k prompt x 32 in flight does not OOM an engine that generation alone would not."""
@@ -169,7 +172,7 @@ def candidate(ref_dir: str | Path, url: str, model: str, out_path: str | Path, e
             return None
 
     try:
-        with ThreadPoolExecutor(_score_concurrency(concurrency)) as ex:
+        with ThreadPoolExecutor(min(_score_concurrency(concurrency), CANDIDATE_SCORE_MAX)) as ex:
             scored = [c for c in ex.map(comp, seqs) if c is not None]
         div = divergence_summary(scored) if scored else None
         if div is not None:

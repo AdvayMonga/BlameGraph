@@ -363,7 +363,7 @@ class EvalTools:
         task = getattr(self.s, "task", None)
         return tuple(dict.fromkeys((*task.regimes, *task.constraints))) if task else self.bench_default_regimes
     seed = 0
-    equiv_concurrency = 16
+    equiv_concurrency = 32       # the example engine's batch size (MAX_BATCH_SIZE in its target); more would queue past the client timeout
     serve_jailed = True
 
     def _work(self, tool: str) -> Path:
