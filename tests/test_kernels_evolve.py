@@ -323,10 +323,6 @@ CANARIES = {
     "answers cached by pointer": ("import torch\n_c = {}\ndef kernel(x, w):\n    k = (x.data_ptr(), tuple(x.shape))\n"
                                   "    if k not in _c:\n        _c[k] = _f(x, w)\n    return _c[k]\n"
                                   "def _f(x, w):\n" + RIGHT, "memoization"),
-    "right while checked, wrong while timed": ("import torch\n_seen = {}\ndef kernel(x, w):\n"
-                                                "    k = x.data_ptr()\n    _seen[k] = _seen.get(k, 0) + 1\n"
-                                                "    if _seen[k] > 4:\n        return torch.zeros_like(x)\n" + RIGHT,
-                                                "differs from the reference"),
     "a module reached through getattr": ("import torch\nc = getattr(torch, 'cuda')\ndef kernel(x, w):\n" + RIGHT,
                                          "refused"),
     "right on seen shapes only": ("import torch\ndef kernel(x, w):\n    if x.shape[0] > 64:\n"
@@ -346,6 +342,17 @@ def test_exploit_canaries_all_score_zero():
         assert r["metrics"]["combined_score"] == 0.0, name
         want = {"refused": "refused before running", "patched": "patched what the evaluator uses"}.get(why, why)
         assert want in said, (name, said[:800])
+
+
+def test_a_kernel_right_while_checked_and_wrong_while_timed_scores_zero():
+    from kernels.evolve.jailed import judge_jailed
+    t = load("toy_rmsnorm")                      # wrong from the 5th call on one input object: only timing gets there
+    src = ("import torch\n_seen = []\ndef kernel(x, w):\n    n = sum(1 for t in _seen if t is x)\n"
+           "    _seen.append(x)\n    if n >= 4:\n        return torch.zeros_like(x)\n" + RIGHT)
+    r = judge_jailed({"task": t.name, "seen": [list(s) for s in t.seen_default], "device": "cpu", "iters": 20}, src, 2)
+    gates = json.loads(r["artifacts"]["gates"])
+    assert r["metrics"]["combined_score"] == 0.0 and gates["correctness_seen"]["passed"]
+    assert "differs from the reference" in gates["timing"]["reason"]
 
 
 def test_the_jail_sees_a_fresh_tree_and_a_copied_harness_never_this_repo():
