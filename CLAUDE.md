@@ -199,7 +199,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   a two-stage cascade, each stage a fresh jailed process (`kernels.evolve.jailed`: the jail gets the candidate, its
   config and a copied harness, never this repo; `core.judge`: stage 1 = two shapes, one seed; stage 2 = the full
   check on seen shapes + paired timing against the baseline (`kernels.time_pair`: same inputs, random order per
-  pair), score = call-weighted geometric-mean speedup, a shape counting 1.0 when the middle half of its paired ratios
+  pair; a task whose callers replay it in CUDA graphs, `Task.graphs`, e.g. `paged_decode`, is captured and timed as a
+  graph replay, and a kernel that cannot be captured scores 0), score = call-weighted geometric-mean speedup, a shape counting 1.0 when the middle half of its paired ratios
   includes 1; at the end the top candidates are re-judged 3x and the highest median is promoted, `run --retime`); a candidate is
   refused if its source reaches for an exploit route or writes into anything it imported, under any alias
   (`core.screen`), and scores 0 if any function the checker or timer uses is patched, checked after loading and

@@ -250,8 +250,14 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
                 "artifacts": {"gates": json.dumps(gates, indent=1)}}
     if pc is not None:
         gates["peak_memory"] = {"passed": True, "reason": f"peak {pc / 2**20:.0f} MiB vs baseline {pb / 2**20:.0f} MiB"}
-    rows, score, raw = _timed(task, timed, base, seen, weights, dtype, device, iters, hw)
-    held = _timed(task, timed, base, heldout, weights, dtype, device, iters, hw) if heldout else None   # gate only
+    try:
+        rows, score, raw = _timed(task, timed, base, seen, weights, dtype, device, iters, hw)
+        held = _timed(task, timed, base, heldout, weights, dtype, device, iters, hw) if heldout else None  # gate only
+    except Exception as e:                       # noqa: BLE001  e.g. a kernel that cannot be captured in a CUDA graph
+        gates["timing"] = {"passed": False, "reason": (f"{type(e).__name__}: {e}")[:2000] +
+                           (" (timed as a CUDA graph replay: the kernel must capture)" if task.graphs else "")}
+        return {"metrics": {"combined_score": 0.0, "correct": 1.0, "stage": stage},
+                "artifacts": {"gates": json.dumps(gates, indent=1)}}
     over = [x for x in rows + (held[0] if held else []) if (x["pct_of_roofline"] or 0) > PHYSICS_MARGIN_PCT]
     if over:
         gates["physics"] = {"passed": False, "reason": f"{len(over)} shapes measured faster than the roofline bound "
@@ -274,7 +280,8 @@ def _timed(task, cand, base, shapes, weights, dtype, device, iters, hw) -> tuple
     rows, logs, raw = [], 0.0, 0.0
     total = sum((weights or {}).get(json.dumps(list(s)), 1) for s in shapes)
     for s in shapes:
-        p = time_pair(cand, base, task.make_inputs, s, dtype, device, iters=iters)    # unwrapped: no check in the window
+        p = time_pair(cand, base, task.make_inputs, s, dtype, device, iters=iters,      # unwrapped: no check in
+                      graphs=task.graphs)                                              # the window
         c, b, speed = p["a"], p["b"], p["ratio"]["median"]
         shown = _shown(p["ratio"])
         w = (weights or {}).get(json.dumps(list(s)), 1) / total

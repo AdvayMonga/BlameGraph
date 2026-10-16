@@ -29,6 +29,8 @@ class Task:
     edge_shapes: Callable = None            # edge_shapes(shape) -> shapes; default: the checker's
     dtypes: tuple = (torch.bfloat16,)
     layouts: tuple = ("strided", "transposed")  # non-contiguous variants its callers pass (lab/capture records it)
+    graphs: bool = False                    # its callers replay it inside CUDA graphs: it must capture, and is timed
+                                            # as a graph replay (no host launch overhead)
     make_real: Callable = None              # make_real(shape, dtype, device, generator, ints) -> inputs, `ints` being a
                                             # captured call's 1-D int args by value (e.g. its real sequence lengths)
     seen_default: tuple = field(default_factory=tuple)      # shapes to use with no capture (tests, toys)

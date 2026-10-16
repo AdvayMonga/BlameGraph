@@ -138,6 +138,30 @@ def test_real_sequence_lengths_replace_synthetic_ones_where_captured():
     assert load("toy_rmsnorm").with_ints({"[8, 256]": [[1]]}) is load("toy_rmsnorm")      # no int args: unchanged
 
 
+def test_graph_timing_is_cuda_only_and_a_kernel_that_cannot_be_timed_scores_zero():
+    import dataclasses
+    from kernels import time_pair
+    from kernels.evolve import core
+    from kernels.evolve.run import system_message
+    t = load("toy_rmsnorm")
+    p = time_pair(t.reference, t.reference, t.make_inputs, (8, 256), torch.float32, iters=3, warmup=1, graphs=True)
+    assert p["clock"] == "host"                                  # no CUDA here: timed eagerly
+    g = dataclasses.replace(t, graphs=True)
+    assert judge(g, SEED, list(t.seen_default), [], None, "cpu", None, 2, iters=3)["metrics"]["correct"] == 1.0
+    orig = core.time_pair
+
+    def no_capture(*a, **k):
+        raise RuntimeError("operation not permitted when stream is capturing")
+    core.time_pair = no_capture
+    try:
+        r = judge(g, SEED, list(t.seen_default), [], None, "cpu", None, 2, iters=3)
+    finally:
+        core.time_pair = orig
+    gate = json.loads(r["artifacts"]["gates"])["timing"]
+    assert r["metrics"]["combined_score"] == 0.0 and not gate["passed"] and "must capture" in gate["reason"]
+    assert load("paged_decode").graphs and "CUDA graph" in system_message(load("paged_decode"))
+
+
 def test_paged_decode_reference_matches_dense_attention():
     t = load("paged_decode")
     shape = (3, 8, 2, 16, 4, 11)

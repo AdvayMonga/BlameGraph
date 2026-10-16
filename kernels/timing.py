@@ -14,6 +14,8 @@ from .check import _gen
 _perf_counter, _quantiles, _Random = time.perf_counter, statistics.quantiles, random.Random
 _Event, _record, _elapsed = torch.cuda.Event, torch.cuda.Event.record, torch.cuda.Event.elapsed_time
 _cuda_sync, _mps_sync = torch.cuda.synchronize, torch.mps.synchronize
+_CUDAGraph, _graph, _Stream, _stream, _current = (torch.cuda.CUDAGraph, torch.cuda.graph, torch.cuda.Stream,
+                                                  torch.cuda.stream, torch.cuda.current_stream)
 
 
 def _sync(device):
@@ -70,22 +72,46 @@ def time_kernel(fn, make_inputs, shape, dtype, device="cpu", iters=50, warmup=5,
             "clock": "cuda_events" if torch.device(device).type == "cuda" else "host"}
 
 
-def time_pair(a, b, make_inputs, shape, dtype, device="cpu", iters=50, warmup=5, n_buffers=4, seed=0) -> dict:
+def graphed(fn, bufs: list, device) -> list:
+    """One CUDA graph per input set, captured after a warm-up outside the capture (compiles, autotuning): each entry
+    replays fn on that set, as an engine that decodes in graphs runs it. Raises if fn cannot be captured."""
+    side = _Stream(device)
+    side.wait_stream(_current(device))
+    with _stream(side):
+        for inputs in bufs:
+            fn(*inputs)
+    _current(device).wait_stream(side)
+    out = []
+    for inputs in bufs:
+        g = _CUDAGraph()
+        with _graph(g):
+            fn(*inputs)
+        out.append(lambda *_, g=g: g.replay())
+    return out
+
+
+def time_pair(a, b, make_inputs, shape, dtype, device="cpu", iters=50, warmup=5, n_buffers=4, seed=0,
+              graphs=False) -> dict:
     """a and b timed in pairs on the same inputs, in a seeded random order per pair, so drift (clocks, heat, other
-    load) lands on both: each one's stats plus the per-pair ratio b/a (above 1: a is faster)."""
+    load) lands on both: each one's stats plus the per-pair ratio b/a (above 1: a is faster). graphs=True (CUDA):
+    each is captured once per input set and timed as a graph replay, so host launch overhead is not counted."""
     bufs = [make_inputs(shape, dtype, device, _gen(seed + i)) for i in range(n_buffers)]
+    graphs = graphs and torch.device(device).type == "cuda"
+    ga, gb = (graphed(a, bufs, device), graphed(b, bufs, device)) if graphs else (None, None)
     flush, order, ta, tb = _flush(device), _Random(seed), [], []
     for i in range(warmup + iters):
         inputs = bufs[i % n_buffers]
+        fa, fb = (ga[i % n_buffers], gb[i % n_buffers]) if graphs else (a, b)
         first_a = order.random() < 0.5
-        x = _one(a if first_a else b, inputs, device, flush)
-        y = _one(b if first_a else a, inputs, device, flush)
+        x = _one(fa if first_a else fb, inputs, device, flush)
+        y = _one(fb if first_a else fa, inputs, device, flush)
         if i >= warmup:
             ta.append(x if first_a else y)
             tb.append(y if first_a else x)
     r25, rmed, r75 = _quantiles([y / x for x, y in zip(ta, tb) if x > 0], n=4)
+    clock = "cuda_graph" if graphs else "cuda_events" if torch.device(device).type == "cuda" else "host"
     return {"a": _stats(ta), "b": _stats(tb), "ratio": {"median": rmed, "p25": r25, "p75": r75}, "iters": iters,
-            "clock": "cuda_events" if torch.device(device).type == "cuda" else "host"}
+            "clock": clock}
 
 
 def check_memoization(fn, make_inputs, shape, dtype, device="cpu", iters=30, warmup=3, ratio=0.5) -> dict:
