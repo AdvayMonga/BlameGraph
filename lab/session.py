@@ -85,7 +85,7 @@ def system_prompt(t: target.Target, spec: agent.AgentSpec) -> str:
         env=json.dumps(t.engine.env), write=globs(t.write), add_only=globs(t.add_only), deny=globs(ALWAYS_DENY),
         tools="\n".join(f"- `{x.name}`: {x.description}" for x in spec.tools),
         session_usd=spec.max_budget_usd, max_turns=spec.max_turns, timeout_s=spec.timeout_s,
-        min_session_usd=MIN_SESSION_USD, holdout=HOLDOUT_BUDGET, closing_usd=CLOSING_USD, closing_turns=CLOSING_TURNS,
+        min_session_usd=MIN_SESSION_USD, holdout=HOLDOUT_BUDGET, submit_tier=t.submit_tier, closing_usd=CLOSING_USD, closing_turns=CLOSING_TURNS,
         closing_tools=" and ".join(f"`{x}`" for x in CLOSING_TOOLS))
 
 

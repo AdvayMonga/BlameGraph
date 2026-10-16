@@ -53,7 +53,8 @@ inconclusive (429s at concurrency 32); fp8 experts and a Triton MoE GEMM exist, 
 - BF16 puzzle: plain BF16 matched the reference on Nebius at concurrency 128 but diverged on Verda at 32
   (`RUNS.md` 2026-10-05). Don't treat a BF16 rerun as a noise sample until resolved.
 - `equiv` at tier dev: ~26 min on inference-server #107 at concurrency 32, but 12/1,585 items were 429-rejected
-  (inconclusive); run at concurrency 16 or raise `MAX_QUEUE_WAIT_S`.
+  (inconclusive). 429s are now retried for ~6 min (was ~1 min); not yet rerun on a GPU. Submit takes a dev-tier equiv
+  for this engine (`submit_tier`); equiv tier `quick` (teacher-forced divergence only) is unmeasured on a GPU.
 - inference-server #107's Triton MoE grouped GEMM asserts inside the decode CUDA graph under load (exact in eager mode).
 - The engine's radix prefix cache evicts by scanning the whole tree per leaf (~100% of scheduler time in long-context
   prefill): a layer-3 engine bug (`RUNS.md` 2026-10-14/15).

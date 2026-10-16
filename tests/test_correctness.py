@@ -213,7 +213,7 @@ def test_shed_requests_are_retried_and_persistent_errors_are_unanswered(monkeypa
 
     srv = HTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    crun.RETRIES = 2
+    retries, crun.RETRIES = crun.RETRIES, 2
     try:
         items = [{"id": k, "messages": [{"role": "user", "content": k}], "max_tokens": 8} for k in ("ok", "shed", "broken")]
         with tempfile.TemporaryDirectory() as d:
@@ -224,7 +224,7 @@ def test_shed_requests_are_retried_and_persistent_errors_are_unanswered(monkeypa
             assert seen["ok"] == 1 and seen["broken"] == 2                  # resume: answered items skipped, errored ones retried
             assert again["broken"].get("error")
     finally:
-        crun.RETRIES = 6
+        crun.RETRIES = retries
         srv.shutdown()
 
 

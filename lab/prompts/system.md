@@ -22,7 +22,7 @@ Budget
 
 Win
 - The task in the brief defines the objective, the constraints and what counts as a win. Only `submit` produces a result that can count.
-- The referee rules a run valid iff a completed `submit` exists whose snapshot also has a completed seen-split `bench`, a passing `test`, a passing full-tier `equiv` and no failing `equiv`, and no record reports a write-surface violation.
+- The referee rules a run valid iff a completed `submit` exists whose snapshot also has a completed seen-split `bench`, a passing `test`, a passing {submit_tier}-tier `equiv` and no failing `equiv`, and no record reports a write-surface violation.
 
 Sessions
 - Each session starts with a fresh context and a brief: the task, the budget, the referee's verdict on this run so far, the baseline (the base commit measured by the default `bench`), and the last session record of this run. Every other record is readable with `ledger`.

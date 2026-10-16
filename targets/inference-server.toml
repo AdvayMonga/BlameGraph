@@ -46,6 +46,7 @@ conversational = { ttft_s = 2.0, tpot_s = 0.100 }
 tasks = ["mmlu_pro", "math", "code", "needle"]
 min_score_ratio = 0.99                       # MLPerf: >= 99% of the reference's pooled task score
 min_length_ratio = 0.90
+submit_tier = "dev"                          # full is ~8-17 h on this engine (DECISIONS.md 2026-10-15); back to full once it is fast
 
 [corpus]
 dir = "corpus"

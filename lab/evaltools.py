@@ -4,7 +4,7 @@ ledger stay here.
 
   bench    the regimes on the seen split, short tier -> one headline per regime, raw
   equiv    the correctness gate against the target's reference -> pass | fail | inconclusive, with every metric
-  submit   the only thing that can produce a win: needs a passing full-tier equiv and a seen bench for this
+  submit   the only thing that can produce a win: needs a passing equiv at the target's submit tier and a seen bench for this
            snapshot, measures the held-out split at the full tier, compares with the base commit measured the same
            way, and records one aggregate per metric through the Thresholdout guard (the held-out numbers
            themselves never reach the ledger). Verdict per metric: improved | regressed | within_band | unknown_band.
@@ -250,7 +250,7 @@ class EvalTools:
         tier = args.get("tier") or "dev"
         profile = args.get("profile") or None
         config = {"split": "seen", "tier": tier, **({"profile": profile} if profile else {})}
-        ref = t.reference_dir_for(tier)
+        ref = t.reference_dir_for("dev" if tier == "quick" else tier)
         if not target.reference_complete(ref):
             self._record("equiv", "equiv", args, {"verdict": "refused", "reason": f"no {tier}-tier reference outputs; "
                          "run `python -m correctness reference` for this target first"}, snap, config=config)
@@ -274,7 +274,7 @@ class EvalTools:
             result = {**_failed(e), "artifacts": self._equiv_store(work, out, prior)}
             self._record("equiv", "equiv", args, result, snap, config=config)
             return _said("equiv", result)
-        passed = {"pass": True, "fail": False}.get(res["verdict"])     # inconclusive is None: neither passing nor failing
+        passed = {"pass": True, "fail": False}.get(res["verdict"])     # inconclusive and quick's facts are None: neither
         record = {"verdict": res["verdict"], "passed": passed, "reasons": res["reasons"], "gates": res["gates"],
                   "metrics": res["metrics"], "thresholds": res["thresholds"], "tier": tier,
                   "artifacts": self._equiv_store(work, out, prior), **_killed(res)}
@@ -289,16 +289,18 @@ class EvalTools:
         t = target.load()
         mine = [r for r in ledger.records(self.s.ledger_root, run=self.s.run_id, snapshot=snap.id)]
 
+        need = t.submit_tier
+
         def full_equiv(profile: str | None) -> dict | None:
-            """The latest full-tier equiv of one profile's launch (None = general) on this snapshot."""
+            """The latest equiv at the target's submit tier of one profile's launch (None = general) on this snapshot."""
             return next((r for r in reversed(mine) if r["kind"] == "equiv"
-                         and (r.get("result") or {}).get("tier") == "full"
+                         and (r.get("result") or {}).get("tier") == need
                          and (r.get("config") or {}).get("profile") == profile), None)
         eq = full_equiv(None)
         if not eq or eq["result"].get("verdict") != "pass":
-            why = ("no full-tier equiv on this snapshot" if not eq else
-                   f"latest full-tier equiv is {eq['result'].get('verdict')}")
-            self._record("submit", "submit", args, {"verdict": "refused", "reason": f"{why}; run equiv with tier=full first"}, snap)
+            why = (f"no {need}-tier equiv on this snapshot" if not eq else
+                   f"latest {need}-tier equiv is {eq['result'].get('verdict')}")
+            self._record("submit", "submit", args, {"verdict": "refused", "reason": f"{why}; run equiv with tier={need} first"}, snap)
             return f"submit refused: {why}"
         benches = [r for r in mine if r["kind"] == "bench" and (r.get("result") or {}).get("verdict") == "ok"
                    and (r.get("config") or {}).get("split") == "seen" and (r.get("config") or {}).get("tier") == BENCH_TIER]
@@ -315,7 +317,7 @@ class EvalTools:
             own = [n for n in names if n in profiles.overrides(tree, t)]
             short = [n for n in own if ((full_equiv(n) or {}).get("result") or {}).get("verdict") != "pass"]
             if short:
-                why = f"no passing full-tier equiv for profile(s) {short}; run equiv with tier=full and that profile first"
+                why = f"no passing {need}-tier equiv for profile(s) {short}; run equiv with tier={need} and that profile first"
                 self._record("submit", "submit", args, {"verdict": "refused", "reason": why}, snap)
                 return f"submit refused: {why}"
             base = self.base_heldout(t, names)
@@ -363,7 +365,7 @@ class EvalTools:
         task = getattr(self.s, "task", None)
         return tuple(dict.fromkeys((*task.regimes, *task.constraints))) if task else self.bench_default_regimes
     seed = 0
-    equiv_concurrency = 32       # the example engine's batch size (MAX_BATCH_SIZE in its target); more would queue past the client timeout
+    equiv_concurrency = 32       # dev tier ~26 min on inference-server #107 at 32 (RUNS.md 2026-10-15); sheds are retried
     serve_jailed = True
 
     def _work(self, tool: str) -> Path:

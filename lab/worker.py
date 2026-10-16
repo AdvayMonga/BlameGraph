@@ -136,10 +136,11 @@ def job_equiv(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     with engine.using(build.python_for(inputs["tree"])), container.quiet(args.get("workbench")) as killed, \
             serve.Served(inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"], artifacts=out,
                          env_extra=profiles.env(t, args.get("profile"))) as srv:
-        res = crun.candidate(inputs["reference"], srv.url, t.model, out / "equiv.json", enc,
-                             Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio),
-                             concurrency=args["concurrency"], api=client.Api(t.engine.api, t.chat_kwargs),
-                             config={"tier": args["tier"]})
+        api = client.Api(t.engine.api, t.chat_kwargs)
+        res = (crun.quick(inputs["reference"], srv.url, t.model, out / "equiv.json", api=api) if args["tier"] == "quick"
+               else crun.candidate(inputs["reference"], srv.url, t.model, out / "equiv.json", enc,
+                                   Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio),
+                                   concurrency=args["concurrency"], api=api, config={"tier": args["tier"]}))
         srv.exclusive()
     return {**res, "killed": killed}
 

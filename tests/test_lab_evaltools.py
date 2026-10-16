@@ -210,6 +210,30 @@ def test_submit_needs_full_equiv_and_a_bench_then_records_one_aggregate_per_metr
     assert (s.run_dir / "base-heldout-full.json").exists()
 
 
+def test_submit_takes_the_equiv_tier_the_target_names(lab, monkeypatch):
+    tb, s = lab
+    t = target.load()
+    monkeypatch.setattr(target, "load", lambda path=None: t.__class__(**{**t.__dict__, "submit_tier": "dev"}))
+    assert json.loads(tb.equiv({"tier": "full"}))["verdict"] == "pass"
+    tb.bench({"regimes": ["single_stream"]})
+    assert tb.submit({}).startswith("submit refused: no dev-tier equiv")
+    assert "a passing dev-tier equiv" in next(x for x in tb.specs() if x.name == "submit").description
+    assert json.loads(tb.equiv({"tier": "dev"}))["verdict"] == "pass"
+    assert json.loads(tb.submit({}))["split"] == "heldout"
+
+
+def test_quick_equiv_scores_the_reference_answers_and_returns_facts(lab):
+    tb, s = lab
+    out = json.loads(tb.equiv({"tier": "quick"}))
+    assert out["verdict"] == "facts" and out["tier"] == "quick"
+    assert out["metrics"]["n_sequences"] > 0 and "kl_mean" in out["metrics"] and "top1_agree" in out["metrics"]
+    rec = next(ledger.records(s.ledger_root, kind="equiv"))
+    assert rec["result"]["passed"] is None and rec["config"]["tier"] == "quick"
+    assert tb.submit({}).startswith("submit refused: no full-tier equiv")      # facts never count as a pass
+    with pytest.raises(ValueError, match="submit_tier"):
+        target._submit_tier("quick")                   # submit takes a generated-answer tier only
+
+
 def test_submit_is_refused_where_there_is_no_shared_heldout_budget(lab, monkeypatch):
     tb, s = lab
     tb.equiv({"tier": "full"}); tb.bench({"regimes": ["single_stream"]})
