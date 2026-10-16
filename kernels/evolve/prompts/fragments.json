@@ -1,0 +1,19 @@
+{
+  "fitness_declined": "Score declined: {prev:.4f} → {current:.4f}",
+  "code_too_long": "Code length over {threshold} characters",
+  "no_specific_guidance": "No earlier measurement in this lineage",
+  "metrics_improved": "Metrics improved: {metrics}",
+  "metrics_regressed": "Metrics changed: {metrics}",
+  "code_simplification": "",
+  "default_improvement": "No earlier measurement in this lineage",
+  "diverse_programs_title": "Programs from other regions of the database",
+  "inspiration_type_diverse": "From another region",
+  "inspiration_type_migrant": "From another island",
+  "inspiration_type_random": "Random sample",
+  "inspiration_type_score_high_performer": "High score",
+  "inspiration_type_score_alternative": "Other region",
+  "inspiration_type_score_experimental": "Low score",
+  "inspiration_type_score_exploratory": "Random sample",
+  "diverse_program_metrics_prefix": "Metrics of",
+  "top_program_metrics_prefix": "Measured"
+}

@@ -191,6 +191,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `kernels/shapes.py` (shapes and call counts from captures; held-out = whole regions above the 80th percentile on the
   task's axes, never random samples), `kernels/evolve/` (the layer-1 generator, a replication of OpenEvolve 0.4.0 =
   open AlphaEvolve: `python -m kernels.evolve run|gate|split`; the starting program is the engine's kernel module;
+  prompts carry facts only (`kernels/evolve/prompts/` overrides OpenEvolve's advice; `run.system_message` states how a
+  program is judged, from the evaluator's own constants);
   a two-stage cascade, each stage a fresh jailed process (`kernels.evolve.jailed`: the jail gets the candidate, its
   config and a copied harness, never this repo; `core.judge`: stage 1 = two shapes, one seed; stage 2 = the full
   check on seen shapes + timing against the baseline, score = call-weighted geometric-mean speedup); a candidate is
