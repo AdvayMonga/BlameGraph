@@ -5,6 +5,7 @@ local and archived in the store (`python -m store pull`).
 
 | Date | Venue | What | GPU cost | Result | Evidence |
 |---|---|---|---|---|---|
+| 2026-10-16 | Nebius H200 (`lab-gpu-2`, the engine session's VM) | Layer-1 loop validated on a GPU (#46-#58), then OpenEvolve on `moe_gemm` through `ship` | ~$9.3 GPU (~2 h 5 min of kernel steps) + ~$1 model (estimate) | Every new evaluator piece runs; engine kernels pass every gate. Evolved `moe_gemm` 1.087x seen / 1.094x held-out, all gates pass; shipped as an engine branch, end-to-end judge not run | laptop `lab/runs/kernels-validate*/`, `lab/runs/kernels-moe/`, ledger `ev-20261016-9969664d6bb0`, inference-server `kernels/moe_gemm-20261016-154523` |
 | 2026-10-15 | Verda H200 | Manual engine serving fixes (inference-server #107), #33 profiles check | ~$24 (4 h 25 min) | single_stream TPOT p99 21 -> 15.6 ms, saturated 0.097 -> 0.37 req/s, long_prompt invalid -> 2.66 req/s; gate inconclusive at concurrency 32 | `data/engine-h200-20261015/`, below |
 | 2026-10-14/15 | Nebius H200 | Layer-1 kernel loop on `paged_decode` (branch `feat/kernel-loop`) | not recorded | GQA-packed decode kernel 3.88x on 196 seen shapes, passes held-out; end to end single_stream TPOT p99 21.6 -> 15.4 ms, saturated 0.100 -> 0.158 req/s (short tier, one run each); equiv not run | store `archive/kernels-2026-10-14-622240de7cc1b4aa.tar.zst` (gate results, best program, shapes), engine PR inference-server #106 |
 | 2026-10-13 | Nebius H200 | Ceilings vs measurements, vLLM and the engine | not recorded | Every floor below every measurement; engine at 0.5-7% of ceiling, vLLM 19-94% | `knowledge/reference/inference-server/` |
@@ -13,6 +14,35 @@ local and archived in the store (`python -m store pull`).
 | 2026-10-08 | Nebius H200 | Profiler tools on the real engine | ~$0.87 | All four tools work unjailed; three fixes | below |
 | 2026-10-05 | Nebius H200 | Full-tier correctness recalibration | ~$16.50 | Policy confirmed; FP8/INT8 pass, Int4 fails | `data/h200-run-20261005/REPORT.md`, `data/equiv-full/` |
 | 2026-10-04 | Verda H200 | Dev-tier correctness calibration | $6.75 | Gate separates Int4; consistency results void | `data/h200-run-20261004/REPORT.md`, `data/equiv/` |
+
+## 2026-10-16 — Layer-1 loop on a GPU: validation, then `moe_gemm` through `ship` (Nebius H200)
+Run by the engine session on its VM (`lab-gpu-2`), BlameGraph main `a303313` then `0420b37`; engine = branch
+`engine/gpu-session-2` (`eb7b683` + #110/#111 behind flags; `moe_kernel.py` and `paged_attention_kernel.py` as on
+`eb7b683`). The kernel steps had the GPU to themselves; auto-stop armed throughout.
+
+Phase A (`paged_decode`, 91 min, ~$6.8): capture + split = 143 seen / 27 held-out shapes. `gate` on the engine's own
+kernel (#106's evolved one) and on `tests/fixtures/paged_decode_evolved.py` (the same kernel): every gate passes
+(429 seen and 81 held-out cases, edge, memoization, values ×3/×0.01/−1, peak memory), no patch or timing false
+positive, timing as CUDA-graph replays (`clock: cuda_graph`), paired ratios with ~1 µs IQR on 28 µs calls, 16-43%
+of the roofline bound, speedup 1.0 and held-out speedup 1.0 as expected. Step-time share (32 requests × 64 tokens,
+graphs on, 4.64 s window): kernels 48.9% of the window; `moe_gemm` 13.7% (`speedup_if_free` 1.159); `paged_decode`
+read 0 because #106 renamed its kernels (fixed, #59); top unmatched: the CUTLASS grouped GEMM on the prefill path
+6.2%, cuDNN SDPA 5.2%. Each full `gate` took ~45 min with the GPU near idle.
+
+Phase B (`moe_gemm`): the first gate stopped after 17 min (~$1.3): py-spy put the time in generating the expert
+weights (128×1536×2048) on the CPU for every check case, and the split held out 0 shapes (most calls at the largest
+M, so the call-weighted cut equalled the max). Both fixed (#60: large inputs made on the device, roofline from the
+timed inputs, a distinct-value cut). Redo: 44 seen / 10 held-out shapes; the full gate in < 1 min; the engine's own
+kernel passes every gate (132 / 30 cases) at 37-78% of its roofline bound. OpenEvolve from the laptop (controller),
+candidates judged on the VM over SSH: 20 iterations, 9.5 min, ~15 s per evaluation, Haiku 4.5 (0.8) + Opus 5.5
+(0.2), 19 model calls (~192k prompt + ~14k response tokens, ~$1 at list prices: an estimate; the `kernels` record has
+no cost, nothing priced it). Best (after re-timing the top 3): 1.0908 on the seen shapes. Its change: BLOCK_N/BLOCK_K
+128/64 → 64/128, num_stages 3 → 4, `EVEN_K`/`EVEN_N` constexpr flags dropping the masks, `evict_first` on the
+weight loads. `gate`: every gate passes; seen 1.087x (43/44 shapes beyond noise, 0.99-1.16x, one 1.42x), held-out
+1.094x (10/10 beyond noise, 1.06-1.16x, 80-99.6% of roofline); error against the reference equal to the baseline's.
+`ship`: inference-server branch `kernels/moe_gemm-20261016-154523` (`59e6808` on `eb7b683`, `moe_kernel.py` only,
++15/−6), pushed, no PR. Not run: the end-to-end judge (`lab.experiment` → `bench`, `equiv`, `submit`); the user
+stopped here (Amdahl: ≤ ~1.2% end to end, likely within the noise bands). Kernel steps after Phase A ≈ 16 min, ~$1.2.
 
 ## 2026-10-15 — Engine serving fixes by hand (Verda H200, inference-server PR #107)
 Short tier, seen split, bf16, `python -m regimes run` against the engine served with the target's env. Baseline of
