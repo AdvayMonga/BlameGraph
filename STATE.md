@@ -7,11 +7,11 @@ What works now. Rewritten in place, never appended: when something changes, edit
 | | 1. Kernels | 2. Model execution | 3. Runtime | 4. Serving |
 |---|---|---|---|---|
 | In the example engine | `models/paged_attention_kernel.py`, MoE grouped GEMM, norm/rope, sampling | `models/qwen3_moe.py`, `backends/custom_torch_backend.py`, `launch_table.py`, `quant.py` | `scheduler.py`, `scheduling_policy.py`, `kv_cache/` | `server.py`, `openai_shim.py`, tokenizer, startup, `control_plane/` |
-| Data | have: real call shapes and inputs captured from runs (`lab.profile --capture`, `kernels/shapes.py` splits them), validated on GPU; long-context shapes thin (~30 seen requests) | partial: correctness task sets + corpus; missing a small fixed batch for logit checks and a list of step configurations | partial: corpus (public, repeats prompts); the load generator (separate work) replaces it | have: same workloads + the cold-start command |
+| Data | have: real call shapes and their int args (real sequence lengths) captured from runs (`lab.profile --capture`, `kernels/shapes.py`), used for checking and timing; each task's share of a profiled window (`kernels.evolve share`). Captures validated on GPU; real-input timing and share not yet run on one. One task (`paged_decode`); long-context shapes thin (~30 seen requests) | partial: correctness task sets + corpus; missing a small fixed batch for logit checks and a list of step configurations | partial: corpus (public, repeats prompts); the load generator (separate work) replaces it | have: same workloads + the cold-start command |
 | Simulator | not needed (the real kernel runs in seconds; the roofline is the bound) | partial: analytic step floors (`validity/ceiling.py`); missing a measured step-time model | missing: scheduler simulator (real `scheduler.py` on a fake clock and backend, step times from layer 2's model) | not needed |
-| Hypothesis generator | have: OpenEvolve replication (`kernels/evolve/`), validated on GPU (`RUNS.md` 2026-10-14/15); one task with real shapes (`paged_decode`) | missing (hypothesis-driven + knob search) | missing (hypothesis-driven, simulator-screened) | not needed: the general agent |
-| Measurement tools | have: `time_kernel`, ncu `kernel`, nsys `trace`, % of bandwidth peak | have: `profile`, `trace`, kernel share of time, step floors | have: `bench` client rows, engine telemetry, timeline, py-spy | have: `bench` cold_start/overload, serve logs, telemetry |
-| Evaluator | have: cascade judge + held-out gate (`kernels/evolve/core.py`), hardened 2026-10-15; candidates judged in the jail (`kernels/evolve/jailed.py`), untested on a GPU | missing: fast step-time + logit check (no server) | partial: `bench` + `equiv`; no noise bands measured for this engine yet | have: `bench` regimes |
+| Hypothesis generator | have: OpenEvolve replication (`kernels/evolve/`), validated on GPU (`RUNS.md` 2026-10-14/15); facts-only prompts; every candidate in a `kernels` ledger record; top candidates re-timed before promotion. Prompts, records and re-timing not yet run on a GPU | missing (hypothesis-driven + knob search) | missing (hypothesis-driven, simulator-screened) | not needed: the general agent |
+| Measurement tools | have: `time_kernel`, `time_pair` (paired with the baseline; CUDA-graph replay for graph-replayed tasks, untested on a GPU), ncu `kernel`, nsys `trace`, % of bandwidth peak | have: `profile`, `trace`, kernel share of time, step floors | have: `bench` client rows, engine telemetry, timeline, py-spy | have: `bench` cold_start/overload, serve logs, telemetry |
+| Evaluator | have: cascade judge + held-out gate (correctness and held-out speed), jailed, hardened and reviewed 2026-10-15 (`kernels/evolve/core.py`, `jailed.py`; exploit canaries in `tests/test_kernels_evolve.py`); `ship` turns a gated kernel into an engine branch for the end-to-end judge. None of #46-#54 run on a GPU yet | missing: fast step-time + logit check (no server) | partial: `bench` + `equiv`; no noise bands measured for this engine yet | have: `bench` regimes |
 
 Across layers, built: the end-to-end judge, `search` over every run's experiments (BM25 + local embeddings,
 `lab/search.py`; the store's ledger holds no experiment records yet), calibration (`lab/calibrate.py`), experiment records
@@ -75,8 +75,11 @@ inconclusive (429s at concurrency 32); fp8 experts and a Triton MoE GEMM exist, 
   first real `python -m regimes run all` against the engine and against vLLM.
 - GPU, with approval and the auto-stop armed: `python -m lab.validate --target targets/inference-server.toml`
   (~3-4 h; serves unjailed, so not blocked), then a real `python -m lab.session --task ...` run.
-- Layer 1: the improvement list in `data/notes/kernel-generator-improvements.md` (local). Engine PR
-  inference-server #106 (the evolved kernel) is merged, its `equiv` not run; the jailed evaluator needs a GPU run.
+- Layer 1, end to end (2026-10-15: off-GPU work done, #46-#54): one GPU run to validate the jailed evaluator,
+  graph and paired timing, real inputs and the step-time share; one OpenEvolve run under them; `gate` then `ship`
+  the winner and measure it through `lab.experiment` (`bench`, `equiv`, `submit`). Engine PR inference-server #106
+  (the evolved kernel) is merged, its `equiv` not run. Generator improvements after that:
+  `data/notes/kernel-generator-improvements.md` (local).
 - Agent regime: undecided items in `DECISIONS.md` 2026-10-14.
 
 ## Store
