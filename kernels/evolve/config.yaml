@@ -18,13 +18,15 @@ database:
   population_size: 200
   archive_size: 50
   num_islands: 3
-  similarity_threshold: 0.95    # near-duplicate programs are not evaluated
+  similarity_threshold: 0.95    # inactive: OpenEvolve checks novelty only with an embedding_model
 evaluator:
   cascade_evaluation: true
   cascade_thresholds: [0.5]     # stage 1 (2 shapes, one seed) must pass before stage 2 (all seen shapes + timing)
   parallel_evaluations: 1       # one GPU: candidates are timed one at a time
   timeout: 900
 prompt:
+  template_dir: prompts         # facts only: OpenEvolve's defaults carry advice ("Consider ...", "Focus areas")
+  suggest_simplification_after_chars: null
   num_top_programs: 3
   num_diverse_programs: 2
   include_artifacts: true       # gate reasons, errors and per-shape timings go back to the model

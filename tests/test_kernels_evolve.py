@@ -162,6 +162,32 @@ def test_capture_records_calls_and_the_split_holds_out_the_largest():
         assert back["seen"] == s["seen"]
 
 
+ADVICE = ("consider", "focus", "suggest", "to improve", "inspire", "memory access pattern", "thoughtful", "valuable",
+          "simplif", "should", "try ")
+
+
+def test_prompts_carry_facts_never_advice():
+    try:
+        from openevolve.config import load_config
+        from openevolve.prompt.sampler import PromptSampler
+    except ImportError:
+        print("skip: openevolve not installed")
+        return
+    from kernels.evolve.run import HERE, system_message
+    cfg = load_config(str(HERE / "config.yaml"))
+    cfg.prompt.system_message = system_message(load("paged_decode"))
+    s = PromptSampler(cfg.prompt)
+    prev = [{"id": "a", "code": "x", "metrics": {"combined_score": 2.0}, "changes": "c"}]
+    for diff in (True, False):
+        p = s.build_prompt(current_program="def kernel(): ...", parent_program="def kernel(): ...",
+                           program_metrics={"combined_score": 1.0}, previous_programs=prev, top_programs=prev,
+                           inspirations=prev, diff_based_evolution=diff,
+                           program_artifacts={"gates": "{}"}, feature_dimensions=cfg.database.feature_dimensions)
+        text = (p["system"] + p["user"]).lower()
+        assert not [w for w in ADVICE if w in text], [w for w in ADVICE if w in text]
+        assert "score declined: 2.0000" in text and "paged_decode_attention" in text
+
+
 def test_remote_evaluation_sends_the_source_on_stdin_and_never_a_key():
     try:
         from kernels.evolve import evaluator

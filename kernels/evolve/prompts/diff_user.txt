@@ -1,0 +1,24 @@
+# Current program
+- Score: {fitness_score}
+- Feature coordinates: {feature_coords}
+- Measured against its parent: {improvement_areas}
+
+{artifacts}
+
+# Earlier programs
+{evolution_history}
+
+# Program
+```{language}
+{current_program}
+```
+
+# Output format
+Changes as SEARCH/REPLACE blocks. Each SEARCH section must match the current program exactly, or the block is not
+applied. Any number of blocks:
+
+<<<<<<< SEARCH
+old lines
+=======
+new lines
+>>>>>>> REPLACE
