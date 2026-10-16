@@ -5,6 +5,7 @@ local and archived in the store (`python -m store pull`).
 
 | Date | Venue | What | GPU cost | Result | Evidence |
 |---|---|---|---|---|---|
+| 2026-10-16 | Nebius H200 (`lab-gpu-2`) | Engine wide-batch work (inference-server #109) | ~2 h | single_stream TPOT p99 9.6 ms, saturated 1.07-1.65 req/s (conc 64 marginal), long_prompt 6.25; gate PASS | `data/engine-h200-20261015/nebius2/`, below |
 | 2026-10-16 | Nebius H200 | Engine: MoE kernel on, gate to PASS (inference-server #107 merged) | ~2 h | single_stream TPOT p99 11.5 ms, saturated 0.95 req/s, long_prompt 6.25 req/s; gate PASS 1,597/1,597 at 16 in flight | `data/engine-h200-20261015/nebius/`, below |
 | 2026-10-15 | Verda H200 | Manual engine serving fixes (inference-server #107), #33 profiles check | ~$24 (4 h 25 min) | single_stream TPOT p99 21 -> 15.6 ms, saturated 0.097 -> 0.37 req/s, long_prompt invalid -> 2.66 req/s; gate inconclusive at concurrency 32 | `data/engine-h200-20261015/`, below |
 | 2026-10-14/15 | Nebius H200 | Layer-1 kernel loop on `paged_decode` (branch `feat/kernel-loop`) | not recorded | GQA-packed decode kernel 3.88x on 196 seen shapes, passes held-out; end to end single_stream TPOT p99 21.6 -> 15.4 ms, saturated 0.100 -> 0.158 req/s (short tier, one run each); equiv not run | store `archive/kernels-2026-10-14-622240de7cc1b4aa.tar.zst` (gate results, best program, shapes), engine PR inference-server #106 |
@@ -14,6 +15,20 @@ local and archived in the store (`python -m store pull`).
 | 2026-10-08 | Nebius H200 | Profiler tools on the real engine | ~$0.87 | All four tools work unjailed; three fixes | below |
 | 2026-10-05 | Nebius H200 | Full-tier correctness recalibration | ~$16.50 | Policy confirmed; FP8/INT8 pass, Int4 fails | `data/h200-run-20261005/REPORT.md`, `data/equiv-full/` |
 | 2026-10-04 | Verda H200 | Dev-tier correctness calibration | $6.75 | Gate separates Int4; consistency results void | `data/h200-run-20261004/REPORT.md`, `data/equiv/` |
+
+## 2026-10-16 — Engine wide-batch work (Nebius H200 `lab-gpu-2`, inference-server #109)
+Saturated after #107 (0.99 req/s) passed at concurrency 32 and failed 64 on both limits (TTFT p99 3.9 s, TPOT 150 ms).
+Decode profiles at batch 1/16/32: the step is launch-bound, not bandwidth-bound (the MoE GEMM 2.4-5 ms of it).
+py-spy on the scheduler thread under the saturated load: 50% in the per-row Python loop of the SDPA prefill
+(a 10k-token wave of 19 prompts took 1.3 s; its kernels 0.2 s), ~20% in the decode state's per-layer joins, leaves
+and block allocations (~400 `.item()` syncs a step at batch 128). Fixes: prefill attention over the whole wave
+(one gather, one masked SDPA per layer; few long rows keep flash per row, since the masked path halved long_prompt),
+the decode state as one `[layers, rows, cols]` table, fused q/k/v GEMM, cached index vectors. Results: single_stream
+TPOT p99 11.5 -> 9.6 ms; decode step 9.7 ms at batch 1, 14 at 8, 19 at 16, 43 at 128 (was 24 / 35-60); saturated
+1.65 req/s in one run (conc 64 within limits, TTFT p99 1.92 s) and 1.07 in the next on the same engine (TTFT p99
+3.43 s): a prefill wave still blocks decode and the stalls are bursty, so conc 64 straddles the 2 s line; long_prompt
+6.25 req/s. Gate (dev tier, 16 in flight) PASS 1,597/1,597. #109 merged. Next: prefill/decode overlap (mixed
+batching), the slowest waves (a 6-prompt 8.5k-token wave at 1.5 s), fp8 once bandwidth-bound.
 
 ## 2026-10-16 — Engine: MoE kernel on, the gate to PASS (Nebius H200, inference-server #107 merged)
 The Triton MoE grouped GEMM's device-side assert was the routing kernel returning an out-of-range expert id (the

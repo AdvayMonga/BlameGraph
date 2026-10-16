@@ -35,12 +35,12 @@ from the agent), the workbench/measurement sandbox, the GPU VM tooling.
 - `validity/tier_agreement.py`: needs real short/full runs.
 - Remote worker (`LAB_WORKER=ssh`): used in the one-session dry run only.
 
-## Where the engine stands (2026-10-16, inference-server main after #106, #107, #108)
-Engine vs plain vLLM (2026-10-13 for vLLM): single_stream TPOT p99 11.5 ms vs 4.1 ms, saturated 0.95 vs 5.8 req/s,
-long prompt 6.25 vs 68 req/s; every regime valid; the dev-tier gate passes (1,597/1,597). Decode step p50 10.9 ms at
-batch 1, 12.7 at batch 4: still launch-bound (~2,000 kernels per step; next: the per-layer graph-replay copies, the
-routing gather/scatter, then fp8 once bandwidth-bound). Prefill attention is torch SDPA; the MoE GEMMs run in a Triton
-kernel up to 2048 pairs. fp8 experts exist, off (`RUNS.md` 2026-10-15/16).
+## Where the engine stands (2026-10-16, inference-server main after #109)
+Engine vs plain vLLM (2026-10-13 for vLLM): single_stream TPOT p99 9.6 ms vs 4.1 ms, saturated 1.07-1.65 vs 5.8 req/s
+(concurrency 64 straddles the 2 s TTFT line: a prefill wave still blocks decode), long prompt 6.25 vs 68 req/s; every
+regime valid; the dev-tier gate passes (1,597/1,597). Decode step 9.7 ms at batch 1, 14 at 8, 19 at 16, 43 at 128.
+Still launch-bound; the next structural item is prefill/decode overlap (mixed batching), then fp8 once bandwidth-bound.
+fp8 experts exist, off (`RUNS.md` 2026-10-15/16).
 
 ## In flight (branches not on main)
 | Branch | Worktree | What | Status |
@@ -68,8 +68,8 @@ kernel up to 2048 pairs. fp8 experts exist, off (`RUNS.md` 2026-10-15/16).
 - The corpus's long_prompt_short_output window repeats each prompt ~5x, which rewards prefix caching.
 
 ## Next
-- GPU (Nebius): the engine's remaining launch overhead (per-layer graph-replay copies, routing gather/scatter), then
-  fp8 once the step is bandwidth-bound; the long-prompt tail (slowest gate request 75 s at 16 in flight).
+- GPU (Nebius): prefill/decode overlap in the engine (mixed batching: a wave blocks decode, which is what fails
+  saturated at concurrency 64-128); the slowest prefill waves; then fp8 once the step is bandwidth-bound.
 - GPU, needs spend approval: resolve the BF16 puzzle (dev tier at concurrency 32 and 128 on one VM, ~20 min, ~$1.50);
   first real `python -m regimes run all` against the engine and against vLLM.
 - GPU, with approval and the auto-stop armed: `python -m lab.validate --target targets/inference-server.toml`
