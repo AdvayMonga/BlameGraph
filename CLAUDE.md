@@ -120,7 +120,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
 - `lab/worker.py` — the job interface, built for the measured jobs: `test`, `measure`, `equiv`, `profile` take input
   trees + JSON args, write an out dir, return JSON; the tools call `self.worker`. `LAB_WORKER=local` (default, in
   process) or `ssh` (the `lab.vm` VM): inputs by content hash, re-hashed on the worker before every job; GpuBusy,
-  Contaminated, NotReady, ValueError cross intact. Remote is tested through a local shell, not yet over SSH. With
+  Contaminated, NotReady, ValueError cross intact. Remote is tested through a local shell, and ran over real SSH in the 2026-10-10 dry run and the 2026-10-16
+  kernel run. With
   `ssh` the agent works on the VM too: its workspace mirrored by rsync (pulled before every audit), its workbench
   built there (`workbench`), its CLI's stdio over `ssh -R`, the API proxy tunnelled to a unix socket in the workbench.
 - `lab/TRACE.md` + `lab/trace_contract.py` — the request-trace contract: per-request engine rows (trace_id = the
