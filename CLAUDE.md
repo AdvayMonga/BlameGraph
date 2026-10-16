@@ -206,7 +206,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   (`core.screen`), and scores 0 if any function the checker or timer uses is patched, checked after loading and
   after every call the checker makes (`core._watched`; the timer binds its own at import); the exploit canaries in
   `tests/test_kernels_evolve.py` must all score 0; selection never sees held-out shapes, `gate` judges them (correctness, and their speedup as a fact); `validate_gpu.sh` = the GPU validation; tolerances from the target's
-  `[kernels]`). `lab/capture.py` + `lab.profile --capture MODULE:FUNCTION` (the `profile` tool's `capture`): every
+  `[kernels]`). `kernels/share.py` (`python -m kernels.evolve share --profile BUNDLE`: each task's share of a profiled engine
+  window from the device kernels it launches, `Task.kernel_names`, the speedup bound if they took no time, and the
+  kernels no task covers, by share: the facts for choosing the next task). `lab/capture.py` + `lab.profile --capture MODULE:FUNCTION` (the `profile` tool's `capture`): every
   call's argument shapes and small int tensors, the first call per shape kept whole as real inputs.
 - `regimes/` — load generation: drives a live OpenAI-compatible server the eight ways it gets used, client-side.
   `client.py` (one streamed chat request: TTFT from *scheduled* send to first real token, TPOT = (E2E − TTFT)/(n − 1),

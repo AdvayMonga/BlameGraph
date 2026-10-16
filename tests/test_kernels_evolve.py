@@ -162,6 +162,25 @@ def test_graph_timing_is_cuda_only_and_a_kernel_that_cannot_be_timed_scores_zero
     assert load("paged_decode").graphs and "CUDA graph" in system_message(load("paged_decode"))
 
 
+def test_share_of_the_window_per_task_and_the_kernels_no_task_covers():
+    from kernels.evolve.run import main
+    from kernels.share import shares
+    with tempfile.TemporaryDirectory() as d:
+        b = Path(d)
+        (b / "meta.json").write_text(json.dumps({"window": {"wall_s": 1.0}}))
+        (b / "kernels.json").write_text(json.dumps({"kernels": [
+            {"name": "fused_moe_kernel", "count": 10, "total_us": 500_000.0},
+            {"name": "_paged_decode_splitk_kernel", "count": 10, "total_us": 150_000.0},
+            {"name": "_splitk_combine_kernel", "count": 10, "total_us": 50_000.0},
+            {"name": "rms_norm_kernel", "count": 10, "total_us": 20_000.0}]}))
+        r = shares(b, [load("paged_decode"), load("toy_rmsnorm")])
+        pd = r["tasks"]["paged_decode"]
+        assert abs(pd["share_of_window"] - 0.2) < 1e-9 and abs(pd["speedup_if_free"] - 1.25) < 1e-9
+        assert len(pd["kernels"]) == 2 and r["tasks"]["toy_rmsnorm"]["share_of_window"] == 0
+        assert [k["name"] for k in r["unmatched"]] == ["fused_moe_kernel", "rms_norm_kernel"]
+        assert main(["share", "--profile", str(b)]) == 0
+
+
 def test_paged_decode_reference_matches_dense_attention():
     t = load("paged_decode")
     shape = (3, 8, 2, 16, 4, 11)

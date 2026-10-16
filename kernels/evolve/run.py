@@ -1,6 +1,7 @@
 """python -m kernels.evolve run --task T [--shapes SHAPES.json | --captures DIR ...] --out DIR [--iterations N]
                                [--config CONFIG.yaml] [--device cuda] [--initial PROGRAM.py]
 python -m kernels.evolve gate --task T --shapes SHAPES.json --program BEST.py [--device cuda]
+python -m kernels.evolve share --profile BUNDLE      (each task's share of a profiled engine window)
 
 `run` replicates OpenEvolve (AlphaEvolve's open re-implementation) on one kernel task: the starting program is the
 engine's current kernel (its module's source, with `kernel` bound to the entry point), selection sees the seen shapes
@@ -88,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--shapes")
         p.add_argument("--captures", action="append")
         p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    sub.add_parser("share").add_argument("--profile", required=True, help="a `profile` bundle dir")
     r = sub.choices["run"]
     r.add_argument("--out", required=True)
     r.add_argument("--iterations", type=int, default=20)
@@ -98,6 +100,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.choices["gate"].add_argument("--program", required=True)
     sub.choices["split"].add_argument("--write", required=True)
     a = ap.parse_args(argv)
+    if a.cmd == "share":
+        from kernels.share import shares
+        print(json.dumps(shares(Path(a.profile), [load(n) for n in TASKS]), indent=1))
+        return 0
     task = load(a.task)
     sets = _shapes(task, a)
     tol = tolerances(_target_tolerances())
