@@ -68,8 +68,12 @@ fp8 experts exist, off (`RUNS.md` 2026-10-15/16).
 - The corpus's long_prompt_short_output window repeats each prompt ~5x, which rewards prefix caching.
 
 ## Next
-- GPU (Nebius): prefill/decode overlap in the engine (mixed batching: a wave blocks decode, which is what fails
-  saturated at concurrency 64-128); the slowest prefill waves; then fp8 once the step is bandwidth-bound.
+- GPU (Nebius), built and CPU-tested, awaiting measurement in this order, one at a time: inference-server #110
+  (`PREFILL_MODE=mixed`: bounded multi-row prefill between decode steps, for saturated at concurrency 64-128),
+  #111 (`ASYNC_DECODE=1`: step n launched on n-1's device tokens, host work overlapped), then fp8 experts at wide
+  batch (`CUSTOM_BACKEND_QUANT=fp8`, already in main), then a Triton `moe_align` + fused MoE epilogue built live
+  (the remaining ~25 routing launches per layer). The slowest prefill waves (a 6-prompt 8.5k-token wave at 1.5 s)
+  and long-prompt cache hits need a profile before anything is built for them.
 - GPU, needs spend approval: resolve the BF16 puzzle (dev tier at concurrency 32 and 128 on one VM, ~20 min, ~$1.50);
   first real `python -m regimes run all` against the engine and against vLLM.
 - GPU, with approval and the auto-stop armed: `python -m lab.validate --target targets/inference-server.toml`
