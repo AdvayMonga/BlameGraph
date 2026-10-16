@@ -78,36 +78,64 @@ def job_test(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
 
 
 def job_measure(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
-    """`args`: names, split, tier, seed, jailed, passive (keep device/telemetry/client rows in `out`)."""
-    from lab import artifacts, build
-    from lab.evaltools import run_regimes
+    """`args`: names, split, tier, seed, jailed, passive (keep device/telemetry/client rows in `out`). One engine
+    launch per profile (lab/profiles.py), general first; every result and row carries its `profile` (None = general),
+    and a profile's device/telemetry/serve log land in `out/profiles/<regime>/`. A profile launch that fails makes
+    its regimes invalid with the reason and the measurement goes on; the general launch failing, a busy GPU or a
+    contaminated measurement still fail it whole."""
+    from lab import artifacts, build, profiles
+    from lab.evaltools import _why, run_regimes
     t = target.load()
     rows = [] if args["passive"] else None
+    results, ready, failed = [], {}, {}
     try:
-        with engine.using(build.python_for(inputs["tree"])), container.quiet(args.get("workbench")) as killed, serve.Served(
-                inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"],
-                artifacts=out if args["passive"] else None) as srv:
-            results = run_regimes(srv.url, t, args["names"], args["split"], args["tier"], args["seed"], rows)
-            srv.exclusive()
+        with engine.using(build.python_for(inputs["tree"])), container.quiet(args.get("workbench")) as killed:
+            for prof, names in profiles.launches(inputs["tree"], t, args["names"]):
+                where = None
+                if args["passive"]:
+                    where = out if prof is None else out / "profiles" / prof
+                    where.mkdir(parents=True, exist_ok=True)
+                k = len(rows) if rows is not None else 0
+                try:
+                    with serve.Served(inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"],
+                                      artifacts=where, env_extra=profiles.env(t, prof)) as srv:
+                        got = run_regimes(srv.url, t, names, args["split"], args["tier"], args["seed"], rows)
+                        srv.exclusive()
+                    ready[prof] = srv.ready_s
+                except (serve.GpuBusy, serve.Contaminated):
+                    raise
+                except Exception as e:
+                    if prof is None:
+                        raise
+                    failed[prof] = _why(e)
+                    general = {r["regime"]: r for r in results}
+                    got = [{"regime": n, "objective": general[n]["objective"], "better": general[n]["better"],
+                            "value": None, "valid": False,
+                            "invalid_reasons": [f"profile launch failed: {failed[prof]}"]} for n in names]
+                for r in got + (rows or [])[k:]:
+                    r["profile"] = prof
+                results += got
         from lab import gpu
-        return {"results": results, "ready_s": srv.ready_s, "gpu": gpu.query(), "killed": killed}
+        return {"results": results, "ready_s": ready[None], "profiles_ready_s": {p: s for p, s in ready.items() if p},
+                "profiles_failed": failed, "gpu": gpu.query(), "killed": killed}
     finally:
         if rows is not None:
             artifacts.write_rows(out, rows)
 
 
 def job_equiv(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
-    """`args`: tier, concurrency, jailed. The gate's outputs land in `out` as equiv.json and equiv.outputs.jsonl;
-    answers already in `prior`'s equiv.outputs.jsonl are reused, not asked again."""
+    """`args`: tier, concurrency, jailed, profile (None = general). The gate's outputs land in `out` as equiv.json and
+    equiv.outputs.jsonl; answers already in `prior`'s equiv.outputs.jsonl are reused, not asked again."""
     from correctness import client, run as crun
     from correctness.gate import Thresholds
-    from lab import build
+    from lab import build, profiles
     t = target.load()
     if (inputs["prior"] / "equiv.outputs.jsonl").exists():
         shutil.copyfile(inputs["prior"] / "equiv.outputs.jsonl", out / "equiv.outputs.jsonl")
     enc = hooks.get("encoder") or crun.HFEncoder(t.model, t.chat_kwargs)
     with engine.using(build.python_for(inputs["tree"])), container.quiet(args.get("workbench")) as killed, \
-            serve.Served(inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"], artifacts=out) as srv:
+            serve.Served(inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"], artifacts=out,
+                         env_extra=profiles.env(t, args.get("profile"))) as srv:
         res = crun.candidate(inputs["reference"], srv.url, t.model, out / "equiv.json", enc,
                              Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio),
                              concurrency=args["concurrency"], api=client.Api(t.engine.api, t.chat_kwargs),
@@ -128,8 +156,9 @@ def job_profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
 
 
 def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
-    from lab import proftools, tools as T
+    from lab import profiles, proftools, tools as T
     tree, kind, a = inputs["tree"], args["kind"], args["args"]
+    prof = {"env": profiles.env(target.load(), a["profile"])} if a.get("profile") else {}
     files = out / "files"
     harness = T.stage_harness(tree)
     if kind == "profile":
@@ -138,7 +167,7 @@ def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
         argv = [engine.python(), "-m", "lab.profile", "--requests", str(n), "--max-tokens", str(a.get("max_tokens", 32)),
                 "--out", str(runs), *T.workload_flags(a, harness, n),
                 *[w for f in a.get("capture") or [] for w in ("--capture", str(f))]]
-        proc = (hooks.get("profile_runner") or T.default_profile_runner)(tree, argv)
+        proc = (hooks.get("profile_runner") or T.default_profile_runner)(tree, argv, **prof)
         bundles = sorted(runs.glob("*")) if runs.exists() else []
         if bundles:
             T._drop_links(bundles[-1])
@@ -158,13 +187,13 @@ def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     src = T.workload_flags(a, harness, proftools._int(a, "requests", *proftools.WORKLOAD["requests"]))
     argv = [*ins["wrap"](exe, work), engine.python(), "-m", "lab.profile", *ins["flags"], *src, *ins["extra"](exe),
             "--out", str(work / "bundle")]
-    proc = T.default_profile_runner(tree, argv, read=read)
+    proc = T.default_profile_runner(tree, argv, read=read, **prof)
     log, commands = proc.stdout + proc.stderr, [argv]
     T._drop_links(work)
     if ins["post"] and proc.returncode == 0:
         pargv, dest = ins["post"](exe, work)
         commands.append(pargv)
-        p = T.default_profile_runner(tree, pargv, read=read)
+        p = T.default_profile_runner(tree, pargv, read=read, **prof)
         if dest:
             dest.write_text(p.stdout)
         log += p.stderr if dest else p.stdout + p.stderr

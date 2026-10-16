@@ -9,11 +9,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from lab import calibrate, corpus, engine, experiments, ledger, target
+from lab import calibrate, corpus, engine, experiments, ledger, profiles, target
 from lab.agent import ToolSpec
 from lab.budget import Budget, BudgetExceeded, gpu_rate
 from lab.evaltools import EvalTools, _killed
-from lab.proftools import ProfTools
+from lab.proftools import PROFILE_ARG, ProfTools
 from lab.safety import grader
 
 # Tools that occupy the GPU: their wall time is charged at the venue's rate. The rest cost $0.
@@ -142,10 +142,15 @@ class Toolbox(EvalTools, ProfTools):
 
     def profile(self, args: dict) -> str:
         snap = self._audited("profile", args)
+        tree = self._pristine()
+        why = profiles.refusal(tree, target.load(), args.get("profile"))
+        if why:
+            self._record("note", "profile", args, {"verdict": "refused", "reason": why}, snap)
+            return f"profile refused: {why}"
         out = self._work("profile")
         t0 = time.monotonic()
         try:
-            r = self.worker.call("profile", {"tree": self._pristine()},
+            r = self.worker.call("profile", {"tree": tree},
                                  {"kind": "profile", "args": args, "workbench": getattr(self.s, "workbench", None)}, out)
             blob, visible = self._keep(out / "files") if (out / "files").is_dir() else ("", "")
         finally:
@@ -279,6 +284,13 @@ class Toolbox(EvalTools, ProfTools):
         windows = (f"one engine start plus, per regime, a {short['final_s']:.0f} s measurement window at tier short or "
                    f"{full['final_s']:.0f} s at full, plus {short['probe_s']:.0f} s / {full['probe_s']:.0f} s probes for "
                    f"regimes that search for a load")
+        tg = target.load()
+        prof = (f" Launch profiles: the engine's {tg.profiles} holds [general] and optional tables named after regimes. "
+                f"Every regime is measured on the general launch; a regime whose table is non-empty is also measured "
+                f"in its own engine start with {tg.profile_env}=<regime>, and that number is its headline (the general "
+                f"one is reported beside it). The harness sets only {tg.profile_env}; what a table does is the engine's "
+                f"code (as shipped, it writes the table over the launch env, including the target's settings)."
+                if tg.profiles else "")
         specs = [
             ToolSpec("test", "Lint and run the test suite on a pristine copy of your current workspace, inside the "
                      "referee's jail. Returns PASS or FAIL, lint and test status, and the tail of each output." + offline
@@ -291,12 +303,15 @@ class Toolbox(EvalTools, ProfTools):
                      "workspace under lab/runs/, left out of your change. `capture`: \"module:function\" entry points whose every "
                      "call's argument shapes (and one whole call per shape) go into the bundle's captures/; it "
                      "synchronizes, so that bundle's times are not representative. Returns the bundle path and its file names."
+                     + (PROFILE_ARG if tg.profiles else "")
                      + gpu("1-7 min measured at 16 requests x 64 tokens on an H200 (7 min when the weights were still loading from disk)"),
                      {"type": "object", "properties": {"capture": {"type": "array", "items": {"type": "string"}},
                                                        "corpus_class": {"type": "string"}, "seed": {"type": "integer"},
                                                        "synthetic": {"type": "boolean"}, "requests": {"type": "integer"},
                                                        "prompt_len": {"type": "integer"},
-                                                       "max_tokens": {"type": "integer"}}}, self.profile),
+                                                       "max_tokens": {"type": "integer"},
+                                                       **({"profile": {"type": "string"}} if tg.profiles else {})}},
+                     self.profile),
             ToolSpec("ledger", "Read records of this and earlier runs: every tool call, session and baseline, with "
                      "snapshots and results. Filters: `kind`, `session`, `snapshot`, `tool`. Returns the `last` N "
                      "matches (default 20) as JSON lines." + free,
@@ -332,22 +347,27 @@ class Toolbox(EvalTools, ProfTools):
                      f"regimes on the seen split. `regimes`: default {_names(self.bench_defaults())}; 'all'; or "
                      f"any of {_names(suite.REGIMES)}. `tier`: short (default) or full. `seed`: the seen-split workload sample "
                      f"(default {self.seed}). Returns one headline per regime "
-                     f"(objective, value, direction, validity), raw. Takes {windows}." + gpu("5-25 min per regime"),
+                     f"(objective, value, direction, validity), raw. Takes {windows}." + prof + gpu("5-25 min per regime"),
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}},
                                                        "tier": {"type": "string", "enum": ["short", "full"]},
                                                        "seed": {"type": "integer"}}}, self.bench),
             ToolSpec("equiv", "Serve your current workspace and run the correctness gate against the reference "
                      "model's outputs at `tier` dev (default) or full. Returns pass, fail or inconclusive with every "
-                     "metric. submit requires a passing full-tier equiv on the snapshot. Takes one engine start plus "
+                     "metric. submit requires a passing full-tier equiv on the snapshot"
+                     + (", and one for each regime it measures under its own profile (`profile`: that regime's name; "
+                        "default the general launch)" if tg.profiles else "") + ". Takes one engine start plus "
                      "generating the tier's task set, 32 requests in flight." + gpu("10 min at tier dev on unmodified vLLM and ~95 min on the example engine (about 17 items/min, measured at 16 requests in flight, H200); the full tier is about 12x the items"),
-                     {"type": "object", "properties": {"tier": {"type": "string", "enum": ["dev", "full"]}}}, self.equiv),
+                     {"type": "object", "properties": {"tier": {"type": "string", "enum": ["dev", "full"]},
+                                                       **({"profile": {"type": "string"}} if tg.profiles else {})}},
+                     self.equiv),
             ToolSpec("submit", "Measure your current workspace on the held-out split at the full tier and compare it "
                      "with the base commit measured the same way. Needs a passing full-tier equiv and a completed "
                      "short-tier seen bench on this snapshot. `regimes`: default those of that bench. The only thing "
-                     "that can produce a win. Returns one aggregate per regime (base, new, delta %, noise band %, "
+                     "that can produce a win. Returns one aggregate per regime (base, new, delta %, noise band % (measured on "
+                     "the base engine's general config), "
                      "verdict, and % of the ceiling computed from the base's seen-split request shape) and, with a task, its score. Takes one engine start plus a held-out full-tier "
                      f"measurement per regime, the base commit's held-out measurement once per run, and up to one of the "
-                     f"{HOLDOUT_BUDGET} held-out queries per regime." + gpu("15-25 min per regime"),
+                     f"{HOLDOUT_BUDGET} held-out queries per regime." + prof + gpu("15-25 min per regime"),
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}}}},
                      self.submit),
             *self.prof_specs(gpu),
@@ -399,12 +419,12 @@ def workload_flags(args: dict, harness: Path, n: int) -> list[str]:
     return ["--workload", str(harness / "workload.json")] + (["--enable-thinking"] if t.chat_kwargs.get("enable_thinking") else [])
 
 
-def default_profile_runner(tree: Path, argv: list[str], read: list[Path] = ()):
-    """lab.profile in the pristine tree as agent code: jailed, with the target's engine env, weights and `read`
-    read-only, harness first on the path."""
+def default_profile_runner(tree: Path, argv: list[str], read: list[Path] = (), env: dict | None = None):
+    """lab.profile in the pristine tree as agent code: jailed, with the target's engine env (and `env`: a launch
+    profile's), weights and `read` read-only, harness first on the path."""
     path = os.pathsep.join([str(tree / HARNESS_DIR), str(tree / "src"), str(tree)])
-    return grader.jailed(tree, argv, timeout_s=3600, env_extra={**target.load().engine.env, "PYTHONPATH": path},
-                         read=read)
+    return grader.jailed(tree, argv, timeout_s=3600,
+                         env_extra={**target.load().engine.env, **(env or {}), "PYTHONPATH": path}, read=read)
 
 
 def clean_pristine(run_dir: Path) -> None:

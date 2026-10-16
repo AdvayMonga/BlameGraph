@@ -149,7 +149,7 @@ def _calibrate_results(results, rows, t, gpu, tier, split, seed):
         row = {"objective": obj, "value": value, "better": r["better"], "fingerprint": fp}
         if value is None:
             row["value_missing"] = "the measurement was invalid: " + "; ".join(r.get("invalid_reasons") or [])
-        shape = shape_from_rows([x for x in rows if x.get("regime") == name])
+        shape = shape_from_rows([x for x in rows if x.get("regime") == name and x.get("profile") == r.get("profile")])
         if hw is None:
             row["ceiling"], row["ceiling_missing"] = None, "no measured or spec-sheet peaks for this GPU"
         elif spec is None:

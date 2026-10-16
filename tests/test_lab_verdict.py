@@ -107,6 +107,17 @@ def test_submission_equiv_failed():
     assert fb["for_researcher"]["activity"]["snapshots"][A]["equiv_failed"] == 1
 
 
+def test_a_submitted_profile_needs_its_own_passing_equiv():
+    sub = {**rec("submit", A, SUBMIT_OK), "config": {"tier": "full", "split": "heldout", "profiles": ["single_stream"]}}
+    general = rec("equiv", A, {"passed": True, "reasons": []})
+    lines = [rec("test", A, tested()), general, rec("bench", A, bench_ok(0.019)), sub]
+    i = run_feedback(lines)["for_agent"]["integrity"]
+    assert not i["valid"] and i["reasons"] == [f"submission_equivalent: submitted snapshot {A} has 0 passing and "
+                                               "0 failing equiv record(s) for profile single_stream (0 refused)"], i
+    own = {**rec("equiv", A, {"passed": True, "reasons": []}), "config": {"tier": "full", "profile": "single_stream"}}
+    assert run_feedback(lines[:-1] + [own, sub])["for_agent"]["integrity"]["valid"]
+
+
 def test_only_refused_tools():
     lines = [refused("bench", A), refused("equiv", A), refused("submit", A), session_rec(A)]
     fb = run_feedback(lines)

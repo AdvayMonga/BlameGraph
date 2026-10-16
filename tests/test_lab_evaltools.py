@@ -46,6 +46,8 @@ write = ["src/inference_server/*"]
 add_only = ["tests/test_*.py"]
 test = "python -m pytest -q -p no:cacheprovider"
 lint = "python -m ruff check ."
+profiles = "src/inference_server/profiles.toml"
+profile_env = "ENGINE_PROFILE"
 [engine.telemetry]
 env = {{ TELEMETRY_DIR = "{{dir}}" }}
 [reference]
@@ -436,3 +438,109 @@ def test_bench_takes_the_agents_seed(lab, monkeypatch):
     assert seeds == [7, tb.seed]
     with pytest.raises(ValueError):
         tb.bench({"seed": "7"})
+
+
+@pytest.fixture
+def launches(monkeypatch):
+    """The profile env of every engine launch, in order."""
+    seen, real = [], serve.Served.__init__
+
+    def init(self, *a, **kw):
+        seen.append(dict(kw.get("env_extra") or {}))
+        real(self, *a, **kw)
+    monkeypatch.setattr(serve.Served, "__init__", init)
+    return seen
+
+
+def _profile(s, text: str) -> None:
+    (s.workspace.path / "src" / "inference_server" / "profiles.toml").write_text(text)
+
+
+def test_an_engine_without_profiles_is_served_once(lab, launches):
+    tb, s = lab
+    _profile(s, "[general]\n")
+    out = json.loads(tb.bench({"regimes": ["single_stream"]}))
+    assert launches == [{}] and "profile" not in out["metrics"]["single_stream"]
+
+
+def test_a_regime_with_its_own_profile_is_served_again_and_that_is_its_headline(lab, launches):
+    from lab import artifacts
+    tb, s = lab
+    _profile(s, "[general]\n[single_stream]\nMAX_BATCH_SIZE = 1\n[saturated]\nMAX_BATCH_SIZE = 64\n")
+    out = json.loads(tb.bench({"regimes": ["single_stream"]}))
+    assert launches == [{}, {"ENGINE_PROFILE": "single_stream"}]          # saturated was not measured: no launch
+    m = out["metrics"]["single_stream"]
+    assert m["profile"] == "single_stream" and m["general"]["valid"] and m["general"]["value"] is not None
+    rec = next(ledger.records(s.ledger_root, kind="bench"))
+    assert [r["profile"] for r in rec["result"]["regimes"]] == [None, "single_stream"]
+    rows = artifacts.load(rec, s.ledger_root)["client_rows"]
+    assert {r["profile"] for r in rows} == {None, "single_stream"}
+    assert (s.ledger_root / rec["result"]["artifacts"]["profiles"] / "single_stream" / "serve.log").exists()
+
+
+def test_equiv_serves_a_profile_only_when_the_file_has_it(lab, launches):
+    tb, s = lab
+    assert tb.equiv({"profile": "single_stream"}).startswith("equiv refused: no [single_stream] table")
+    _profile(s, "[single_stream]\nMAX_BATCH_SIZE = 1\n")
+    out = json.loads(tb.equiv({"profile": "single_stream"}))
+    assert out["verdict"] == "pass" and out["profile"] == "single_stream"
+    assert launches == [{"ENGINE_PROFILE": "single_stream"}]
+    rec = list(ledger.records(s.ledger_root, kind="equiv"))[-1]
+    assert rec["config"]["profile"] == "single_stream"
+    assert (s.run_dir / "equiv" / f"{rec['snapshot']}-dev-single_stream.json").exists()
+
+
+def test_submit_needs_a_passing_full_equiv_for_each_profile_it_measures(lab):
+    tb, s = lab
+    _profile(s, "[single_stream]\nMAX_BATCH_SIZE = 1\n")
+    tb.equiv({"tier": "full"}); tb.bench({"regimes": ["single_stream"]})
+    assert tb.submit({}).startswith("submit refused: no passing full-tier equiv for profile(s) ['single_stream']")
+    assert not (s.run_dir / "base-heldout-full.json").exists()             # refused before anything was measured
+    assert json.loads(tb.equiv({"tier": "full", "profile": "single_stream"}))["verdict"] == "pass"
+    out = json.loads(tb.submit({}))
+    assert set(out["metrics"]) == {"single_stream"}
+    rec = next(r for r in ledger.records(s.ledger_root, kind="submit") if r.get("config", {}).get("split") == "heldout")
+    assert rec["config"]["profiles"] == ["single_stream"]
+
+
+def test_a_profile_launch_that_fails_is_flagged_and_the_measurement_goes_on(lab, launches, monkeypatch):
+    tb, s = lab
+    _profile(s, "[single_stream]\nMAX_BATCH_SIZE = 1\n")
+    real = serve.Served.__enter__
+
+    def enter(self):
+        if self.env_extra.get("ENGINE_PROFILE"):
+            raise serve.NotReady("exited with 1")
+        return real(self)
+    monkeypatch.setattr(serve.Served, "__enter__", enter)
+    out = json.loads(tb.bench({"regimes": ["single_stream"]}))
+    m = out["metrics"]["single_stream"]
+    assert m["profile"] == "single_stream" and m["valid"] is False and m["value"] is None
+    assert m["invalid_reasons"] == ["profile launch failed: engine did not start: exited with 1"]
+    assert m["general"]["valid"] and out["profiles_failed"] == {"single_stream": "engine did not start: exited with 1"}
+    assert next(ledger.records(s.ledger_root, kind="bench"))["result"]["verdict"] == "ok"
+
+
+def test_a_profiles_file_that_does_not_parse_is_a_recorded_refusal(lab):
+    tb, s = lab
+    _profile(s, "[single_stream\n")
+    assert tb.equiv({"profile": "single_stream"}).startswith("equiv refused: src/inference_server/profiles.toml does not parse")
+    assert list(ledger.records(s.ledger_root, kind="equiv"))[-1]["result"]["verdict"] == "refused"
+
+
+def test_submit_says_which_heldout_profile_launch_failed_and_how_only(lab, monkeypatch):
+    tb, s = lab
+    _profile(s, "[single_stream]\nMAX_BATCH_SIZE = 1\n")
+    tb.equiv({"tier": "full"}); tb.equiv({"tier": "full", "profile": "single_stream"}); tb.bench({"regimes": ["single_stream"]})
+    real = serve.Served.__enter__
+
+    def enter(self):
+        if self.env_extra.get("ENGINE_PROFILE"):
+            raise serve.NotReady("exited with 1; log: /private/held-out/serve.log")
+        return real(self)
+    monkeypatch.setattr(serve.Served, "__enter__", enter)
+    out = json.loads(tb.submit({}))
+    assert out["profiles_failed"] == {"single_stream": "engine did not start"}
+    assert out["metrics"]["single_stream"]["verdict"] == "unknown"
+    rec = next(r for r in ledger.records(s.ledger_root, kind="submit") if r.get("config", {}).get("split") == "heldout")
+    assert rec["config"]["profiles_failed"] == {"single_stream": "engine did not start"}

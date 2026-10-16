@@ -23,7 +23,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from lab import artifacts, calibrate, ledger, serve, target, worker
+from lab import artifacts, calibrate, ledger, profiles, serve, target, worker
 from validity.holdout import HoldoutGuard, Refused
 
 HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT = 100, 2.0, 0.5
@@ -56,9 +56,17 @@ def run_regimes(url: str, t: target.Target, names: list[str], split: str, tier: 
 
 
 def headline(results: list[dict]) -> dict:
-    """{regime: {objective, value, better, valid, invalid_reasons}}: the numbers, nothing judged."""
-    return {r["regime"]: {"objective": r["objective"], "value": r["value"], "better": r["better"],
-                          "valid": r["valid"], "invalid_reasons": r["invalid_reasons"]} for r in results}
+    """{regime: {objective, value, better, valid, invalid_reasons}}: the numbers, nothing judged. A regime also served
+    under its own profile reports that launch, with `profile` and the general launch's value and validity."""
+    out: dict = {}
+    for r in results:
+        h = {"objective": r["objective"], "value": r["value"], "better": r["better"], "valid": r["valid"],
+             "invalid_reasons": r["invalid_reasons"]}
+        if r.get("profile"):
+            g = out.get(r["regime"])
+            h.update(profile=r["profile"], general={"value": g["value"], "valid": g["valid"]} if g else None)
+        out[r["regime"]] = h
+    return out
 
 
 def noise_band_pct(regime: str, t: target.Target | None = None, root: Path = ledger.ROOT) -> float | None:
@@ -120,6 +128,8 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
                         f"consistent streams; under the line fails only when the net loss is significant",
                         "tasks": list(t.tasks)},
         "noise_bands_pct": {n: noise_band_pct(n, root=ledger_root or ledger.ROOT) for n in suite.REGIMES},
+        "noise_bands_measured_on": "the base commit's engine with its general config, repeated unchanged runs "
+                                   "(lab.validate); submit applies them to every candidate and every launch profile",
         "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,
         "ceilings": _ceiling_facts(t, ledger_root),
     }
@@ -225,25 +235,32 @@ class EvalTools:
             return _said("bench", result)
         cal = calibrate.calibrate_results(r["results"], artifacts.read_rows(work), target.load(), r.get("gpu"), tier,
                                           "seen", seed)
+        failed = {"profiles_failed": r["profiles_failed"]} if r.get("profiles_failed") else {}
         result = {"verdict": "ok", "metrics": headline(r["results"]), "calibrated": cal, "regimes": r["results"],
                   "tier": tier, "seconds": time.monotonic() - t0, "ready_s": r["ready_s"], "gpu": r.get("gpu"),
-                  "artifacts": artifacts.store(work, self.s.ledger_root), **_killed(r)}
+                  "artifacts": artifacts.store(work, self.s.ledger_root), **failed, **_killed(r)}
         self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier, "seed": seed})
         return json.dumps({"snapshot": snap.id, "split": "seen", "tier": tier, "metrics": result["metrics"],
-                           "calibrated": cal, **_killed(r)}, indent=1)
+                           "calibrated": cal, **failed, **_killed(r)}, indent=1)
 
     # -- equiv --------------------------------------------------------------------------
     def equiv(self, args: dict) -> str:
         snap = self._audited("equiv", args)
         t = target.load()
         tier = args.get("tier") or "dev"
+        profile = args.get("profile") or None
+        config = {"split": "seen", "tier": tier, **({"profile": profile} if profile else {})}
         ref = t.reference_dir_for(tier)
         if not target.reference_complete(ref):
             self._record("equiv", "equiv", args, {"verdict": "refused", "reason": f"no {tier}-tier reference outputs; "
-                         "run `python -m correctness reference` for this target first"}, snap)
+                         "run `python -m correctness reference` for this target first"}, snap, config=config)
             return "equiv refused: no reference outputs for this target"
         tree = self._pristine()
-        out = self.s.run_dir / "equiv" / f"{snap.id}-{tier}.json"
+        why = profiles.refusal(tree, t, profile)
+        if why:
+            self._record("equiv", "equiv", args, {"verdict": "refused", "reason": why}, snap, config=config)
+            return f"equiv refused: {why}"
+        out = self.s.run_dir / "equiv" / f"{snap.id}-{tier}{'-' + profile if profile else ''}.json"
         work = self._work("equiv")
         # answers already collected for this snapshot are reused, never re-rolled: the gate is statistical
         prior = Path(tempfile.mkdtemp(prefix="equiv-prior-", dir=self.s.run_dir))
@@ -252,28 +269,35 @@ class EvalTools:
         try:
             res = self.worker.call("equiv", {"tree": tree, "reference": ref, "prior": prior},
                                    {"tier": tier, "concurrency": self.equiv_concurrency, "jailed": self.serve_jailed,
-                                    "workbench": getattr(self.s, "workbench", None)}, work)
+                                    "profile": profile, "workbench": getattr(self.s, "workbench", None)}, work)
         except Exception as e:
             result = {**_failed(e), "artifacts": self._equiv_store(work, out, prior)}
-            self._record("equiv", "equiv", args, result, snap, config={"split": "seen", "tier": tier})
+            self._record("equiv", "equiv", args, result, snap, config=config)
             return _said("equiv", result)
         passed = {"pass": True, "fail": False}.get(res["verdict"])     # inconclusive is None: neither passing nor failing
         record = {"verdict": res["verdict"], "passed": passed, "reasons": res["reasons"], "gates": res["gates"],
                   "metrics": res["metrics"], "thresholds": res["thresholds"], "tier": tier,
                   "artifacts": self._equiv_store(work, out, prior), **_killed(res)}
-        self._record("equiv", "equiv", args, record, snap, config={"split": "seen", "tier": tier})
-        return json.dumps({"snapshot": snap.id, "tier": tier, "verdict": res["verdict"], "reasons": res["reasons"],
-                           "metrics": res["metrics"], **_killed(res)}, indent=1, default=str)
+        self._record("equiv", "equiv", args, record, snap, config=config)
+        return json.dumps({"snapshot": snap.id, "tier": tier, **({"profile": profile} if profile else {}),
+                           "verdict": res["verdict"], "reasons": res["reasons"], "metrics": res["metrics"],
+                           **_killed(res)}, indent=1, default=str)
 
     # -- submit -------------------------------------------------------------------------
     def submit(self, args: dict) -> str:
         snap = self._audited("submit", args)
         t = target.load()
         mine = [r for r in ledger.records(self.s.ledger_root, run=self.s.run_id, snapshot=snap.id)]
-        eq = [r for r in mine if r["kind"] == "equiv" and (r.get("result") or {}).get("tier") == "full"]
-        if not eq or eq[-1]["result"].get("verdict") != "pass":
+
+        def full_equiv(profile: str | None) -> dict | None:
+            """The latest full-tier equiv of one profile's launch (None = general) on this snapshot."""
+            return next((r for r in reversed(mine) if r["kind"] == "equiv"
+                         and (r.get("result") or {}).get("tier") == "full"
+                         and (r.get("config") or {}).get("profile") == profile), None)
+        eq = full_equiv(None)
+        if not eq or eq["result"].get("verdict") != "pass":
             why = ("no full-tier equiv on this snapshot" if not eq else
-                   f"latest full-tier equiv is {eq[-1]['result'].get('verdict')}")
+                   f"latest full-tier equiv is {eq['result'].get('verdict')}")
             self._record("submit", "submit", args, {"verdict": "refused", "reason": f"{why}; run equiv with tier=full first"}, snap)
             return f"submit refused: {why}"
         benches = [r for r in mine if r["kind"] == "bench" and (r.get("result") or {}).get("verdict") == "ok"
@@ -286,13 +310,22 @@ class EvalTools:
         try:
             names = [n for n in _regimes(args, tuple(seen)) if n in seen]
             guard = holdout_guard(t)            # before anything is measured: no budget here is a cheap refusal
+            tree = self._pristine()
+            # every config that will be measured passed the gate on its own: a profile is a different engine
+            own = [n for n in names if n in profiles.overrides(tree, t)]
+            short = [n for n in own if ((full_equiv(n) or {}).get("result") or {}).get("verdict") != "pass"]
+            if short:
+                why = f"no passing full-tier equiv for profile(s) {short}; run equiv with tier=full and that profile first"
+                self._record("submit", "submit", args, {"verdict": "refused", "reason": why}, snap)
+                return f"submit refused: {why}"
             base = self.base_heldout(t, names)
             base_seen = self.base_seen(t, names)
-            tree = self._pristine()
             # held-out passive data stays operator-only: never a blob, never in the record, never inside the jail.
             # A contaminated run raises here, before the holdout guard: it spends no query.
             private = self.s.run_dir / "heldout-private" / f"{snap.id}-{time.strftime('%Y%m%dT%H%M%S')}"
             r = self._measure(tree, private, "serve-submit.log", names=names, split="heldout", tier="full", passive=True)
+            # which profile launches failed and how (did not start / the exception's type), never its text
+            failed = {p: why.split(":", 1)[0] for p, why in (r.get("profiles_failed") or {}).items()}
             new = headline(r["results"])
             cal_path = self.s.run_dir / f"base-seen-{BENCH_TIER}.calibrated.json"
             seen_cal = json.loads(cal_path.read_text()) if cal_path.exists() else {}
@@ -312,9 +345,10 @@ class EvalTools:
             result = _failed(e)
             self._record("submit", "submit", args, result, snap)
             return _said("submit", result)
-        rec = self._record_heldout("submit", "submit", args, {"tier": "full"}, metrics, snap)
+        config = {"tier": "full", **({"profiles": own} if own else {}), **({"profiles_failed": failed} if failed else {})}
+        rec = self._record_heldout("submit", "submit", args, config, metrics, snap)
         out = {"snapshot": snap.id, "split": "heldout", "tier": "full", "metrics": metrics, "record": rec["id"],
-               **_killed(r)}
+               **({"profiles_failed": failed} if failed else {}), **_killed(r)}
         task = getattr(self.s, "task", None)
         if task is not None:                       # the task's own win condition, applied to these aggregates
             from lab.task import score

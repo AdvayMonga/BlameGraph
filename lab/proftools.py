@@ -15,9 +15,11 @@ import shutil
 import time
 from pathlib import Path
 
+from lab import profiles, target
 from lab.agent import ToolSpec
 from lab.evaltools import _killed
 
+PROFILE_ARG = " `profile`: run the engine under that regime's launch profile (default the general one)."
 OUT = "_instr"                      # in the pristine tree: writable in the jail, rebuilt on every call
 NSYS_REPORTS = "cuda_gpu_kern_sum,cuda_api_sum,cuda_gpu_mem_time_sum,nvtx_sum"
 NSYS_FLAGS = ["--trace", "cuda,nvtx,osrt", "--capture-range", "cudaProfilerApi", "--capture-range-end", "stop",
@@ -125,6 +127,10 @@ class ProfTools:
         instrument(tool, args)                  # refuse bad arguments before anything is snapshotted or run
         snap = self._audited(tool, args)
         tree = self._pristine()
+        why = profiles.refusal(tree, target.load(), args.get("profile"))
+        if why:
+            self._record("note", tool, args, {"verdict": "refused", "reason": why}, snap)
+            return f"{tool} refused: {why}"
         out = self._work(tool)
         t0 = time.monotonic()
         try:
@@ -152,20 +158,23 @@ class ProfTools:
 
     def prof_specs(self, gpu) -> list[ToolSpec]:
         """`gpu(time)` renders the cost fact for a description."""
+        has = bool(target.load().profiles)
+        extra = {"profile": {"type": "string"}} if has else {}
+        note = PROFILE_ARG if has else ""
         return [
             ToolSpec("trace", "Run the profile workload of your current workspace under Nsight Systems (nsys). "
                      f"`nsys_args`: the `nsys profile` flags, default {' '.join(NSYS_FLAGS)} (the measured window "
                      "only); output and overwrite are set by the tool. Stores the .nsys-rep and `nsys stats` CSV tables "
                      "(GPU kernels, CUDA API, memory copies, NVTX) in the ledger; returns the head of the kernel table. "
-                     "Refused where nsys is not installed." + gpu("about 1 min measured at 16 requests x 64 tokens on an H200 (engine start, workload, report export)"),
-                     _schema(nsys_args=FLAGS), self.trace),
+                     "Refused where nsys is not installed." + note + gpu("about 1 min measured at 16 requests x 64 tokens on an H200 (engine start, workload, report export)"),
+                     _schema(nsys_args=FLAGS, **extra), self.trace),
             ToolSpec("kernel", "Run the profile workload under Nsight Compute (ncu) on the kernels whose name "
                      "matches `kernel_regex` (every kernel if omitted): skips `launch_skip` matching launches, then "
                      "profiles `launch_count` with section set `set` (any `ncu --list-sets` name); `ncu_args` are "
                      "appended as further ncu flags. Stores the .ncu-rep and its raw metrics CSV in the ledger; returns "
                      "the head of the CSV. Refused where ncu is not installed."
-                     + gpu("about 1.5 min measured at 4-8 launches on an H200; each profiled launch is replayed once per metric pass, so it grows with launch_count and set=full"),
-                     _schema(kernel_regex={"type": "string"},
+                     + note + gpu("about 1.5 min measured at 4-8 launches on an H200; each profiled launch is replayed once per metric pass, so it grows with launch_count and set=full"),
+                     _schema(**extra, kernel_regex={"type": "string"},
                              launch_skip={"type": "integer", "minimum": 0, "default": 0},
                              launch_count={"type": "integer", "minimum": 1, "default": 8},
                              set={"type": "string", "default": "basic"}, ncu_args=FLAGS), self.kernel),
@@ -173,7 +182,7 @@ class ProfTools:
                      "repeats (scheduler and backend in process, warmup excluded). Stores a speedscope profile and one "
                      "stack dump taken halfway in the ledger; returns the head of the dump. `pyspy_args` are appended "
                      "to `py-spy record`. Refused where py-spy is "
-                     "not installed." + gpu("about 35 s plus `seconds`, measured on an H200"),
-                     _schema(seconds={"type": "integer", "minimum": 1, "default": 20},
+                     "not installed." + note + gpu("about 35 s plus `seconds`, measured on an H200"),
+                     _schema(**extra, seconds={"type": "integer", "minimum": 1, "default": 20},
                              rate={"type": "integer", "minimum": 1, "default": 100}, pyspy_args=FLAGS), self.hostprof),
         ]
