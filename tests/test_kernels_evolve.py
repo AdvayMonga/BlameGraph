@@ -382,7 +382,7 @@ def test_remote_evaluation_sends_the_source_on_stdin_and_never_a_key():
         fake_ssh.chmod(0o755)
         old = dict(os.environ)
         os.environ.update(KERNEL_EVAL_SSH=json.dumps([str(fake_ssh), "host"]), KERNEL_EVAL_REMOTE=f"cd {ROOT} &&",
-                          KERNEL_EVAL_REMOTE_CONFIG=str(cfg), KERNEL_EVAL_CONFIG=str(cfg), ANTHROPIC_API_KEY="sk-x")
+                          KERNEL_EVAL_CONFIG=str(cfg), ANTHROPIC_API_KEY="sk-x")       # config travels on stdin
         try:
             r = evaluator.evaluate_stage1(str(SEED))
         finally:

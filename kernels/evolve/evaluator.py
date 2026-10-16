@@ -3,14 +3,13 @@ kernels.evolve.core), so no candidate outlives its evaluation, shares a process 
 $KERNEL_EVAL_CONFIG (written by kernels.evolve.run). Facts only go back to the model: gate reasons, errors, timings.
 
 Remote: with $KERNEL_EVAL_SSH (a JSON argv prefix, e.g. ["ssh", "-i", KEY, "lab@host"]) and $KERNEL_EVAL_REMOTE (a
-shell prefix run there, e.g. "cd ~/BlameGraph && PATH=... "), each stage runs on the GPU host with the program's
-source on stdin and $KERNEL_EVAL_REMOTE_CONFIG as its config, so the model's key stays on this machine. No API key is
+shell prefix run there, e.g. "cd ~/BlameGraph && PATH=... "), each stage runs on the GPU host with the config and the
+program's source on stdin, so nothing is copied there first and the model's key stays on this machine. No API key is
 ever in a candidate's environment."""
 from __future__ import annotations
 
 import json
 import os
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -26,9 +25,9 @@ def _run(program_path: str, stage: int) -> EvaluationResult:
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(ROOT), os.environ.get("PYTHONPATH")]))
     remote = os.environ.get("KERNEL_EVAL_SSH")
     if remote:
-        cmd = json.loads(remote) + [os.environ.get("KERNEL_EVAL_REMOTE", "") + " python -m kernels.evolve.jailed "
-                                    + shlex.quote(os.environ["KERNEL_EVAL_REMOTE_CONFIG"]) + f" - {stage}"]
-        stdin = Path(program_path).read_text()
+        cmd = json.loads(remote) + [os.environ.get("KERNEL_EVAL_REMOTE", "") + f" python -m kernels.evolve.jailed - - {stage}"]
+        stdin = json.dumps({"config": json.loads(Path(os.environ["KERNEL_EVAL_CONFIG"]).read_text()),
+                            "source": Path(program_path).read_text()})
     else:
         cmd = [sys.executable, "-m", "kernels.evolve.jailed", os.environ["KERNEL_EVAL_CONFIG"], program_path, str(stage)]
         stdin = None
