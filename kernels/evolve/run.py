@@ -39,6 +39,8 @@ def system_message(task) -> str:
     from kernels.evolve import core
     base = f"the engine's current `{task.entry}`" if task.entry else "the task's reference"
     refused = "; ".join(dict.fromkeys(core.FORBIDDEN.values()))
+    graphs = (", both captured in CUDA graphs and timed as graph replays, as the engine runs them (a kernel that "
+              "cannot be captured scores 0)") if task.graphs else ""
     return f"""The program defines `kernel`, a replacement for {base}. It must compute what the task's reference \
 computes, on the same inputs, within dtype tolerance ({', '.join(str(d).removeprefix('torch.') for d in task.dtypes)}).
 
@@ -46,7 +48,7 @@ How a program is judged:
 - Stage 1: correctness on the two most-called seen shapes, one seed. Stage 2: correctness on every seen shape (three \
 seeds, edge shapes, NaN/Inf inputs, inputs scaled by {', '.join(f'{k:g}' for k in core.SCALES)}), inputs left \
 unchanged, no output aliasing, no answers kept across calls; then peak memory at most {core.MEMORY_FACTOR}x the \
-baseline's + {core.MEMORY_SLACK // 2**20} MiB; then timing against {base}.
+baseline's + {core.MEMORY_SLACK // 2**20} MiB; then timing against {base}{graphs}.
 - Score: the call-weighted geometric mean of the speedup over the seen shapes, the program and the baseline timed \
 in pairs on the same inputs; a shape where the middle half of the paired ratios includes 1 counts as 1.0. A failed gate scores 0; so does a time at which the kernel would run at \
 over {core.PHYSICS_MARGIN_PCT}% of its roofline bound. Held-out shapes are judged separately and are not part of the score.
