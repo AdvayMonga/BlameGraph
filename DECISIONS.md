@@ -3,6 +3,13 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-15 — Kernel-level precision: no global switches, precision inside a kernel allowed
+A candidate kernel may not change process-wide numerics (e.g. `torch.backends.cuda.matmul.allow_tf32 = True`): the
+source screen refuses it (`kernels/evolve/core.screen`). Lower precision inside the kernel (e.g. FP8 math) is allowed
+when the output passes the task's tolerance; its max error against the reference, beside the baseline's on the same
+inputs, is reported as a fact (`error_vs_reference`), and `equiv` stays the final judge. Why: a global switch also
+changes the reference and the baseline the evaluator compares against, and every other layer of the engine, so it is
+an exploit of the evaluator, not an optimization; quantization inside a kernel is what the 2026-10-04 rule allows.
 ## 2026-10-15 — Submit takes a dev-tier equiv for the example engine; a quick equiv tier
 Equiv's time is the engine generating answers: ~95 min at tier dev on inference-server, so the full tier (~11.5M
 output tokens) would be ~8-17 h. To get a first working run, the target names the tier submit requires

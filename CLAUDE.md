@@ -194,8 +194,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   a two-stage cascade, each stage a fresh jailed process (`kernels.evolve.jailed`: the jail gets the candidate, its
   config and a copied harness, never this repo; `core.judge`: stage 1 = two shapes, one seed; stage 2 = the full
   check on seen shapes + timing against the baseline, score = call-weighted geometric-mean speedup); a candidate is
-  refused if its source reaches for an exploit route (`core.screen`) and scores 0 if it leaves any function the
-  checker or timer uses patched (`core._watched`; the timer binds its own at import); the exploit canaries in
+  refused if its source reaches for an exploit route or writes into anything it imported, under any alias
+  (`core.screen`), and scores 0 if any function the checker or timer uses is patched, checked after loading and
+  after every call the checker makes (`core._watched`; the timer binds its own at import); the exploit canaries in
   `tests/test_kernels_evolve.py` must all score 0; selection never sees held-out shapes, `gate` judges them; `validate_gpu.sh` = the GPU validation; tolerances from the target's
   `[kernels]`). `lab/capture.py` + `lab.profile --capture MODULE:FUNCTION` (the `profile` tool's `capture`): every
   call's argument shapes and small int tensors, the first call per shape kept whole as real inputs.

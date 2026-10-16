@@ -65,6 +65,8 @@ def test_the_screen_refuses_exploit_routes_and_passes_real_kernels():
     ev = ROOT / "tests" / "fixtures" / "paged_decode_evolved.py"     # the best program of the 2026-10-14 run
     assert screen(SEED.read_text()) == [] and screen(ev.read_text()) == []
     assert screen("x = os.environ.get('A', '0')\n") == []
+    assert screen("import torch\nx = torch.empty(3)\nx.tag = 1\nclass A:\n    def f(self):\n        self.a = 1\n") == []
+    assert screen("import torch\nm = torch.cuda\nm.synchronize = None\n") and screen("def k(x):\n    type(x).f = 1\n")
     t = load("toy_rmsnorm")
     with tempfile.TemporaryDirectory() as d:
         bad = Path(d) / "bad.py"
@@ -93,6 +95,8 @@ def test_noise_rule_and_physics_alarm():
     t = load("toy_rmsnorm")
     same = judge(t, SEED, list(t.seen_default), [], None, "cpu", None, 2, iters=3)
     assert same["metrics"]["raw_speedup"] > 0 and "beyond_noise" in json.loads(same["artifacts"]["timings"])[0]
+    err = json.loads(same["artifacts"]["error_vs_reference"])["candidate"]
+    assert err["max_abs"]["float32"] is not None and err["cases"] > 0
     from validity.peaks import Peaks
     fast = Peaks("toy", 1.0, 1.0, 1e9, "spec")      # a 1 FLOP/s, 1 B/s machine: any real time beats its bound
     orig = core._peaks
@@ -189,11 +193,18 @@ CANARIES = {
                              "def kernel(x, w):\n" + RIGHT, "refused"),
     "timer statistics patched through an alias": ("import torch\nimport statistics as s\n"
                                                   "s.quantiles = lambda t, n: [0.0, 1e-9, 1e-9]\n"
-                                                  "def kernel(x, w):\n" + RIGHT, "patched"),
+                                                  "def kernel(x, w):\n" + RIGHT, "refused"),
     "checker's tensor op patched through an alias": ("import torch as T\nT.Tensor.abs = lambda self: self * 0\n"
-                                                     "def kernel(x, w):\n    return x.clone()\n", "patched"),
+                                                     "def kernel(x, w):\n    return x.clone()\n", "refused"),
     "sync made a no-op": ("import torch\nimport torch as T\nT.cuda.synchronize = lambda *a, **k: None\n"
-                          "def kernel(x, w):\n" + RIGHT, "patched"),
+                          "def kernel(x, w):\n" + RIGHT, "refused"),
+    # past the screen (the module reached through a list): caught at run time
+    "timer statistics patched at import": ("import torch\nimport statistics\nmods = [statistics]\n"
+                                           "mods[0].quantiles = lambda t, n: [0.0, 1e-9, 1e-9]\n"
+                                           "def kernel(x, w):\n" + RIGHT, "patched"),
+    "checker's tensor op patched during the call": ("import torch\nmods = [torch]\ndef kernel(x, w):\n"
+                                                    "    mods[0].Tensor.abs = lambda self: self * 0\n"
+                                                    "    return x.clone()\n", "patched"),
     "the reference imported": ("from kernels.tasks.toy_rmsnorm import reference as kernel\n", "refused"),
     "background thread": ("import threading, torch\ndef kernel(x, w):\n" + RIGHT, "refused"),
     "output never written": ("import torch\ndef kernel(x, w):\n    return torch.empty_like(x)\n", "correctness"),
