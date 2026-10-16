@@ -122,8 +122,9 @@ def main(argv: list[str] | None = None) -> int:
     sets = shapes_mod.select(task, sets, a.timing_shapes)
     cfg_path = out / "eval_config.json"          # selection never sees the held-out shapes
     cfg_path.write_text(json.dumps({"task": task.name, "seen": [list(s) for s in sets["seen"]],
-                                    "weights": sets.get("calls"), "device": a.device, "tolerances": tol,
-                                    "ints": _ints(sets, ("seen",))}))
+                                    "weights": {k: v for k, v in (sets.get("calls") or {}).items()
+                                                if k in {json.dumps(list(x)) for x in sets["seen"]}},
+                                    "device": a.device, "tolerances": tol, "ints": _ints(sets, ("seen",))}))
     (out / "shapes.json").write_text(json.dumps({k: [list(s) for s in v] if k in ("seen", "heldout") else v
                                                  for k, v in sets.items()}, indent=1))
     program = Path(a.initial) if a.initial else out / "initial_program.py"

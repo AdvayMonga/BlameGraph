@@ -24,10 +24,11 @@ FORBIDDEN = {
     r"\binspect\b|\bsys\._getframe|\bf_back\b|\bf_locals\b": "frame introspection",
     r"\bctypes\b|\bcffi\b": "raw memory access",
     r"\bthreading\b|\bmultiprocessing\b|\bconcurrent\b|\basyncio\b": "background work outside the timed call",
-    r"torch\.cuda\.(Stream|stream|Event|set_stream|current_stream)\b|\.elapsed_time\b|\bcuda\.Event\b":
+    r"torch\.cuda\.(Stream|stream|Event|set_stream|current_stream)\b|\.elapsed_time\b|\bcuda\.Event\b"
+    r"|\b(Stream|ExternalStream|Event|CUDAGraph|current_stream|set_stream|_sleep)\b":
         "streams or timer events",
     r"\btime\.(perf_counter|time|monotonic|sleep)\b|\bimport time\b|\bfrom time\b": "the clock",
-    r"\bsys\.modules\b|\bbuiltins\b|__builtins__|\bimportlib\b|__import__|\bsetattr\s*\(|__setattr__|__dict__"
+    r"\bsys\.modules\b|\bbuiltins\b|__builtins__|\bimportlib\b|__import__|\b(set|get)attr\s*\(|__setattr__|__dict__"
     r"|\bglobals\s*\(|\bvars\s*\(|\b(torch|triton|time|math|statistics)(\.\w+)+\s*=(?!=)": "patching modules",
     r"(?<![.\w])(eval|exec|compile)\s*\(|__subclasses__|\btypes\.(FunctionType|CodeType)\b": "code built at run time",
     r"\bkernels\.(check|timing|evolve)\b|\bfrom kernels\b|\bimport kernels\b": "the evaluator itself",
@@ -44,8 +45,9 @@ def screen(source: str) -> list[str]:
 
 
 def _writes_into(source: str) -> list[str]:
-    """Attribute writes or deletes whose root is an imported name, a name bound to one (`m = torch.cuda`), or a call
-    (`type(x).abs = f`): patching a library under any alias. Writes on other objects (`self.x = 1`) are left alone."""
+    """Attribute writes or deletes whose root is an imported name, a name bound to one (`m = torch.cuda`) or to a call
+    (`T = type(x)`), or a call (`type(x).abs = f`): patching a library under any alias. Writes on other objects
+    (`self.x = 1`, a parameter's attribute) are left alone."""
     import ast
     try:
         tree = ast.parse(source)
@@ -64,8 +66,8 @@ def _writes_into(source: str) -> list[str]:
         grew = False
         for n in nodes:
             if isinstance(n, (ast.Assign, ast.AnnAssign, ast.NamedExpr)) and n.value is not None:
-                r = root(n.value) if isinstance(n.value, (ast.Name, ast.Attribute)) else None
-                if isinstance(r, ast.Name) and r.id in held:
+                r = root(n.value) if isinstance(n.value, (ast.Name, ast.Attribute, ast.Call)) else None
+                if isinstance(r, ast.Call) or (isinstance(r, ast.Name) and r.id in held):
                     for t in (n.targets if isinstance(n, ast.Assign) else [n.target]):
                         if isinstance(t, ast.Name) and t.id not in held:
                             held.add(t.id)
@@ -95,7 +97,7 @@ def _watched(task: Task) -> dict:
         for k, v in vars(m).items():
             if (callable(v) or isinstance(v, type(math))) and not k.startswith("__") and (own or not k.startswith("_")):
                 out[f"{m.__name__}.{k}"] = id(v)
-    for c in (torch.Tensor, torch.cuda.Event):
+    for c in (torch.Tensor, torch.cuda.Event, torch.cuda.CUDAGraph):
         out.update({f"{c.__module__}.{c.__qualname__}.{k}": id(v) for k, v in vars(c).items()})
     return out
 
@@ -103,7 +105,7 @@ def _watched(task: Task) -> dict:
 def _patched(before: dict, task: Task) -> list[str]:
     """Names in `before` that now point elsewhere or are gone, and attributes added to the watched classes."""
     now = _watched(task)
-    cls = (f"{c.__module__}.{c.__qualname__}." for c in (torch.Tensor, torch.cuda.Event))
+    cls = (f"{c.__module__}.{c.__qualname__}." for c in (torch.Tensor, torch.cuda.Event, torch.cuda.CUDAGraph))
     prefixes = tuple(cls)
     return sorted([k for k, v in before.items() if now.get(k) != v] +
                   [k for k in now if k not in before and k.startswith(prefixes)])
@@ -219,7 +221,8 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
     except Exception:                            # noqa: BLE001
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
                 "artifacts": {"error": "checker raised:\n" + traceback.format_exc()[-3000:]}}
-    gates = {k: {"passed": g["passed"], "reason": g["reason"]} for k, g in r["gates"].items()}
+    gates = {k: {"passed": g["passed"], "reason": g["reason"], "cases": (g.get("evidence") or {}).get("cases")}
+             for k, g in r["gates"].items()}
     if r["passed"] and stage > 1:                 # other value distributions, on the two most frequent seen shapes
         for k in SCALES:
             v = check_kernel(ref, cand, _scaled(task.make_inputs, k), seen[:2], [], dtypes=task.dtypes, device=device,
@@ -251,11 +254,13 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
     if pc is not None:
         gates["peak_memory"] = {"passed": True, "reason": f"peak {pc / 2**20:.0f} MiB vs baseline {pb / 2**20:.0f} MiB"}
     try:
-        rows, score, raw = _timed(task, timed, base, seen, weights, dtype, device, iters, hw)
-        held = _timed(task, timed, base, heldout, weights, dtype, device, iters, hw) if heldout else None  # gate only
-    except Exception as e:                       # noqa: BLE001  e.g. a kernel that cannot be captured in a CUDA graph
+        rows, score, raw = _timed(task, timed, base, seen, weights, dtype, device, iters, hw, tolerances)
+        held = (_timed(task, timed, base, heldout, weights, dtype, device, iters, hw, tolerances)   # gate only
+                if heldout else None)
+    except Exception as e:                       # noqa: BLE001  cannot be captured, or wrong output while timed
         gates["timing"] = {"passed": False, "reason": (f"{type(e).__name__}: {e}")[:2000] +
-                           (" (timed as a CUDA graph replay: the kernel must capture)" if task.graphs else "")}
+                           (" (timed as a CUDA graph replay: the kernel must capture and stay correct)"
+                            if task.graphs else "")}
         return {"metrics": {"combined_score": 0.0, "correct": 1.0, "stage": stage},
                 "artifacts": {"gates": json.dumps(gates, indent=1)}}
     over = [x for x in rows + (held[0] if held else []) if (x["pct_of_roofline"] or 0) > PHYSICS_MARGIN_PCT]
@@ -274,14 +279,22 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
     return {"metrics": metrics, "artifacts": artifacts}
 
 
-def _timed(task, cand, base, shapes, weights, dtype, device, iters, hw) -> tuple[list, float, float]:
+def _timed(task, cand, base, shapes, weights, dtype, device, iters, hw, tolerances=None) -> tuple[list, float, float]:
     """Per-shape paired timings against the baseline, and the call-weighted geometric-mean speedup with gains inside
-    the noise counted as 1.0 (and without that rule)."""
+    the noise counted as 1.0 (and without that rule). Raises if the timed calls' output differs from the reference:
+    a kernel that does less only when timed (e.g. while a CUDA graph captures it) is caught here."""
+    from kernels.check import TOLERANCES, _compare
+    atol, rtol = {**TOLERANCES, **(tolerances or {})}[dtype]
     rows, logs, raw = [], 0.0, 0.0
     total = sum((weights or {}).get(json.dumps(list(s)), 1) for s in shapes)
     for s in shapes:
         p = time_pair(cand, base, task.make_inputs, s, dtype, device, iters=iters,      # unwrapped: no check in
                       graphs=task.graphs)                                              # the window
+        for inputs, out in zip(p["inputs"], p["outputs_a"]):
+            d = _compare(task.reference(*[t.clone() for t in inputs]), out, atol, rtol)
+            if not d["ok"]:
+                raise ValueError(f"the timed calls' output differs from the reference at shape {list(s)}: "
+                                 f"{d.get('error') or ('max_abs %.3g, max_rel %.3g' % (d['max_abs'], d['max_rel']))}")
         c, b, speed = p["a"], p["b"], p["ratio"]["median"]
         shown = _shown(p["ratio"])
         w = (weights or {}).get(json.dumps(list(s)), 1) / total
