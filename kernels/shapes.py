@@ -24,6 +24,21 @@ def from_captures(task: Task, dirs: list[Path]) -> Counter:
     return c
 
 
+def ints_from_captures(task: Task, dirs: list[Path]) -> dict:
+    """{json shape: the 1-D int args by value} from the first captured call of each shape (e.g. its real sequence
+    lengths), for `Task.with_ints`. Calls logged by shape only (inside a graph recording) carry none."""
+    out: dict = {}
+    for d in dirs:
+        for call in capture.load(d):
+            if task.entry and call["fn"] != task.entry:
+                continue
+            s = task.shape_of(call)
+            vals = [a["values"] for a in call["args"] if "values" in a]
+            if s is not None and vals and json.dumps(list(s)) not in out:
+                out[json.dumps(list(s))] = vals
+    return out
+
+
 def split(task: Task, counts: Counter, quantile: float = 0.8) -> dict:
     """Held out: a shape whose value on any held-out axis is above that axis's `quantile` (by calls). Seen: the rest.
     Each list is ordered by call count, most frequent first."""
@@ -60,8 +75,12 @@ def select(task: Task, sets: dict, k: int = 8, bins: int = 4) -> dict:
     for s in seen:
         buckets.setdefault(key(s), []).append(s)
     reps = sorted(((max(b, key=lambda s: n[s]), sum(n[s] for s in b)) for b in buckets.values()), key=lambda x: -x[1])[:k]
-    return {**sets, "seen": [s for s, _ in reps], "calls": {json.dumps(list(s)): w for s, w in reps},
-            "selected_from": len(seen)}
+    out = {**sets, "seen": [s for s, _ in reps], "calls": {json.dumps(list(s)): w for s, w in reps},
+           "selected_from": len(seen)}
+    if "ints" in sets:                           # the held-out shapes' ints stay: `gate` uses them
+        keep = {json.dumps(list(s)) for s, _ in reps} | {json.dumps(list(s)) for s in sets["heldout"]}
+        out["ints"] = {k: v for k, v in sets["ints"].items() if k in keep}
+    return out
 
 
 def write(path: Path, sets: dict) -> Path:

@@ -6,7 +6,9 @@ regions, and the bytes and FLOPs a call must move (the roofline bound). Tensors 
 scalars a call needs (e.g. an attention scale) are derived from the shapes inside `call`."""
 from __future__ import annotations
 
+import dataclasses
 import importlib
+import json
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -27,12 +29,26 @@ class Task:
     edge_shapes: Callable = None            # edge_shapes(shape) -> shapes; default: the checker's
     dtypes: tuple = (torch.bfloat16,)
     layouts: tuple = ("strided", "transposed")  # non-contiguous variants its callers pass (lab/capture records it)
+    make_real: Callable = None              # make_real(shape, dtype, device, generator, ints) -> inputs, `ints` being a
+                                            # captured call's 1-D int args by value (e.g. its real sequence lengths)
     seen_default: tuple = field(default_factory=tuple)      # shapes to use with no capture (tests, toys)
     heldout_default: tuple = field(default_factory=tuple)
 
     def bind(self, fn: Callable) -> Callable:
         """fn as the checker and the timer call it: tensors in, the task's scalars added."""
         return (lambda *xs: self.call(fn, *xs)) if self.call else fn
+
+    def with_ints(self, ints: dict | None) -> "Task":
+        """This task with inputs built from captured int args where a shape has them ({json shape: ints}); random
+        values elsewhere (edge shapes, scaled variants keep the captured ints)."""
+        if not ints or not self.make_real:
+            return self
+        synthetic = self.make_inputs
+
+        def make(shape, dtype, device, g):
+            got = ints.get(json.dumps(list(shape)))
+            return self.make_real(shape, dtype, device, g, got) if got else synthetic(shape, dtype, device, g)
+        return dataclasses.replace(self, make_inputs=make)
 
     def baseline(self) -> Callable | None:
         if not self.entry:

@@ -189,7 +189,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   how to read a shape from a captured call, the held-out axes, the layouts its callers pass, bytes and FLOPs per call
   for the roofline; `toy_rmsnorm` for CPU, `paged_decode` = the example engine's `paged_decode_attention`),
   `kernels/shapes.py` (shapes and call counts from captures; held-out = whole regions above the 80th percentile on the
-  task's axes, never random samples), `kernels/evolve/` (the layer-1 generator, a replication of OpenEvolve 0.4.0 =
+  task's axes, never random samples; `ints_from_captures` keeps each shape's captured int args, e.g. real sequence
+  lengths, which `Task.with_ints` uses for checking and timing in place of synthetic ones), `kernels/evolve/` (the layer-1 generator, a replication of OpenEvolve 0.4.0 =
   open AlphaEvolve: `python -m kernels.evolve run|gate|split`; the starting program is the engine's kernel module;
   each run appends one `kernels` ledger record (every candidate's seen-shape metrics and lineage, OpenEvolve's
   evolution trace and the best program as blobs; `lab/LEDGER.md`);
