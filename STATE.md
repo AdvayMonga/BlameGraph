@@ -35,11 +35,12 @@ from the agent), the workbench/measurement sandbox, the GPU VM tooling.
 - `validity/tier_agreement.py`: needs real short/full runs.
 - Remote worker (`LAB_WORKER=ssh`): used in the one-session dry run only.
 
-## Where the engine stands (2026-10-15, inference-server #107, not merged)
-Engine vs plain vLLM (2026-10-13 for vLLM): single_stream TPOT p99 15.6 ms vs 4.1 ms, saturated 0.37 vs 5.8 req/s,
-long prompt 2.66 vs 68 req/s; every regime valid. The decode step is launch-bound (~2,300 kernels per step after
-fusion; the CUTLASS grouped GEMM 3.5 ms of 13.3); prefill attention is torch SDPA. The gate on this state is
-inconclusive (429s at concurrency 32); fp8 experts and a Triton MoE GEMM exist, off by default (`RUNS.md` 2026-10-15).
+## Where the engine stands (2026-10-16, inference-server main after #106, #107, #108)
+Engine vs plain vLLM (2026-10-13 for vLLM): single_stream TPOT p99 11.5 ms vs 4.1 ms, saturated 0.95 vs 5.8 req/s,
+long prompt 6.25 vs 68 req/s; every regime valid; the dev-tier gate passes (1,597/1,597). Decode step p50 10.9 ms at
+batch 1, 12.7 at batch 4: still launch-bound (~2,000 kernels per step; next: the per-layer graph-replay copies, the
+routing gather/scatter, then fp8 once bandwidth-bound). Prefill attention is torch SDPA; the MoE GEMMs run in a Triton
+kernel up to 2048 pairs. fp8 experts exist, off (`RUNS.md` 2026-10-15/16).
 
 ## In flight (branches not on main)
 | Branch | Worktree | What | Status |
@@ -47,7 +48,7 @@ inconclusive (429s at concurrency 32); fp8 experts and a Triton MoE GEMM exist, 
 | `lab/profiles` | `BlameGraph-wt/profiles` | Launch profiles: a config per regime | Not merged |
 | `target/batch-size` | `BlameGraph-wt/batch` | The engine's own batch size, not a pinned 32 | One commit, not merged |
 | `gpu/session` | `BlameGraph-wt/gpu` | Merges `lab/profiles` + `target/batch-size`: the tree pushed to the VM for the 2026-10-15 session | Disposable; not for merging |
-| `docs/gpu-1015` | `BlameGraph-wt/docs1015` | This session's RUNS.md/STATE.md entries | PR open |
+| `docs/gpu-1016` | `BlameGraph-wt/docs1016` | The 2026-10-16 session's RUNS.md/STATE.md entries | PR open |
 
 ## Open problems
 - BF16 puzzle: plain BF16 matched the reference on Nebius at concurrency 128 but diverged on Verda at 32
@@ -55,7 +56,6 @@ inconclusive (429s at concurrency 32); fp8 experts and a Triton MoE GEMM exist, 
 - `equiv` at tier dev: ~26 min on inference-server #107 at concurrency 32, but 12/1,585 items were 429-rejected
   (inconclusive). 429s are now retried for ~6 min (was ~1 min); not yet rerun on a GPU. Submit takes a dev-tier equiv
   for this engine (`submit_tier`); equiv tier `quick` (teacher-forced divergence only) is unmeasured on a GPU.
-- inference-server #107's Triton MoE grouped GEMM asserts inside the decode CUDA graph under load (exact in eager mode).
 - The engine's radix prefix cache evicts by scanning the whole tree per leaf (~100% of scheduler time in long-context
   prefill): a layer-3 engine bug (`RUNS.md` 2026-10-14/15).
 - `session.py --run` re-resolves `base` from HEAD rather than the run's original base; resuming after the engine moved
@@ -68,9 +68,8 @@ inconclusive (429s at concurrency 32); fp8 experts and a Triton MoE GEMM exist, 
 - The corpus's long_prompt_short_output window repeats each prompt ~5x, which rewards prefix caching.
 
 ## Next
-- GPU (Nebius): the gate on inference-server #107 at concurrency 16; debug its MoE kernel in the decode graph (3.5 ms
-  of the 13 ms step); then the remaining launch overhead (per-layer graph-replay copies, routing gather/scatter) and
-  fp8 once the step is bandwidth-bound. Merge #107 with the evolved decode kernel (#106).
+- GPU (Nebius): the engine's remaining launch overhead (per-layer graph-replay copies, routing gather/scatter), then
+  fp8 once the step is bandwidth-bound; the long-prompt tail (slowest gate request 75 s at 16 in flight).
 - GPU, needs spend approval: resolve the BF16 puzzle (dev tier at concurrency 32 and 128 on one VM, ~20 min, ~$1.50);
   first real `python -m regimes run all` against the engine and against vLLM.
 - GPU, with approval and the auto-stop armed: `python -m lab.validate --target targets/inference-server.toml`

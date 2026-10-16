@@ -5,6 +5,7 @@ local and archived in the store (`python -m store pull`).
 
 | Date | Venue | What | GPU cost | Result | Evidence |
 |---|---|---|---|---|---|
+| 2026-10-16 | Nebius H200 | Engine: MoE kernel on, gate to PASS (inference-server #107 merged) | ~2 h | single_stream TPOT p99 11.5 ms, saturated 0.95 req/s, long_prompt 6.25 req/s; gate PASS 1,597/1,597 at 16 in flight | `data/engine-h200-20261015/nebius/`, below |
 | 2026-10-15 | Verda H200 | Manual engine serving fixes (inference-server #107), #33 profiles check | ~$24 (4 h 25 min) | single_stream TPOT p99 21 -> 15.6 ms, saturated 0.097 -> 0.37 req/s, long_prompt invalid -> 2.66 req/s; gate inconclusive at concurrency 32 | `data/engine-h200-20261015/`, below |
 | 2026-10-14/15 | Nebius H200 | Layer-1 kernel loop on `paged_decode` (branch `feat/kernel-loop`) | not recorded | GQA-packed decode kernel 3.88x on 196 seen shapes, passes held-out; end to end single_stream TPOT p99 21.6 -> 15.4 ms, saturated 0.100 -> 0.158 req/s (short tier, one run each); equiv not run | store `archive/kernels-2026-10-14-622240de7cc1b4aa.tar.zst` (gate results, best program, shapes), engine PR inference-server #106 |
 | 2026-10-13 | Nebius H200 | Ceilings vs measurements, vLLM and the engine | not recorded | Every floor below every measurement; engine at 0.5-7% of ceiling, vLLM 19-94% | `knowledge/reference/inference-server/` |
@@ -13,6 +14,18 @@ local and archived in the store (`python -m store pull`).
 | 2026-10-08 | Nebius H200 | Profiler tools on the real engine | ~$0.87 | All four tools work unjailed; three fixes | below |
 | 2026-10-05 | Nebius H200 | Full-tier correctness recalibration | ~$16.50 | Policy confirmed; FP8/INT8 pass, Int4 fails | `data/h200-run-20261005/REPORT.md`, `data/equiv-full/` |
 | 2026-10-04 | Verda H200 | Dev-tier correctness calibration | $6.75 | Gate separates Int4; consistency results void | `data/h200-run-20261004/REPORT.md`, `data/equiv/` |
+
+## 2026-10-16 — Engine: MoE kernel on, the gate to PASS (Nebius H200, inference-server #107 merged)
+The Triton MoE grouped GEMM's device-side assert was the routing kernel returning an out-of-range expert id (the
+BLOCK_E sentinel) for NaN rows, which the decode graph's dummy rows carry; clamped, and the kernel runs with no
+errors under load. With it (and main's evolved paged_decode #106 merged): single_stream TPOT p99 15.6 -> 11.5 ms
+(decode step p50 10.9 ms, batch 4 12.7 ms), saturated 0.37 -> 0.95 req/s, long_prompt 2.66 -> 6.25 req/s, short
+tier, seen split, bf16. Gate (dev tier, 16 in flight): inconclusive twice on the same item, `mbpp-783`, which the
+telemetry showed completed (261 tokens) but in 635 s of decode, one step per 2.4 s, 15 min into the run: the radix
+cache's one-scan-per-block eviction once the cache was full (the bug found by the kernel-loop session, fixed in
+inference-server #108). With #108 merged: PASS, 1,597/1,597 answered, slowest decode 75 s. #107 merged to the
+engine's main. Lessons added to the ops notes: `pkill -f` in an ssh command kills the ssh shell when the pattern
+appears in the same command line; edit VM scripts locally and scp them.
 
 ## 2026-10-15 — Engine serving fixes by hand (Verda H200, inference-server PR #107)
 Short tier, seen split, bf16, `python -m regimes run` against the engine served with the target's env. Baseline of
