@@ -191,6 +191,53 @@ def test_share_of_the_window_per_task_and_the_kernels_no_task_covers():
         assert main(["share", "--profile", str(b)]) == 0
 
 
+def test_ship_commits_the_module_on_a_new_engine_branch_without_touching_its_tree():
+    import dataclasses
+    import subprocess
+    from kernels.evolve.run import initial_program
+    from kernels.evolve.ship import module_source, ship
+    with tempfile.TemporaryDirectory() as d:
+        repo = Path(d) / "engine"
+        (repo / "src" / "fake_pkg").mkdir(parents=True)
+        (repo / "src" / "fake_pkg" / "mod.py").write_text("def entry(x):\n    return x\n")
+        git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True, check=True).stdout
+        git("init", "-q")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "base", "--allow-empty")
+        git("add", ".")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "engine")
+        (repo / "src" / "fake_pkg" / "mod.py").write_text("def entry(x):\n    return x  # the user's edit\n")
+        task = dataclasses.replace(load("toy_rmsnorm"), entry="fake_pkg.mod:entry")
+        program = ("# EVOLVE-BLOCK-START\ndef entry(x):\n    return x\n\ndef faster(x):\n    return x * 1\n"
+                   "# EVOLVE-BLOCK-END\n\nkernel = faster\n")
+        assert module_source(program, "entry").endswith("entry = faster\n")
+        assert "EVOLVE" not in module_source(initial_program(load("toy_rmsnorm")), "kernel")
+        ok = {"metrics": {"correct": 1.0},
+              "artifacts": {"gates": json.dumps({"correctness_heldout": {"passed": True, "cases": 6},
+                                                 "physics": {"passed": True}})}}
+        assert module_source("def kernel(x):\n    return x\n", "entry").endswith("entry = kernel\n")    # a rewrite
+        old = dict(os.environ)
+        os.environ.update(GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t", GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t")
+        try:
+            out = ship(task, program, ok, repo, branch="kernels/test")
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+        assert out["path"] == "src/fake_pkg/mod.py" and "entry = faster" in git("show", "kernels/test:src/fake_pkg/mod.py")
+        assert git("diff", "--name-only", out["base"], "kernels/test").split() == ["src/fake_pkg/mod.py"]
+        assert "the user's edit" in (repo / "src" / "fake_pkg" / "mod.py").read_text()       # working tree untouched
+        assert git("rev-parse", "--abbrev-ref", "HEAD").strip() != "kernels/test"
+        from kernels.evolve.ship import gate_passed
+        flagged = json.loads(ok["artifacts"]["gates"])
+        assert not gate_passed({**ok, "artifacts": {"gates": json.dumps({**flagged, "physics": {"passed": False}})}})
+        assert not gate_passed({**ok, "artifacts": {"gates": json.dumps(
+            {**flagged, "correctness_heldout": {"passed": True, "cases": 0}})}})      # held-out set empty
+        try:
+            ship(task, program, {"metrics": {"correct": 1.0}, "artifacts": {"gates": "{}"}}, repo, branch="kernels/x")
+            raise AssertionError("shipped without a held-out gate")
+        except ValueError:
+            pass
+
+
 def test_paged_decode_reference_matches_dense_attention():
     t = load("paged_decode")
     shape = (3, 8, 2, 16, 4, 11)
