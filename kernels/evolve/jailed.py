@@ -1,4 +1,4 @@
-"""python -m kernels.evolve.jailed CONFIG.json PROGRAM|- STAGE  ->  kernels.evolve.core's JSON, judged in the jail.
+"""python -m kernels.evolve.jailed CONFIG.json PROGRAM|- STAGE  (or `- - STAGE`: {config, source} as JSON on stdin)  ->  kernels.evolve.core's JSON, judged in the jail.
 
 The candidate runs as agent code (lab/safety/grader.jailed: a container with no network on Linux, srt elsewhere;
 LAB_NO_JAIL=1 waives it). The jail sees a fresh tree holding only the candidate and its config, a read-only copy of
@@ -67,8 +67,13 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
 
 
 def main() -> int:
-    cfg, stage = json.loads(Path(sys.argv[1]).read_text()), int(sys.argv[3])
-    source = sys.stdin.read() if sys.argv[2] == "-" else Path(sys.argv[2]).read_text()
+    stage = int(sys.argv[3])
+    if sys.argv[1] == "-":                       # `- - STAGE`: {"config", "source"} on stdin (a remote evaluation)
+        d = json.loads(sys.stdin.read())
+        cfg, source = d["config"], d["source"]
+    else:
+        cfg = json.loads(Path(sys.argv[1]).read_text())
+        source = sys.stdin.read() if sys.argv[2] == "-" else Path(sys.argv[2]).read_text()
     sys.stdout.write("\n" + json.dumps(judge_jailed(cfg, source, stage)) + "\n")
     return 0
 
