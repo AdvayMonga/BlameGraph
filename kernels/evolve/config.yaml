@@ -24,6 +24,9 @@ evaluator:
   cascade_thresholds: [0.5]     # stage 1 (2 shapes, one seed) must pass before stage 2 (all seen shapes + timing)
   parallel_evaluations: 1       # one GPU: candidates are timed one at a time
   timeout: 900
+evolution_trace:                # every candidate: parent, child, code, diff, prompt, metrics (into the run's ledger record)
+  enabled: true
+  include_code: true
 prompt:
   template_dir: prompts         # facts only: OpenEvolve's defaults carry advice ("Consider ...", "Focus areas")
   suggest_simplification_after_chars: null

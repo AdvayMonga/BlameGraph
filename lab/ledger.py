@@ -18,7 +18,7 @@ from typing import Any, Iterator
 SCHEMA = 1
 ROOT = Path(__file__).resolve().parents[1] / "lab" / "ledger"
 KINDS = {"test", "equiv", "bench", "profile", "submit", "session", "note", "baseline", "noise", "hypothesis",
-         "reflection"}
+         "reflection", "kernels"}
 LEGACY_KINDS = {"finding"}             # in older ledgers: read and merged, never written
 WRITER_FIELDS = {"id", "at", "schema"}
 # A held-out record is one aggregate per metric and nothing else: these fields, scalar values.
