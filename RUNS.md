@@ -5,6 +5,7 @@ local and archived in the store (`python -m store pull`).
 
 | Date | Venue | What | GPU cost | Result | Evidence |
 |---|---|---|---|---|---|
+| 2026-10-15 | Verda H200 | Manual engine serving fixes (inference-server #107), #33 profiles check | ~$24 (4 h 25 min) | single_stream TPOT p99 21 -> 15.6 ms, saturated 0.097 -> 0.37 req/s, long_prompt invalid -> 2.66 req/s; gate inconclusive at concurrency 32 | `data/engine-h200-20261015/`, below |
 | 2026-10-14/15 | Nebius H200 | Layer-1 kernel loop on `paged_decode` (branch `feat/kernel-loop`) | not recorded | GQA-packed decode kernel 3.88x on 196 seen shapes, passes held-out; end to end single_stream TPOT p99 21.6 -> 15.4 ms, saturated 0.100 -> 0.158 req/s (short tier, one run each); equiv not run | store `archive/kernels-2026-10-14-622240de7cc1b4aa.tar.zst` (gate results, best program, shapes), engine PR inference-server #106 |
 | 2026-10-13 | Nebius H200 | Ceilings vs measurements, vLLM and the engine | not recorded | Every floor below every measurement; engine at 0.5-7% of ceiling, vLLM 19-94% | `knowledge/reference/inference-server/` |
 | 2026-10-13 | Nebius H200 (x3) | `python -m lab.gpucheck` | not recorded | Every item passes after three fixes | below |
@@ -12,6 +13,26 @@ local and archived in the store (`python -m store pull`).
 | 2026-10-08 | Nebius H200 | Profiler tools on the real engine | ~$0.87 | All four tools work unjailed; three fixes | below |
 | 2026-10-05 | Nebius H200 | Full-tier correctness recalibration | ~$16.50 | Policy confirmed; FP8/INT8 pass, Int4 fails | `data/h200-run-20261005/REPORT.md`, `data/equiv-full/` |
 | 2026-10-04 | Verda H200 | Dev-tier correctness calibration | $6.75 | Gate separates Int4; consistency results void | `data/h200-run-20261004/REPORT.md`, `data/equiv/` |
+
+## 2026-10-15 — Engine serving fixes by hand (Verda H200, inference-server PR #107)
+Short tier, seen split, bf16, `python -m regimes run` against the engine served with the target's env. Baseline of
+#107's first commits (KV from 90% of raw free memory, batch 128, fair policy): single_stream 18.9 ms, saturated
+0.32 req/s, long_prompt invalid again, this time 1,444 HTTP 500s = CUDA OOM (no cap on a batched prefill wave's
+tokens). Fixed with `MAX_PREFILL_TOKENS` (32768, rows x longest prompt per wave) and KV sized after a measured
+max-prefill peak: long_prompt valid at 1.56 req/s. fp8 experts (`torch._scaled_grouped_mm`, per-channel weights,
+per-token activations): correct, no change in any regime. Profile (`lab.profile --profiler torch`, batch 1): 288,759
+kernel launches in 64 decode steps (~4,500 per step), the CUTLASS grouped GEMM 3.5 ms of the ~20 ms step, the rest
+1-3 us elementwise/copy/reduce ops: launch-bound, not bandwidth-bound. Microbenchmark: the paged prefill Triton
+kernel at ~5 TFLOP/s vs torch SDPA ~600 (56x at 1k tokens, 136x at 16k; 1.8 s per layer at 32k). SDPA prefill
+(prefix gathered from blocks + suffix, one flash call per row): long_prompt 2.13 req/s. Fused Triton kernels
+(RMSNorm, add+RMSNorm, RMSNorm+RoPE, SiLU*up, softmax top-k): launches halved, batch-1 step 24 -> 13.3 ms,
+single_stream 15.6 ms, saturated 0.37, long_prompt 2.66 req/s. A Triton MoE grouped GEMM (reads only active experts)
+is exact in eager mode but asserts inside the decode CUDA graph under load: off by default. Gate (dev tier, conc 32)
+on the fused+SDPA engine: inconclusive, 12/1,585 unanswered (429s), ratio 0.9951 (CI 0.982-1.008) on the rest.
+#33 profiles on the real GPU: two engine starts back to back (12.7 s, 13.2 s), profiled single_stream (batch 1,
+graph bucket 1) 15.8 vs 19.3 ms general, per-profile passive data kept. Lessons: an idle ssh session to the VM dies
+after ~1 h (a watcher missed a finished run; an hour of GPU idle), `lab.vm setup` needs `LAB_TARGET`, Verda deletes
+the disk on stop (use Nebius). Engine tag `loop-baseline` = the engine before all of this.
 
 ## 2026-10-14/15 — Layer-1 kernel loop (Nebius H200, branch `feat/kernel-loop`)
 `kernels/evolve` on `paged_decode`: capture (steady_interactive, 64 requests, graphs off: 27,216 calls, all contiguous;
