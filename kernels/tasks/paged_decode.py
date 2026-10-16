@@ -78,7 +78,7 @@ def edge_shapes(shape):
 # Qwen3-30B-A3B: 32 query heads, 4 KV heads, head dim 128; the engine's block size is read from captures.
 TASK = Task("paged_decode", "inference_server.models.paged_attention_kernel:paged_decode_attention", reference,
             make_inputs, shape_of, cost, call=_call, make_real=make_real, graphs=True,
-            kernel_names=(r"_paged_decode(_splitk)?_kernel", r"_splitk_combine_kernel"), heldout_axes=(0, 5), edge_shapes=edge_shapes,
+            kernel_names=(r"_paged_decode(_splitk)?_kernel", r"_gqa_decode\w*_kernel", r"_splitk_combine(_vec)?_kernel"), heldout_axes=(0, 5), edge_shapes=edge_shapes,
             dtypes=(torch.bfloat16,), layouts=(),        # the engine passes contiguous tensors only
             seen_default=((1, 32, 4, 128, 16, 512), (8, 32, 4, 128, 16, 1024), (32, 32, 4, 128, 16, 2048)),
             heldout_default=((64, 32, 4, 128, 16, 4096), (128, 32, 4, 128, 16, 8192)))
