@@ -124,8 +124,31 @@ def main(argv: list[str] | None = None) -> int:
                         output_dir=str(out / "openevolve"), cleanup=False)
     (out / "best_program.py").write_text(res.best_code)
     (out / "best_metrics.json").write_text(json.dumps(res.metrics, indent=1, default=str))
-    print(json.dumps({"best_score": res.best_score, "metrics": res.metrics, "out": str(out)}, default=str))
+    rec = record(task, sets, config, a.iterations, a.device, out / "openevolve" / "evolution_trace.jsonl",
+                 out / "best_program.py", res.metrics)
+    print(json.dumps({"best_score": res.best_score, "metrics": res.metrics, "out": str(out), "ledger": rec["id"]},
+                     default=str))
     return 0
+
+
+def record(task, sets: dict, config, iterations: int, device: str, trace: Path, best: Path, best_metrics: dict,
+           root: Path | None = None) -> dict:
+    """One `kernels` ledger record per run: every evaluated candidate's seen-shape metrics and lineage, the trace and
+    the best program as blobs. Held-out shapes stay out (`gate` judges them; its output stays in the run dir)."""
+    import time
+    from lab import ledger
+    root = root or ledger.ROOT
+    rows = [json.loads(x) for x in trace.read_text().splitlines() if x.strip()] if trace.exists() else []
+    cands = [{"id": r["child_id"], "parent": r["parent_id"], "iteration": r["iteration"],
+              "island": r.get("island_id"), "metrics": r.get("child_metrics")} for r in rows]
+    return ledger.append({
+        "kind": "kernels", "run": f"kernels-{time.strftime('%Y%m%d-%H%M%S')}", "tool": "kernels.evolve.run",
+        "config": {"split": "seen", "task": task.name, "entry": task.entry, "iterations": iterations,
+                   "device": device, "seen_shapes": len(sets["seen"]), "selected_from": sets.get("selected_from"),
+                   "models": [{"name": m.name, "weight": m.weight} for m in config.llm.models]},
+        "result": {"best": best_metrics, "candidates": cands,
+                   "trace": ledger.put_blob(trace, root, ".jsonl") if trace.exists() else None,
+                   "best_program": ledger.put_blob(best, root, ".py")}}, root)
 
 
 def _target_tolerances() -> dict | None:

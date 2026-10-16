@@ -333,11 +333,22 @@ def test_openevolve_finds_the_known_good_edit_and_rejects_the_cheat():
         c.evaluator.cascade_evaluation, c.evaluator.cascade_thresholds = True, [0.5]
         c.evaluator.parallel_evaluations = 1
         c.database.num_islands, c.database.in_memory = 1, True
+        c.evolution_trace.enabled, c.evolution_trace.include_code = True, True
         res = run_evolution(str(SEED), str(ROOT / "kernels" / "evolve" / "evaluator.py"), c, iterations=4,
                             output_dir=str(Path(d) / "oe"), cleanup=False)
         assert "rsqrt" in res.best_code and "return x.clone()" not in res.best_code
         seed = judge(t, SEED, list(t.seen_default), [], None, "cpu", None, 2, iters=3)["metrics"]["combined_score"]
         assert res.metrics.get("correct") == 1.0 and res.best_score > 3 * seed     # the naive seed is ~0.1x
+        from kernels.evolve.run import record
+        from lab import ledger
+        best = Path(d) / "best.py"
+        best.write_text(res.best_code)
+        rec = record(t, {"seen": list(t.seen_default)}, c, 4, "cpu", Path(d) / "oe" / "evolution_trace.jsonl", best,
+                     res.metrics, root=Path(d) / "ledger")
+        stored = list(ledger.records(Path(d) / "ledger", kind="kernels"))
+        assert stored and stored[0]["id"] == rec["id"] and len(rec["result"]["candidates"]) >= 1
+        assert all({"id", "parent", "metrics"} <= x.keys() for x in rec["result"]["candidates"])
+        assert (Path(d) / "ledger" / rec["result"]["trace"]).exists() and rec["config"]["split"] == "seen"
         print("best", res.best_score)
 
 
