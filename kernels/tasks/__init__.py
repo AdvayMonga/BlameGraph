@@ -60,6 +60,14 @@ class Task:
         return getattr(importlib.import_module(mod), attr)
 
 
+def randn(size, g, device, dtype, scale: float = 1.0) -> torch.Tensor:
+    """Normal values made on `device` by a generator seeded from `g` (the checker's seeded CPU generator): the same
+    values for the same seed on a device, and fast for the large tensors (expert weights, KV pools) that took seconds
+    each to generate on the CPU."""
+    d = torch.Generator(device=device).manual_seed(int(torch.randint(0, 2**62, (1,), generator=g)))
+    return (torch.randn(size, generator=d, device=device) * scale).to(dtype)
+
+
 def load(name: str) -> Task:
     return importlib.import_module(f"kernels.tasks.{name}").TASK
 

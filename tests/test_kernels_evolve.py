@@ -135,6 +135,17 @@ def test_paged_decode_checks_with_no_edge_shapes_do_not_fall_back_to_the_default
     assert r["passed"]
 
 
+def test_split_holds_out_a_region_even_when_calls_pile_up_at_the_largest_value():
+    from collections import Counter
+    from kernels.tasks import randn
+    t = load("moe_gemm")
+    counts = Counter({(m, 64, 96, 8, m, 1): (1000 if m == 512 else 3) for m in range(8, 513, 8)})
+    s = shapes.split(t, counts)
+    assert s["cut_by"] == "distinct" and s["heldout"] and max(x[0] for x in s["seen"]) < min(x[0] for x in s["heldout"])
+    g1, g2 = torch.Generator().manual_seed(3), torch.Generator().manual_seed(3)
+    assert torch.equal(randn((4, 5), g1, "cpu", torch.float32), randn((4, 5), g2, "cpu", torch.float32))
+
+
 def test_real_sequence_lengths_replace_synthetic_ones_where_captured():
     t = load("paged_decode")
     shape, other = (3, 8, 2, 16, 4, 11), (2, 8, 2, 16, 4, 9)
