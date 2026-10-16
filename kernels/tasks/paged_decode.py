@@ -33,10 +33,11 @@ def reference(q, k_pool, v_pool, block_tables, seq_lens):
     return out.to(q.dtype)
 
 
-def make_inputs(shape, dtype, device, g):
+def make_inputs(shape, dtype, device, g, lens=None):
     N, Hq, Hkv, D, bs, L = shape
-    lens = torch.randint(1, L + 1, (N,), generator=g, dtype=torch.int32)
-    lens[0] = L
+    if lens is None:
+        lens = torch.randint(1, L + 1, (N,), generator=g, dtype=torch.int32)
+        lens[0] = L
     per = (L + bs - 1) // bs
     blocks = N * per + 1
     table = torch.randperm(blocks, generator=g)[: N * per].view(N, per).to(torch.int32)
@@ -44,6 +45,11 @@ def make_inputs(shape, dtype, device, g):
     k = torch.randn(blocks, Hkv, bs, D, generator=g).to(dtype)
     v = torch.randn(blocks, Hkv, bs, D, generator=g).to(dtype)
     return tuple(t.to(device) for t in (q, k, v, table, lens))
+
+
+def make_real(shape, dtype, device, g, ints):
+    """The captured call's sequence lengths (its one 1-D int argument), random q/k/v and block tables."""
+    return make_inputs(shape, dtype, device, g, torch.tensor(ints[0], dtype=torch.int32))
 
 
 def shape_of(call):
@@ -71,7 +77,7 @@ def edge_shapes(shape):
 
 # Qwen3-30B-A3B: 32 query heads, 4 KV heads, head dim 128; the engine's block size is read from captures.
 TASK = Task("paged_decode", "inference_server.models.paged_attention_kernel:paged_decode_attention", reference,
-            make_inputs, shape_of, cost, call=_call, heldout_axes=(0, 5), edge_shapes=edge_shapes,
+            make_inputs, shape_of, cost, call=_call, make_real=make_real, heldout_axes=(0, 5), edge_shapes=edge_shapes,
             dtypes=(torch.bfloat16,), layouts=(),        # the engine passes contiguous tensors only
             seen_default=((1, 32, 4, 128, 16, 512), (8, 32, 4, 128, 16, 1024), (32, 32, 4, 128, 16, 2048)),
             heldout_default=((64, 32, 4, 128, 16, 4096), (128, 32, 4, 128, 16, 8192)))

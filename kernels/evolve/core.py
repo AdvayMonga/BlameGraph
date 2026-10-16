@@ -290,7 +290,7 @@ def main() -> int:
         program = Path(name)
     else:
         program = Path(sys.argv[2])
-    task = load(cfg["task"])
+    task = load(cfg["task"]).with_ints(cfg.get("ints"))      # captured int args (real sequence lengths) where given
     tol = {getattr(torch, k): tuple(v) for k, v in (cfg.get("tolerances") or {}).items()}
     out = judge(task, program, [tuple(s) for s in cfg["seen"]], [tuple(s) for s in cfg.get("heldout", [])],
                 cfg.get("weights"), cfg.get("device", "cpu"), tol or None, stage, cfg.get("iters", 30))

@@ -66,7 +66,15 @@ def tolerances(target_tol: dict | None) -> dict:
 def _shapes(task, a) -> dict:
     if a.shapes:
         return shapes_mod.read(a.shapes)
-    return shapes_mod.split(task, shapes_mod.from_captures(task, [Path(d) for d in a.captures or []]))
+    dirs = [Path(d) for d in a.captures or []]
+    sets = shapes_mod.split(task, shapes_mod.from_captures(task, dirs))
+    return {**sets, "ints": shapes_mod.ints_from_captures(task, dirs)} if dirs else sets
+
+
+def _ints(sets: dict, which: tuple[str, ...]) -> dict:
+    """The captured ints of the shapes in `which` (selection gets the seen ones only)."""
+    keys = {json.dumps(list(s)) for k in which for s in sets[k]}
+    return {k: v for k, v in (sets.get("ints") or {}).items() if k in keys}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -96,7 +104,8 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "gate":
         out = judge_jailed({"task": task.name, "seen": [list(s) for s in sets["seen"]],
                             "heldout": [list(s) for s in sets["heldout"]], "weights": sets.get("calls"),
-                            "device": a.device, "tolerances": tol}, Path(a.program).read_text(), 2, timeout_s=3600)
+                            "device": a.device, "tolerances": tol, "ints": _ints(sets, ("seen", "heldout"))},
+                           Path(a.program).read_text(), 2, timeout_s=3600)
         print(json.dumps(out, indent=1))
         return 0 if out["metrics"]["correct"] else 1
     out = Path(a.out)
@@ -104,7 +113,8 @@ def main(argv: list[str] | None = None) -> int:
     sets = shapes_mod.select(task, sets, a.timing_shapes)
     cfg_path = out / "eval_config.json"          # selection never sees the held-out shapes
     cfg_path.write_text(json.dumps({"task": task.name, "seen": [list(s) for s in sets["seen"]],
-                                    "weights": sets.get("calls"), "device": a.device, "tolerances": tol}))
+                                    "weights": sets.get("calls"), "device": a.device, "tolerances": tol,
+                                    "ints": _ints(sets, ("seen",))}))
     (out / "shapes.json").write_text(json.dumps({k: [list(s) for s in v] if k in ("seen", "heldout") else v
                                                  for k, v in sets.items()}, indent=1))
     program = Path(a.initial) if a.initial else out / "initial_program.py"

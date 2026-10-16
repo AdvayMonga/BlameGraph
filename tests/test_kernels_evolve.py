@@ -109,6 +109,19 @@ def test_noise_rule_and_physics_alarm():
     assert r["metrics"]["combined_score"] == 0.0 and g["physics"]["passed"] is False
 
 
+def test_real_sequence_lengths_replace_synthetic_ones_where_captured():
+    t = load("paged_decode")
+    shape, other = (3, 8, 2, 16, 4, 11), (2, 8, 2, 16, 4, 9)
+    real = t.with_ints({json.dumps(list(shape)): [[5, 9, 11]]})
+    g = torch.Generator().manual_seed(0)
+    assert real.make_inputs(shape, torch.float32, "cpu", g)[4].tolist() == [5, 9, 11]
+    assert int(real.make_inputs(other, torch.float32, "cpu", g)[4][0]) == 9               # not captured: synthetic
+    q, k, v, table, lens = real.make_inputs(shape, torch.float32, "cpu", torch.Generator().manual_seed(1))
+    out = t.reference(q, k, v, table, lens)
+    assert out.shape == (3, 8, 16) and torch.isfinite(out).all()
+    assert load("toy_rmsnorm").with_ints({"[8, 256]": [[1]]}) is load("toy_rmsnorm")      # no int args: unchanged
+
+
 def test_paged_decode_reference_matches_dense_attention():
     t = load("paged_decode")
     shape = (3, 8, 2, 16, 4, 11)
@@ -154,6 +167,10 @@ def test_capture_records_calls_and_the_split_holds_out_the_largest():
         s = shapes.split(task, counts)
         assert s["source"] == "captures" and (256, 32, 4, 128, 16, 17 * 256) in s["heldout"]
         assert max(x[0] for x in s["seen"]) < min(x[0] for x in s["heldout"])
+        ints = shapes.ints_from_captures(task, [Path(d)])
+        assert ints[json.dumps([1, 32, 4, 128, 16, 17])] == [[17]] and len(ints) == 9       # first call per shape
+        kept = shapes.select(task, {**s, "ints": ints}, k=3)["ints"]
+        assert set(kept) <= {json.dumps(list(x)) for x in [*shapes.select(task, s, k=3)["seen"], *s["heldout"]]}
         sel = shapes.select(task, s, k=3)
         assert len(sel["seen"]) == 3 and sel["selected_from"] == len(s["seen"]) and sel["heldout"] == s["heldout"]
         assert sum(sel["calls"].values()) <= sum(counts[x] for x in s["seen"])
