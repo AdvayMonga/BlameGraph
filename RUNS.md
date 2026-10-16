@@ -90,7 +90,7 @@ Policy confirmed, nothing tuned. 18,606 items, vLLM 0.30.0, concurrency 128, 3 h
 1.0009, INT8 `nytopop/Qwen3-30B-A3B.w8a8` 0.9993, FP8 (DeepGEMM on, nvcc 13.0) 1.0034 — all PASS; GPTQ-Int4 0.9869
 FAIL (MMLU-Pro 0.9807, p = 3e-5). FP8/INT8 each lose and gain ~800 answers in balance: that churn is the realistic
 noise. Consistency clean on every run.
-Open (→ STATE): plain BF16 matched the batch-invariant reference exactly here (18,602/18,606 identical, KL 0.0), but
+Open: plain BF16 matched the batch-invariant reference exactly here (18,602/18,606 identical, KL 0.0), but
 on Verda at concurrency 32 it diverged on 466/490 MMLU-Pro answers (median 13% into the answer). Logs show both BF16
 servers plain (non-invariant compile path, requests served by the BF16 server); the reference reproduced across both
 days and clouds (691/691 same-prompt answers identical). Differences: venue, driver 580.126 vs 580.173, concurrency

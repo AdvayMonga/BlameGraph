@@ -30,8 +30,6 @@ each needs data, a simulator, a hypothesis generator, measurement tools and an e
 end-to-end judge (`equiv` + `submit` + the held-out guard). The agent chooses which layer to work on; it is given each
 layer's share of time × its distance from the ceiling as a fact. Layer 1 first.
 
-Status of each layer's parts: `STATE.md`.
-
 ## Layout
 Top-level packages, run from the repo root (no install step; `pyproject.toml` lists optional extras and holds the
 pytest/ruff config). Each folder with commands has its own `python -m`.
@@ -142,7 +140,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   hidden from the agent; without fastembed it ranks by BM25 and says why. `LAB_TEST_REAL_EMBEDDINGS=1` runs the
   real-model test. It finds paraphrases ("tokens generated slowly" -> per-token latency) but not domain synonyms
   (fp8 -> quantization).
-- `store/` — the data store (2026-10-09). `remote.py` (`LAB_STORE` = `s3://<bucket>` with `LAB_STORE_ENDPOINT` for
+- `store/` — the data store (2026-10-09; bucket `bg-data`, credentials in `.env`: `LAB_STORE`, `LAB_STORE_ENDPOINT`,
+  `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`). `remote.py` (`LAB_STORE` = `s3://<bucket>` with `LAB_STORE_ENDPOINT` for
   Cloudflare R2, or a directory; write-once keys), `sync.py` (`push`/`pull`: ledger as byte-range segments, blobs,
   submit's held-out passive data, held-out traces + seed, `archive` for
   anything else; zstd, `heldout/` prefix for held-out material), `index.py` (DuckDB tables rebuilt from the ledger and
@@ -260,14 +259,14 @@ themselves, so don't add agent tools without asking. Corpus classes for the regi
 corpus lacks (short/long output, overload, shared prefix) belong in `corpus/build_corpus.py`; the regimes synthesize
 them from existing records meanwhile.
 
-## State, decisions, runs
-Where things stand is in three files; keep them current as part of every change:
-- `STATE.md` — what works now, branches in flight, open problems, next. **Rewrite** the affected line; never append history.
-- `DECISIONS.md` — one dated entry per decision (what, why, what it replaced), newest first, append-only. The eval
-  conventions (2026-10-02) are there; change any decision only with the user.
-- `RUNS.md` — every GPU run: a row (date, venue, cost, result, evidence) and its details, append-only.
+## Decisions and runs
+Two append-only files; add to them as part of the change that makes the decision or the run:
+- `DECISIONS.md` — one dated entry per decision (what, why, what it replaced), newest first. The eval conventions
+  (2026-10-02) are there; change any decision only with the user.
+- `RUNS.md` — every GPU run: a row (date, venue, cost, result, evidence) and its details.
 
-@STATE.md
+There is no status file: what works now is the code, the merged PRs and `RUNS.md`.
+
 @DECISIONS.md
 
 The agent's tool set is the user's design: ask first. README stays a few one-line feature bullets, not a dev doc.
