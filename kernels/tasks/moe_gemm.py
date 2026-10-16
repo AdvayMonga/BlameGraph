@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import torch
 
-from kernels.tasks import Task
+from kernels.tasks import Task, randn
 
 BLOCK_M = 16
 
@@ -66,12 +66,16 @@ def _routing(M, E, T, from_tokens, g, sorted_e=None):
     return (tok, *align(sorted_e, E))
 
 
+def _with_values(T, K, N, E, dtype, device, g, tok, sorted_ids, expert_ids):
+    """Random a and w made on the device (w is E·N·K: ~400M values at the real shapes), routing as given."""
+    a, w = randn((T, K), g, device, dtype), randn((E, N, K), g, device, dtype, 0.05)
+    return a, tok.to(device), w, sorted_ids.to(device), expert_ids.to(device)
+
+
 def make_inputs(shape, dtype, device, g):
     M, K, N, E, T, ft = shape
     tok, sorted_ids, expert_ids = _routing(M, E, T, ft, g)
-    a = torch.randn(T, K, generator=g).to(dtype)
-    w = (torch.randn(E, N, K, generator=g) * 0.05).to(dtype)
-    return tuple(t.to(device) for t in (a, tok, w, sorted_ids, expert_ids))
+    return _with_values(T, K, N, E, dtype, device, g, tok, sorted_ids, expert_ids)
 
 
 def make_real(shape, dtype, device, g, ints):
@@ -79,9 +83,7 @@ def make_real(shape, dtype, device, g, ints):
     M, K, N, E, T, ft = shape
     tok = torch.tensor(ints[0], dtype=torch.int64) if ft else torch.empty(0, dtype=torch.int64)
     sorted_ids, expert_ids = (torch.tensor(x, dtype=torch.int32) for x in ints[-2:])
-    a = torch.randn(T, K, generator=g).to(dtype)
-    w = (torch.randn(E, N, K, generator=g) * 0.05).to(dtype)
-    return tuple(t.to(device) for t in (a, tok, w, sorted_ids, expert_ids))
+    return _with_values(T, K, N, E, dtype, device, g, tok, sorted_ids, expert_ids)
 
 
 def shape_of(call):

@@ -10,7 +10,7 @@ import math
 
 import torch
 
-from kernels.tasks import Task
+from kernels.tasks import Task, randn
 
 
 def _call(fn, q, k_pool, v_pool, block_tables, seq_lens):
@@ -41,10 +41,8 @@ def make_inputs(shape, dtype, device, g, lens=None):
     per = (L + bs - 1) // bs
     blocks = N * per + 1
     table = torch.randperm(blocks, generator=g)[: N * per].view(N, per).to(torch.int32)
-    q = torch.randn(N, Hq, D, generator=g).to(dtype)
-    k = torch.randn(blocks, Hkv, bs, D, generator=g).to(dtype)
-    v = torch.randn(blocks, Hkv, bs, D, generator=g).to(dtype)
-    return tuple(t.to(device) for t in (q, k, v, table, lens))
+    q, k, v = (randn(sz, g, device, dtype) for sz in ((N, Hq, D), (blocks, Hkv, bs, D), (blocks, Hkv, bs, D)))
+    return q, k, v, table.to(device), lens.to(device)
 
 
 def make_real(shape, dtype, device, g, ints):
