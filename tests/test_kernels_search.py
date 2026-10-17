@@ -279,7 +279,7 @@ def test_the_openevolve_arm_gets_the_same_single_model_and_the_facts_only_prompt
 
 
 def test_openevolve_calls_are_priced_into_a_usage_log():
-    from kernels.evolve.llm import usage
+    from kernels.evolve.run import usage
     with tempfile.TemporaryDirectory() as d:
         log = Path(d) / "usage.jsonl"
         log.write_text(json.dumps({"model": "claude-opus-5-5", "usd": 0.5}) + "\n" +
