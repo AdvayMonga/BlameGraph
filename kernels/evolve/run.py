@@ -146,14 +146,18 @@ def main(argv: list[str] | None = None) -> int:
     config.prompt.system_message = system_message(task)
     if "anthropic.com" in (config.llm.api_base or ""):       # Claude refuses a temperature; OpenEvolve always sends one
         config.llm.update_model_params({"init_client": init_client}, overwrite=True)
+    os.environ["KERNELS_USAGE_LOG"] = str(out / "usage.jsonl")
     res = run_evolution(str(program), str(HERE / "evaluator.py"), config, iterations=a.iterations,
                         output_dir=str(out / "openevolve"), cleanup=False)
     trace = out / "openevolve" / "evolution_trace.jsonl"
     code, metrics, retimed = retime(trace, a.retime) if a.retime else (None, None, [])
     (out / "best_program.py").write_text(code or res.best_code)
     (out / "best_metrics.json").write_text(json.dumps(metrics or res.metrics, indent=1, default=str))
+    from kernels.evolve.llm import usage
     rec = record(task, sets, [{"name": m.name, "weight": m.weight} for m in config.llm.models], a.iterations,
-                 a.device, trace, out / "best_program.py", metrics or res.metrics, retimed=retimed)
+                 a.device, trace, out / "best_program.py", metrics or res.metrics, retimed=retimed,
+                 cost={**usage(out / "usage.jsonl"),
+                       "evals": sum(1 for x in trace.read_text().splitlines() if x.strip()) if trace.exists() else 0})
     print(json.dumps({"best_score": res.best_score, "metrics": res.metrics, "out": str(out), "ledger": rec["id"]},
                      default=str))
     return 0

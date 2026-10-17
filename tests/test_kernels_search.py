@@ -227,6 +227,66 @@ def test_the_grid_search_picks_launch_parameters_and_rewrites_them_as_constants(
         assert _tune("def kernel(x, w): ...\n", {}, judge, 3)[2] == {}                  # no grid declared
 
 
+def test_the_ab_harness_runs_both_arms_and_gates_each_winner_on_held_out_shapes():
+    from kernels.search import ab
+    from kernels.tasks import load
+    t = load("toy_rmsnorm")
+    fast = SEED.read_text().replace(LOOP, "    xf = x.float()\n    return (xf * torch.rsqrt(xf.pow(2).mean(-1, "
+                                         "keepdim=True) + 1e-6) * w.float()).to(x.dtype)")
+    def arm(code):
+        def run(a, out, seed):
+            (out / "best_program.py").write_text(code)
+            return {"ledger": None}
+        return run
+    saved = dict(ab.ARMS)
+    ab.ARMS.clear()
+    ab.ARMS.update({"openevolve": arm(SEED.read_text()), "kernels.search": arm(fast)})
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            shapes = Path(d) / "shapes.json"
+            shapes.write_text(json.dumps({"seen": [list(x) for x in t.seen_default],
+                                          "heldout": [list(x) for x in t.heldout_default]}))
+            assert ab.main(["--task", t.name, "--shapes", str(shapes), "--out", str(Path(d) / "ab"), "--device", "cpu",
+                            "--evals", "2"]) == 0
+            rows = json.loads((Path(d) / "ab" / "ab.json").read_text())
+    finally:
+        ab.ARMS.clear()
+        ab.ARMS.update(saved)
+    by = {r["arm"]: r for r in rows}
+    assert set(by) == {"openevolve", "kernels.search"} and all(r["gates_passed"] for r in rows)
+    assert by["kernels.search"]["seen_score"] > 3 * by["openevolve"]["seen_score"]    # rsqrt vs the naive row loop
+    assert by["kernels.search"]["heldout_speedup"] > 0
+
+
+def test_the_openevolve_arm_gets_the_same_single_model_and_the_facts_only_prompts():
+    from types import SimpleNamespace
+    from kernels.evolve import run
+    from kernels.search import ab
+    seen = {}
+    orig = run.main
+    run.main = lambda argv: seen.update(argv=argv) or print('{"ledger": "x"}')
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = SimpleNamespace(model="claude-opus-5-5", task="moe_gemm", shapes="s.json", evals=30, device="cuda",
+                                initial=None)
+            assert ab._openevolve(a, Path(d), 1) == {"ledger": "x"}
+            import yaml
+            cfg = yaml.safe_load((Path(d) / "config.yaml").read_text())
+    finally:
+        run.main = orig
+    assert cfg["llm"]["models"] == [{"name": "claude-opus-5-5", "weight": 1.0}] and cfg["random_seed"] == 1
+    assert Path(cfg["prompt"]["template_dir"]).is_dir() and seen["argv"][seen["argv"].index("--iterations") + 1] == "29"
+
+
+def test_openevolve_calls_are_priced_into_a_usage_log():
+    from kernels.evolve.llm import usage
+    with tempfile.TemporaryDirectory() as d:
+        log = Path(d) / "usage.jsonl"
+        log.write_text(json.dumps({"model": "claude-opus-5-5", "usd": 0.5}) + "\n" +
+                       json.dumps({"model": "claude-opus-5-5", "usd": 0.25}) + "\n")
+        assert usage(log) == {"usd": 0.75, "model_calls": 2} and usage(Path(d) / "none") == {"usd": 0, "model_calls": 0}
+
+
 def test_the_claude_client_streams_with_effort_and_fallbacks_and_prices_the_call():
     from types import SimpleNamespace
     from kernels.search.llm import FALLBACK_BETA, Claude
