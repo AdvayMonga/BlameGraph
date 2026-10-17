@@ -103,6 +103,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   shutdown, because a stalled session once billed 12 h for 3.5 h of work), `corpus.py` +
   `chat_template.py` (corpus loader, template fingerprint). Tests: `tests/test_lab_*.py` (pytest); the ones
   that drive engine code skip unless the engine and its deps import (run them with the engine's python).
+- `lab/rehearsal.py` — `python -m lab.rehearsal setup DIR`: the whole loop on a laptop, no GPU. A practice engine
+  (`lab/rehearsal_server.py` copied into a git repo: fixed decode slots and time per token, one-token words in the
+  Qwen3 tokenizer), its target spec, a task, a local store, and reference answers to a synthetic multiple-choice set;
+  the docstring lists the validate and session commands. Run from its own checkout so the ledger is separate.
 - `lab/validate.py` — `python -m lab.validate --target T`: serves the target's reference and writes its outputs, judges
   each `[validation]` good/bad launch (good must pass, bad must fail: the gate separates on *this* model and GPU), and
   measures each regime's run-to-run band from repeated reference runs into `noise` ledger records (which
