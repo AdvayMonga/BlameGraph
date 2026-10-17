@@ -196,7 +196,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `kernels/tasks/` (a kernel task: the engine entry point it replaces = the baseline, a reference, an input builder,
   how to read a shape from a captured call, the held-out axes, the layouts its callers pass, bytes and FLOPs per call
   for the roofline; `toy_rmsnorm` for CPU, `paged_decode` = the example engine's `paged_decode_attention`, `moe_gemm` = its MoE grouped
-  GEMM `moe_kernel.moe_gemm`, both projections, real routing from captures),
+  GEMM `moe_kernel.moe_gemm`, both projections, real routing from captures; `rmsnorm`, `add_rmsnorm`, `rmsnorm_rope`,
+  `silu_mul`, `topk_softmax` = its fused kernels in `models/fused.py`, references from its own eager paths; prefill
+  attention has no task: `sdpa_prefill` takes the backend's paged context, not tensors),
   `kernels/shapes.py` (shapes and call counts from captures; held-out = whole regions above the 80th percentile on the
   task's axes, never random samples; `ints_from_captures` keeps each shape's captured int args, e.g. real sequence
   lengths, which `Task.with_ints` uses for checking and timing in place of synthetic ones), `kernels/evolve/` (the layer-1 generator, a replication of OpenEvolve 0.4.0 =
