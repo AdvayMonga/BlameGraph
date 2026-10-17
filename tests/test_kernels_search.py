@@ -167,6 +167,49 @@ def test_ncu_counters_parse_and_a_host_without_ncu_says_so():
     assert "ncu counters" in facts(Node("n", None, "", r["metrics"], r["artifacts"], 0))
 
 
+CHUNKED = """import torch
+
+CONFIG = {"chunk": 1, "eps": 1e-6}
+TUNABLES = {"chunk": [1, 16, 64]}
+
+
+def kernel(x, w):
+    out = torch.empty_like(x)
+    c = CONFIG["chunk"]
+    for i in range(0, x.shape[0], c):
+        r = x[i:i + c].float()
+        out[i:i + c] = (r * torch.rsqrt(r.pow(2).mean(-1, keepdim=True) + CONFIG["eps"]) * w.float()).to(x.dtype)
+    return out
+"""
+
+
+def test_the_grid_search_picks_launch_parameters_and_rewrites_them_as_constants():
+    from kernels.evolve import evaluator
+    from kernels.search import tune
+    from kernels.search.__main__ import _tune
+    from kernels.search.loop import cascade
+    from kernels.tasks import load
+    assert tune.params(CHUNKED) == ({"chunk": 1, "eps": 1e-6}, {"chunk": [1, 16, 64]})
+    assert tune.params("CONFIG = {}\n") is None and tune.params("CONFIG = {'a': 1}\nTUNABLES = {'b': [2]}\n") is None
+    moved = tune.with_config(CHUNKED, {"chunk": 64, "eps": 1e-6})
+    assert "CONFIG = {'chunk': 64, 'eps': 1e-06}\n" in moved and moved.count("CONFIG =") == 1 and "TUNABLES" in moved
+    g = tune.grid({"a": 1, "b": 1}, {"a": [1, 2], "b": [1, 2, 3]}, points=3)
+    assert g[0] == {"a": 1, "b": 1} and len(g) == 3 and len({json.dumps(x, sort_keys=True) for x in g}) == 3
+    t = load("toy_rmsnorm")
+    with tempfile.TemporaryDirectory() as d:
+        cfg = Path(d) / "eval.json"
+        cfg.write_text(json.dumps({"task": t.name, "seen": [[64, 256], [64, 512]], "device": "cpu", "iters": 5}))
+        os.environ["KERNEL_EVAL_CONFIG"] = str(cfg)
+        judge = cascade(evaluator.judge_stage)
+        code, result, rows = tune.sweep(CHUNKED, judge, points=3)
+        assert len(rows) == 3 and "'chunk': 1," not in code and result["metrics"]["correct"] == 1.0
+        best = max(rows, key=lambda r: r["score"])
+        assert best["config"]["chunk"] > 1 and best["score"] > rows[0]["score"]          # chunk 1 is the slow one
+        out, metrics, rec = _tune(CHUNKED, {"combined_score": rows[0]["score"]}, judge, 3)
+        assert rec["promoted"] and rec["median"] > rec["base_median"] and "'chunk': 1," not in out
+        assert _tune("def kernel(x, w): ...\n", {}, judge, 3)[2] == {}                  # no grid declared
+
+
 def test_the_claude_client_streams_with_effort_and_fallbacks_and_prices_the_call():
     from types import SimpleNamespace
     from kernels.search.llm import FALLBACK_BETA, Claude
