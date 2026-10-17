@@ -183,3 +183,10 @@ def test_a_venv_in_scratch_is_left_out_but_a_link_in_the_surface_is_a_violation(
     assert a.ok and {".venv/bin/python", ".venv/big.whl"} <= set(a.scratch)
     (ws / "src/inference_server/sneaky.py").symlink_to("/etc/passwd")
     assert "symlink: src/inference_server/sneaky.py" in grader.audit(repo, "HEAD", ws).violations
+
+
+def test_srt_never_reads_the_jailed_command_as_its_own_options(tmp_path, monkeypatch):
+    from lab.safety import jail
+    monkeypatch.setattr(jail.shutil, "which", lambda name: "/bin/srt" if name == "srt" else None)
+    argv = jail.wrap({"network": {}, "filesystem": {}}, tmp_path / "srt.json", ["python", "-c", "print(1)"])
+    assert argv == ["/bin/srt", "--settings", str(tmp_path / "srt.json"), "--", "python", "-c", "print(1)"]

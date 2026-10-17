@@ -60,4 +60,4 @@ def wrap(config: dict, settings_path: Path, argv: list[str]) -> list[str]:
                               "(or LAB_NO_JAIL=1 on a box you trust)")
         return argv
     settings_path.write_text(json.dumps(config, indent=2))
-    return [shutil.which("srt"), "--settings", str(settings_path), *argv]
+    return [shutil.which("srt"), "--settings", str(settings_path), "--", *argv]   # `--`: a `-c` in argv is not srt's
