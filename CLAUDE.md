@@ -217,7 +217,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   (`kernels/evolve/ncu.py`, stage 3 of the jailed evaluator), and the coder writing it; a failed child gets one repair
   in correction mode; launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen afterwards by a grid
   search on the winner, written back as constants, promoted only if their re-timed median is higher
-  (`kernels/search/tune.py`); every call priced; same evaluator, run dir, re-timed promotion and `kernels` record as `kernels.evolve run`). `kernels/evolve/ship.py` (`python -m kernels.evolve ship`: a program with a passing held-out gate becomes a
+  (`kernels/search/tune.py`); the search stops once the best program is at `--stop-pct` (90) of its call-weighted
+  roofline bound, a figure the prompt states; every call priced; same evaluator, run dir, re-timed promotion and `kernels` record as `kernels.evolve run`). `kernels/evolve/ship.py` (`python -m kernels.evolve ship`: a program with a passing held-out gate becomes a
   commit on a new engine branch, built with git plumbing so the engine's tree is untouched; `--budget` starts the
   `lab.experiment` researcher run on it, measured end to end by `bench`/`equiv`/`submit`). `kernels/share.py` (`python -m kernels.evolve share --profile BUNDLE`: each task's share of a profiled engine
   window from the device kernels it launches, `Task.kernel_names`, the speedup bound if they took no time, and the
