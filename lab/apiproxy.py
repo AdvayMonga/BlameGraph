@@ -25,6 +25,7 @@ PRICES = {
     "claude-haiku-4-5": (1.0, 5.0, 0.10, 1.25, 2.0),
 }
 ALLOWED = ("/v1/messages", "/v1/messages/count_tokens", "/v1/models")
+COUNTED = ("model", "messages", "system", "tools", "tool_choice", "thinking")   # what count_tokens takes
 HOP = {"connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "proxy-authorization",
        "proxy-authenticate", "content-length", "host", "accept-encoding"}
 
@@ -158,20 +159,26 @@ class Proxy:
         metered = path == "/v1/messages"
         if metered and (not body or not isinstance(model, str) or price(model) is None):
             return self._refuse(h, 403, "a /v1/messages request needs a JSON body naming a priced model")
-        # Its worst case is reserved before it goes (input: at most a token per byte of body; output: all of max_tokens),
-        # so concurrent requests cannot overshoot the cap.
-        hold = (len(body) * price(model)[0] + max_tokens * price(model)[1]) / 1e6 if metered else 0.0
-        with self.lock:
-            if metered and self.spent_usd + self.reserved_usd + hold > self.cap_usd:
-                return self._refuse(h, 403, f"this session's ${self.cap_usd:.2f} is spent (or would be by this request: "
-                                            f"${hold:.2f} reserved for {len(body)} body bytes and max_tokens {max_tokens} "
-                                            f"of {model}; ${self.spent_usd:.2f} spent, ${self.reserved_usd:.2f} in flight)")
-            self.reserved_usd += hold
         headers = {k: v for k, v in h.headers.items() if k.lower() not in HOP | {"x-api-key", "authorization"}}
         headers.update(self.auth, host=self.upstream.netloc, **{"accept-encoding": "identity"})
         if "authorization" in self.auth:
             betas = [b for b in headers.pop("anthropic-beta", "").split(",") if b.strip()]
             headers["anthropic-beta"] = ",".join(dict.fromkeys([*betas, OAUTH_BETA]))
+        # Its worst case is reserved before it goes, so concurrent requests cannot overshoot the cap: the input as the
+        # API counts it (or a token per body byte when it cannot say) at the dearest rate the request can incur (a cache
+        # write when it marks cache_control, 1 h when any mark asks for it), and all of max_tokens as output.
+        hold = 0.0
+        if metered:
+            p = price(model)
+            n_in = self._input_tokens(req, headers) if req.get("messages") else None
+            rate = p[4] if b'"1h"' in body else p[3] if b"cache_control" in body else p[0]
+            hold = ((len(body) if n_in is None else n_in) * max(p[0], rate) + max_tokens * p[1]) / 1e6
+        with self.lock:
+            if metered and self.spent_usd + self.reserved_usd + hold > self.cap_usd:
+                return self._refuse(h, 403, f"this session's ${self.cap_usd:.2f} is spent (or would be by this request: "
+                                            f"${hold:.2f} reserved for the input ({len(body)} body bytes) and max_tokens {max_tokens} "
+                                            f"of {model}; ${self.spent_usd:.2f} spent, ${self.reserved_usd:.2f} in flight)")
+            self.reserved_usd += hold
         conn = (http.client.HTTPSConnection if self.upstream.scheme == "https" else http.client.HTTPConnection)(
             self.upstream.netloc, timeout=900)
         usage = None
@@ -195,6 +202,22 @@ class Proxy:
             if usage is not None:
                 usage.done()
             self._charge(metered and usage is not None, usage, model, max_tokens, hold)
+
+    def _input_tokens(self, req: dict, headers: dict) -> int | None:
+        """The request's input tokens from the API's count_tokens (free); None when it cannot say."""
+        body = json.dumps({k: req[k] for k in COUNTED if k in req}).encode()
+        conn = (http.client.HTTPSConnection if self.upstream.scheme == "https" else http.client.HTTPConnection)(
+            self.upstream.netloc, timeout=30)
+        try:
+            conn.request("POST", "/v1/messages/count_tokens", body=body,
+                         headers={**headers, "content-type": "application/json", "content-length": str(len(body))})
+            resp = conn.getresponse()
+            out = resp.read()
+            return int(json.loads(out)["input_tokens"]) if resp.status == 200 else None
+        except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException):
+            return None
+        finally:
+            conn.close()
 
     def _charge(self, metered: bool, usage: "_Usage | None", model: str | None, max_tokens: int, hold: float) -> None:
         """An incomplete response is charged its input as far as seen and its whole `max_tokens` of output."""
