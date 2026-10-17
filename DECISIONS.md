@@ -3,6 +3,17 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+
+## 2026-10-17 — Our own layer-1 generator; OpenEvolve becomes the baseline
+`kernels/search/` replaces the `openevolve` package as the generator, taking from what the published systems learned:
+refinement chains in a tree (Kevin, STARK, KernelPro, Kernel Forge), a strong-model judge reading curated facts beside a
+coder (CudaForge, KForge, Astra), the model writing structure while a grid search picks tile sizes (KernelEvolve,
+AlphaEvolve; also our 2026-10-16 moe_gemm win, mostly tile sizes and stages), stop rules near speed-of-light (Hari),
+duplicate refusal before GPU time (ShinkaEvolve). It is proved against OpenEvolve on the same tasks, evaluator and
+budget. Choices: Opus 5.5 for both judge and coder (a weak coder cost CudaForge 0.8x; model spend is small next to GPU
+time); the judge's text is kept per candidate in the run's trace blob, not inline in the ledger record; the judge sees
+a curated set of ncu counters, starting from CudaForge's 24 (a view of facts, not advice). The evaluator, tasks,
+gate, ship and records are unchanged.
 ## 2026-10-17 — The end-to-end judge runs once several shipped kernels stack
 Shipped kernels are stacked on one engine branch (each `kernels.evolve ship --base` the previous shipped branch; the
 first is `kernels/moe_gemm-20261016-154523`), and `bench` + `equiv` + `submit` run once, on the stack, when its gains

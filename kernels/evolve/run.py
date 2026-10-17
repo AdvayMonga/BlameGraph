@@ -136,19 +136,7 @@ def main(argv: list[str] | None = None) -> int:
         from kernels.evolve.ship import gate_passed
         return 0 if gate_passed(out) else 1
     out = Path(a.out)
-    out.mkdir(parents=True, exist_ok=True)
-    sets = shapes_mod.select(task, sets, a.timing_shapes)
-    cfg_path = out / "eval_config.json"          # selection never sees the held-out shapes
-    cfg_path.write_text(json.dumps({"task": task.name, "seen": [list(s) for s in sets["seen"]],
-                                    "weights": {k: v for k, v in (sets.get("calls") or {}).items()
-                                                if k in {json.dumps(list(x)) for x in sets["seen"]}},
-                                    "device": a.device, "tolerances": tol, "ints": _ints(sets, ("seen",))}))
-    (out / "shapes.json").write_text(json.dumps({k: [list(s) for s in v] if k in ("seen", "heldout") else v
-                                                 for k, v in sets.items()}, indent=1))
-    program = Path(a.initial) if a.initial else out / "initial_program.py"
-    if not a.initial:
-        program.write_text(initial_program(task))
-    os.environ["KERNEL_EVAL_CONFIG"] = str(cfg_path)
+    sets, program = prepare(task, sets, out, a.device, tol, a.timing_shapes, a.initial)
     if "OPENAI_API_KEY" not in os.environ and "ANTHROPIC_API_KEY" in os.environ:
         os.environ["OPENAI_API_KEY"] = os.environ["ANTHROPIC_API_KEY"]     # the config's endpoint is Anthropic's
     from openevolve import run_evolution
@@ -164,11 +152,30 @@ def main(argv: list[str] | None = None) -> int:
     code, metrics, retimed = retime(trace, a.retime) if a.retime else (None, None, [])
     (out / "best_program.py").write_text(code or res.best_code)
     (out / "best_metrics.json").write_text(json.dumps(metrics or res.metrics, indent=1, default=str))
-    rec = record(task, sets, config, a.iterations, a.device, trace, out / "best_program.py", metrics or res.metrics,
-                 retimed=retimed)
+    rec = record(task, sets, [{"name": m.name, "weight": m.weight} for m in config.llm.models], a.iterations,
+                 a.device, trace, out / "best_program.py", metrics or res.metrics, retimed=retimed)
     print(json.dumps({"best_score": res.best_score, "metrics": res.metrics, "out": str(out), "ledger": rec["id"]},
                      default=str))
     return 0
+
+
+def prepare(task, sets: dict, out: Path, device: str, tol: dict, timing_shapes: int, initial: str | None):
+    """The run dir: selection's config (seen shapes only, their weights and captured ints; the held-out shapes never
+    enter it) as $KERNEL_EVAL_CONFIG, the shape sets, and the starting program. Returns (sets, program path)."""
+    out.mkdir(parents=True, exist_ok=True)
+    sets = shapes_mod.select(task, sets, timing_shapes)
+    cfg_path = out / "eval_config.json"
+    seen = {json.dumps(list(x)) for x in sets["seen"]}
+    cfg_path.write_text(json.dumps({"task": task.name, "seen": [list(s) for s in sets["seen"]],
+                                    "weights": {k: v for k, v in (sets.get("calls") or {}).items() if k in seen},
+                                    "device": device, "tolerances": tol, "ints": _ints(sets, ("seen",))}))
+    (out / "shapes.json").write_text(json.dumps({k: [list(s) for s in v] if k in ("seen", "heldout") else v
+                                                 for k, v in sets.items()}, indent=1))
+    program = Path(initial) if initial else out / "initial_program.py"
+    if not initial:
+        program.write_text(initial_program(task))
+    os.environ["KERNEL_EVAL_CONFIG"] = str(cfg_path)
+    return sets, program
 
 
 def retime(trace: Path, k: int, repeats: int = 3) -> tuple[str | None, dict | None, list]:
@@ -188,7 +195,7 @@ def retime(trace: Path, k: int, repeats: int = 3) -> tuple[str | None, dict | No
     for r in top:
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
             f.write(r["child_code"])
-        runs = [evaluator.evaluate_stage2(f.name).metrics for _ in range(repeats)]
+        runs = [evaluator.judge_stage(f.name, 2)["metrics"] for _ in range(repeats)]
         Path(f.name).unlink()
         scores = [m.get("combined_score", 0.0) for m in runs]
         med = statistics.median(scores)
@@ -201,8 +208,9 @@ def retime(trace: Path, k: int, repeats: int = 3) -> tuple[str | None, dict | No
     return win["code"], win["metrics"], [{k: v for k, v in x.items() if k not in ("code", "metrics")} for x in out]
 
 
-def record(task, sets: dict, config, iterations: int, device: str, trace: Path, best: Path, best_metrics: dict,
-           root: Path | None = None, retimed: list | None = None) -> dict:
+def record(task, sets: dict, models: list[dict], iterations: int, device: str, trace: Path, best: Path,
+           best_metrics: dict, root: Path | None = None, retimed: list | None = None, tool: str = "kernels.evolve.run",
+           cost: dict | None = None) -> dict:
     """One `kernels` ledger record per run: every evaluated candidate's seen-shape metrics and lineage, the trace and
     the best program as blobs. Held-out shapes stay out (`gate` judges them; its output stays in the run dir)."""
     import time
@@ -212,13 +220,14 @@ def record(task, sets: dict, config, iterations: int, device: str, trace: Path, 
     cands = [{"id": r["child_id"], "parent": r["parent_id"], "iteration": r["iteration"],
               "island": r.get("island_id"), "metrics": r.get("child_metrics")} for r in rows]
     return ledger.append({
-        "kind": "kernels", "run": f"kernels-{time.strftime('%Y%m%d-%H%M%S')}", "tool": "kernels.evolve.run",
+        "kind": "kernels", "run": f"kernels-{time.strftime('%Y%m%d-%H%M%S')}", "tool": tool,
         "config": {"split": "seen", "task": task.name, "entry": task.entry, "iterations": iterations,
                    "device": device, "seen_shapes": len(sets["seen"]), "selected_from": sets.get("selected_from"),
-                   "models": [{"name": m.name, "weight": m.weight} for m in config.llm.models]},
+                   "models": models},
         "result": {"best": best_metrics, "candidates": cands, "retimed": retimed or [],
                    "trace": ledger.put_blob(trace, root, ".jsonl") if trace.exists() else None,
-                   "best_program": ledger.put_blob(best, root, ".py")}}, root)
+                   "best_program": ledger.put_blob(best, root, ".py")},
+        **({"cost": cost} if cost else {})}, root)
 
 
 def _target_tolerances() -> dict | None:
