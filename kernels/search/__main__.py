@@ -35,18 +35,30 @@ def _median(code: str, judge, n: int = 3) -> tuple[float, dict]:
     return med, min(runs, key=lambda m: abs(float(m.get("combined_score") or 0.0) - med))
 
 
-def _tune(code: str, metrics: dict, judge, points: int) -> tuple[str, dict, dict]:
-    """The winner, or its best grid point when that re-times higher: (code, metrics, a record of the sweep)."""
+def _tune(code: str, metrics: dict, judge, points: int, size_expr: str | None = None) -> tuple[str, dict, dict]:
+    """The winner, its best grid point, or a per-size-region dispatch over grid points, whichever re-times highest
+    (each challenger must beat the incumbent's median): (code, metrics, a record of the sweep)."""
     if not points or tune.params(code) is None:
         return code, metrics, {}
     variant, _, rows = tune.sweep(code, judge, points)
-    if variant == code:
-        return code, metrics, {"points": rows, "promoted": False}
+    rec = {"points": [{k: r[k] for k in ("config", "score")} for r in rows], "promoted": False}
+    best, best_m = code, metrics
+    table = tune.regions(rows) if size_expr else None
+    if variant == code and not table:
+        return best, best_m, rec
     base, _ = _median(code, judge)
-    med, m = _median(variant, judge)
-    if med > base:
-        return variant, m, {"points": rows, "promoted": True, "median": med, "base_median": base}
-    return code, metrics, {"points": rows, "promoted": False, "median": med, "base_median": base}
+    if variant != code:
+        med, m = _median(variant, judge)
+        rec.update(median=med, base_median=base)
+        if med > base:
+            best, best_m, base, rec["promoted"] = variant, m, med, True
+    if table:
+        regional = tune.dispatch(best, size_expr, table)
+        med, m = _median(regional, judge)
+        rec["regions"] = {"table": table, "median": med, "promoted": med > base}
+        if med > base:
+            best, best_m, rec["promoted"] = regional, m, True
+    return best, best_m, rec
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -82,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
                         review=review, stop_pct=a.stop_pct or None)
     code, metrics, retimed = retime(out / "trace.jsonl", a.retime) if a.retime else (None, None, [])
     best = tree.best()
-    code, metrics, tuned = _tune(code or best.code, metrics or best.metrics, judge, a.tune_points)
+    code, metrics, tuned = _tune(code or best.code, metrics or best.metrics, judge, a.tune_points, task.size_expr)
     (out / "best_program.py").write_text(code or best.code)
     (out / "best_metrics.json").write_text(json.dumps(metrics or best.metrics, indent=1))
     models = [{"name": a.model, "role": "coder", "effort": a.effort}] + (

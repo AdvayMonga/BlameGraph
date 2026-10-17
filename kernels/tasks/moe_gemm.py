@@ -113,7 +113,7 @@ def edge_shapes(shape):
 # Qwen3-30B-A3B: 128 experts, hidden 2048, expert width 768 (gate_up N = 1536, K = 2048; down N = 2048, K = 768); the
 # engine calls this kernel for up to 2048 pairs (CUSTOM_BACKEND_MOE_KERNEL_ROWS) inside its decode CUDA graphs.
 TASK = Task("moe_gemm", "inference_server.models.moe_kernel:moe_gemm", reference, make_inputs, shape_of, cost,
-            call=_call, make_real=make_real, graphs=True, kernel_names=(r"_moe_gemm_kernel",), heldout_axes=(0,),
+            call=_call, make_real=make_real, graphs=True, kernel_names=(r"_moe_gemm_kernel",), size_expr="args[5]", heldout_axes=(0,),
             edge_shapes=edge_shapes, dtypes=(torch.bfloat16,), layouts=(),
             seen_default=((8, 64, 96, 8, 4, 1), (16, 64, 96, 8, 16, 0), (32, 64, 96, 8, 16, 1)),
             heldout_default=((64, 64, 96, 8, 32, 1), (128, 64, 96, 8, 128, 0)))

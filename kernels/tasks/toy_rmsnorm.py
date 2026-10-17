@@ -29,6 +29,6 @@ def cost(shape, dtype, inputs=None):
     return 4 * rows * dim, (2 * rows * dim + dim) * b          # read x and w, write y
 
 
-TASK = Task("toy_rmsnorm", None, reference, make_inputs, shape_of, cost, heldout_axes=(0,),
+TASK = Task("toy_rmsnorm", None, reference, make_inputs, shape_of, cost, size_expr="args[0].shape[0]", heldout_axes=(0,),
             dtypes=(torch.float32,), seen_default=((8, 256), (32, 512), (64, 1024)),
             heldout_default=((256, 1024), (512, 2048)))
