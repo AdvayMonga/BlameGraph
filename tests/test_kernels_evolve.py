@@ -547,8 +547,8 @@ def test_openevolve_finds_the_known_good_edit_and_rejects_the_cheat():
         from lab import ledger
         best = Path(d) / "best.py"
         best.write_text(res.best_code)
-        rec = record(t, {"seen": list(t.seen_default)}, c, 4, "cpu", Path(d) / "oe" / "evolution_trace.jsonl", best,
-                     res.metrics, root=Path(d) / "ledger")
+        rec = record(t, {"seen": list(t.seen_default)}, [{"name": "scripted", "weight": 1.0}], 4, "cpu",
+                     Path(d) / "oe" / "evolution_trace.jsonl", best, res.metrics, root=Path(d) / "ledger")
         stored = list(ledger.records(Path(d) / "ledger", kind="kernels"))
         assert stored and stored[0]["id"] == rec["id"] and len(rec["result"]["candidates"]) >= 1
         assert all({"id", "parent", "metrics"} <= x.keys() for x in rec["result"]["candidates"])
