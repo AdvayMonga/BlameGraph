@@ -63,7 +63,7 @@ def test_tree_selects_open_nodes_and_closes_failing_ones():
 def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_node():
     from kernels.evolve import evaluator
     from kernels.evolve.run import record, retime, system_message
-    from kernels.search.loop import FORMAT, cascade, search
+    from kernels.search.loop import cascade, search
     from kernels.tasks import load
     from lab import ledger
     t = load("toy_rmsnorm")
@@ -81,7 +81,7 @@ def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_node():
                                    "iters": 3}))
         os.environ["KERNEL_EVAL_CONFIG"] = str(cfg)
         out = Path(d) / "run"
-        tree, cost = search(SEED.read_text(), system_message(t) + "\n\n" + FORMAT, scripted,
+        tree, cost = search(SEED.read_text(), system_message(t), scripted,
                             cascade(evaluator.judge_stage), out, evals=10, usd=100.0)
         best = tree.best()
         root = next(n for n in tree.nodes.values() if n.parent is None)    # the naive seed is ~0.1x the baseline
@@ -106,6 +106,65 @@ def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_node():
         stored = list(ledger.records(Path(d) / "ledger", kind="kernels"))
         assert stored[0]["tool"] == "kernels.search" and stored[0]["cost"] == cost
         assert len(rec["result"]["candidates"]) == len(tree.nodes)
+
+
+def test_with_a_judge_each_step_is_plan_then_code_and_a_failed_child_gets_one_repair():
+    from kernels.search.loop import search
+    calls = []
+
+    def review(system, user):
+        mode = "correction" if "critical_issue" in system else "optimization"
+        calls.append(("judge", mode, user))
+        return json.dumps({"plan": f"{mode} plan"}), 1.0
+
+    def propose(system, user):
+        calls.append(("coder", system, user))
+        return ("<<<<<<< SEARCH\nx = 1\n=======\nx = 2\n>>>>>>> REPLACE" if "x = 1" in user else "nothing"), 0.5
+
+    judged = []
+
+    def judge(code):                             # x = 2 fails; nothing else is ever judged
+        judged.append(code)
+        ok = code == "x = 1\n"
+        m = {"combined_score": 1.0 if ok else 0.0, "correct": 1.0 if ok else 0.0, "stage": 2}
+        return {"metrics": m, "artifacts": {} if ok else {"error": "stage 1: wrong output"}}
+
+    with tempfile.TemporaryDirectory() as d:
+        tree, cost = search("x = 1\n", "SYSTEM", propose, judge, Path(d), evals=3, usd=4.0, review=review)
+    modes = [c[1] for c in calls if c[0] == "judge"]
+    assert modes[:2] == ["optimization", "correction"]                       # the failed child is repaired next
+    coder = [c for c in calls if c[0] == "coder"]
+    assert "optimization plan" in coder[0][2] and "SEARCH/REPLACE" in coder[0][1] and "SEARCH/REPLACE" not in \
+        [c for c in calls if c[0] == "judge"][0][2]
+    assert "stage 1: wrong output" in calls[2][2]                            # the judge sees why the child failed
+    repaired = [n for n in tree.nodes.values() if n.mode == "correction"]
+    assert repaired and repaired[0].parent == next(n.id for n in tree.nodes.values() if n.code == "x = 2\n")
+    assert cost["usd"] <= 4.0 + 1.5 and cost["model_calls"] == 2 * (len(tree.nodes) - 1)
+
+
+def test_ncu_counters_parse_and_a_host_without_ncu_says_so():
+    from kernels.evolve import jailed, ncu
+    from kernels.search.loop import cascade, facts
+    from kernels.search.tree import Node
+    head = ",".join(f'"{h}"' for h in ["ID", "Kernel Name", *ncu.METRICS])
+    units = ",".join(['""', '""'] + ['"%"'] * len(ncu.METRICS))
+    row = lambda i, name, dur: ",".join([f'"{i}"', f'"{name}"'] + ['"1,234.5"'] * (len(ncu.METRICS) - 1) + [f'"{dur}"'])
+    out = "==PROF== Connected\n" + "\n".join([head, units, row(0, "small", 10), row(1, "big", 900)]) + "\n==PROF== done"
+    p = ncu.parse(out)
+    assert [k["name"] for k in p["kernels"]] == ["big", "small"] and p["kernels"][0]["dram__bytes_read.sum"] == 1234.5
+    assert ncu.parse("no csv here")["kernels"] == []
+    if __import__("shutil").which("ncu") is None:
+        r = jailed.judge_jailed({"task": "toy_rmsnorm", "seen": [[8, 256]], "device": "cpu"}, "x = 1\n", 3)
+        assert "ncu_missing" in r["artifacts"]
+    stages = []
+
+    def fake(path, stage):
+        stages.append(stage)
+        return {"metrics": {"combined_score": 1.2, "correct": 1.0}, "artifacts": {"ncu": json.dumps(p)} if stage == 3
+                else {"timings": "[]"}}
+    r = cascade(fake, counters=True)("x = 1\n")
+    assert stages == [1, 2, 3] and "ncu" in r["artifacts"] and "timings" in r["artifacts"]
+    assert "ncu counters" in facts(Node("n", None, "", r["metrics"], r["artifacts"], 0))
 
 
 def test_the_claude_client_streams_with_effort_and_fallbacks_and_prices_the_call():
