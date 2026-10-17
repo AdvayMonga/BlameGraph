@@ -153,7 +153,6 @@ def main(argv: list[str] | None = None) -> int:
     code, metrics, retimed = retime(trace, a.retime) if a.retime else (None, None, [])
     (out / "best_program.py").write_text(code or res.best_code)
     (out / "best_metrics.json").write_text(json.dumps(metrics or res.metrics, indent=1, default=str))
-    from kernels.evolve.llm import usage
     rec = record(task, sets, [{"name": m.name, "weight": m.weight} for m in config.llm.models], a.iterations,
                  a.device, trace, out / "best_program.py", metrics or res.metrics, retimed=retimed,
                  cost={**usage(out / "usage.jsonl"),
@@ -161,6 +160,12 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps({"best_score": res.best_score, "metrics": res.metrics, "out": str(out), "ledger": rec["id"]},
                      default=str))
     return 0
+
+
+def usage(log: Path) -> dict:
+    """A run's model cost from the usage log `kernels.evolve.llm.ClaudeCompat` appends to: {usd, model_calls}."""
+    rows = [json.loads(x) for x in Path(log).read_text().splitlines() if x.strip()] if Path(log).exists() else []
+    return {"usd": round(sum(r["usd"] for r in rows), 4), "model_calls": len(rows)}
 
 
 def prepare(task, sets: dict, out: Path, device: str, tol: dict, timing_shapes: int, initial: str | None):

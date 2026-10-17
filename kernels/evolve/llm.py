@@ -23,11 +23,6 @@ class ClaudeCompat(OpenAILLM):
         return out
 
 
-def usage(log) -> dict:
-    """The run's model cost from the usage log: {usd, model_calls}."""
-    rows = [json.loads(x) for x in open(log).read().splitlines() if x.strip()] if os.path.exists(log) else []
-    return {"usd": round(sum(r["usd"] for r in rows), 4), "model_calls": len(rows)}
-
 
 def init_client(model_cfg):
     return ClaudeCompat(model_cfg)
