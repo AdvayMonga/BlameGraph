@@ -287,6 +287,43 @@ def test_openevolve_calls_are_priced_into_a_usage_log():
         assert usage(log) == {"usd": 0.75, "model_calls": 2} and usage(Path(d) / "none") == {"usd": 0, "model_calls": 0}
 
 
+def test_regions_pick_a_config_per_size_and_the_dispatcher_sets_it_per_call():
+    import torch
+    from kernels.evolve import evaluator
+    from kernels.search import tune
+    from kernels.search.loop import cascade
+    from kernels.tasks import load
+    small, big = {"chunk": 1, "eps": 1e-6}, {"chunk": 64, "eps": 1e-6}
+    rows = [{"config": small, "score": 1.0, "timings": [{"shape": [4, 256], "speedup": 2.0, "weight": 0.5},
+                                                         {"shape": [512, 256], "speedup": 0.5, "weight": 0.5}]},
+            {"config": big, "score": 1.0, "timings": [{"shape": [4, 256], "speedup": 0.8, "weight": 0.5},
+                                                       {"shape": [512, 256], "speedup": 3.0, "weight": 0.5}]}]
+    table = tune.regions(rows)
+    assert table == [(4, small), (None, big)]
+    assert tune.regions([rows[0], {**rows[1], "timings": rows[0]["timings"]}]) is None       # one point wins everywhere
+    t = load("toy_rmsnorm")
+    for prog in (CHUNKED, "# EVOLVE-BLOCK-START\n" + CHUNKED.replace("def kernel(", "def entry(") +
+                 "# EVOLVE-BLOCK-END\n\nkernel = entry\n"):
+        code = tune.dispatch(prog, t.size_expr, table)
+        ns = {}
+        exec(compile(code, "<dispatched>", "exec"), ns)
+        for rows_, want in ((4, 1), (512, 64)):
+            x, w = t.make_inputs((rows_, 256), torch.float32, "cpu", torch.Generator().manual_seed(0))
+            assert torch.allclose(ns["kernel"](x, w), t.reference(x, w), atol=1e-5) and ns["CONFIG"]["chunk"] == want
+    with tempfile.TemporaryDirectory() as d:
+        cfg = Path(d) / "eval.json"
+        cfg.write_text(json.dumps({"task": t.name, "seen": [[4, 256], [512, 256]], "device": "cpu", "iters": 3}))
+        os.environ["KERNEL_EVAL_CONFIG"] = str(cfg)
+        r = cascade(evaluator.judge_stage)(tune.dispatch(CHUNKED, t.size_expr, table))
+    assert r["metrics"]["correct"] == 1.0, r["artifacts"]                  # passes the screen and every gate
+    from kernels.evolve.ship import module_source
+    marked = "# EVOLVE-BLOCK-START\n" + CHUNKED.replace("def kernel(", "def entry(") + "# EVOLVE-BLOCK-END\n\nkernel = entry\n"
+    shipped = module_source(tune.dispatch(marked, t.size_expr, table), "entry")
+    assert "_dispatch_impl = entry" in shipped and shipped.rstrip().endswith("entry = _dispatched")    # ships wrapped
+    assert all(load(n).size_expr for n in ("paged_decode", "moe_gemm", "rmsnorm", "add_rmsnorm", "rmsnorm_rope",
+                                           "silu_mul", "topk_softmax"))
+
+
 def test_the_claude_client_streams_with_effort_and_fallbacks_and_prices_the_call():
     from types import SimpleNamespace
     from kernels.search.llm import FALLBACK_BETA, Claude

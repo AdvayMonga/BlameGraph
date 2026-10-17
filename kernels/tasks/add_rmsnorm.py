@@ -32,5 +32,5 @@ def shape_of(call):
 TASK = Task("add_rmsnorm", "inference_server.models.fused:add_rmsnorm", reference, make_inputs, shape_of,
             lambda shape, dtype, inputs=None: rows_cost(*shape, 2, 2, dtype),
             call=lambda fn, h, a, w: fn(h, a, w, EPS), graphs=True, kernel_names=(r"^_add_rmsnorm_kernel",),
-            heldout_axes=(0,), edge_shapes=rows_edges, dtypes=(torch.bfloat16,), layouts=(),
+            size_expr="args[0].numel() // args[0].shape[-1]", heldout_axes=(0,), edge_shapes=rows_edges, dtypes=(torch.bfloat16,), layouts=(),
             seen_default=((4, HIDDEN), (32, HIDDEN)), heldout_default=((512, HIDDEN),))

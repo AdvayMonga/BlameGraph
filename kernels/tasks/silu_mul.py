@@ -29,6 +29,6 @@ def cost(shape, dtype, inputs=None):
 
 
 TASK = Task("silu_mul", "inference_server.models.fused:silu_mul", reference, make_inputs, shape_of, cost,
-            graphs=True, kernel_names=(r"^_silu_mul_kernel",), heldout_axes=(0,),
+            graphs=True, kernel_names=(r"^_silu_mul_kernel",), size_expr="args[0].shape[0]", heldout_axes=(0,),
             edge_shapes=lambda s: [(1, s[1]), (3, s[1]), (s[0] + 1, s[1])], dtypes=(torch.bfloat16,), layouts=(),
             seen_default=((8, 1536), (64, 1536), (512, 1536)), heldout_default=((2048, 1536),))
