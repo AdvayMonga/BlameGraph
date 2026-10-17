@@ -210,7 +210,7 @@ def retime(trace: Path, k: int, repeats: int = 3) -> tuple[str | None, dict | No
 
 def record(task, sets: dict, models: list[dict], iterations: int, device: str, trace: Path, best: Path,
            best_metrics: dict, root: Path | None = None, retimed: list | None = None, tool: str = "kernels.evolve.run",
-           cost: dict | None = None) -> dict:
+           cost: dict | None = None, extra: dict | None = None) -> dict:
     """One `kernels` ledger record per run: every evaluated candidate's seen-shape metrics and lineage, the trace and
     the best program as blobs. Held-out shapes stay out (`gate` judges them; its output stays in the run dir)."""
     import time
@@ -224,7 +224,7 @@ def record(task, sets: dict, models: list[dict], iterations: int, device: str, t
         "config": {"split": "seen", "task": task.name, "entry": task.entry, "iterations": iterations,
                    "device": device, "seen_shapes": len(sets["seen"]), "selected_from": sets.get("selected_from"),
                    "models": models},
-        "result": {"best": best_metrics, "candidates": cands, "retimed": retimed or [],
+        "result": {"best": best_metrics, "candidates": cands, "retimed": retimed or [], **(extra or {}),
                    "trace": ledger.put_blob(trace, root, ".jsonl") if trace.exists() else None,
                    "best_program": ledger.put_blob(best, root, ".py")},
         **({"cost": cost} if cost else {})}, root)

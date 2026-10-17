@@ -1,6 +1,6 @@
 """python -m kernels.search --task T [--shapes SHAPES.json | --captures DIR ...] --out DIR [--evals N] [--usd X]
                           [--model CODER] [--judge-model JUDGE|none] [--effort E] [--[no-]ncu] [--device cuda]
-                          [--initial PROGRAM.py] [--retime K]
+                          [--initial PROGRAM.py] [--retime K] [--tune-points N]
 
 Our own layer-1 generator (kernels/search/loop.py) on one kernel task, judged by kernels.evolve's evaluator exactly as
 `python -m kernels.evolve run` is: the same run dir, selection config (seen shapes only), re-timed promotion and
@@ -16,9 +16,37 @@ import torch
 
 from kernels.evolve import evaluator
 from kernels.evolve.run import _shapes, _target_tolerances, prepare, record, retime, system_message, tolerances
+from kernels.search import tune
 from kernels.search.llm import Claude
 from kernels.search.loop import cascade, search
 from kernels.tasks import TASKS, load
+
+
+TUNE_FACT = ("A program may define, at module level, `CONFIG` (a dict of the launch parameters its kernel uses) and "
+             "`TUNABLES` (for each CONFIG key, a list of values). After the search, up to --tune-points points of that "
+             "grid are judged on the best program, CONFIG rewritten in its source; the best point is re-timed and "
+             "replaces the program if its median score is higher.")
+
+
+def _median(code: str, judge, n: int = 3) -> tuple[float, dict]:
+    runs = [judge(code)["metrics"] for _ in range(n)]
+    scores = sorted(float(m.get("combined_score") or 0.0) for m in runs)
+    med = scores[n // 2]
+    return med, min(runs, key=lambda m: abs(float(m.get("combined_score") or 0.0) - med))
+
+
+def _tune(code: str, metrics: dict, judge, points: int) -> tuple[str, dict, dict]:
+    """The winner, or its best grid point when that re-times higher: (code, metrics, a record of the sweep)."""
+    if not points or tune.params(code) is None:
+        return code, metrics, {}
+    variant, _, rows = tune.sweep(code, judge, points)
+    if variant == code:
+        return code, metrics, {"points": rows, "promoted": False}
+    base, _ = _median(code, judge)
+    med, m = _median(variant, judge)
+    if med > base:
+        return variant, m, {"points": rows, "promoted": True, "median": med, "base_median": base}
+    return code, metrics, {"points": rows, "promoted": False, "median": med, "base_median": base}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -38,6 +66,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--initial")
     ap.add_argument("--timing-shapes", type=int, default=8)
     ap.add_argument("--retime", type=int, default=3)
+    ap.add_argument("--tune-points", type=int, default=16, help="grid points tried on the winner's TUNABLES; 0: none")
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args(argv)
     a.ncu = a.device.startswith("cuda") if a.ncu is None else a.ncu
@@ -46,17 +75,20 @@ def main(argv: list[str] | None = None) -> int:
     sets, program = prepare(task, _shapes(task, a), out, a.device, tolerances(_target_tolerances()),
                             a.timing_shapes, a.initial)
     review = None if a.judge_model == "none" else Claude(a.judge_model, a.effort)
-    tree, cost = search(program.read_text(), system_message(task), Claude(a.model, a.effort),
-                        cascade(evaluator.judge_stage, counters=a.ncu), out, a.evals, a.usd, a.seed, review=review)
+    judge = cascade(evaluator.judge_stage, counters=a.ncu)
+    system = system_message(task) + ("\n\n" + TUNE_FACT if a.tune_points else "")
+    tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.usd, a.seed,
+                        review=review)
     code, metrics, retimed = retime(out / "trace.jsonl", a.retime) if a.retime else (None, None, [])
     best = tree.best()
+    code, metrics, tuned = _tune(code or best.code, metrics or best.metrics, judge, a.tune_points)
     (out / "best_program.py").write_text(code or best.code)
     (out / "best_metrics.json").write_text(json.dumps(metrics or best.metrics, indent=1))
     models = [{"name": a.model, "role": "coder", "effort": a.effort}] + (
         [{"name": a.judge_model, "role": "judge", "effort": a.effort}] if review else [])
     rec = record(task, sets, models, a.evals, a.device,
                  out / "trace.jsonl", out / "best_program.py", metrics or best.metrics, retimed=retimed,
-                 tool="kernels.search", cost=cost)
+                 tool="kernels.search", cost=cost, extra={"tuned": tuned})
     print(json.dumps({"best": metrics or best.metrics, "cost": cost, "nodes": len(tree.nodes), "out": str(out),
                       "ledger": rec["id"]}))
     return 0
