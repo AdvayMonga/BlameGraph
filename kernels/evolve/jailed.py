@@ -15,6 +15,7 @@ import tempfile
 from pathlib import Path
 
 from kernels.evolve import ncu
+from kernels.evolve.verify import verify
 from kernels.tasks import load
 from lab import engine
 from lab.safety import grader
@@ -55,6 +56,8 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
         tree, harness = Path(d, "tree"), stage_harness(Path(d, "harness"))
         tree.mkdir()
         (tree / "candidate.py").write_text(source)
+        if stage == 2:                           # outputs to verify outside the jail
+            cfg = {**cfg, "record": str(tree / "outputs.pt")}
         (tree / "eval_config.json").write_text(json.dumps(cfg))
         src = _engine_src(load(cfg["task"]))
         path = os.pathsep.join(str(p) for p in (harness, src) if p)
@@ -72,6 +75,17 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
             argv = [engine.python(), "-m", "kernels.evolve.core", str(tree / "eval_config.json"),
                     str(tree / "candidate.py"), str(stage)]
         p = grader.jailed(tree, argv, timeout_s=timeout_s, env_extra={"PYTHONPATH": path}, read=read)
+        lines = [x for x in p.stdout.splitlines() if x.startswith("{")]
+        if stage == 2 and p.returncode == 0 and lines:
+            r = json.loads(lines[-1])
+            if r["metrics"].get("correct") == 1.0:
+                ok, why = verify(cfg, tree / "outputs.pt")
+                gates = {**json.loads(r["artifacts"].get("gates") or "{}"),
+                         "verified_outside": {"passed": ok, "reason": why}}
+                r["artifacts"]["gates"] = json.dumps(gates, indent=1)
+                if not ok:
+                    r["metrics"] = {**r["metrics"], "combined_score": 0.0, "correct": 0.0}
+            return r
     if stage == NCU_STAGE:
         if p.returncode != 0:
             return {"metrics": {"stage": stage}, "artifacts": {"ncu_error": (p.stderr or p.stdout)[-2000:]}}

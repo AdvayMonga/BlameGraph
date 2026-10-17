@@ -456,6 +456,29 @@ def test_a_kernel_right_while_checked_and_wrong_while_timed_scores_zero():
     assert "differs from the reference" in gates["timing"]["reason"]
 
 
+def test_outputs_are_verified_again_outside_the_candidates_process():
+    from kernels.check import _gen
+    from kernels.evolve.jailed import judge_jailed
+    from kernels.evolve.verify import verify
+    t = load("toy_rmsnorm")
+    cfg = {"task": t.name, "seen": [list(s) for s in t.seen_default], "heldout": [list(s) for s in t.heldout_default],
+           "device": "cpu", "iters": 3}
+    r = judge_jailed(cfg, "import torch\ndef kernel(x, w):\n" + RIGHT, 2)
+    g = json.loads(r["artifacts"]["gates"])["verified_outside"]
+    assert r["metrics"]["correct"] == 1.0 and g["passed"] and "recomputed outside" in g["reason"]
+    with tempfile.TemporaryDirectory() as d:
+        shape = t.seen_default[0]
+        x, w = t.make_inputs(shape, torch.float32, "cpu", _gen(0))
+        good = {"kind": "check", "shape": list(shape), "dtype": "float32", "seed": 0, "scale": None,
+                "outputs": [t.reference(x, w)]}
+        torch.save({"records": [good]}, Path(d) / "ok.pt")
+        assert verify(cfg, Path(d) / "ok.pt")[0]
+        torch.save({"records": [{**good, "outputs": [x.clone()]}]}, Path(d) / "bad.pt")   # wrong values recorded
+        ok, why = verify(cfg, Path(d) / "bad.pt")
+        assert not ok and "differs from the reference" in why
+        assert not verify(cfg, Path(d) / "missing.pt")[0]
+
+
 def test_the_jail_sees_a_fresh_tree_and_a_copied_harness_never_this_repo():
     from kernels.evolve import jailed
     from lab.safety import container, grader, jail

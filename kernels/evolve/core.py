@@ -136,6 +136,19 @@ def _pct_of_roofline(task: Task, shape, dtype, ms: float, hw, inputs: list) -> f
     return bound_s / (ms / 1e3) * 100
 
 
+# Outputs of the plain check cases and the timed calls, kept for kernels/evolve/verify.py, which recomputes the
+# reference and compares outside this process (a candidate can reach anything in here). Copied and saved through
+# functions bound before any candidate loads.
+RECORDS: list = []
+_detach, _cpu, _clone, _save = torch.Tensor.detach, torch.Tensor.cpu, torch.Tensor.clone, torch.save
+
+
+def _keep(kind: str, shape, dtype: str, seed: int, outputs, scale: float | None = None) -> None:
+    outs = outputs if isinstance(outputs, (list, tuple)) else [outputs]
+    RECORDS.append({"kind": kind, "shape": list(shape), "dtype": dtype, "seed": seed, "scale": scale,
+                    "outputs": [_clone(_cpu(_detach(o))) for o in outs if isinstance(o, torch.Tensor)]})
+
+
 # Value distributions beyond the task's own (KernelBench-Verified's hidden suite: x3, x0.01, negated): a kernel tuned to
 # one input distribution, or one that special-cases it, fails here.
 SCALES = (3.0, 0.01, -1.0)
@@ -213,10 +226,11 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
     ref = task.reference
     shapes = seen[:2] if stage == 1 else seen
     try:
+        keep = lambda case, out: _keep("check", case["shape"], case["dtype"], case["seed"], out)    # noqa: E731
         r = check_kernel(ref, cand, task.make_inputs, shapes, heldout if stage > 1 else [], dtypes=task.dtypes,
                          device=device, seeds=(0,) if stage == 1 else (0, 1, 2), tolerances=tolerances,
                          edge_shapes=task.edge_shapes(shapes[0]) if task.edge_shapes else None,
-                         repeats=1 if stage == 1 else 3, layouts=task.layouts)
+                         repeats=1 if stage == 1 else 3, layouts=task.layouts, record=keep)
     except Exception:                            # noqa: BLE001
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
                 "artifacts": {"error": "checker raised:\n" + traceback.format_exc()[-3000:]}}
@@ -225,7 +239,9 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
     if r["passed"] and stage > 1:                 # other value distributions, on the two most frequent seen shapes
         for k in SCALES:
             v = check_kernel(ref, cand, _scaled(task.make_inputs, k), seen[:2], [], dtypes=task.dtypes, device=device,
-                             seeds=(7,), tolerances=tolerances, edge_shapes=[], repeats=1, layouts=())
+                             seeds=(7,), tolerances=tolerances, edge_shapes=[], repeats=1, layouts=(),
+                             record=lambda case, out, k=k: _keep("check", case["shape"], case["dtype"], case["seed"],
+                                                                 out, k))
             g = v["gates"]["correctness_seen"]
             gates[f"values_x{k:g}"] = {"passed": g["passed"], "reason": g["reason"]}
             r["passed"] = r["passed"] and g["passed"]
@@ -289,6 +305,8 @@ def _timed(task, cand, base, shapes, weights, dtype, device, iters, hw, toleranc
     for s in shapes:
         p = time_pair(cand, base, task.make_inputs, s, dtype, device, iters=iters,      # unwrapped: no check in
                       graphs=task.graphs)                                              # the window
+        for i, out in enumerate(p["outputs_a"]):
+            _keep("time", s, str(dtype).removeprefix("torch."), i, out)     # time_pair's buffer i: seed i
         for inputs, out in zip(p["inputs"], p["outputs_a"]):
             d = _compare(task.reference(*[t.clone() for t in inputs]), out, atol, rtol)
             if not d["ok"]:
@@ -323,6 +341,8 @@ def main() -> int:
     tol = {getattr(torch, k): tuple(v) for k, v in (cfg.get("tolerances") or {}).items()}
     out = judge(task, program, [tuple(s) for s in cfg["seen"]], [tuple(s) for s in cfg.get("heldout", [])],
                 cfg.get("weights"), cfg.get("device", "cpu"), tol or None, stage, cfg.get("iters", 30))
+    if cfg.get("record"):
+        _save({"records": RECORDS}, cfg["record"])
     sys.stdout.write("\n" + json.dumps(out) + "\n")
     return 0
 
