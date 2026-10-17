@@ -380,11 +380,7 @@ def test_prompts_carry_facts_never_advice():
 
 
 def test_remote_evaluation_sends_the_source_on_stdin_and_never_a_key():
-    try:
-        from kernels.evolve import evaluator
-    except ImportError:
-        print("skip: openevolve not installed")
-        return
+    from kernels.evolve import evaluator
     t = load("toy_rmsnorm")
     with tempfile.TemporaryDirectory() as d:
         cfg = Path(d) / "eval.json"
@@ -396,11 +392,11 @@ def test_remote_evaluation_sends_the_source_on_stdin_and_never_a_key():
         os.environ.update(KERNEL_EVAL_SSH=json.dumps([str(fake_ssh), "host"]), KERNEL_EVAL_REMOTE=f"cd {ROOT} &&",
                           KERNEL_EVAL_CONFIG=str(cfg), ANTHROPIC_API_KEY="sk-x")       # config travels on stdin
         try:
-            r = evaluator.evaluate_stage1(str(SEED))
+            r = evaluator.judge_stage(str(SEED), 1)
         finally:
             os.environ.clear()
             os.environ.update(old)
-        assert r.metrics["correct"] == 1.0 and (Path(d) / "keys").read_text().strip() == "0"
+        assert r["metrics"]["correct"] == 1.0 and (Path(d) / "keys").read_text().strip() == "0"
 
 
 RIGHT = "    xf = x.float()\n    return (xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + 1e-6) * w.float()).to(x.dtype)\n"
