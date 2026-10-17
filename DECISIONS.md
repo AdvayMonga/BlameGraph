@@ -3,14 +3,13 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
-
-
 ## 2026-10-17 — The end-to-end judge runs once several shipped kernels stack
 Shipped kernels are stacked on one engine branch (each `kernels.evolve ship --base` the previous shipped branch; the
 first is `kernels/moe_gemm-20261016-154523`), and `bench` + `equiv` + `submit` run once, on the stack, when its gains
 can add up past the regimes' noise bands. Why: one kernel's gain (moe_gemm 1.09x on 13.7% of the decode window, ≤ ~1.2%
 end to end) sits inside the bands, so judging it alone costs hours of GPU for a within-band verdict. Each kernel still
 passes its own held-out gate before it ships; a failing stack is bisected with `equiv`.
+
 ## 2026-10-16 — No status file
 `STATE.md` is removed; the record is `DECISIONS.md` and `RUNS.md`, both append-only. Why: a rewritten-in-place
 status file went stale between sessions (it still listed merged engine PRs as open). Replaces the three-file entry of
@@ -23,6 +22,7 @@ when the output passes the task's tolerance; its max error against the reference
 inputs, is reported as a fact (`error_vs_reference`), and `equiv` stays the final judge. Why: a global switch also
 changes the reference and the baseline the evaluator compares against, and every other layer of the engine, so it is
 an exploit of the evaluator, not an optimization; quantization inside a kernel is what the 2026-10-04 rule allows.
+
 ## 2026-10-15 — Submit takes a dev-tier equiv for the example engine; a quick equiv tier
 Equiv's time is the engine generating answers: ~95 min at tier dev on inference-server, so the full tier (~11.5M
 output tokens) would be ~8-17 h. To get a first working run, the target names the tier submit requires
