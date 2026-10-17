@@ -237,7 +237,7 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
     gates = {k: {"passed": g["passed"], "reason": g["reason"], "cases": (g.get("evidence") or {}).get("cases")}
              for k, g in r["gates"].items()}
     if r["passed"] and stage > 1:                 # other value distributions, on the two most frequent seen shapes
-        for k in SCALES:
+        for k in (SCALES if task.scales is None else task.scales):
             v = check_kernel(ref, cand, _scaled(task.make_inputs, k), seen[:2], [], dtypes=task.dtypes, device=device,
                              seeds=(7,), tolerances=tolerances, edge_shapes=[], repeats=1, layouts=(),
                              record=lambda case, out, k=k: _keep("check", case["shape"], case["dtype"], case["seed"],

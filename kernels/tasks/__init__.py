@@ -31,6 +31,8 @@ class Task:
     layouts: tuple = ("strided", "transposed")  # non-contiguous variants its callers pass (lab/capture records it)
     graphs: bool = False                    # its callers replay it inside CUDA graphs: it must capture, and is timed
                                             # as a graph replay (no host launch overhead)
+    scales: tuple | None = None            # value scalings checked beyond the task's own (None: the evaluator's; ties in
+                                            # bf16 make ×0.01 meaningless for an exact top-k)
     kernel_names: tuple[str, ...] = ()      # regexes of the device kernels its entry launches (kernels/share.py)
     make_real: Callable = None              # make_real(shape, dtype, device, generator, ints) -> inputs, `ints` being a
                                             # captured call's 1-D int args by value (e.g. its real sequence lengths)
@@ -72,4 +74,5 @@ def load(name: str) -> Task:
     return importlib.import_module(f"kernels.tasks.{name}").TASK
 
 
-TASKS = ("toy_rmsnorm", "paged_decode", "moe_gemm")
+TASKS = ("toy_rmsnorm", "paged_decode", "moe_gemm", "rmsnorm", "add_rmsnorm", "rmsnorm_rope", "silu_mul",
+         "topk_softmax")

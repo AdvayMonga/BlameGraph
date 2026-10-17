@@ -317,6 +317,30 @@ def test_the_starting_program_can_come_from_an_older_engine_commit():
     assert "# old" in prog and "# new" not in prog and prog.rstrip().endswith("kernel = entry")
 
 
+def test_the_fused_kernel_tasks_check_their_own_references_and_read_captured_shapes():
+    from kernels import check_kernel
+    from kernels.tasks import rmsnorm_rope
+    for name in ("rmsnorm", "add_rmsnorm", "rmsnorm_rope", "silu_mul", "topk_softmax"):
+        t = load(name)
+        r = check_kernel(t.reference, lambda *x, t=t: t.reference(*x), t.make_inputs, list(t.seen_default)[:2],
+                         list(t.heldout_default), dtypes=t.dtypes, seeds=(0,), repeats=1, layouts=(),
+                         edge_shapes=t.edge_shapes(t.seen_default[0]))
+        assert r["passed"], (name, r["reasons"])
+        inputs = t.make_inputs(t.seen_default[0], torch.bfloat16, "cpu", torch.Generator().manual_seed(0))
+        call = {"fn": t.entry, "args": [{"shape": list(x.shape)} for x in inputs], "kwargs": {}}
+        assert t.shape_of(call) == tuple(t.seen_default[0]), name
+        assert all(v > 0 for v in t.cost(t.seen_default[0], torch.bfloat16)) and t.graphs and t.kernel_names
+    x, w, cos, sin = rmsnorm_rope.make_inputs((2, 3, 4, 128), torch.float32, "cpu", torch.Generator().manual_seed(1))
+    x32 = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-6) * w                    # the HF formula, fp32
+    half = 64
+    hf = x32 * cos[:, :, None] + torch.cat((-x32[..., half:], x32[..., :half]), -1) * sin[:, :, None]
+    assert torch.allclose(rmsnorm_rope.reference(x, w, cos, sin), hf, atol=1e-4)
+    t = load("topk_softmax")
+    w, ids = t.reference(torch.randn(5, 128, generator=torch.Generator().manual_seed(2)))
+    assert ids.dtype == torch.int64 and ids.shape == (5, 8) and torch.allclose(w.sum(-1), torch.ones(5))
+    assert t.scales == (3.0, -1.0)
+
+
 def test_paged_decode_reference_matches_dense_attention():
     t = load("paged_decode")
     shape = (3, 8, 2, 16, 4, 11)
