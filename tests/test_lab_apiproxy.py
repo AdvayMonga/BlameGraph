@@ -24,14 +24,20 @@ SSE = (b'event: message_start\ndata: {"type":"message_start","message":{"model":
 
 @pytest.fixture
 def upstream():
-    seen = []
+    seen, counted = [], []
 
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
 
         def do_POST(self):
-            body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+            raw = self.rfile.read(int(self.headers["content-length"]))
+            body = json.loads(raw)
+            if self.path == "/v1/messages/count_tokens" and "messages" in body:    # the proxy's own count
+                counted.append({"headers": {k.lower(): v for k, v in self.headers.items()}, "body": body})
+                out = json.dumps({"input_tokens": len(raw) // 4}).encode()
+                self.send_response(200); self.send_header("content-length", str(len(out))); self.end_headers()
+                return self.wfile.write(out)
             seen.append({"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": body})
             out, kind = ((SSE, "text/event-stream") if body.get("stream") else
                          (json.dumps({"model": body["model"], "usage": USAGE}).encode(), "application/json"))
@@ -198,3 +204,54 @@ def test_the_input_is_reserved_too(upstream, monkeypatch):
     with apiproxy.Proxy(0.05, upstream=url) as p:                   # 20k bytes of opus input is up to $0.08
         status, body = post(p, "/v1/messages", {"model": "claude-opus-5-5", "max_tokens": 1, "pad": "x" * 20000})
     assert status == 403 and seen == []
+
+
+def test_the_input_reserved_is_what_count_tokens_says_not_a_token_per_byte(upstream, monkeypatch):
+    url, seen = upstream
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-real")
+    msgs = [{"role": "user", "content": "x" * 200_000}]                # 200 kB: $0.80 of opus a byte a token
+    with apiproxy.Proxy(0.50, upstream=url) as p:                      # counted (bytes / 4): ~$0.40 at 2x input
+        status, _ = post(p, "/v1/messages", {"model": "claude-opus-5-5", "max_tokens": 10, "messages": msgs,
+                                             "metadata": {"user_id": "u"}})
+    assert status == 200 and len(seen) == 1 and seen[0]["path"] == "/v1/messages"
+
+
+def test_count_tokens_gets_only_what_it_takes_and_its_failure_falls_back_to_bytes(monkeypatch):
+    got = []
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            got.append((self.path, json.loads(self.rfile.read(int(self.headers["content-length"])))))
+            self.send_response(500 if self.path.endswith("count_tokens") else 200)
+            out = json.dumps({"model": "claude-opus-5-5", "usage": USAGE}).encode()
+            self.send_header("content-length", str(len(out))); self.end_headers(); self.wfile.write(out)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-real")
+    try:
+        msgs = [{"role": "user", "content": "x" * 20_000}]             # 20 kB a byte a token: $0.08 > the cap
+        with apiproxy.Proxy(0.05, upstream=f"http://127.0.0.1:{srv.server_address[1]}") as p:
+            status, body = post(p, "/v1/messages", {"model": "claude-opus-5-5", "max_tokens": 1, "messages": msgs,
+                                                    "stream": False, "metadata": {}})
+    finally:
+        srv.shutdown()
+    assert status == 403 and b"reserved for the input" in body
+    assert [g[0] for g in got] == ["/v1/messages/count_tokens"]       # counted (failed), never sent
+    assert set(got[0][1]) == {"model", "messages"}
+
+
+@pytest.mark.parametrize("mark,rate", [(None, 0), ({"type": "ephemeral"}, 3), ({"type": "ephemeral", "ttl": "1h"}, 4)])
+def test_the_input_is_held_at_the_rate_its_cache_marks_can_incur(upstream, monkeypatch, mark, rate):
+    url, seen = upstream
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-real")
+    block = {"type": "text", "text": "x" * 40_000, **({"cache_control": mark} if mark else {})}
+    req = {"model": "claude-opus-5-5", "max_tokens": 1, "messages": [{"role": "user", "content": [block]}]}
+    n = len(json.dumps({k: req[k] for k in ("model", "messages")})) // 4      # what the fake upstream counts
+    held = n * apiproxy.PRICES["claude-opus-5-5"][rate] / 1e6
+    with apiproxy.Proxy(held * 0.99, upstream=url) as p:                         # a hair under: refused
+        assert post(p, "/v1/messages", req)[0] == 403
+    with apiproxy.Proxy(held * 1.01 + 1e-4, upstream=url) as p:                  # a hair over: sent
+        assert post(p, "/v1/messages", req)[0] == 200
