@@ -1,7 +1,8 @@
 """The practice engine for `python -m lab.rehearsal`: an OpenAI-compatible server with a fixed number of decode
-slots and a fixed time per token. Requests wait for a free slot, then stream one word per TOKEN_S; each word is one
-token in the target model's tokenizer. Multiple-choice questions ("pick one") are answered "(C)". vLLM-shaped
-teacher-forced scoring at /v1/completions. Stdlib only: this file is copied into the practice engine's repo.
+slots. Each decode step costs STEP_S on the simulated device plus the host work of choosing the next word, which
+folds the whole output so far. Each word is one token in the target model's tokenizer. Multiple-choice questions
+("pick one") are answered "(C)". vLLM-shaped teacher-forced scoring at /v1/completions. Stdlib only: this file is
+copied into the practice engine's repo.
 
   python server.py --port N [--wrong-every K]
 """
@@ -14,11 +15,29 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SLOTS = 2               # requests decoded at once; the rest wait
-TOKEN_S = 0.02          # seconds per generated token
+STEP_S = 0.01           # the simulated device: one decode step takes this long (it stands for the GPU)
+MIX_ROUNDS = 2000       # host work per word folded into the decoder state
 WORDS = [" the", " of", " and", " to", " in", " a", " is", " that", " for", " it"]
 ANSWER, ANSWER_TOKENS = "The answer is (C).", 6
 WRONG, WRONG_TOKENS = "The answer is (B).", 6
 COLD, COLD_TOKENS = "42", 2
+
+
+def _mix(acc: int, w: int) -> int:
+    for k in range(MIX_ROUNDS):
+        acc = (acc * 31 + w + k) % 1_000_003
+    return acc
+
+
+# >>> decode
+def decode(n: int):
+    """The next n words: each is chosen by the state folded over every word before it."""
+    acc = 0
+    for _ in range(n):
+        w = acc % len(WORDS)
+        acc = _mix(acc, w)
+        yield WORDS[w]
+# <<< decode
 
 
 def answer(messages: list[dict], max_tokens: int, wrong: bool = False) -> tuple[list[str], int]:
@@ -29,7 +48,7 @@ def answer(messages: list[dict], max_tokens: int, wrong: bool = False) -> tuple[
     if "pick one" in last:
         return ([WRONG], WRONG_TOKENS) if wrong else ([ANSWER], ANSWER_TOKENS)
     n = max(1, max_tokens)
-    return [WORDS[i % len(WORDS)] for i in range(n)], n
+    return None, n                      # generated word by word by `decode`
 
 
 def make_server(port: int = 0, wrong_every: int = 0) -> ThreadingHTTPServer:
@@ -75,8 +94,9 @@ def make_server(port: int = 0, wrong_every: int = 0) -> ThreadingHTTPServer:
             chunks, n = reply(body["messages"], body.get("max_tokens") or 16)
             with slots:
                 if not body.get("stream"):
-                    time.sleep(TOKEN_S * n)
-                    return self._json({"choices": [{"message": {"role": "assistant", "content": "".join(chunks)},
+                    time.sleep(STEP_S * n)
+                    text = "".join(chunks if chunks is not None else decode(n))
+                    return self._json({"choices": [{"message": {"role": "assistant", "content": text},
                                                     "finish_reason": "stop"}],
                                        "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": n}})
                 self.send_response(200)
@@ -84,9 +104,13 @@ def make_server(port: int = 0, wrong_every: int = 0) -> ThreadingHTTPServer:
                 self.send_header("Transfer-Encoding", "chunked")
                 self.end_headers()
                 self._chunk({"choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}]})
-                for c in chunks:
-                    time.sleep(TOKEN_S * (n if len(chunks) == 1 else 1))
-                    self._chunk({"choices": [{"index": 0, "delta": {"content": c}}]})
+                if chunks is not None:          # a fixed answer: its whole decode time, then the text
+                    time.sleep(STEP_S * n)
+                    self._chunk({"choices": [{"index": 0, "delta": {"content": "".join(chunks)}}]})
+                else:
+                    for c in decode(n):
+                        time.sleep(STEP_S)
+                        self._chunk({"choices": [{"index": 0, "delta": {"content": c}}]})
                 self._chunk({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
                 self._chunk({"choices": [], "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": n}})
                 self._chunk(b"[DONE]")

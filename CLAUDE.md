@@ -106,7 +106,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
 - `lab/rehearsal.py` — `python -m lab.rehearsal setup DIR`: the whole loop on a laptop, no GPU. A practice engine
   (`lab/rehearsal_server.py` copied into a git repo: fixed decode slots and time per token, one-token words in the
   Qwen3 tokenizer), its target spec, a task, a local store, and reference answers to a synthetic multiple-choice set;
-  the docstring lists the validate and session commands. Run from its own checkout so the ledger is separate.
+  the docstring lists the validate and session commands. Run from its own checkout so the ledger is separate. The
+  practice decoder refolds its state over the whole output every step (the reference keeps it): a real, legitimate
+  fix exists; with only a sleep to cut, the agent refused ("gaming the benchmark"). First rehearsal 2026-10-17:
+  one Sonnet 5.5 session, $0.19, 18 turns, valid, submit improved -85.9% (band 0.9%).
 - `lab/validate.py` — `python -m lab.validate --target T`: serves the target's reference and writes its outputs, judges
   each `[validation]` good/bad launch (good must pass, bad must fail: the gate separates on *this* model and GPU), and
   measures each regime's run-to-run band from repeated reference runs into `noise` ledger records (which

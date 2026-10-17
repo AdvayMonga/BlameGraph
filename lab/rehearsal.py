@@ -2,7 +2,9 @@
 can edit and measure), a target spec for it, a task, and the reference answers equiv compares against.
 
   python -m lab.rehearsal setup DIR
-    DIR/engine/       the practice engine: a git repo (src/inference_server/server.py, tests, ruff config)
+    DIR/engine/       the practice engine: a git repo (src/inference_server/server.py, tests, ruff config), whose decoder
+                      refolds its state over the whole output every step (the reference keeps it): the same words,
+                      slower, so there is something to win
     DIR/reference.py  an unmodified copy of its server: the reference, and validation's known-good/bad launches
     DIR/ref, ref-full the reference's answers to a synthetic multiple-choice set (what equiv compares against)
     DIR/target.toml, DIR/task.toml, DIR/store/ (a local store: the held-out guard, never the real one)
@@ -29,7 +31,18 @@ from lab import engine, rehearsal_server
 
 MODEL = "Qwen/Qwen3-30B-A3B"       # its tokenizer only: nothing loads the weights
 SERVER = Path(__file__).with_name("rehearsal_server.py")
-TESTS = '''from inference_server.server import ANSWER, WORDS, answer
+SLOW_DECODE = '''def decode(n: int):
+    """The next n words: each is chosen by the state folded over every word before it."""
+    out = []
+    for _ in range(n):
+        acc = 0
+        for w in out:
+            acc = _mix(acc, w)
+        w = acc % len(WORDS)
+        out.append(w)
+        yield WORDS[w]
+'''
+TESTS = '''from inference_server.server import ANSWER, WORDS, answer, decode
 
 
 def test_multiple_choice_is_answered_c():
@@ -37,9 +50,11 @@ def test_multiple_choice_is_answered_c():
     assert chunks == [ANSWER] and n == 6
 
 
-def test_other_prompts_stream_one_word_per_token():
+def test_other_prompts_decode_one_word_per_token():
     chunks, n = answer([{"role": "user", "content": "hello"}], 5)
-    assert n == 5 and chunks == WORDS[:5]
+    words = list(decode(40))
+    assert chunks is None and n == 5 and len(words) == 40 and set(words) <= set(WORDS)
+    assert words[:8] == [" the", " in", " the", " it", " it", " to", " for", " in"]
 '''
 
 
@@ -50,7 +65,10 @@ def _git(repo: Path, *args: str) -> None:
 
 def make_engine(dest: Path) -> Path:
     """The practice engine as a one-commit git repo."""
-    files = {"src/inference_server/__init__.py": "", "src/inference_server/server.py": SERVER.read_text(),
+    src = SERVER.read_text()
+    a, b = src.index("# >>> decode\n"), src.index("# <<< decode\n") + len("# <<< decode\n")
+    slow = src[:a] + SLOW_DECODE + src[b:]          # the same words, the state refolded from scratch every step
+    files = {"src/inference_server/__init__.py": "", "src/inference_server/server.py": slow,
              "tests/test_server.py": TESTS, "tests/conftest.py": "import sys\nsys.path.insert(0, 'src')\n",
              "pyproject.toml": "[tool.ruff]\nline-length = 120\n[tool.ruff.lint]\nselect = ['F']\n",
              "README.md": "# practice engine\nA small OpenAI-compatible server for rehearsing the lab's loop.\n",

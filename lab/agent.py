@@ -18,6 +18,9 @@ from lab.safety.hooks import WRITE_TOOLS, write_guard
 
 BUILTIN_TOOLS = ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "WebSearch", "WebFetch"]
 PASS_ENV = ("CLAUDE_CODE_ENTRYPOINT", "CLAUDE_AGENT_SDK_VERSION")       # what the SDK sets for its CLI
+# The CLI asks for 128k output tokens per request by default; the proxy reserves all of them up front, which at
+# claude-fable-5-1's $50/M is $6.40, more than a session's cap. 16k is ~60 kB of output per reply.
+MAX_OUTPUT_TOKENS = 16_000
 SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # What a session says when it ends. `stop` means the agent is done with this run.
 OUTPUT_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["status", "note"],
@@ -97,7 +100,8 @@ def cli_env(home: Path, tmp: Path, ws: Path, base_url: str) -> dict[str, str]:
     return {"HOME": str(home), "CLAUDE_CONFIG_DIR": str(home), "TMPDIR": str(tmp), "PYTHONPATH": str(ws / "src"),
             "PYTHONDONTWRITEBYTECODE": "1", "HF_HUB_CACHE": str(HF_HUB), "HF_HUB_OFFLINE": "1",
             "HF_HOME": str(tmp / "hf-home"), "ANTHROPIC_BASE_URL": base_url,
-            "ANTHROPIC_API_KEY": apiproxy.PLACEHOLDER, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
+            "ANTHROPIC_API_KEY": apiproxy.PLACEHOLDER, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(MAX_OUTPUT_TOKENS)}
 
 
 def workbench_command(name: str, ws: Path, scratch: Path, cli: Path, base_url: str | None = None,

@@ -163,7 +163,9 @@ class Proxy:
         hold = (len(body) * price(model)[0] + max_tokens * price(model)[1]) / 1e6 if metered else 0.0
         with self.lock:
             if metered and self.spent_usd + self.reserved_usd + hold > self.cap_usd:
-                return self._refuse(h, 403, f"this session's ${self.cap_usd:.2f} is spent (or would be by this request)")
+                return self._refuse(h, 403, f"this session's ${self.cap_usd:.2f} is spent (or would be by this request: "
+                                            f"${hold:.2f} reserved for {len(body)} body bytes and max_tokens {max_tokens} "
+                                            f"of {model}; ${self.spent_usd:.2f} spent, ${self.reserved_usd:.2f} in flight)")
             self.reserved_usd += hold
         headers = {k: v for k, v in h.headers.items() if k.lower() not in HOP | {"x-api-key", "authorization"}}
         headers.update(self.auth, host=self.upstream.netloc, **{"accept-encoding": "identity"})
