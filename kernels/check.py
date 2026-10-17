@@ -90,10 +90,12 @@ def _summary(cases) -> tuple[bool, str, dict]:
 
 def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes, dtypes=(torch.float32,),
                  device="cpu", seeds=(0, 1, 2), tolerances=None, edge_shapes=None, require_deterministic=False,
-                 repeats=3, layouts=("strided", "transposed")) -> dict:
+                 repeats=3, layouts=("strided", "transposed"), record=None) -> dict:
     """Return {"passed", "reasons", "gates": {name: {passed, reason, evidence}}} for candidate vs reference.
     make_inputs(shape, dtype, device, generator) -> tuple of tensors; generator is a seeded CPU torch.Generator.
-    `layouts`: the non-contiguous input variants to test, for a kernel whose callers pass such inputs."""
+    `layouts`: the non-contiguous input variants to test, for a kernel whose callers pass such inputs.
+    `record(case, outputs)` is called with each plain case's outputs (inputs straight from make_inputs and the seed),
+    so they can be checked again outside this process (kernels/evolve/verify.py)."""
     tol = {**TOLERANCES, **(tolerances or {})}
     mutated, aliased, nondet = [], [], []
 
@@ -119,6 +121,8 @@ def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes,
             aliased.append(case)
         if any(len(a) != len(first) or not all(torch.equal(_bits(x), _bits(y)) for x, y in zip(a, first)) for a in again):
             nondet.append(case)
+        if record is not None and variant is None:
+            record(case, first)
         return {**case, **_compare(ref, first, atol, rtol)}
 
     def cases(shapes, seeds_, reps=1):
