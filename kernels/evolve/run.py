@@ -2,6 +2,7 @@
                                [--config CONFIG.yaml] [--device cuda] [--initial PROGRAM.py]
 python -m kernels.evolve gate --task T --shapes SHAPES.json --program BEST.py [--device cuda]
 python -m kernels.evolve share --profile BUNDLE      (each task's share of a profiled engine window)
+python -m kernels.evolve initial --task T --engine REPO --ref REF --out P.py   (start from the kernel at an engine commit)
 python -m kernels.evolve ship --task T --program BEST.py --gate GATE.json --engine REPO [--base REF] [--budget USD]
 
 `run` replicates OpenEvolve (AlphaEvolve's open re-implementation) on one kernel task: the starting program is the
@@ -33,6 +34,15 @@ def initial_program(task) -> str:
         return (HERE / "seeds" / f"{task.name}.py").read_text()
     mod, _, attr = task.entry.partition(":")
     src = inspect.getsource(importlib.import_module(mod))
+    return f"# EVOLVE-BLOCK-START\n{src}\n# EVOLVE-BLOCK-END\n\nkernel = {attr}\n"
+
+
+def initial_program_at(task, repo: Path, ref: str) -> str:
+    """The same starting program, from the engine module as it was at `ref` in the engine repo (e.g. the kernel before
+    a change, for an A/B with known headroom). The baseline stays the engine's current kernel."""
+    from kernels.evolve.ship import _git, _module_path
+    mod, _, attr = task.entry.partition(":")
+    src = _git(repo, "show", f"{ref}:{_module_path(repo, _git(repo, 'rev-parse', ref), mod)}")
     return f"# EVOLVE-BLOCK-START\n{src}\n# EVOLVE-BLOCK-END\n\nkernel = {attr}\n"
 
 
@@ -91,6 +101,11 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--captures", action="append")
         p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     sub.add_parser("share").add_argument("--profile", required=True, help="a `profile` bundle dir")
+    ini = sub.add_parser("initial")
+    ini.add_argument("--task", required=True, choices=TASKS)
+    ini.add_argument("--engine", required=True, help="the engine repo")
+    ini.add_argument("--ref", required=True, help="the engine commit whose kernel to start from")
+    ini.add_argument("--out", required=True)
     sh = sub.add_parser("ship")
     sh.add_argument("--task", required=True, choices=TASKS)
     sh.add_argument("--program", required=True)
@@ -116,6 +131,10 @@ def main(argv: list[str] | None = None) -> int:
             from lab import experiment
             out["run"] = experiment.start(Path(a.engine), out["base"], out["branch"], a.budget)
         print(json.dumps(out, indent=1))
+        return 0
+    if a.cmd == "initial":
+        Path(a.out).write_text(initial_program_at(load(a.task), Path(a.engine), a.ref))
+        print(a.out)
         return 0
     if a.cmd == "share":
         from kernels.share import shares

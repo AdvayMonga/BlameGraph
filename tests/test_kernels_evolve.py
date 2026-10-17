@@ -296,6 +296,27 @@ def test_moe_gemm_task_reference_routing_capture_and_judge():
     assert r["metrics"]["correct"] == 1.0, r["artifacts"]
 
 
+def test_the_starting_program_can_come_from_an_older_engine_commit():
+    import dataclasses
+    import subprocess
+    from kernels.evolve.run import initial_program_at
+    with tempfile.TemporaryDirectory() as d:
+        repo = Path(d) / "engine"
+        (repo / "src" / "fake_pkg").mkdir(parents=True)
+        f = repo / "src" / "fake_pkg" / "mod.py"
+        git = lambda *a: subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                                        capture_output=True, text=True, check=True).stdout
+        git("init", "-q")
+        f.write_text("def entry(x):\n    return x  # old\n")
+        git("add", ".")
+        git("commit", "-qm", "old")
+        f.write_text("def entry(x):\n    return x  # new\n")
+        git("commit", "-qam", "new")
+        task = dataclasses.replace(load("toy_rmsnorm"), entry="fake_pkg.mod:entry")
+        prog = initial_program_at(task, repo, "HEAD~1")
+    assert "# old" in prog and "# new" not in prog and prog.rstrip().endswith("kernel = entry")
+
+
 def test_paged_decode_reference_matches_dense_attention():
     t = load("paged_decode")
     shape = (3, 8, 2, 16, 4, 11)
