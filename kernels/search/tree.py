@@ -18,6 +18,8 @@ class Node:
     artifacts: dict
     iteration: int
     proposal: str = ""                       # the model text that produced it (empty for the root)
+    judge: str = ""                          # the judge's plan it was written from (empty without a judge)
+    mode: str = "optimization"               # or "correction": a repair of a failed parent
     children: list[str] = field(default_factory=list)
     failures: int = 0
 

@@ -1,4 +1,4 @@
-"""python -m kernels.evolve.jailed CONFIG.json PROGRAM|- STAGE  (or `- - STAGE`: {config, source} as JSON on stdin)  ->  kernels.evolve.core's JSON, judged in the jail.
+"""python -m kernels.evolve.jailed CONFIG.json PROGRAM|- STAGE (1, 2, or 3: ncu counters)  (or `- - STAGE`: {config, source} as JSON on stdin)  ->  kernels.evolve.core's JSON, judged in the jail.
 
 The candidate runs as agent code (lab/safety/grader.jailed: a container with no network on Linux, srt elsewhere;
 LAB_NO_JAIL=1 waives it). The jail sees a fresh tree holding only the candidate and its config, a read-only copy of
@@ -14,6 +14,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from kernels.evolve import ncu
 from kernels.tasks import load
 from lab import engine
 from lab.safety import grader
@@ -21,6 +22,7 @@ from lab.safety import grader
 ROOT = Path(__file__).resolve().parents[2]
 HARNESS = {"kernels": None, "validity": ("__init__.py", "peaks.py"), "lab": ("__init__.py", "target.py")}
 TIMEOUT_S = float(os.environ.get("KERNEL_EVAL_TIMEOUT_S", "600"))
+NCU_STAGE = 3                    # not a judging stage: ncu counters for a program that passed stage 2 (kernels/evolve/ncu.py)
 
 
 def stage_harness(dest: Path) -> Path:
@@ -56,9 +58,24 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
         (tree / "eval_config.json").write_text(json.dumps(cfg))
         src = _engine_src(load(cfg["task"]))
         path = os.pathsep.join(str(p) for p in (harness, src) if p)
-        p = grader.jailed(tree, [engine.python(), "-m", "kernels.evolve.core", str(tree / "eval_config.json"),
-                                 str(tree / "candidate.py"), str(stage)],
-                          timeout_s=timeout_s, env_extra={"PYTHONPATH": path}, read=[harness] + ([src] if src else []))
+        read = [harness] + ([src] if src else [])
+        if stage == NCU_STAGE:                   # ncu around the probe; its install root mounted read-only
+            exe = shutil.which("ncu")
+            if not exe:
+                return {"metrics": {"stage": stage}, "artifacts": {"ncu_missing": "ncu is not installed here"}}
+            exe = str(Path(exe).resolve())
+            read += [Path(exe).parent, Path(exe).parent.parent] + ([Path("/opt/nvidia")] if Path("/opt/nvidia").exists()
+                                                                   else [])
+            argv = [exe, *ncu.flags(), engine.python(), "-m", "kernels.evolve.ncu", str(tree / "eval_config.json"),
+                    str(tree / "candidate.py")]
+        else:
+            argv = [engine.python(), "-m", "kernels.evolve.core", str(tree / "eval_config.json"),
+                    str(tree / "candidate.py"), str(stage)]
+        p = grader.jailed(tree, argv, timeout_s=timeout_s, env_extra={"PYTHONPATH": path}, read=read)
+    if stage == NCU_STAGE:
+        if p.returncode != 0:
+            return {"metrics": {"stage": stage}, "artifacts": {"ncu_error": (p.stderr or p.stdout)[-2000:]}}
+        return {"metrics": {"stage": stage}, "artifacts": {"ncu": json.dumps(ncu.parse(p.stdout))}}
     lines = [x for x in p.stdout.splitlines() if x.startswith("{")]
     if p.returncode != 0 or not lines:
         return {**fail, "artifacts": {"error": f"evaluation process exited {p.returncode}:\n"
