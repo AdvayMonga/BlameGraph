@@ -142,6 +142,23 @@ def test_with_a_judge_each_step_is_plan_then_code_and_a_failed_child_gets_one_re
     assert cost["usd"] <= 4.0 + 1.5 and cost["model_calls"] == 2 * (len(tree.nodes) - 1)
 
 
+def test_the_search_stops_near_the_roofline_and_states_the_gap():
+    from kernels.search.loop import prompt, search
+    from kernels.search.tree import Node, Tree
+    rows = [{"shape": [1], "weight": 0.75, "pct_of_roofline": 96.0}, {"shape": [2], "weight": 0.25,
+                                                                      "pct_of_roofline": 80.0}]
+    n = Node("a", None, "x = 1\n", {"combined_score": 1.0, "correct": 1.0}, {"timings": json.dumps(rows)}, 0)
+    assert abs(n.pct_of_roofline - 92.0) < 1e-9
+    t = Tree()
+    t.add(n)
+    assert "92.0% of its roofline bound" in prompt(t, n)
+    judge = lambda code: {"metrics": n.metrics, "artifacts": n.artifacts}
+    never = lambda system, user: (_ for _ in ()).throw(AssertionError("no model call near the roofline"))
+    with tempfile.TemporaryDirectory() as d:
+        _, cost = search("x = 1\n", "S", never, judge, Path(d), evals=5, usd=1.0, stop_pct=90.0)
+    assert cost["stopped_near_roofline"] and cost["model_calls"] == 0
+
+
 def test_ncu_counters_parse_and_a_host_without_ncu_says_so():
     from kernels.evolve import jailed, ncu
     from kernels.search.loop import cascade, facts

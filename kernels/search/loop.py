@@ -79,7 +79,8 @@ def prompt(tree: Tree, node: Node, plan: str = "", coder: bool = True) -> str:
     tried = [tree.nodes[c] for c in node.children]
     kids = "\n".join(f"- {c.id}: score {c.score:.4f}" + (f", {c.artifacts.get('error', '')[:300]}"
                                                           if c.score <= 0 else "") for c in tried) or "none"
-    return (f"# Program {node.id} (score {node.score:.4f}; best in the tree {tree.best().score:.4f})\n"
+    sol = f"; {node.pct_of_roofline:.1f}% of its roofline bound, call-weighted" if node.pct_of_roofline else ""
+    return (f"# Program {node.id} (score {node.score:.4f}{sol}; best in the tree {tree.best().score:.4f})\n"
             f"```python\n{node.code}\n```\n\n# Its measurements\n{facts(node)}\n\n"
             f"# Lineage (node, score)\n{path}\n\n# Programs already derived from it\n{kids}\n\n"
             + (f"# The change to make (from the judge)\n{plan}\n\n" if plan else "") + (FORMAT if coder else ""))
@@ -106,8 +107,11 @@ def cascade(judge_stage: Callable[[str, int], dict], counters: bool = False) -> 
 
 def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, float]],
            judge: Callable[[str], dict], out: Path, evals: int, usd: float, seed: int = 0,
-           review: Callable[[str, str], tuple[str, float]] | None = None) -> tuple[Tree, dict]:
-    """Search until `evals` programs are judged, `usd` is spent on model calls, or nothing is left to try.
+           review: Callable[[str, str], tuple[str, float]] | None = None,
+           stop_pct: float | None = None) -> tuple[Tree, dict]:
+    """Search until `evals` programs are judged, `usd` is spent on model calls, nothing is left to try, or the best
+    program is within `stop_pct`% of its roofline bound (Hari et al.: stopping near speed-of-light kept >= 95% of the
+    gain for 19-43% fewer tokens).
     `propose` is the coder, `review` the judge (None: the coder alone). Returns the tree and the run's cost
     {usd, model_calls, evals}."""
     out.mkdir(parents=True, exist_ok=True)
@@ -124,6 +128,8 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
         judged += 1
         keep(Node(uuid.uuid4().hex[:8], None, initial, r["metrics"], r["artifacts"], 0), 0.0)
         while judged < evals and spent < usd:
+            if stop_pct and (tree.best().pct_of_roofline or 0) >= stop_pct:
+                break
             if review and repairs:
                 parent, mode = tree.nodes[repairs.pop(0)], "correction"
             else:
@@ -150,4 +156,5 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
             keep(child, cost)
             if child.score <= 0 and mode == "optimization":
                 repairs.append(child.id)         # one repair per failed child
-    return tree, {"usd": round(spent, 4), "model_calls": calls, "evals": judged}
+    near = bool(stop_pct and (tree.best().pct_of_roofline or 0) >= stop_pct)
+    return tree, {"usd": round(spent, 4), "model_calls": calls, "evals": judged, "stopped_near_roofline": near}

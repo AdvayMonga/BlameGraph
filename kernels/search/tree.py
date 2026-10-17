@@ -27,6 +27,14 @@ class Node:
     def score(self) -> float:
         return float(self.metrics.get("combined_score") or 0.0)
 
+    @property
+    def pct_of_roofline(self) -> float | None:
+        """Call-weighted % of the roofline bound over the seen shapes it was timed on (None if untimed)."""
+        import json
+        rows = [r for r in json.loads(self.artifacts.get("timings") or "[]") if r.get("pct_of_roofline") is not None]
+        w = sum(r.get("weight") or 0 for r in rows)
+        return sum((r.get("weight") or 0) * r["pct_of_roofline"] for r in rows) / w if rows and w else None
+
 
 def fingerprint(code: str) -> str:
     """Hash of the program with comments and whitespace removed: two proposals that differ only there are one."""

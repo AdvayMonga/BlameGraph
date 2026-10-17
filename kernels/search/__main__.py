@@ -68,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--retime", type=int, default=3)
     ap.add_argument("--tune-points", type=int, default=16, help="grid points tried on the winner's TUNABLES; 0: none")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--stop-pct", type=float, default=90.0, help="stop once the best is at this %% of its roofline")
     a = ap.parse_args(argv)
     a.ncu = a.device.startswith("cuda") if a.ncu is None else a.ncu
     task = load(a.task)
@@ -78,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     judge = cascade(evaluator.judge_stage, counters=a.ncu)
     system = system_message(task) + ("\n\n" + TUNE_FACT if a.tune_points else "")
     tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.usd, a.seed,
-                        review=review)
+                        review=review, stop_pct=a.stop_pct or None)
     code, metrics, retimed = retime(out / "trace.jsonl", a.retime) if a.retime else (None, None, [])
     best = tree.best()
     code, metrics, tuned = _tune(code or best.code, metrics or best.metrics, judge, a.tune_points)
