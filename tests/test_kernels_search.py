@@ -565,6 +565,9 @@ def test_the_claude_client_streams_with_effort_and_fallbacks_and_prices_the_call
     c.model = "claude-haiku-4-5"
     c("sys", "user")
     assert "output_config" not in seen and "fallbacks" not in seen
+    from types import SimpleNamespace as NS
+    dated = NS(model="claude-haiku-4-5-20251001", usage=NS(model_dump=lambda: {"input_tokens": 1_000_000}))
+    assert abs(c._usd(dated) - 1.0) < 1e-9                          # priced as claude-haiku-4-5 ($1/MTok in)
 
 
 if __name__ == "__main__":

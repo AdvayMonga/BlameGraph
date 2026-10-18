@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from lab.apiproxy import cost_usd
+from lab.apiproxy import cost_usd, price
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 WEB_SEARCH_USD = 0.01
@@ -53,7 +53,7 @@ class Claude:
     def _usd(self, m) -> float:
         u = m.usage.model_dump()
         web = ((u.get("server_tool_use") or {}).get("web_search_requests") or 0) * WEB_SEARCH_USD
-        return cost_usd(m.model, u) + web
+        return cost_usd(m.model if price(m.model) else self.model, u) + web      # a dated id prices as its model
 
     def __call__(self, system: str, user: str) -> tuple[str, float]:
         """(the final response's text, the cost of every turn in $); a refused request returns no text."""
