@@ -23,7 +23,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from lab import artifacts, calibrate, ledger, profiles, serve, target, worker
+from lab import artifacts, calibrate, engine, ledger, profiles, serve, target, worker
 from validity.holdout import HoldoutGuard, Refused
 
 HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT = 100, 2.0, 0.5
@@ -69,16 +69,18 @@ def headline(results: list[dict]) -> dict:
     return out
 
 
-def noise_band_pct(regime: str, t: target.Target | None = None, root: Path = ledger.ROOT) -> float | None:
+def noise_band_pct(regime: str, t: target.Target | None = None, root: Path = ledger.ROOT,
+                   commit: str | None = None) -> float | None:
     """The latest run-to-run band for a regime from the ledger's `noise` records, only if it was measured on this
-    target's engine (a band from another engine or model says nothing about this one)."""
+    target's engine and, with `commit`, at that engine commit (a band from another engine, model or engine version
+    says nothing about this one)."""
     d = None
     for r in ledger.records(root, kind="noise"):
-        if r["result"].get("regime") == regime:
-            d = r["result"]
-    if d is None or (t is not None and (d.get("target") != t.name or d.get("server") != "engine")):
-        return None
-    return d.get("band_pct")
+        x = r["result"]
+        if (x.get("regime") == regime and (t is None or (x.get("target") == t.name and x.get("server") == "engine"))
+                and (commit is None or x.get("engine_commit") == commit)):
+            d = x
+    return None if d is None else d.get("band_pct")
 
 
 def delta_pct(base: dict, new: dict) -> float | None:
@@ -115,7 +117,7 @@ def heldout_context(seen_cal: dict, base: dict, delta: float | None, better: str
             "reference_missing": "the reference is measured on the seen split at tier short; this is held-out at tier full"}
 
 
-def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
+def harness_facts(t: target.Target, ledger_root: Path | None = None, commit: str | None = None) -> dict:
     """What the referee measures against: the parameters the agent cannot read off its ledger. Facts, not advice."""
     from regimes import suite
     from regimes.workload import corpus_version
@@ -127,9 +129,11 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
         "correctness": {"policy": f"pooled task score >= {t.min_score_ratio} of the reference, length >= {t.min_length_ratio}, "
                         f"consistent streams; under the line fails only when the net loss is significant",
                         "tasks": list(t.tasks)},
-        "noise_bands_pct": {n: noise_band_pct(n, root=ledger_root or ledger.ROOT) for n in suite.REGIMES},
+        "noise_bands_pct": {n: noise_band_pct(n, t, ledger_root or ledger.ROOT, commit) for n in suite.REGIMES},
         "noise_bands_measured_on": "the base commit's engine with its general config, repeated unchanged runs "
-                                   "(lab.validate); submit applies them to every candidate and every launch profile",
+                                   "(lab.validate); submit applies them to every candidate and every launch profile; "
+                                   "None where no band was measured at this engine commit",
+        "noise_bands_engine_commit": commit,
         "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,
         "ceilings": _ceiling_facts(t, ledger_root),
     }
@@ -338,7 +342,7 @@ class EvalTools:
                 # with the seen one. Without a seen delta to compare, nothing held-out is reported at all.
                 held_d = guard.query(seen_d, held_d)["value"] if held_d is not None and seen_d is not None else None
                 better[n] = new[n].get("better", "higher")
-                metrics[n] = {**aggregate(base.get(n, {}), held_d, better[n], noise_band_pct(n, t, self.s.ledger_root)),
+                metrics[n] = {**aggregate(base.get(n, {}), held_d, better[n], noise_band_pct(n, t, self.s.ledger_root, engine.commit(self.s.workspace.repo, self.s.workspace.base))),
                               **heldout_context(seen_cal.get(n) or {}, base.get(n, {}), held_d, better[n])}
         except Refused as e:
             self._record("submit", "submit", args, {"verdict": "refused", "reason": str(e)}, snap)

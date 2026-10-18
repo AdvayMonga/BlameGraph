@@ -58,3 +58,14 @@ def test_budget_resumes_from_the_ledger(tmp_path):
     ledger.append({"kind": "test", "run": "r1", "cost": {"usd": 0.25}}, root)
     ledger.append({"kind": "test", "run": "r2", "cost": {"usd": 9.0}}, root)
     assert Budget.resume(2.0, "r1", root).spent_usd == pytest.approx(0.75)
+
+
+def test_engine_commit_is_none_for_a_dirty_tree_when_asked(tmp_path):
+    from lab import engine
+    from tests.lab_fixtures import make_repo
+    repo = make_repo(tmp_path)
+    head = engine.commit(repo)
+    assert len(head) == 40 and engine.commit(repo, clean=True) == head
+    (repo / "README.md").write_text("changed\n")
+    assert engine.commit(repo, clean=True) is None and engine.commit(repo) == head
+    assert engine.commit(tmp_path / "nowhere") is None

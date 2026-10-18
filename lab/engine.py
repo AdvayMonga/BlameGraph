@@ -3,6 +3,7 @@ is exported from it) and the Python that runs its code. The environment never im
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -42,3 +43,16 @@ def python() -> str:
 def venv(py: str | None = None) -> Path:
     """The prefix the jail must let `py` read: its venv dir (bin/python -> two levels up)."""
     return Path(py or python()).parent.parent
+
+
+def commit(repo: Path, ref: str = "HEAD", clean: bool = False) -> str | None:
+    """`ref` as a commit sha in the engine repo; with `clean`, None when the working tree has uncommitted changes
+    (a measurement of that tree belongs to no commit)."""
+    def git(*a):
+        return subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True, check=True).stdout.strip()
+    try:
+        if clean and git("status", "--porcelain", "--untracked-files=no"):
+            return None
+        return git("rev-parse", ref)
+    except (OSError, subprocess.CalledProcessError):
+        return None

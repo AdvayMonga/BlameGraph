@@ -75,4 +75,5 @@ def test_validate_separates_and_measures_bands(spec, tmp_path, monkeypatch):
     noise = rec["result"]
     assert noise["runs"] == 2 and noise["band_pct"] is not None and rep["bands_measured"] is True
     assert noise["server"] == "engine" and noise["target"] == spec.name
+    assert "engine_commit" in noise and noise["engine_commit"] is None     # this engine dir is no git repo
     assert (tmp_path / "ref" / "outputs.jsonl").exists() and (tmp_path / "out" / "report.json").exists()
