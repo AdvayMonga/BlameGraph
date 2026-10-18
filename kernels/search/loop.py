@@ -244,10 +244,11 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
             measured = []
             for i, random_pick in choose(scores, beam, explore, tree.rng):
                 child = attempt(parent, json.dumps(hs[i]), "optimization", cost if not measured else 0.0)
-                if child is not None:
-                    measured.append({"index": i, "random": random_pick, "child_id": child.id})
-            hyplog.write(json.dumps({"iteration": it, "parent_id": parent.id, "hypotheses": hs, "roi": ranks,
-                                     "scores": scores, "measured": measured}) + "\n")
+                if child is not None:                # the label: did it beat its parent? (scores already count
+                    measured.append({"index": i, "random": random_pick, "child_id": child.id,   # noise as 1.0)
+                                     "child_score": child.score, "improved": child.score > parent.score})
+            hyplog.write(json.dumps({"iteration": it, "parent_id": parent.id, "parent_score": parent.score,
+                                     "hypotheses": hs, "roi": ranks, "scores": scores, "measured": measured}) + "\n")
             hyplog.flush()
     near = bool(stop_pct and (tree.best().pct_of_roofline or 0) >= stop_pct)
     stalled = bool(patience and not near and judged < evals and spent < usd and judged - best_at >= patience)

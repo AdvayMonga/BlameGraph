@@ -225,8 +225,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   alpha = 0.5, KernelPro), a node closed after 3 failed children, the model shown only the
   parent program, its measurements and its lineage, SEARCH/REPLACE answers, duplicates refused before any GPU time,
   with a judge (default) each step is two calls,
-  the judge (Opus 5.5) naming 16 changes as JSON with its own speedup and risk estimates, ranked by
-  MANTIS's ROI (or a `screen`), the top 3 plus 1 random written and judged (`--hypotheses/--beam/--explore`; every
+  the judge (Opus 5.5) naming 16 changes as JSON with its own speedup and risk estimates, scored by a
+  System-1 screener (`kernels/search/screen.py`, `--screen haiku` default: Claude Haiku 4.5's probability of beating
+  the parent; `roi` = MANTIS's ROI; `random`; a learned local classifier replaces it once the random picks have
+  labelled a few hundred), the top 3 plus 1 random written and judged (`--hypotheses/--beam/--explore`; every
   hypothesis and its fate in `hypotheses.jsonl`), from the facts, including CudaForge's 24 ncu counters
   (`kernels/evolve/ncu.py`, stage 3 of the jailed evaluator), and the coder writing it; a failed child is repaired in
   correction mode, chained up to 3 deep; launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen afterwards by a grid

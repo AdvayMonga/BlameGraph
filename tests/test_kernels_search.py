@@ -390,6 +390,42 @@ def test_regions_pick_a_config_per_size_and_the_dispatcher_sets_it_per_call():
                                            "silu_mul", "topk_softmax"))
 
 
+def test_screeners_score_hypotheses_and_the_log_keeps_labels():
+    from kernels.search import screen
+    from kernels.search.loop import search
+    hs = [{"modification_plan": "a", "expected_speedup": 1.5}, {"modification_plan": "b", "expected_speedup": 1.1}]
+    assert screen.parse("ok: [0.2, 1.7]", 2) == [0.2, 1.0] and screen.parse("[0.1]", 2) is None
+    seen = {}
+    fake = lambda system, user: seen.update(system=system, user=user) or ("[0.1, 0.9]", 0.002)      # noqa: E731
+    scores, usd = screen.haiku(fake)("TASK FACTS", "PROGRAM AND MEASUREMENTS", hs)
+    assert scores == [0.1, 0.9] and usd == 0.002 and "PROGRAM AND MEASUREMENTS" in seen["user"]
+    assert '1. {"modification_plan": "b"' in seen["user"] and "probability" in seen["system"]
+    scores, _ = screen.haiku(lambda s, u: ("no idea", 0.0))("S", "F", hs)
+    assert scores[0] > scores[1]                                   # unparsable: MANTIS ROI order instead
+    assert screen.make("roi") is None and len(screen.make("random")("S", "F", hs)[0]) == 2
+
+    def review(system, user):
+        return json.dumps([{"modification_plan": f"set x = {v}", "expected_speedup": 1.0} for v in (2, 3, 4)]), 0.0
+
+    def propose(system, user):
+        v = re.search(r"set x = (\d+)", user).group(1)
+        return f"<<<<<<< SEARCH\nx = 1\n=======\nx = {v}\n>>>>>>> REPLACE", 0.0
+
+    def judge(code):
+        x = int(code.split("=")[1])
+        return {"metrics": {"combined_score": {1: 1.0, 2: 0.9, 3: 1.4, 4: 1.2}[x], "correct": 1.0, "stage": 2},
+                "artifacts": {}}
+
+    pick_third = lambda system, facts, hs: ([0.0, 0.1, 0.9][: len(hs)], 0.01)                          # noqa: E731
+    with tempfile.TemporaryDirectory() as d:
+        tree, cost = search("x = 1\n", "S", propose, judge, Path(d), evals=2, usd=1.0, review=review, beam=1,
+                            explore=0, screen=pick_third)
+        row = json.loads((Path(d) / "hypotheses.jsonl").read_text().splitlines()[0])
+    assert row["measured"] == [{"index": 2, "random": False, "child_id": row["measured"][0]["child_id"],
+                                "child_score": 1.2, "improved": True}] and row["parent_score"] == 1.0
+    assert row["scores"] == [0.0, 0.1, 0.9] and cost["usd"] == 0.01
+
+
 def test_the_claude_client_streams_with_effort_and_fallbacks_and_prices_the_call():
     from types import SimpleNamespace
     from kernels.search.llm import FALLBACK_BETA, Claude
