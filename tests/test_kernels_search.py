@@ -8,6 +8,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -315,9 +316,17 @@ def test_the_ab_harness_runs_both_arms_and_gates_each_winner_on_held_out_shapes(
             assert ab.main(["--task", t.name, "--shapes", str(shapes), "--out", str(Path(d) / "ab"), "--device", "cpu",
                             "--evals", "2", "--arms", "openevolve,kernels.search"]) == 0
             rows = json.loads((Path(d) / "ab" / "ab.json").read_text())
+            ab.ARMS.update({"openevolve": None, "kernels.search": None})      # finished arms are reused, not rerun
+            env = {"KERNEL_EVAL_SSH": json.dumps(["sh", "-c"]),                  # the gate over a stand-in for ssh
+                   "KERNEL_EVAL_REMOTE": f"cd {Path(__file__).parent.parent} && PATH={Path(sys.executable).parent}:$PATH"}
+            with mock.patch.dict(os.environ, env):
+                assert ab.main(["--task", t.name, "--shapes", str(shapes), "--out", str(Path(d) / "ab"),
+                                "--device", "cpu", "--evals", "2", "--arms", "openevolve,kernels.search"]) == 0
+            again = json.loads((Path(d) / "ab" / "ab.json").read_text())
     finally:
         ab.ARMS.clear()
         ab.ARMS.update(saved)
+    assert [r["seen_score"] > 0 and r["gates_passed"] for r in again] == [True, True]
     by = {r["arm"]: r for r in rows}
     assert set(by) == {"openevolve", "kernels.search"} and all(r["gates_passed"] for r in rows)
     assert by["kernels.search"]["seen_score"] > 3 * by["openevolve"]["seen_score"]    # rsqrt vs the naive row loop
