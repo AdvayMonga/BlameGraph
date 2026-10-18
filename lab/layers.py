@@ -93,7 +93,7 @@ def from_bundle(bundle: str | Path, t=None, gpu: dict | None = None, gates: dict
                     "basis": "CUDA kernel time (kernels.json) / window"},
         "model_execution": {"share": share(max(0.0, prefill_s + decode_s - (kernel_s or 0.0))) if kernel_s is not None else None,
                             "prefill_phase_s": prefill_s, "decode_phase_s": decode_s, "decode_steps": n_decode,
-                            "decode_step_mean_s": decode_s / n_decode if n_decode else None,
+                            "decode_step_mean_s": decode_s / n_decode if n_decode and decode_s else None,
                             "basis": "prefill + decode phase wall time beyond kernel time: launches, framework, sampling"},
         "runtime": {"share": share(admin_s), "admit_evict_s": admin_s,
                     "gpu_idle_share": None if kernel_s is None else max(0.0, 1 - kernel_s / w),
