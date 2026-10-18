@@ -1,7 +1,7 @@
 """python -m kernels.evolve run --task T [--shapes SHAPES.json | --captures DIR ...] --out DIR [--iterations N]
                                [--config CONFIG.yaml] [--device cuda] [--initial PROGRAM.py]
 python -m kernels.evolve gate --task T --shapes SHAPES.json --program BEST.py [--device cuda]
-python -m kernels.evolve share --profile BUNDLE      (each task's share of a profiled engine window)
+python -m kernels.evolve share --profile BUNDLE [--profile ...] [--gate TASK=GATE.json ...]   (tasks ranked by headroom)
 python -m kernels.evolve initial --task T --engine REPO --ref REF --out P.py   (start from the kernel at an engine commit)
 python -m kernels.evolve ship --task T --program BEST.py --gate GATE.json --engine REPO [--base REF] [--budget USD]
 
@@ -100,7 +100,9 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--shapes")
         p.add_argument("--captures", action="append")
         p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    sub.add_parser("share").add_argument("--profile", required=True, help="a `profile` bundle dir")
+    shp = sub.add_parser("share")
+    shp.add_argument("--profile", action="append", required=True, help="a `profile` bundle dir (repeat per class)")
+    shp.add_argument("--gate", action="append", default=[], help="TASK=GATE.json: the engine kernel's gate result")
     ini = sub.add_parser("initial")
     ini.add_argument("--task", required=True, choices=TASKS)
     ini.add_argument("--engine", required=True, help="the engine repo")
@@ -137,8 +139,9 @@ def main(argv: list[str] | None = None) -> int:
         print(a.out)
         return 0
     if a.cmd == "share":
-        from kernels.share import shares
-        print(json.dumps(shares(Path(a.profile), [load(n) for n in TASKS]), indent=1))
+        from kernels.share import rank
+        gates = {k: json.loads(Path(v).read_text()) for k, v in (g.split("=", 1) for g in a.gate)}
+        print(json.dumps(rank([Path(p) for p in a.profile], [load(n) for n in TASKS], gates), indent=1))
         return 0
     task = load(a.task)
     sets = _shapes(task, a)

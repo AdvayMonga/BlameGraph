@@ -30,7 +30,7 @@ new lines
 >>>>>>> REPLACE"""
 
 TIMING_KEYS = ("shape", "candidate_ms", "baseline_ms", "speedup", "speedup_p25", "speedup_p75", "beyond_noise",
-               "pct_of_roofline")
+               "pct_of_roofline", "bound", "pct_of_peak_bandwidth", "pct_of_peak_flops")
 
 
 JUDGE = """You are the judge in a search over GPU kernel programs. You are shown one program and its measurements;
@@ -48,7 +48,14 @@ def ncu_facts(node: Node) -> str:
     """The top kernels of one call with CudaForge's 24 counters, or why there are none."""
     a = node.artifacts
     if a.get("ncu"):
-        return "\n".join(json.dumps(k) for k in json.loads(a["ncu"]).get("kernels", [])) or "none recorded"
+        d = json.loads(a["ncu"])
+        per = d.get("shapes") or [{"shape": None, **d}]
+        lines = []
+        for p in per:
+            head = f"shape {p['shape']}: " if p.get("shape") is not None else ""
+            ks = p.get("kernels") or []
+            lines += [head + json.dumps(k) for k in ks] or [head + (p.get("error") or "none recorded")]
+        return "\n".join(lines)
     if a.get("ncu_missing"):
         return a["ncu_missing"]
     return "ncu failed: " + a["ncu_error"][-300:] if a.get("ncu_error") else ""
@@ -70,7 +77,8 @@ def facts(node: Node) -> str:
     if a.get("error_vs_reference"):
         out.append(f"error against the reference: {a['error_vs_reference']}")
     if ncu_facts(node):
-        out.append("ncu counters (one call, most-called seen shape, longest kernels first):\n" + ncu_facts(node))
+        out.append("ncu counters (one call each on the smallest and the largest seen shape, longest kernels first):\n"
+                   + ncu_facts(node))
     return "\n".join(out)
 
 
@@ -108,10 +116,11 @@ def cascade(judge_stage: Callable[[str, int], dict], counters: bool = False) -> 
 def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, float]],
            judge: Callable[[str], dict], out: Path, evals: int, usd: float, seed: int = 0,
            review: Callable[[str, str], tuple[str, float]] | None = None,
-           stop_pct: float | None = None) -> tuple[Tree, dict]:
+           stop_pct: float | None = None, patience: int | None = None) -> tuple[Tree, dict]:
     """Search until `evals` programs are judged, `usd` is spent on model calls, nothing is left to try, or the best
-    program is within `stop_pct`% of its roofline bound (Hari et al.: stopping near speed-of-light kept >= 95% of the
-    gain for 19-43% fewer tokens).
+    program reaches `stop_pct`% of its roofline bound, or `patience` programs have been judged since the best last
+    improved (MANTIS, Hari et al.: within 25% of speed-of-light or 16 attempts without progress kept 96% of the geomean
+    gain for 33% fewer tokens).
     `propose` is the coder, `review` the judge (None: the coder alone). Returns the tree and the run's cost
     {usd, model_calls, evals}."""
     out.mkdir(parents=True, exist_ok=True)
@@ -127,8 +136,13 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
         r = judge(initial)
         judged += 1
         keep(Node(uuid.uuid4().hex[:8], None, initial, r["metrics"], r["artifacts"], 0), 0.0)
+        best_at, best_score = judged, tree.best().score
         while judged < evals and spent < usd:
             if stop_pct and (tree.best().pct_of_roofline or 0) >= stop_pct:
+                break
+            if tree.best().score > best_score:
+                best_at, best_score = judged, tree.best().score
+            if patience and judged - best_at >= patience:
                 break
             if review and repairs:
                 parent, mode = tree.nodes[repairs.pop(0)], "correction"
@@ -157,4 +171,6 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
             if child.score <= 0 and mode == "optimization":
                 repairs.append(child.id)         # one repair per failed child
     near = bool(stop_pct and (tree.best().pct_of_roofline or 0) >= stop_pct)
-    return tree, {"usd": round(spent, 4), "model_calls": calls, "evals": judged, "stopped_near_roofline": near}
+    stalled = bool(patience and not near and judged < evals and spent < usd and judged - best_at >= patience)
+    return tree, {"usd": round(spent, 4), "model_calls": calls, "evals": judged, "stopped_near_roofline": near,
+                  "stopped_no_progress": stalled}

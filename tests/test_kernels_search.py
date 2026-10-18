@@ -159,6 +159,49 @@ def test_the_search_stops_near_the_roofline_and_states_the_gap():
     assert cost["stopped_near_roofline"] and cost["model_calls"] == 0
 
 
+def test_diagnosis_facts_bound_type_two_shape_counters_ranking_and_patience():
+    from types import SimpleNamespace
+    import torch
+    from kernels.evolve.core import _roofline
+    from kernels.search.loop import ncu_facts, search
+    from kernels.search.tree import Node
+    from kernels.share import rank
+    from kernels.tasks import load
+    t = load("toy_rmsnorm")                     # 4 FLOPs and ~8 bytes per element: memory-bound on any GPU
+    hw = SimpleNamespace(bf16_flops=1e15, bw_bytes_s=4e12)
+    x = t.make_inputs((1024, 4096), torch.float32, "cpu", torch.Generator().manual_seed(0))
+    r = _roofline(t, (1024, 4096), torch.float32, 0.05, hw, [x])
+    assert r["bound"] == "memory" and abs(r["pct_of_roofline"] - r["pct_of_peak_bandwidth"]) < 1e-9
+    assert r["pct_of_peak_flops"] < r["pct_of_peak_bandwidth"] and _roofline(t, (8, 8), torch.float32, 1.0, None,
+                                                                             [x]) == {"pct_of_roofline": None}
+    two = {"shapes": [{"shape": [1, 256], "kernels": [{"name": "k_small"}]},
+                      {"shape": [512, 256], "kernels": [{"name": "k_big"}]}]}
+    f = ncu_facts(Node("n", None, "", {}, {"ncu": json.dumps(two)}, 0))
+    assert "shape [1, 256]" in f and "k_big" in f
+    with tempfile.TemporaryDirectory() as d:
+        bundles = []
+        for i, dur in enumerate((200_000.0, 100_000.0)):
+            b = Path(d) / f"b{i}"
+            b.mkdir()
+            (b / "meta.json").write_text(json.dumps({"window": {"wall_s": 1.0}}))
+            (b / "kernels.json").write_text(json.dumps({"kernels": [
+                {"name": "_moe_gemm_kernel", "count": 1, "total_us": dur},
+                {"name": "_gqa_decode_splitk_kernel", "count": 1, "total_us": 100_000.0}]}))
+            bundles.append(b)
+        gate = {"artifacts": {"timings": json.dumps([{"weight": 1.0, "pct_of_roofline": 90.0}])}}
+        out = rank(bundles, [load("moe_gemm"), load("paged_decode")], {"paged_decode": gate})
+    moe, pd = (next(r for r in out["tasks"] if r["task"] == n) for n in ("moe_gemm", "paged_decode"))
+    assert moe["share_by_profile"] == [0.2, 0.1] and abs(moe["share"] - 0.15) < 1e-9 and moe["gain_at_roofline"] is None
+    assert abs(pd["gain_at_roofline"] - 0.1 * 0.1) < 1e-9 and pd["pct_of_roofline"] == 90.0
+    flat = {"metrics": {"combined_score": 1.0, "correct": 1.0}, "artifacts": {}}
+    n = iter(range(100))
+    with tempfile.TemporaryDirectory() as d:
+        _, cost = search("x = 0\n", "S", lambda s, u: (f"<<<<<<< SEARCH\nx = 0\n=======\nx = {next(n) + 1}\n>>>>>>> "
+                                                       "REPLACE", 0.0), lambda code: flat, Path(d), evals=50, usd=1.0,
+                         patience=3)
+    assert cost["stopped_no_progress"] and cost["evals"] <= 5                # no score ever beats the root's
+
+
 def test_ncu_counters_parse_and_a_host_without_ncu_says_so():
     from kernels.evolve import jailed, ncu
     from kernels.search.loop import cascade, facts

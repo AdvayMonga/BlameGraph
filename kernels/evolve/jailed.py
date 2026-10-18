@@ -50,7 +50,19 @@ def _engine_src(task) -> Path | None:
 
 
 def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_S) -> dict:
-    """core's result for `source` under `cfg`, from a jailed process; a crash or timeout scores 0 with its output."""
+    """core's result for `source` under `cfg`, from a jailed process; a crash or timeout scores 0 with its output.
+    Stage 3 (ncu) profiles the smallest and the largest seen shape (by their first axis), each in its own jail:
+    a batch of 1 and a batch of 512 rarely share a bottleneck."""
+    if stage == NCU_STAGE and not cfg.get("_ncu_one"):
+        seen = sorted(cfg["seen"], key=lambda s: s[0])
+        out = []
+        for shape in [seen[0]] + ([seen[-1]] if seen[-1] != seen[0] else []):
+            a = judge_jailed({**cfg, "seen": [shape], "_ncu_one": True}, source, stage, timeout_s)["artifacts"]
+            if "ncu_missing" in a:
+                return {"metrics": {"stage": stage}, "artifacts": a}
+            out.append({"shape": shape, **(json.loads(a["ncu"]) if "ncu" in a else
+                                           {"error": a.get("ncu_error", "")[-500:]})})
+        return {"metrics": {"stage": stage}, "artifacts": {"ncu": json.dumps({"shapes": out})}}
     fail = {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage}}
     with tempfile.TemporaryDirectory(prefix="kernel-eval-") as d:
         tree, harness = Path(d, "tree"), stage_harness(Path(d, "harness"))
