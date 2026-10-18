@@ -20,18 +20,27 @@ from kernels.search.loop import roi
 HAIKU = """You score proposed changes to a GPU kernel program before any code is written. You are shown the program,
 its measurements and a numbered list of proposed changes. For each, give the probability (0 to 1) that a program
 written from it will be correct and faster than this one beyond the timer's noise. Reply with one JSON array of
-numbers, one per change, in order, and nothing else."""
+exactly {n} numbers, one per change in the order listed (the last change included), and nothing else."""
 
 
-def parse(text: str, n: int) -> list[float] | None:
-    """The first flat array of exactly n numbers anywhere in the reply (prose and other brackets around it ignored)."""
+def parse(text: str, n: int) -> tuple[list[float], bool] | None:
+    """The first flat array of n numbers anywhere in the reply (prose and other brackets around it ignored), or of
+    n - 1 padded with their median (Haiku 4.5 left out the last, appended, hypothesis in the 2026-10-18 A/B); the flag
+    says whether it was padded."""
+    arrays = []
     for m in re.findall(r"\[[^\[\]]*\]", text or ""):
         try:
             v = json.loads(m)
-            if isinstance(v, list) and len(v) == n:
-                return [min(max(float(x), 0.0), 1.0) for x in v]
+            if isinstance(v, list) and len(v) in (n, n - 1) and n > 1:
+                arrays.append([min(max(float(x), 0.0), 1.0) for x in v])
         except (json.JSONDecodeError, TypeError, ValueError):
             continue
+    exact = [a for a in arrays if len(a) == n]
+    if exact:
+        return exact[0], False
+    if arrays:
+        a = arrays[0]
+        return a + [sorted(a)[len(a) // 2]], True
     return None
 
 
@@ -39,12 +48,12 @@ def haiku(call: Callable[[str, str], tuple[str, float]]):
     """A screener over `call` (a Claude client: (system, user) -> (text, $)); unparsable replies fall back to ROI order."""
     def screen(system: str, facts: str, hs: list[dict]) -> tuple[list[float], float]:
         listing = "\n".join(f"{i}. {json.dumps(h)}" for i, h in enumerate(hs))
-        text, usd = call(system + "\n\n" + HAIKU, f"{facts}\n\n# Proposed changes\n{listing}")
-        scores = parse(text, len(hs))
-        screen.last = {"reply": text, "parsed": scores is not None}      # kept in hypotheses.jsonl beside the scores
-        if scores is None:                       # no usable scores: the published triage instead
+        text, usd = call(system + "\n\n" + HAIKU.format(n=len(hs)), f"{facts}\n\n# Proposed changes\n{listing}")
+        got = parse(text, len(hs))
+        screen.last = {"reply": text, "parsed": got is not None, "padded": bool(got and got[1])}   # in hypotheses.jsonl
+        if got is None:                          # no usable scores: the published triage instead
             return [roi(h, None) for h in hs], usd
-        return scores, usd
+        return got[0], usd
     return screen
 
 
