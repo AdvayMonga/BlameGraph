@@ -17,6 +17,7 @@ os.environ.setdefault("LAB_NO_JAIL", "1")
 
 from kernels.search import diff  # noqa: E402
 from kernels.search.tree import Node, Tree, fingerprint  # noqa: E402
+import re  # noqa: E402
 
 SEED = ROOT / "kernels" / "evolve" / "seeds" / "toy_rmsnorm.py"
 LOOP = '''    out = torch.empty_like(x)
@@ -47,16 +48,23 @@ def test_diff_applies_exact_blocks_and_refuses_the_rest():
     assert "0 times" in diff.apply(code, "<<<<<<< SEARCH\nc = 1\n=======\nc = 4\n>>>>>>> REPLACE")[1]
 
 
-def test_tree_selects_open_nodes_and_closes_failing_ones():
-    t = Tree(seed=0, epsilon=0.0, max_children=5, max_failures=2)
-    ok = {"combined_score": 1.0, "correct": 1.0}
-    root = t.add(Node("r", None, "x = 1", ok, {}, 0))
-    t.add(Node("a", "r", "x = 2", {"combined_score": 2.0, "correct": 1.0}, {}, 1))
-    assert t.select().id == "a" and t.best().id == "a"
+def test_mcts_descends_by_uct_widens_progressively_and_skips_closed_nodes():
+    import math
+    t = Tree(seed=0, max_failures=2)
+    ok = lambda sc: {"combined_score": sc, "correct": 1.0, "stage": 2}        # noqa: E731
+    root = t.add(Node("r", None, "x = 1", ok(1.0), {}, 0))
+    assert t.select().id == "r" and root.visits == 1 and abs(root.value - 0.5) < 1e-9     # reward = score/root/2
+    t.add(Node("a", "r", "x = 2", ok(1.8), {}, 1))
+    t.add(Node("b", "r", "x = 3", ok(0.6), {}, 1))
+    assert root.visits == 3 and len(root.children) == 2 > math.ceil(3 ** 0.5) - 1
+    assert t.select().id == "a"                         # root may not widen (2 >= ceil(3^0.5)); UCT prefers `a`
     for i in range(2):
-        t.add(Node(f"f{i}", "a", "", {"combined_score": 0.0, "correct": 0.0}, {}, 2 + i))
-    assert t.select().id == "r"                          # `a` closed after 2 failed children
-    assert [n.id for n in t.lineage(t.nodes["f0"])] == ["r", "a", "f0"] and root.children == ["a"]
+        t.add(Node(f"f{i}", "a", "", {"combined_score": 0.0, "correct": 0.0, "stage": 1}, {}, 2 + i))
+    assert not t.expandable(t.nodes["a"]) and t.select().id in ("r", "b")      # `a` closed after 2 failed children
+    assert [n.id for n in t.lineage(t.nodes["f0"])] == ["r", "a", "f0"]
+    assert t.nodes["f0"].visits == 1 and t.nodes["a"].visits == 3
+    t.add(Node("u", "b", "", {"combined_score": 0.0, "correct": 0.0, "stage": 0}, {"error": "no diff"}, 9))
+    assert t.nodes["u"].visits == 0                     # never judged: no reward backed up
     assert fingerprint("x = 1  # note\n") == fingerprint("x=1\n")
 
 
@@ -108,38 +116,53 @@ def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_node():
         assert len(rec["result"]["candidates"]) == len(tree.nodes)
 
 
-def test_with_a_judge_each_step_is_plan_then_code_and_a_failed_child_gets_one_repair():
-    from kernels.search.loop import search
+def test_an_expansion_ranks_many_hypotheses_measures_a_beam_and_repairs_failures_in_a_chain():
+    from kernels.search.loop import choose, hypotheses, roi, search
     calls = []
 
     def review(system, user):
-        mode = "correction" if "critical_issue" in system else "optimization"
-        calls.append(("judge", mode, user))
-        return json.dumps({"plan": f"{mode} plan"}), 1.0
+        if "critical_issue" in system:
+            calls.append(("judge", "correction", user))
+            return json.dumps({"critical_issue": "x"}), 1.0
+        calls.append(("judge", "optimization", user))
+        hs = [{"modification_plan": f"set x = {v}", "expected_speedup": sp, "implementation_risk": 1,
+               "performance_risk": 1} for v, sp in ((2, 1.1), (3, 1.9), (9, 1.5), (4, 1.0))]
+        return "Here: " + json.dumps(hs), 1.0
 
     def propose(system, user):
         calls.append(("coder", system, user))
-        return ("<<<<<<< SEARCH\nx = 1\n=======\nx = 2\n>>>>>>> REPLACE" if "x = 1" in user else "nothing"), 0.5
+        m = re.search(r"set x = (\d+)", user)
+        if m:
+            return f"<<<<<<< SEARCH\nx = 1\n=======\nx = {m.group(1)}\n>>>>>>> REPLACE", 0.5
+        cur = re.search(r"```python\nx = (\d+)", user).group(1)                        # a repair: edit what is shown
+        return f"<<<<<<< SEARCH\nx = {cur}\n=======\nx = {10 + len(calls)}\n>>>>>>> REPLACE", 0.5
 
-    judged = []
-
-    def judge(code):                             # x = 2 fails; nothing else is ever judged
-        judged.append(code)
-        ok = code == "x = 1\n"
-        m = {"combined_score": 1.0 if ok else 0.0, "correct": 1.0 if ok else 0.0, "stage": 2}
+    def judge(code):                             # x = 3 is the win; x = 9 (and every repair of it) fails
+        x = int(code.split("=")[1])
+        ok = x in (1, 2, 3, 4)
+        m = {"combined_score": {1: 1.0, 2: 1.1, 3: 1.6, 4: 1.0}.get(x, 0.0), "correct": 1.0 if ok else 0.0, "stage": 2}
         return {"metrics": m, "artifacts": {} if ok else {"error": "stage 1: wrong output"}}
 
+    assert len(hypotheses("pre " + json.dumps([{"a": 1}, {"b": 2}, 3]) + " post", 16)) == 2
+    assert hypotheses("not json", 4) == [{"plan": "not json"}] and hypotheses("", 4) == []
+    assert roi({"expected_speedup": 2.0}, 100.0) > roi({"expected_speedup": 2.0, "implementation_risk": 3}, 100.0)
+    assert roi({"expected_speedup": 2.0, "implementation_risk": 1, "performance_risk": 1}, 10.0) > 2.0  # gap 10 > 5
+    import random as _r
+    picks = choose([0.1, 0.9, 0.5, 0.3], 3, 1, _r.Random(0))
+    assert [i for i, rnd in picks if not rnd] == [1, 2] and sum(rnd for _, rnd in picks) == 1
     with tempfile.TemporaryDirectory() as d:
-        tree, cost = search("x = 1\n", "SYSTEM", propose, judge, Path(d), evals=3, usd=4.0, review=review)
-    modes = [c[1] for c in calls if c[0] == "judge"]
-    assert modes[:2] == ["optimization", "correction"]                       # the failed child is repaired next
+        tree, cost = search("x = 1\n", "SYSTEM", propose, judge, Path(d), evals=8, usd=100.0, review=review,
+                            n_hypotheses=16, beam=3, explore=0, max_repairs=3)
+        log = [json.loads(x) for x in (Path(d) / "hypotheses.jsonl").read_text().splitlines()]
+    first = log[0]
+    assert len(first["hypotheses"]) == 4 and [m["index"] for m in first["measured"]] == [1, 2, 0]   # ROI order
     coder = [c for c in calls if c[0] == "coder"]
-    assert "optimization plan" in coder[0][2] and "SEARCH/REPLACE" in coder[0][1] and "SEARCH/REPLACE" not in \
-        [c for c in calls if c[0] == "judge"][0][2]
-    assert "stage 1: wrong output" in calls[2][2]                            # the judge sees why the child failed
-    repaired = [n for n in tree.nodes.values() if n.mode == "correction"]
-    assert repaired and repaired[0].parent == next(n.id for n in tree.nodes.values() if n.code == "x = 2\n")
-    assert cost["usd"] <= 4.0 + 1.5 and cost["model_calls"] == 2 * (len(tree.nodes) - 1)
+    assert "SEARCH/REPLACE" in coder[0][1] and "set x = 3" in coder[0][2]
+    assert "SEARCH/REPLACE" not in [c for c in calls if c[0] == "judge"][0][2]
+    chain = [n for n in tree.nodes.values() if n.mode == "correction"]
+    assert [n.repairs for n in sorted(chain, key=lambda n: n.repairs)] == [1, 2, 3]       # repaired up to 3 deep
+    assert "stage 1: wrong output" in next(c for c in calls if c[1] == "correction")[2]
+    assert "set x = 3" in tree.best().judge and tree.best().score == 1.6
 
 
 def test_the_search_stops_near_the_roofline_and_states_the_gap():

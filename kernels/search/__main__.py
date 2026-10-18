@@ -83,6 +83,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--stop-pct", type=float, default=80.0,
                     help="stop once the best is at this %% of its roofline (MANTIS: within 25%% of speed-of-light)")
     ap.add_argument("--patience", type=int, default=16, help="stop after this many judged programs with no new best")
+    ap.add_argument("--hypotheses", type=int, default=16, help="changes the judge names per expansion")
+    ap.add_argument("--beam", type=int, default=4, help="of those, programs written and judged per expansion")
+    ap.add_argument("--explore", type=int, default=1, help="of the beam, picked at random (unbiased labels)")
+    ap.add_argument("--max-repairs", type=int, default=3, help="repairs of a failed child, chained")
     a = ap.parse_args(argv)
     a.ncu = a.device.startswith("cuda") if a.ncu is None else a.ncu
     task = load(a.task)
@@ -93,7 +97,8 @@ def main(argv: list[str] | None = None) -> int:
     judge = cascade(evaluator.judge_stage, counters=a.ncu)
     system = system_message(task) + ("\n\n" + TUNE_FACT if a.tune_points else "")
     tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.usd, a.seed,
-                        review=review, stop_pct=a.stop_pct or None, patience=a.patience or None)
+                        review=review, stop_pct=a.stop_pct or None, patience=a.patience or None,
+                        n_hypotheses=a.hypotheses, beam=a.beam, explore=a.explore, max_repairs=a.max_repairs)
     code, metrics, retimed = retime(out / "trace.jsonl", a.retime) if a.retime else (None, None, [])
     best = tree.best()
     code, metrics, tuned = _tune(code or best.code, metrics or best.metrics, judge, a.tune_points, task.size_expr)
