@@ -5,6 +5,7 @@ local and archived in the store (`python -m store pull`).
 
 | Date | Venue | What | GPU cost | Result | Evidence |
 |---|---|---|---|---|---|
+| 2026-10-18 | Nebius H200 (`lab-gpu-2`) | Engine session 5: the unprofiled parts profiled (prefill forward, batch-1 GEMM under ncu, host under bursts and long prompts) and fixed; Qwen-only engine (inference-server #114, #115, #116, #117) | ~2 h 40 min (~$12) | saturated 3.81 -> 4.06 req/s, single_stream TPOT p99 6.01 -> 5.87 ms, prefill 4.0 -> 3.2 ms/layer at 8k tokens, long_prompt 12.5 (14.2 with fa3, unstable); gate PASS | `data/engine-h200-20261018/`, below |
 | 2026-10-17/18 | Nebius H200 (`lab-gpu-2`) | Engine session 4: one-launch router, FlashInfer planned once per wave, split-K MoE GEMMs, padded-step cap, compile A/B (inference-server #113) | ~1 h 20 min (~$6) | saturated 3.58 -> 3.81 req/s, single_stream TPOT p99 6.14 -> 6.01 ms, long_prompt 9.03 -> 12.5 req/s; gate PASS; compile on the MoE decode not viable | `data/engine-h200-20261017/session6/`, below |
 | 2026-10-17 | Nebius H200 (`lab-gpu-2`) | Engine session 3: defaults, decode launch diet, fused MoE routing/epilogue, FlashInfer prefill (inference-server #112) | ~2 h (~$9) | saturated 1.87 -> 3.58 req/s (conc 128 within limits), single_stream TPOT p99 9.26 -> 6.14 ms, long_prompt 6.25 -> 9.03 req/s; gate PASS (ratio 1.0105, CI 0.997-1.024) | `data/engine-h200-20261017/REPORT.md`, below |
 | 2026-10-16 | Nebius H200 (`lab-gpu-2`) | Engine session 2: mixed prefill + async decode measured (inference-server #110, #111) and three fixes; the kernel loop's Phase A/B ran on the same VM (its own entry) | ~4 h (~$18) | saturated 1.11 -> 1.87 req/s (conc 64 within limits), single_stream TPOT p99 9.5 -> 9.26 ms, 0 OOMs; gate PASS 1,597/1,597 (ratio 1.0032, CI 0.989-1.017) | `data/engine-h200-20261016/REPORT.md`, below |
@@ -19,6 +20,24 @@ local and archived in the store (`python -m store pull`).
 | 2026-10-08 | Nebius H200 | Profiler tools on the real engine | ~$0.87 | All four tools work unjailed; three fixes | below |
 | 2026-10-05 | Nebius H200 | Full-tier correctness recalibration | ~$16.50 | Policy confirmed; FP8/INT8 pass, Int4 fails | `data/h200-run-20261005/REPORT.md`, `data/equiv-full/` |
 | 2026-10-04 | Verda H200 | Dev-tier correctness calibration | $6.75 | Gate separates Int4; consistency results void | `data/h200-run-20261004/REPORT.md`, `data/equiv/` |
+
+## 2026-10-18 — Engine session 5: profile everything that was not, then fix (Nebius H200 `lab-gpu-2`, inference-server #117)
+First the diagnosis. Prefill forward at an 8k-token chunk (never profiled): ~4.0 ms a layer, GEMMs and FlashInfer 2.1 ms
+near peak, 1.4 ms of epilogue waste (fp32 routing-weight multiply 538 us, cast 179, index_add 166, gather 125, rope at
+3x its bandwidth 98 x 2). ncu on the batch-1 grouped GEMM: 11% achieved occupancy, 38% of DRAM bandwidth, 29 us
+against a ~10 us floor (only 8 of 1,440 programs hold work); the split-K that followed from that reading bought nothing
+at any tile, while a 48-config sweep found BLOCK_N 64 / BLOCK_K 128 / 4 stages: 29 -> 18 us (gate_up) and 29 -> 17 us
+(down). py-spy under a 256-request burst: the scheduler thread 69% idle-waiting on the GPU (the host is not the ceiling),
+6% building the prefill block table per layer. py-spy under 96 long prompts: 41% in a per-layer synchronous
+host->device copy in the prefill K/V write. Fixes measured one at a time (`session7*.log`): swept tiles (single_stream
+6.19 -> 5.87 ms, batch-1 step 5.6 ms); per-token gather-and-sum epilogue (an atomic scatter-add tried first ran at
+456 us, the gather at 88); rope per block of 8 heads (98 -> 22 us); block table and suffix positions built once a wave
+from device tensors. End state: saturated 4.06 req/s (conc 128 TTFT p99 0.44 s), single_stream 5.87 ms, prefill 3.2
+ms/layer, long_prompt 12.5; FlashInfer fa3 measured 14.2 then 6.25 on long_prompt with unexplained ~2 s stalls on
+1-5-row prefill steps (auto has them too, 0.5-1.9 s) so it stays opt-in; those stalls are the open item (not the radix
+cache, not a host frame). Gate PASS (ratio 1.0072, 0 unanswered). Same day: the engine became Qwen3-MoE only
+(inference-server #114, -2,284 lines, verified on this VM: 446 tests + kernel checks), stale Modal-era files and
+CLAUDE.md wording removed (#115), uv.lock relocked for the flashinfer extra (#116).
 
 ## 2026-10-17/18 — Engine session 4: router, single plan, split-K, step cap (Nebius H200 `lab-gpu-2`, inference-server #113)
 Built off the GPU after session 3, measured against its end state (3.58 req/s / 6.14 ms / 9.03). A batch-1 kernel
