@@ -281,7 +281,7 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
                 continue
             ranks = [roi(h, parent.pct_of_roofline) for h in hs]
             scores, c = screen(system, prompt(tree, parent, coder=False), hs) if screen else (ranks, 0.0)
-            spent += c
+            spent, calls = spent + c, calls + (1 if c else 0)   # a model screener's call; roi/random cost 0
             measured = []
             for i, random_pick in choose(scores, beam, explore, tree.rng):
                 child = attempt(parent, json.dumps(hs[i]), "optimization", cost if not measured else 0.0)
