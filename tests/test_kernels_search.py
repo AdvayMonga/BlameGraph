@@ -447,7 +447,7 @@ def test_screeners_score_hypotheses_and_the_log_keeps_labels():
         row = json.loads((Path(d) / "hypotheses.jsonl").read_text().splitlines()[0])
     assert row["measured"] == [{"index": 2, "random": False, "child_id": row["measured"][0]["child_id"],
                                 "child_score": 1.2, "improved": True}] and row["parent_score"] == 1.0
-    assert row["scores"] == [0.0, 0.1, 0.9] and cost["usd"] == 0.01
+    assert row["scores"] == [0.0, 0.1, 0.9] and cost["usd"] == 0.01 and cost["model_calls"] == 3   # judge, screen, coder
 
 
 def test_the_judge_can_query_the_ledger_and_search_the_web_across_turns():

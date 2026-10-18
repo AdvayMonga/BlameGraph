@@ -117,6 +117,7 @@ def main(argv: list[str] | None = None) -> int:
     code, metrics, retimed = (retime(out / "trace.jsonl", a.retime, exclude=exclude) if a.retime
                               else (None, None, []))
     cost["usd"] = round(cost["usd"] + sum(spent), 4)
+    cost["model_calls"] += len(spent)
     best = tree.best()
     if code is None and (any("excluded" in r for r in retimed) or (exclude and exclude(best.code, {
             "child_metrics": best.metrics}))):
