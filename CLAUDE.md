@@ -255,6 +255,13 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   window from the device kernels it launches, `Task.kernel_names`, the speedup bound if they took no time, and the
   kernels no task covers, by share: the facts for choosing the next task). `lab/capture.py` + `lab.profile --capture MODULE:FUNCTION` (the `profile` tool's `capture`): every
   call's argument shapes and small int tensors, the first call per shape kept whole as real inputs.
+- `regimes/synth.py` — synthetic traffic (2026-10-18): generated fresh per run from the corpus's seen split and then
+  gone, never written, the seed regenerates it (`Ctx.synthetic`, `regimes run --synthetic`). Whole real sessions in
+  shuffled passes (structure, turns, think time, max_tokens, regime), the real gap sequence repeated with a seeded
+  jitter (bursts stay where they were), text cut from real messages of the same role at sentence ends and
+  recombined to length: 0 of ~2,000 generated prompts per class equal a real one; KS on prompt tokens ≤ 0.02 and
+  per-10 s arrival counts within a few % of the real class (`python -m regimes.synth compare`). Not yet compared
+  against the real corpus on a GPU; until then bench/submit stay on the public corpus.
 - `regimes/` — load generation: drives a live OpenAI-compatible server the eight ways it gets used, client-side.
   `client.py` (one streamed chat request: TTFT from *scheduled* send to first real token, TPOT = (E2E − TTFT)/(n − 1),
   status ok / error (explicit 4xx or 503 rejection) / silent_drop / truncated / crash (other 5xx, no response,
@@ -271,7 +278,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   fresh VLLM/inductor/Triton cache dirs, polls until "17 + 25" is answered "42", then relaunches for the warm figure).
   Tiers: short (30 s probes, 60 s final), full (60 s probes, 600 s final). Probes must last well beyond the TTFT limit
   or a short overload goes unseen; limits are settable per `Ctx` (MLPerf by default). CLI:
-  `python -m regimes run REGIME[,..]|all --url URL [--corpus DIR | --workload FILE] [--split] [--tier] [--tokenizer] [--out]`
+  `python -m regimes run REGIME[,..]|all --url URL [--corpus DIR | --workload FILE] [--synthetic] [--split] [--tier] [--tokenizer] [--out]`
   (`--workload`: a `workloads/` file is one pool for every regime; bursty is refused, no arrival times),
   `python -m regimes cold-start --url URL --cmd "..."`. Closed-loop runs can't detect a client bottleneck by lag.
 - `workloads/` — frontier benchmark request data, researcher-only (never reaches the agent: nothing in `lab/` reads
