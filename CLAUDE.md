@@ -229,7 +229,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   System-1 screener (`kernels/search/screen.py`, `--screen haiku` default: Claude Haiku 4.5's probability of beating
   the parent; `roi` = MANTIS's ROI; `random`; a learned local classifier replaces it once the random picks have
   labelled a few hundred), the top 3 plus 1 random written and judged (`--hypotheses/--beam/--explore`; every
-  hypothesis and its fate in `hypotheses.jsonl`), from the facts, including CudaForge's 24 ncu counters
+  hypothesis and its fate in `hypotheses.jsonl`), from the facts (and, its choice when, Anthropic's web search
+  and read-only SQL over the agent's view of the ledger index, `--judge-tools`; the harness pastes no research), with
+  up to 2 better programs from other branches as diffs and a merge-with-the-best-other-branch hypothesis competing for
+  the beam (CodeEvolve's inspirations), including CudaForge's 24 ncu counters
   (`kernels/evolve/ncu.py`, stage 3 of the jailed evaluator), and the coder writing it; a failed child is repaired in
   correction mode, chained up to 3 deep; launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen afterwards by a grid
   search on the winner, written back as constants, promoted only if their re-timed median is higher
