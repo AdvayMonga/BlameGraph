@@ -25,7 +25,6 @@ class Node:
     mode: str = "optimization"               # or "correction": a repair of a failed parent
     repairs: int = 0                         # repairs in the chain that led here (a repair of a repair counts 2)
     visits: int = 0                          # MCTS: judged programs in its subtree, itself included
-    value: float = 0.0                       # MCTS: sum of their rewards
     children: list[str] = field(default_factory=list)
     failures: int = 0
 
@@ -63,19 +62,40 @@ class Tree:
             p.children.append(node.id)
             if node.score <= 0:
                 p.failures += 1
-        if node.metrics.get("stage", 1):
-            r = self.reward(node)
+        if self.judged(node):
             for n in self.lineage(node):
-                n.visits, n.value = n.visits + 1, n.value + r
+                n.visits += 1
         return node
 
     def root(self) -> Node:
         return next(n for n in self.nodes.values() if n.parent is None)
 
+    @staticmethod
+    def judged(node: Node) -> bool:
+        return bool(node.metrics.get("stage", 1))
+
     def reward(self, node: Node) -> float:
-        """Score relative to the root (the engine's kernel), clipped to [0, 2] and halved into [0, 1]."""
-        base = self.root().score or 1.0
-        return min(node.score / base, 2.0) / 2
+        """The node's percentile among every judged program in the tree (ties split), so rewards keep spreading as the
+        tree improves. A reward relative to the root clipped to 1 at 2x, the 2026-10-18 A/B's, saturated for every
+        child once the start was 0.14x of the engine's kernel, and UCT then only counted visits."""
+        others = [n for n in self.nodes.values() if n is not node and self.judged(n)]
+        if not others:
+            return 0.5
+        below = sum(n.score < node.score for n in others) + 0.5 * sum(n.score == node.score for n in others)
+        return below / len(others)
+
+    def value(self, node: Node) -> float:
+        """Mean reward over the judged programs in the node's subtree, recomputed at every selection."""
+        rs = [self.reward(n) for n in self.subtree(node) if self.judged(n)]
+        return sum(rs) / len(rs) if rs else 0.0
+
+    def subtree(self, node: Node) -> list[Node]:
+        out, stack = [], [node]
+        while stack:
+            n = stack.pop()
+            out.append(n)
+            stack += [self.nodes[c] for c in n.children]
+        return out
 
     def expandable(self, n: Node) -> bool:
         return n.metrics.get("correct") == 1.0 and n.failures < self.max_failures
@@ -97,8 +117,7 @@ class Tree:
                 return node
             if not kids:
                 return node if self.expandable(node) else None
-            node = max(kids, key=lambda k: k.value / k.visits
-                       + self.c * math.sqrt(math.log(max(node.visits, 1)) / k.visits))
+            node = max(kids, key=lambda k: self.value(k) + self.c * math.sqrt(math.log(max(node.visits, 1)) / k.visits))
 
     def best(self) -> Node:
         return max(self.nodes.values(), key=lambda n: (n.score, -n.iteration))

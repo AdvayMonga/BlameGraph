@@ -54,11 +54,15 @@ def test_mcts_descends_by_uct_widens_progressively_and_skips_closed_nodes():
     t = Tree(seed=0, max_failures=2)
     ok = lambda sc: {"combined_score": sc, "correct": 1.0, "stage": 2}        # noqa: E731
     root = t.add(Node("r", None, "x = 1", ok(1.0), {}, 0))
-    assert t.select().id == "r" and root.visits == 1 and abs(root.value - 0.5) < 1e-9     # reward = score/root/2
+    assert t.select().id == "r" and root.visits == 1 and t.reward(root) == 0.5           # alone: the middle
     t.add(Node("a", "r", "x = 2", ok(1.8), {}, 1))
     t.add(Node("b", "r", "x = 3", ok(0.6), {}, 1))
     assert root.visits == 3 and len(root.children) == 2 > math.ceil(3 ** 0.5) - 1
     assert t.select().id == "a"                         # root may not widen (2 >= ceil(3^0.5)); UCT prefers `a`
+    assert (t.reward(t.nodes["a"]), t.reward(root), t.reward(t.nodes["b"])) == (1.0, 0.5, 0.0)   # percentiles
+    t.add(Node("c", "r", "x = 9", ok(1.8), {}, 1))
+    assert t.reward(t.nodes["c"]) == t.reward(t.nodes["a"]) == (2 + 0.5) / 3                # a tie splits
+    t.nodes["r"].children.remove("c"); del t.nodes["c"]; root.visits -= 1
     for i in range(2):
         t.add(Node(f"f{i}", "a", "", {"combined_score": 0.0, "correct": 0.0, "stage": 1}, {}, 2 + i))
     assert not t.expandable(t.nodes["a"]) and t.select().id in ("r", "b")      # `a` closed after 2 failed children
@@ -433,8 +437,11 @@ def test_screeners_score_hypotheses_and_the_log_keeps_labels():
     scores, usd = screen.haiku(fake)("TASK FACTS", "PROGRAM AND MEASUREMENTS", hs)
     assert scores == [0.1, 0.9] and usd == 0.002 and "PROGRAM AND MEASUREMENTS" in seen["user"]
     assert '1. {"modification_plan": "b"' in seen["user"] and "probability" in seen["system"]
-    scores, _ = screen.haiku(lambda s, u: ("no idea", 0.0))("S", "F", hs)
-    assert scores[0] > scores[1]                                   # unparsable: MANTIS ROI order instead
+    sc = screen.haiku(lambda s, u: ("no idea", 0.0))
+    scores, _ = sc("S", "F", hs)
+    assert scores[0] > scores[1] and sc.last == {"reply": "no idea", "parsed": False}   # unparsable: MANTIS ROI order
+    assert screen.parse("Scores [0 to 1] for the 2 changes:\n```json\n[0.3, 0.7]\n```", 2) == [0.3, 0.7]
+    assert screen.parse("[0.3, 0.7, 0.1]", 2) is None and screen.parse("", 2) is None
     assert screen.make("roi") is None and len(screen.make("random")("S", "F", hs)[0]) == 2
 
     def review(system, user):
@@ -455,7 +462,8 @@ def test_screeners_score_hypotheses_and_the_log_keeps_labels():
                             explore=0, screen=pick_third)
         row = json.loads((Path(d) / "hypotheses.jsonl").read_text().splitlines()[0])
     assert row["measured"] == [{"index": 2, "random": False, "child_id": row["measured"][0]["child_id"],
-                                "child_score": 1.2, "improved": True}] and row["parent_score"] == 1.0
+                                "child_score": 1.2, "improved": True, "new_best": True}] and row["parent_score"] == 1.0
+    assert row["screen"] is None                                                   # pick_third keeps no reply
     assert row["scores"] == [0.0, 0.1, 0.9] and cost["usd"] == 0.01 and cost["model_calls"] == 3   # judge, screen, coder
 
 
@@ -507,7 +515,12 @@ def test_inspirations_show_other_branches_and_a_merge_competes_for_the_beam():
     t.add(Node("x", "r", "a = 2\nb = 1\n", ok(1.5), {}, 1))
     t.add(Node("y", "r", "a = 1\nb = 2\n", ok(1.3), {}, 1))
     m = merge_hypothesis(t, t.nodes["y"])
-    assert m["merge_from"] == "x" and m["expected_speedup"] == 1.5
+    assert m["merge_from"] == "x" and m["expected_speedup"] == round(1.5 / 1.3, 4)      # over this program, not the start
+    tried = [{"parent_id": "r", "parent_score": 1.0, "child_id": "x", "child_score": 1.5, "plan": "set a = 2"}]
+    assert "# Hypotheses already measured" not in prompt(t, t.nodes["y"], coder=False)
+    seen = prompt(t, t.nodes["y"], coder=False, measured=tried)
+    assert "on r (1.0000) -> x 1.5000: set a = 2" in seen and "Hypotheses already measured" not in \
+        prompt(t, t.nodes["y"], "plan", measured=tried)                                    # the coder is not shown it
     judge_view = prompt(t, t.nodes["y"], coder=False)
     assert "# Other programs in the tree" in judge_view and "+a = 2" in judge_view and "Program r" not in \
         judge_view.split("# Other programs")[1]
