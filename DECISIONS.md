@@ -32,6 +32,13 @@ are hosted-only and cannot be fine-tuned), a fine-tuned local classifier once on
 few hundred; the judge may use web search and read-only ledger SQL, its own choice when, with no research pasted by
 the harness (the facts-only line: the environment hands over facts; what the model chooses to read is its own, as in
 the agent's workbench); a merge hypothesis competing for the beam.
+## 2026-10-18 — The per-layer facts the agent chooses a layer by
+From each `profile` bundle (`lab/layers.py`): the four layers' shares of the profiled window (kernel time; prefill +
+decode phase time beyond it; admit + evict; time outside steps) and a distance where one is defined (the decode
+step against its floor; kernels against their roofline when gated). Layers 3 and 4 get the facts a change there
+moves (GPU idle share, batch fill, admissions blocked) and say they have no single ceiling, rather than a made-up
+one. Why: 2026-10-14 decided the agent picks the layer and is given these numbers, never a recommendation.
+
 ## 2026-10-18 — A scheduler simulator for layer 3: the real scheduler on a fake clock
 `sim/scheduler.py` runs the engine's own scheduler code one step at a time (a `step()` seam, inference-server
 #120) with a fake clock and a backend that charges a cost model instead of running the model. Why: a scheduling

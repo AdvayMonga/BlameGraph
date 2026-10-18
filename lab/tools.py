@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from lab import calibrate, corpus, engine, experiments, ledger, profiles, target
+from lab import calibrate, corpus, engine, experiments, layers, ledger, profiles, target
 from lab.agent import ToolSpec
 from lab.budget import Budget, BudgetExceeded, gpu_rate
 from lab.evaltools import EvalTools, _killed
@@ -157,6 +157,8 @@ class Toolbox(EvalTools, ProfTools):
             shutil.rmtree(out, ignore_errors=True)
         try:                                     # the blob is the bundle itself (worker copies it to `files`)
             cal = calibrate.calibrate_kernels(self.s.ledger_root / blob, r.get("gpu")) if blob else None
+            if cal is not None:                  # each layer's share of the window and its distance from a ceiling
+                cal["layers"] = layers.from_bundle(self.s.ledger_root / blob, target.load(), r.get("gpu"))
         except Exception as e:                   # noqa: BLE001  never costs the measurement it describes
             cal = {"error": f"calibration failed: {type(e).__name__}: {e}"}
         result = {"returncode": r["returncode"], "bundle": blob, "workspace_copy": visible,
