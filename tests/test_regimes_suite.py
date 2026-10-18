@@ -21,6 +21,11 @@ def test_a_hinted_search_starts_at_the_base_and_stops_at_the_band():
     worse = find_goodput(lambda x: {"valid": True, "meets_limits": x <= 9.0},
                          **suite.Ctx("u", "m", hints={"bursty": {"load": 10.0}}, bands={"bursty": 2.0}).search("bursty", 3.3))
     assert 9.0 * 0.98 <= worse["goodput"] <= 9.0
+    # a large change either way is still found inside the probe cap: the step grows on each move
+    for cap in (4.0, 25.0):
+        far = find_goodput(lambda x: {"valid": True, "meets_limits": x <= cap},
+                           **suite.Ctx("u", "m", hints={"bursty": {"load": 10.0}}, bands={"bursty": 2.0}).search("bursty", 3.3))
+        assert far["goodput"] is not None and cap * 0.9 <= far["goodput"] <= cap, (cap, far["probes"])
 
 
 def _saturated(capacity: int, hints: dict | None = None) -> tuple[dict, list[int]]:
