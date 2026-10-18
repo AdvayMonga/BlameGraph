@@ -80,7 +80,8 @@ class Toolbox(EvalTools, ProfTools):
         from lab.evaltools import noise_band_pct
         base = next(ledger.records(self.s.ledger_root, run=self.s.run_id, kind="baseline"), None)
         name = args["expect"].get("metric")
-        band = (noise_band_pct(name, target.load(), self.s.ledger_root)
+        band = (noise_band_pct(name, target.load(), self.s.ledger_root,
+                               engine.commit(self.s.workspace.repo, self.s.workspace.base))
                 if tool in ("bench", "submit") and isinstance(name, str) else None)
         body["experiment"] = experiments.outcome(tool, args, result, metrics,
                                                  ((base or {}).get("result") or {}).get("metrics"), band)

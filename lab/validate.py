@@ -7,7 +7,8 @@
    checks the gate separates them: every good must PASS, every bad must FAIL (inconclusive counts as neither).
 3. Serves the target's *engine* (the base commit, from its repo) and runs the chosen regimes `noise_runs` times on
    the seen split, short tier, to measure each regime's run-to-run band on the thing submit will judge; writes
-   a `noise` ledger record per regime (tagged with the target and `server: engine`), which `submit` reads.
+   a `noise` ledger record per regime (tagged with the target, `server: engine` and the engine commit, None when its
+   tree had uncommitted changes), which `submit` reads for runs on that base commit only.
 Exit status 0 only if the gate separated and every band was measured. Nothing here is jailed: these are the
 operator's own launches, not the agent's.
 
@@ -25,7 +26,7 @@ import sys
 import time
 from pathlib import Path
 
-from lab import calibrate, gpu, ledger, serve, target
+from lab import calibrate, engine, gpu, ledger, serve, target
 
 
 def band_pct(values: list[float]) -> float | None:
@@ -94,7 +95,8 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
                     values[n].append(r["value"] if r["valid"] else None)
             srv.exclusive()                     # a band from a shared GPU would skew every submit
         for n in names:
-            report["noise"][n] = write_noise(n, values[n], t, {"tier": "short", "split": "seen"}, root)
+            report["noise"][n] = write_noise(n, values[n], t, {"tier": "short", "split": "seen",
+                                                                "engine_commit": engine.commit(t.engine_repo, clean=True)}, root)
     report["bands_measured"] = all(d["band_pct"] is not None for d in report["noise"].values()) if names and noise_runs else None
     # 4. the reference engine under the same regimes, once, without its determinism switches: what every bench is shown next to
     if reference_regimes and names:

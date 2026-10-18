@@ -67,7 +67,7 @@ def referee(s: Session) -> dict:
     from lab.evaltools import harness_facts
     recs = list(ledger.records(s.ledger_root, run=s.run_id))
     try:
-        facts = harness_facts(target.load(), s.ledger_root)
+        facts = harness_facts(target.load(), s.ledger_root, engine.commit(s.workspace.repo, s.workspace.base))
     except Exception as e:                  # a missing corpus or reference is itself a fact
         facts = {"unavailable": f"{type(e).__name__}: {e}"}
     return lab_feedback(recs, s.run_id, str(s.ledger_root), facts)["for_agent"]

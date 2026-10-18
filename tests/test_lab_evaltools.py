@@ -274,6 +274,14 @@ def test_submit_reports_no_heldout_delta_without_a_seen_delta(lab, monkeypatch, 
     assert evaltools.noise_band_pct("single_stream", target.load(), root) is None
     ledger.append({"kind": "noise", "result": {**band, "target": target.load().name}}, root)
     assert evaltools.noise_band_pct("single_stream", target.load(), root) == 1.0
+    # with an engine commit: only a band measured at that commit counts, the latest one
+    assert evaltools.noise_band_pct("single_stream", target.load(), root, commit="abc") is None
+    ledger.append({"kind": "noise", "result": {**band, "target": target.load().name, "engine_commit": "abc",
+                                               "band_pct": 2.0}}, root)
+    ledger.append({"kind": "noise", "result": {**band, "target": target.load().name, "engine_commit": "def",
+                                               "band_pct": 3.0}}, root)
+    assert evaltools.noise_band_pct("single_stream", target.load(), root, commit="abc") == 2.0
+    assert evaltools.noise_band_pct("single_stream", target.load(), root) == 3.0
 
 
 def test_submit_scores_the_task(lab, tmp_path):

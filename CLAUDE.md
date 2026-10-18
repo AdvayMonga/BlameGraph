@@ -112,8 +112,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   one Sonnet 5.5 session, $0.19, 18 turns, valid, submit improved -85.9% (band 0.9%).
 - `lab/validate.py` — `python -m lab.validate --target T`: serves the target's reference and writes its outputs, judges
   each `[validation]` good/bad launch (good must pass, bad must fail: the gate separates on *this* model and GPU), and
-  measures each regime's run-to-run band from repeated reference runs into `noise` ledger records (which
-  `submit` reads). Exit 0 only if both hold. Needs a GPU for a real target; tested on fakes. `lab/LEDGER.md` is the
+  measures each regime's run-to-run band from repeated runs of the engine into `noise` ledger records tagged with
+  its commit (which `submit` reads for runs on that base commit only). Exit 0 only if both hold. Needs a GPU for a real target; tested on fakes. `lab/LEDGER.md` is the
   record-format spec: the environment's public interface.
 - `lab/RUNTIME.md` — design (2026-10-08): controller (laptop: ledger, referee, secrets) and worker (GPU VM: jails,
   clients, profilers) behind a job interface; trust zones and rules; why srt cannot jail GPU code on Linux.

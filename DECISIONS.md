@@ -4,6 +4,13 @@ One entry per decision, newest first: what was decided, why (as recorded at the 
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
 
+## 2026-10-18 — Noise bands belong to one engine commit
+`lab.validate` records the engine commit a band was measured at (None for a tree with uncommitted changes), and
+`submit`, experiment records and the brief's harness facts use a band only at the run's base commit; otherwise it is
+None and submit says `unknown_band`. Why: a changed engine can be more or less jittery, and a band from an older
+engine was being applied silently. Consequence: after the engine moves, re-run `lab.validate`'s noise step
+(minutes per regime on the GPU) before submits on the new base mean anything.
+
 ## 2026-10-17 — Our own layer-1 generator; OpenEvolve becomes the baseline
 `kernels/search/` replaces the `openevolve` package as the generator, taking from what the published systems learned:
 refinement chains in a tree (Kevin, STARK, KernelPro, Kernel Forge), a strong-model judge reading curated facts beside a
