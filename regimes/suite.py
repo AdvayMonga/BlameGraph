@@ -362,6 +362,28 @@ def _launch_once(url, model, cmd, env, expect, timeout_s, poll_s, log_dir, label
     return res
 
 
+# What each regime sends and what it reports, in the words the agent's objective uses (lab/prompts/objective.md).
+FACTS = {
+    "single_stream": ("one request at a time (closed loop, concurrency 1) on steady_interactive prompts",
+                      "p99 time per output token, seconds", "interactive"),
+    "saturated": ("closed loop at doubling concurrency over every corpus class; each level's requests judged against "
+                  "the limits, the highest passing level rerun at full length", "goodput, good requests/s", "conversational"),
+    "bursty": ("the spike trace replayed open loop at a searched multiple of its real rate, burst shape kept (short "
+               "tier: its peak window)", "the highest speed-up whose requests meet the limits", "conversational"),
+    "long_prompt_short_output": ("Poisson arrivals of long_context prompts, max_tokens 64",
+                                 "goodput, good requests/s", "conversational"),
+    "short_prompt_long_output": (f"Poisson arrivals of prompts of at most {SHORT_PROMPT_TOKENS} tokens asking for an "
+                                 "in-depth answer, max_tokens 1024", "goodput, good requests/s", "conversational"),
+    "shared_prefix_multi_turn": (f"conversations of up to {MAX_TURNS} turns, {THINK_S:g} s between turns, all under "
+                                 "one shared system prompt", "goodput, good sessions/s", "conversational"),
+    "overload": ("Poisson at 2x the steady mix's goodput; an explicit rejection (4xx/503) is allowed, a silent drop, "
+                 "truncated stream or no response makes the run invalid", "good requests/s at that load", "conversational"),
+}
+MEASUREMENT = ("TTFT runs from a request's scheduled send to its initial real token; TPOT = (E2E - TTFT) / (n - 1), "
+               "tokens recounted with the reference tokenizer. A request is good when it meets both the TTFT and the TPOT "
+               "limit; goodput is the highest load at which at least 99% of requests are good. A run is invalid on any "
+               "silent drop, truncation or crash, or when the client's own send lag p99 exceeds 10 ms.")
+
 REGIMES = {"single_stream": single_stream, "saturated": saturated, "bursty": bursty,
            "long_prompt_short_output": long_prompt_short_output, "short_prompt_long_output": short_prompt_long_output,
            "shared_prefix_multi_turn": shared_prefix_multi_turn, "overload": overload}

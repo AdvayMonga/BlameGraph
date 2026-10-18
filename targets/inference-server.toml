@@ -48,6 +48,17 @@ min_score_ratio = 0.99                       # MLPerf: >= 99% of the reference's
 min_length_ratio = 0.90
 submit_tier = "dev"                          # full is ~8-17 h on this engine (DECISIONS.md 2026-10-15); back to full once it is fast
 
+[layers]                                     # which engine files make up each layer: the agent's map (lab/prompts/objective.md)
+kernels = ["src/inference_server/models/*kernel*.py", "src/inference_server/models/megakernel/*",
+           "src/inference_server/models/prefill_attention.py", "src/inference_server/models/prefill_flashinfer.py"]
+model_execution = ["src/inference_server/models/qwen3_moe.py", "src/inference_server/models/common.py",
+                   "src/inference_server/models/fused.py", "src/inference_server/models/launch_table.py",
+                   "src/inference_server/backends/*", "src/inference_server/sampling.py"]
+runtime = ["src/inference_server/scheduler.py", "src/inference_server/scheduling_policy.py",
+           "src/inference_server/kv_cache/*", "src/inference_server/models/paged_kv_cache.py"]
+serving = ["src/inference_server/server.py", "src/inference_server/openai_shim.py", "src/inference_server/tokenizer.py",
+           "src/inference_server/config.py", "src/inference_server/profiles.*", "src/control_plane/*"]
+
 [corpus]
 dir = "corpus"
 

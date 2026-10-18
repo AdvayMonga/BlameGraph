@@ -2,6 +2,7 @@
 
     [task]
     goal = "cut p99 time per token under steady load without losing burst capacity"
+    context = "the engine serves one chat product; requests are mostly single-turn"   # optional: specs and facts only
     [objective]
     regimes = ["single_stream"]            # the headline(s) that count; several combine by `combine`
     combine = "min"                        # min | mean of the regimes' gains, in %
@@ -25,6 +26,7 @@ class Task:
     goal: str
     regimes: tuple[str, ...]
     combine: str = "min"
+    context: str | None = None                            # specs and facts about the task, in the researcher's words
     constraints: dict = field(default_factory=dict)      # regime -> {"max_regression_pct": float}
     path: Path | None = None
 
@@ -40,10 +42,11 @@ class Task:
         bad = [r for r in regimes if r not in suite.REGIMES] + [r for r in (raw.get("constraints") or {}) if r not in suite.REGIMES]
         if bad:
             raise ValueError(f"{p}: unknown regime(s) {bad}; one of {list(suite.REGIMES)}")
-        return cls(raw["task"]["goal"], regimes, obj.get("combine", "min"), dict(raw.get("constraints") or {}), p)
+        return cls(raw["task"]["goal"], regimes, combine=obj.get("combine", "min"),
+                   constraints=dict(raw.get("constraints") or {}), path=p, context=raw["task"].get("context"))
 
     def brief(self) -> str:
-        lines = [f"Goal: {self.goal}", f"Objective: {', '.join(self.regimes)} ({self.combine} of their gains, in %); "
+        lines = [f"Goal: {self.goal}"] + ([f"Context: {self.context}"] if self.context else []) + [f"Objective: {', '.join(self.regimes)} ({self.combine} of their gains, in %); "
                  f"a win needs every objective regime improved beyond its noise band on a submit."]
         for r, c in self.constraints.items():
             lines.append(f"Constraint: {r} may not regress by more than {c.get('max_regression_pct', 0)}%.")

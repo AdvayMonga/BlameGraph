@@ -216,8 +216,8 @@ def test_heldout_results_go_through_the_aggregate_only_writer(cfg):
 def test_brief_carries_the_task_and_the_referee_not_advice(cfg, tmp_path):
     from lab.task import Task
     t = tmp_path / "task.toml"
-    t.write_text('[task]\ngoal = "faster decode"\n[objective]\nregimes = ["single_stream"]\n'
-                 '[constraints]\nbursty = { max_regression_pct = 5.0 }\n')
+    t.write_text('[task]\ngoal = "faster decode"\ncontext = "chat traffic, mostly single-turn"\n'
+                 '[objective]\nregimes = ["single_stream"]\n[constraints]\nbursty = { max_regression_pct = 5.0 }\n')
     cfg.task = Task.parse(t)
     cfg.goal = cfg.task.goal
 
@@ -227,7 +227,7 @@ def test_brief_carries_the_task_and_the_referee_not_advice(cfg, tmp_path):
     p = ScriptedProvider(script)
     session.run(cfg, p)
     prompt = p.specs[0].prompt
-    assert prompt.startswith("Goal: faster decode\nObjective: single_stream")
+    assert prompt.startswith("Goal: faster decode\nContext: chat traffic, mostly single-turn\nObjective: single_stream")
     assert "Constraint: bursty may not regress by more than 5.0%." in prompt
     ref = json.loads(prompt.split("Referee (this run so far):\n", 1)[1].split("\n\n", 1)[0])
     assert ref["integrity"]["valid"] is False and set(ref["facts"]) == {"harness"}
@@ -258,6 +258,15 @@ def test_system_prompt_is_generated_from_the_target_and_tools_and_advises_nothin
     assert t.model in system and t.engine_repo.name in system and "`stop`" in system and "`note`" in system
     assert "{" not in system.replace(t.engine.launch, "").replace(json.dumps(t.engine.env), "")   # all filled
     assert not ADVICE.search(system), ADVICE.search(system)
+    assert system.startswith("You are an expert in LLM inference performance engineering.")
+    from regimes import suite
+    for name in suite.FACTS:
+        assert f"- `{name}`:" in system                                    # every regime's definition
+    assert "  - kernels:" in system and "  - runtime:" in system           # the layer map
+    assert f"{t.interactive.tpot_s * 1e3:g} ms" in system
+    run_dir = next(cfg.runs_dir.iterdir())                                 # exactly what the agent saw, kept
+    kept = next((run_dir / "sessions").iterdir())
+    assert (kept / "objective.md").read_text() == system and (kept / "brief.md").read_text() == spec.prompt
 
 
 def test_a_provider_that_works_locally_is_refused_with_a_remote_worker(cfg, monkeypatch):

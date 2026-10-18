@@ -18,9 +18,13 @@ measurement row; anything more is a generalization). The findings in `knowledge/
 agent reads raw data only, through `ledger`, `query` (read-only SQL over every run, `store/index.py`) and `search`
 (text search over every run's experiments, `lab/search.py`).
 The task (`lab/task.py`, `--task task.toml`: goal, objective regimes, constraints) is stated in full in the brief,
-and a submit returns its `score` under that task: the win condition is known, never inferred. The system prompt is
-generated per session (`session.system_prompt`: template `lab/prompts/system.md` filled from the target spec and the
-ToolSpec descriptions, which state what each tool does, returns and costs, never when to use it). The brief is the
+and a submit returns its `score` under that task: the win condition is known, never inferred. The agent's objective
+(its system prompt) is generated per session (`session.system_prompt`: template `lab/prompts/objective.md`, a role line
+and facts only: the engine and its files by layer (target `[layers]`), how results are scored (each regime's load and
+report from `regimes.suite.FACTS`, the limits, tiers, verdicts, correctness policy), the environment, write surface,
+tools (ToolSpec descriptions: what each does, returns and costs, never when to use it), budget, sessions). Everything
+task-specific is in the per-session brief (goal, optional `context` of specs and facts, objective, constraints, budget
+left, referee, baseline, hypotheses). Both are saved per session to `<run>/sessions/<id>/{objective,brief}.md`. The brief is the
 task, budget, referee, a BASELINE (the base commit under bench's defaults = the task's objective + constrained regimes, measured once per run, `baseline` ledger
 kind; `RunConfig.baseline=False` skips it) and only the run's last `session` record.
 

@@ -57,6 +57,7 @@ class Target:
     min_length_ratio: float
     corpus_dir: Path
     raw: dict
+    layers: dict = field(default_factory=dict)   # layer -> globs in the engine repo ([layers]): the objective's map
     submit_tier: str = "full"           # the equiv tier submit requires: full, or dev while full is too slow for the engine
 
     @property
@@ -110,6 +111,7 @@ def parse(path: Path) -> Target:
         tasks=tuple(c.get("tasks") or ("mmlu_pro", "math", "code", "needle")),
         min_score_ratio=float(c.get("min_score_ratio", 0.99)), min_length_ratio=float(c.get("min_length_ratio", 0.90)),
         submit_tier=_submit_tier(c.get("submit_tier", "full")),
+        layers={k: tuple(v) for k, v in (raw.get("layers") or {}).items()},
         corpus_dir=ENV_ROOT / raw.get("corpus", {}).get("dir", "corpus"), raw=raw)
 
 

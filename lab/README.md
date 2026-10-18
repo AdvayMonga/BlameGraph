@@ -95,7 +95,7 @@ A held-out record (`config.split == "heldout"`) carries no `raw` and one aggrega
 One loop: once per run, before the first session, the base commit is measured under `bench`'s default regimes
 (seen split, short tier; the same cache `submit` compares against) and recorded as a `baseline` record
 (`RunConfig.baseline=False` skips it). Then, while dollars remain, a fresh agent session gets a system prompt
-generated from the target spec and the tool specs (`lab/prompts/system.md` is its template: target, write surface,
+generated from the target spec and the tool specs (`lab/prompts/objective.md` is its template: target, write surface,
 each tool with what it does, returns and costs, budget mechanics, how a session ends), the brief, and the tools,
 and is free. Its shell and file tools run inside the srt jail on an
 exported copy of the engine (no git history, held-out data removed); it may write
