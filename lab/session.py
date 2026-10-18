@@ -19,7 +19,7 @@ from lab.task import Task
 from lab.tools import Toolbox, clean_pristine
 from lab.workspace import Workspace
 
-SYSTEM = (Path(__file__).parent / "prompts" / "system.md").read_text()      # a template, filled by system_prompt
+OBJECTIVE = (Path(__file__).parent / "prompts" / "objective.md").read_text()   # a template, filled by system_prompt
 MIN_SESSION_USD = 0.25
 CLOSING_USD = 0.50          # the reflection-only call after a session that left a measurement unreflected
 CLOSING_TURNS = 4
@@ -73,16 +73,44 @@ def referee(s: Session) -> dict:
     return lab_feedback(recs, s.run_id, str(s.ledger_root), facts)["for_agent"]
 
 
+def layer_map(t: target.Target, files) -> str:
+    """Each layer's files in the base tree (the target's `[layers]` globs), one bullet per layer; the rest of the write
+    surface last."""
+    from fnmatch import fnmatch
+    files, taken, lines = sorted(files), set(), []
+    for name, globs in t.layers.items():
+        mine = [f for f in files if f not in taken and any(fnmatch(f, g) for g in globs)]
+        taken |= set(mine)
+        lines.append(f"  - {name.replace('_', ' ')}: " + (", ".join(f"`{f}`" for f in mine) or "no files"))
+    rest = [f for f in files if f not in taken and any(fnmatch(f, g) for g in t.write)]
+    if rest:
+        lines.append("  - in the write surface, in no layer: " + ", ".join(f"`{f}`" for f in rest))
+    return "\n".join(lines) or "  - the target names no layers"
+
+
 def system_prompt(t: target.Target, spec: agent.AgentSpec) -> str:
-    """The system prompt from the target spec and the tool specs: what is there and what it costs, nothing advised."""
+    """The agent's objective from the target spec, the regimes' definitions and the tool specs: what is there, how it
+    is scored and what it costs, nothing advised. Task-specific facts go in each session's brief."""
     from lab.evaltools import HOLDOUT_BUDGET
     from lab.safety.surfaces import ALWAYS_DENY
+    from regimes import suite
 
     def globs(g):
         return ", ".join(f"`{x}`" for x in g) or "nothing"
-    return SYSTEM.format(
+    regimes = "\n".join(f"  - `{n}`: {load}; reports {what}; limits: {limits}"
+                         for n, (load, what, limits) in suite.FACTS.items())
+    workbench = ("; on Linux it is a container with the GPU, internet access and root inside it, paused while a lab tool "
+                 "measures, its processes holding the GPU killed and listed in that tool's result"
+                 if agent.ClaudeAgentSDK.containerized() else "")
+    return OBJECTIVE.format(
         target=t.name, model=t.model, engine=t.engine_repo.name, launch=t.engine.launch,
-        env=json.dumps(t.engine.env), write=globs(t.write), add_only=globs(t.add_only), deny=globs(ALWAYS_DENY),
+        env=json.dumps(t.engine.env), layers=layer_map(t, spec.base_files), regimes=regimes,
+        measurement=suite.MEASUREMENT, interactive_ttft_ms=t.interactive.ttft_s * 1e3,
+        interactive_tpot_ms=t.interactive.tpot_s * 1e3, conversational_ttft_ms=t.conversational.ttft_s * 1e3,
+        conversational_tpot_ms=t.conversational.tpot_s * 1e3, short_probe=suite.TIERS["short"]["probe_s"],
+        short_final=suite.TIERS["short"]["final_s"], full_probe=suite.TIERS["full"]["probe_s"],
+        full_final=suite.TIERS["full"]["final_s"], min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio,
+        workbench=workbench, write=globs(t.write), add_only=globs(t.add_only), deny=globs(ALWAYS_DENY),
         tools="\n".join(f"- `{x.name}`: {x.description}" for x in spec.tools),
         session_usd=spec.max_budget_usd, max_turns=spec.max_turns, timeout_s=spec.timeout_s,
         min_session_usd=MIN_SESSION_USD, holdout=HOLDOUT_BUDGET, submit_tier=t.submit_tier, closing_usd=CLOSING_USD, closing_turns=CLOSING_TURNS,
@@ -186,6 +214,10 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
                                max_budget_usd=min(cfg.session_usd, budget.remaining_usd), workbench=s.workbench,
                                remote=remote, remote_workspace=rws)
         spec.system = system_prompt(target.load(), spec)
+        seen = run_dir / "sessions" / s.session_id           # exactly what the agent was given, for the researcher
+        seen.mkdir(parents=True, exist_ok=True)
+        (seen / "objective.md").write_text(spec.system)
+        (seen / "brief.md").write_text(spec.prompt)
         t0 = time.monotonic()
         try:
             if remote:
