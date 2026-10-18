@@ -32,6 +32,15 @@ are hosted-only and cannot be fine-tuned), a fine-tuned local classifier once on
 few hundred; the judge may use web search and read-only ledger SQL, its own choice when, with no research pasted by
 the harness (the facts-only line: the environment hands over facts; what the model chooses to read is its own, as in
 the agent's workbench); a merge hypothesis competing for the beam.
+## 2026-10-18 — A scheduler simulator for layer 3: the real scheduler on a fake clock
+`sim/scheduler.py` runs the engine's own scheduler code one step at a time (a `step()` seam, inference-server
+#120) with a fake clock and a backend that charges a cost model instead of running the model. Why: a scheduling
+change costs 30+ GPU minutes to try for real; this tries it in seconds on a CPU, on the regimes' own traffic. It
+screens; `bench`/`submit` judge. Its bar before the agent gets it as a tool (the user: a `simulate` tool, interface
+theirs): it must rank changes the way the real bench does (Spearman ≥ 0.8 over several known changes), not match
+milliseconds. The cost model is fitted from step telemetry of the first GPU run (phase 2); until then its defaults
+are stand-ins and every report says so.
+
 ## 2026-10-18 — Synthetic traffic is generated per run, never kept
 `regimes/synth.py` generates each run's traffic fresh from the public corpus's seen split (whole real sessions,
 the real timing pattern jittered, real text recombined) and keeps nothing: the seed in the run's config regenerates

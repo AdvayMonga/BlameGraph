@@ -257,6 +257,16 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   window from the device kernels it launches, `Task.kernel_names`, the speedup bound if they took no time, and the
   kernels no task covers, by share: the facts for choosing the next task). `lab/capture.py` + `lab.profile --capture MODULE:FUNCTION` (the `profile` tool's `capture`): every
   call's argument shapes and small int tensors, the first call per shape kept whole as real inputs.
+- `sim/` — the scheduler simulator (layer 3, 2026-10-18): `sim/scheduler.py` drives the engine's real
+  `ContinuousBatchScheduler` one `step()` at a time (inference-server #120) on a fake clock (`Clock`, installed as the
+  scheduler module's `time`) with `SimBackend`, which runs no model and charges a `CostModel` (prefill and decode
+  step times, answer lengths; defaults are unfitted stand-ins, phase 2 fits them from a GPU run's step telemetry) and
+  reserves KV blocks worst-case like the custom backend. Real: the scheduler, its policy, admission, KV arithmetic,
+  request timestamps, TTFT/TPOT as the regimes define them; a 10-minute class simulates in under a second.
+  `simulate(records, Settings, CostModel)` → regimes-shaped rows for `runner.summarize`; `Settings.from_env` takes the
+  engine's scheduler env vars, so a profile applies as is. `python -m sim run CLASS [--synthetic] [--env JSON]
+  [--cost FILE]`, with the engine's python. Not yet validated against a real bench (the bar: ranks changes like bench
+  does, Spearman ≥ 0.8); not an agent tool yet (the user's design).
 - `regimes/synth.py` — synthetic traffic (2026-10-18): generated fresh per run from the corpus's seen split and then
   gone, never written, the seed regenerates it (`Ctx.synthetic`, `regimes run --synthetic`). Whole real sessions in
   shuffled passes (structure, turns, think time, max_tokens, regime), the real gap sequence repeated with a seeded
