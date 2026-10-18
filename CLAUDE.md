@@ -244,8 +244,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   and ncu runs on the smallest and the largest seen shape; before promotion a model (`--detector-model`, Opus 5.5) reads each would-be winner for gaming and a flagged one is
   passed over, recorded with its evidence (`kernels/search/detect.py`, MANTIS; never changes a score);
   every call priced (OpenEvolve's too, via a usage log);
-  `python -m kernels.search.ab` runs OpenEvolve and kernels.search on one task with the same shapes, start, evaluator,
-  single model and judged-program budget, gates each winner on held-out shapes, and writes `ab.json`; same evaluator, run dir, re-timed promotion and `kernels` record as `kernels.evolve run`). `kernels/evolve/ship.py` (`python -m kernels.evolve ship`: a program with a passing held-out gate becomes a
+  `python -m kernels.search.ab --arms ...` runs OpenEvolve and kernels.search (and variants differing in one flag:
+  `search-roi`, `search-random`, `search-no-tools`) on one task with the same shapes, start, evaluator, single model
+  and judged-program budget, gates each winner on held-out shapes, and writes `ab.json`; `kernels/METHOD.md` maps
+  every component to its published source and number, or says why ours; same evaluator, run dir, re-timed promotion and `kernels` record as `kernels.evolve run`). `kernels/evolve/ship.py` (`python -m kernels.evolve ship`: a program with a passing held-out gate becomes a
   commit on a new engine branch, built with git plumbing so the engine's tree is untouched; `--budget` starts the
   `lab.experiment` researcher run on it, measured end to end by `bench`/`equiv`/`submit`). `kernels/share.py` (`python -m kernels.evolve share --profile BUNDLE [--profile ...] [--gate TASK=GATE.json]`: tasks
   ranked by share x (1 - % of roofline) across profiles, each task's share of a profiled engine
