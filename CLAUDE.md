@@ -221,12 +221,15 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   after every call the checker makes (`core._watched`; the timer binds its own at import); the exploit canaries in
   `tests/test_kernels_evolve.py` must all score 0; selection never sees held-out shapes, `gate` judges them (correctness, and their speedup as a fact); `validate_gpu.sh` = the GPU validation; tolerances from the target's
   `[kernels]`). `kernels/search/` (extra `kernel-search`; our own layer-1 generator, replacing OpenEvolve, which stays as the A/B baseline: `python -m
-  kernels.search`; a tree of refinement chains chosen ε-greedily with child and failure caps, the model shown only the
+  kernels.search`; a tree of refinement chains, parents chosen by MCTS (UCT, C = sqrt 2, progressive widening
+  alpha = 0.5, KernelPro), a node closed after 3 failed children, the model shown only the
   parent program, its measurements and its lineage, SEARCH/REPLACE answers, duplicates refused before any GPU time,
   with a judge (default) each step is two calls,
-  the judge (Opus 5.5) naming one change as JSON from the facts, including CudaForge's 24 ncu counters
-  (`kernels/evolve/ncu.py`, stage 3 of the jailed evaluator), and the coder writing it; a failed child gets one repair
-  in correction mode; launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen afterwards by a grid
+  the judge (Opus 5.5) naming 16 changes as JSON with its own speedup and risk estimates, ranked by
+  MANTIS's ROI (or a `screen`), the top 3 plus 1 random written and judged (`--hypotheses/--beam/--explore`; every
+  hypothesis and its fate in `hypotheses.jsonl`), from the facts, including CudaForge's 24 ncu counters
+  (`kernels/evolve/ncu.py`, stage 3 of the jailed evaluator), and the coder writing it; a failed child is repaired in
+  correction mode, chained up to 3 deep; launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen afterwards by a grid
   search on the winner, written back as constants, promoted only if their re-timed median is higher
   (`kernels/search/tune.py`), and when different points win in different size regions a dispatcher picks CONFIG per
   call from the call's size (`Task.size_expr`, tensor shapes only, so CUDA graphs bake it per captured size), promoted

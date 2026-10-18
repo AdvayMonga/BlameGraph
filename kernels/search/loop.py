@@ -12,6 +12,8 @@ Every node goes to `<out>/trace.jsonl` in the fields `kernels.evolve.run.record`
 from __future__ import annotations
 
 import json
+import math
+import re
 import tempfile
 import uuid
 from pathlib import Path
@@ -33,15 +35,50 @@ TIMING_KEYS = ("shape", "candidate_ms", "baseline_ms", "speedup", "speedup_p25",
                "pct_of_roofline", "bound", "pct_of_peak_bandwidth", "pct_of_peak_flops")
 
 
-JUDGE = """You are the judge in a search over GPU kernel programs. You are shown one program and its measurements;
-name one change for a coder to make, as one JSON object and nothing else.
+JUDGE = """You are the judge in a search over GPU kernel programs. You are shown one program and its measurements.
 {mode_spec}"""
 MODES = {
-    "optimization": 'The program is correct. Reply {"bottleneck": "<max 30 words>", "optimisation_method": "<max 35 '
-                    'words>", "modification_plan": "<max 35 words>"}.',
-    "correction": 'The program failed (see its measurements). Reply {"critical_issue": "<max 20 words>", '
-                  '"why_it_matters": "<max 35 words>", "minimal_fix_hint": "<max 20 words>"}.',
+    "optimization": 'The program is correct. Name {n} distinct changes a coder could make, as one JSON array of {n} '
+                    'objects and nothing else, each {{"bottleneck": "<max 30 words>", "optimisation_method": "<max 35 '
+                    'words>", "modification_plan": "<max 35 words>", "expected_speedup": <your estimate, >= 1.0>, '
+                    '"implementation_risk": <1 low to 3 high>, "performance_risk": <1 low to 3 high>}}.',
+    "correction": 'The program failed (see its measurements). Name one fix, as one JSON object and nothing else: '
+                  '{{"critical_issue": "<max 20 words>", "why_it_matters": "<max 35 words>", "minimal_fix_hint": '
+                  '"<max 20 words>"}}.',
 }
+
+
+def hypotheses(text: str, n: int) -> list[dict]:
+    """The judge's JSON array (or one object), best effort; unparsable text becomes one hypothesis."""
+    m = re.search(r"\[.*\]|\{.*\}", text or "", re.S)
+    try:
+        v = json.loads(m.group(0)) if m else None
+    except json.JSONDecodeError:
+        v = None
+    v = v if isinstance(v, list) else [v] if isinstance(v, dict) else [{"plan": text}] if text else []
+    return [h for h in v if isinstance(h, dict)][:n]
+
+
+def roi(h: dict, pct_of_roofline: float | None) -> float:
+    """MANTIS's triage score: S^(1 + max(0, log10(g / 5))) / (R_impl * R_perf), S = the judge's expected speedup,
+    g = time over the speed-of-light bound (100 / % of roofline). Arithmetic on the judge's own estimates."""
+    try:
+        sp = max(float(h.get("expected_speedup", 1.0)), 1e-6)
+        ri, rp = (min(max(float(h.get(k, 2)), 1.0), 3.0) for k in ("implementation_risk", "performance_risk"))
+    except (TypeError, ValueError):
+        return 0.0
+    g = 100.0 / pct_of_roofline if pct_of_roofline else 1.0
+    return sp ** (1 + max(0.0, math.log10(g / 5))) / (ri * rp)
+
+
+def choose(scores: list[float], k: int, explore: int, rng) -> list[tuple[int, bool]]:
+    """(index, chosen at random) for k of them: the top k - explore by score, then `explore` at random from the rest,
+    so the measured outcomes include hypotheses the ranking did not favour (unbiased labels for a learned screener)."""
+    order = sorted(range(len(scores)), key=lambda i: -scores[i])
+    top = order[: max(0, k - explore)]
+    rest = order[len(top):]
+    picked = rng.sample(rest, min(explore, len(rest)))
+    return [(i, False) for i in top] + [(i, True) for i in picked]
 
 
 def ncu_facts(node: Node) -> str:
@@ -116,16 +153,23 @@ def cascade(judge_stage: Callable[[str, int], dict], counters: bool = False) -> 
 def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, float]],
            judge: Callable[[str], dict], out: Path, evals: int, usd: float, seed: int = 0,
            review: Callable[[str, str], tuple[str, float]] | None = None,
-           stop_pct: float | None = None, patience: int | None = None) -> tuple[Tree, dict]:
+           stop_pct: float | None = None, patience: int | None = None, n_hypotheses: int = 16, beam: int = 4,
+           explore: int = 1, max_repairs: int = 3,
+           screen: Callable[[str, str, list[dict]], tuple[list[float], float]] | None = None) -> tuple[Tree, dict]:
     """Search until `evals` programs are judged, `usd` is spent on model calls, nothing is left to try, or the best
     program reaches `stop_pct`% of its roofline bound, or `patience` programs have been judged since the best last
     improved (MANTIS, Hari et al.: within 25% of speed-of-light or 16 attempts without progress kept 96% of the geomean
     gain for 33% fewer tokens).
-    `propose` is the coder, `review` the judge (None: the coder alone). Returns the tree and the run's cost
-    {usd, model_calls, evals}."""
+
+    Each expansion of an MCTS-chosen parent: the judge (`review`) names `n_hypotheses` changes with its own speedup
+    and risk estimates; `screen` scores them (default: MANTIS's ROI on those estimates); the top `beam - explore` and
+    `explore` random others are written by the coder (`propose`) and judged (Kevin's beam: 4x16, 1.56x vs best@16
+    1.41x). A judged child that fails is repaired, one fix per round, up to `max_repairs` deep. Without a judge the
+    coder alone proposes `beam` children. Every hypothesis, its score and what became of it go to
+    `<out>/hypotheses.jsonl`. Returns the tree and the run's cost {usd, model_calls, evals, ...}."""
     out.mkdir(parents=True, exist_ok=True)
     tree, spent, calls, judged, it, repairs = Tree(seed), 0.0, 0, 0, 0, []
-    with open(out / "trace.jsonl", "w") as trace:
+    with open(out / "trace.jsonl", "w") as trace, open(out / "hypotheses.jsonl", "w") as hyplog:
         def keep(node: Node, cost: float) -> None:
             tree.add(node)
             trace.write(json.dumps({"iteration": node.iteration, "parent_id": node.parent, "child_id": node.id,
@@ -133,6 +177,32 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
                                     "artifacts": node.artifacts, "judge": node.judge, "proposal": node.proposal,
                                     "cost_usd": cost}) + "\n")
             trace.flush()
+
+        def attempt(parent: Node, plan: str, mode: str, cost: float) -> Node | None:
+            """One coder call on `plan`, applied and judged; the child (None when the budget ran out first)."""
+            nonlocal spent, calls, judged
+            if judged >= evals or spent >= usd:
+                return None
+            text, c = propose(system + "\n\n" + FORMAT, prompt(tree, parent, plan))
+            spent, calls, cost = spent + c, calls + 1, cost + c
+            code, why = diff.apply(parent.code, text) if text else (None, "the model returned no text")
+            if code is not None and fingerprint(code) in tree.seen:
+                code, why = None, "identical to a program already judged (comments and whitespace aside)"
+            deep = parent.repairs + (mode == "correction")
+            if code is None:                     # no GPU time spent: a failed child of its parent
+                zero = {"combined_score": 0.0, "correct": 0.0, "stage": 0}
+                child = Node(uuid.uuid4().hex[:8], parent.id, parent.code, zero, {"error": why}, it, text, plan, mode,
+                             deep)
+            else:
+                r = judge(code)
+                judged += 1
+                child = Node(uuid.uuid4().hex[:8], parent.id, code, r["metrics"], r["artifacts"], it, text, plan,
+                             mode, deep)
+                if child.score <= 0 and review and deep < max_repairs:
+                    repairs.append(child.id)
+            keep(child, cost)
+            return child
+
         r = judge(initial)
         judged += 1
         keep(Node(uuid.uuid4().hex[:8], None, initial, r["metrics"], r["artifacts"], 0), 0.0)
@@ -144,32 +214,41 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
                 best_at, best_score = judged, tree.best().score
             if patience and judged - best_at >= patience:
                 break
-            if review and repairs:
-                parent, mode = tree.nodes[repairs.pop(0)], "correction"
-            else:
-                parent, mode = tree.select(), "optimization"
+            it += 1
+            if review and repairs:               # a failed child first: one fix (CudaForge's correction mode)
+                failed = tree.nodes[repairs.pop(0)]
+                plan, cost = review(system + "\n\n" + JUDGE.format(mode_spec=MODES["correction"].format()),
+                                    prompt(tree, failed, coder=False))
+                spent, calls = spent + cost, calls + 1
+                attempt(failed, plan, "correction", cost)
+                continue
+            parent = tree.select()
             if parent is None:
                 break
-            it += 1
-            plan, cost = review(system + "\n\n" + JUDGE.format(mode_spec=MODES[mode]), prompt(tree, parent, coder=False)) \
-                if review else ("", 0.0)
-            text, c2 = propose(system + "\n\n" + FORMAT, prompt(tree, parent, plan))
-            cost += c2
-            spent, calls = spent + cost, calls + (2 if review else 1)
-            code, why = diff.apply(parent.code, text) if text else (None, "the model returned no text")
-            if code is not None and fingerprint(code) in tree.seen:
-                code, why = None, "identical to a program already judged (comments and whitespace aside)"
-            if code is None:                     # no GPU time spent: a failed child of its parent
-                zero = {"combined_score": 0.0, "correct": 0.0, "stage": 0}
-                keep(Node(uuid.uuid4().hex[:8], parent.id, parent.code, zero, {"error": why}, it, text, plan, mode),
-                     cost)
+            if not review:
+                for _ in range(beam):
+                    attempt(parent, "", "optimization", 0.0)
                 continue
-            r = judge(code)
-            judged += 1
-            child = Node(uuid.uuid4().hex[:8], parent.id, code, r["metrics"], r["artifacts"], it, text, plan, mode)
-            keep(child, cost)
-            if child.score <= 0 and mode == "optimization":
-                repairs.append(child.id)         # one repair per failed child
+            text, cost = review(system + "\n\n" + JUDGE.format(mode_spec=MODES["optimization"].format(n=n_hypotheses)),
+                                prompt(tree, parent, coder=False))
+            spent, calls = spent + cost, calls + 1
+            hs = hypotheses(text, n_hypotheses)
+            if not hs:
+                keep(Node(uuid.uuid4().hex[:8], parent.id, parent.code, {"combined_score": 0.0, "correct": 0.0,
+                                                                        "stage": 0},
+                          {"error": "the judge named no change"}, it, "", text), cost)
+                continue
+            ranks = [roi(h, parent.pct_of_roofline) for h in hs]
+            scores, c = screen(system, prompt(tree, parent, coder=False), hs) if screen else (ranks, 0.0)
+            spent += c
+            measured = []
+            for i, random_pick in choose(scores, beam, explore, tree.rng):
+                child = attempt(parent, json.dumps(hs[i]), "optimization", cost if not measured else 0.0)
+                if child is not None:
+                    measured.append({"index": i, "random": random_pick, "child_id": child.id})
+            hyplog.write(json.dumps({"iteration": it, "parent_id": parent.id, "hypotheses": hs, "roi": ranks,
+                                     "scores": scores, "measured": measured}) + "\n")
+            hyplog.flush()
     near = bool(stop_pct and (tree.best().pct_of_roofline or 0) >= stop_pct)
     stalled = bool(patience and not near and judged < evals and spent < usd and judged - best_at >= patience)
     return tree, {"usd": round(spent, 4), "model_calls": calls, "evals": judged, "stopped_near_roofline": near,
