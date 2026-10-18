@@ -263,11 +263,16 @@ def test_moe_gemm_task_reference_routing_capture_and_judge():
     loop = torch.stack([a[tok[i]] @ w[sorted_e[i]].T for i in range(M)])
     assert torch.allclose(out, loop, atol=1e-4)
     rows = torch.randn(M, K, generator=g)                                   # down projection: rows given directly
-    empty = torch.empty(0, dtype=torch.int64)
+    empty = torch.empty(0, dtype=torch.int32)
     assert torch.allclose(mg.reference(rows, empty, w, sorted_ids, expert_ids),
                           torch.stack([rows[i] @ w[sorted_e[i]].T for i in range(M)]), atol=1e-4)
     seen = {}
-    mg._call(lambda *x, **k: seen.update(args=x, kw=k), rows, empty, w, sorted_ids, expert_ids)
+    mg._call(lambda *x, **k: seen.update(args=x, kw=k) or torch.zeros(M, N), rows, empty, w, sorted_ids, expert_ids)
+    padded = torch.full((sorted_ids.numel() // 16 * 16,), M, dtype=torch.int32)        # align_fused's exact padding
+    assert padded.numel() // expert_ids.numel() == 16
+    f32 = mg._call(lambda *x, **k: torch.zeros(M, N, dtype=torch.float32), rows.bfloat16(), empty, w, sorted_ids,
+                   expert_ids)
+    assert f32.dtype == torch.bfloat16                                                  # split-K's fp32, compared as bf16
     assert seen["args"][1] is None and seen["args"][5] == M and seen["kw"] == {"block_m": 16}
     call = {"fn": "x", "args": [{"shape": [T, K]}, {"shape": [M], "values": tok.tolist()}, {"shape": [E, N, K]},
                                 {"shape": [sorted_ids.numel()], "values": sorted_ids.tolist()},

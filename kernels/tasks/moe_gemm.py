@@ -2,8 +2,8 @@
 token's row times its expert's weights. Both expert projections call it: gate_up with rows gathered from the tokens
 (`tok`), down with the pairs' rows given directly (`tok` empty here; None to the engine).
 
-Shape: (M pairs, K, N, E experts, T rows of `a`, from_tokens 1|0). Inputs: a [T, K], tok [M] int64 (empty when not
-from tokens), w [E, N, K], sorted_ids / expert_ids from `align` (block_m 16): the pair ids per padded row block and
+Shape: (M pairs, K, N, E experts, T rows of `a`, from_tokens 1|0). Inputs: a [T, K], tok [M] int32 (empty when not
+from tokens; since inference-server #112 the engine's down projection uses `moe_gemm_scatter` instead), w [E, N, K], sorted_ids / expert_ids from `align` (block_m 16): the pair ids per padded row block and
 each block's expert. Captured calls carry the engine's real routing (tok, sorted_ids, expert_ids by value)."""
 from __future__ import annotations
 
@@ -37,16 +37,26 @@ def _pairs(tok, a):
     return tok.numel() if tok.numel() else a.shape[0]
 
 
+def _block_m(sorted_ids, expert_ids) -> int:
+    """Rows per block: the power of two p with len(sorted_ids) // p == the number of blocks. Unique under both the
+    engine's paddings (`align`: M + E(p - 1) ids; `align_fused`: exactly blocks x p)."""
+    n = expert_ids.numel()
+    return next(p for p in (2 ** i for i in range(11)) if sorted_ids.numel() // p == n)
+
+
 def _call(fn, a, tok, w, sorted_ids, expert_ids):
+    """The engine's call; its fp32 output (when it splits the GEMM over K, which the engine's next kernel reads as is)
+    is compared in the reference's dtype, the same cast for the baseline and every candidate."""
     M = _pairs(tok, a)
-    block_m = (sorted_ids.numel() - M) // w.shape[0] + 1
-    return fn(a, tok if tok.numel() else None, w, sorted_ids, expert_ids, M, block_m=block_m)
+    block_m = _block_m(sorted_ids, expert_ids)
+    out = fn(a, tok if tok.numel() else None, w, sorted_ids, expert_ids, M, block_m=block_m)
+    return out if out.dtype == a.dtype else out.to(a.dtype)
 
 
 def reference(a, tok, w, sorted_ids, expert_ids):
     """Each pair's row times its expert's weights, in fp32."""
     M, (E, N, _) = _pairs(tok, a), w.shape
-    bm = (sorted_ids.numel() - M) // E + 1
+    bm = _block_m(sorted_ids, expert_ids)
     expert = torch.full((sorted_ids.numel(),), E, dtype=torch.long, device=a.device)
     expert[: expert_ids.numel() * bm] = expert_ids.long().repeat_interleave(bm)   # rows past the last block: padding
     real = (sorted_ids < M) & (expert < E)
@@ -62,7 +72,8 @@ def reference(a, tok, w, sorted_ids, expert_ids):
 def _routing(M, E, T, from_tokens, g, sorted_e=None):
     if sorted_e is None:
         sorted_e = torch.sort(torch.randint(0, E, (M,), generator=g)).values
-    tok = torch.randint(0, T, (M,), generator=g) if from_tokens else torch.empty(0, dtype=torch.int64)
+    tok = (torch.randint(0, T, (M,), generator=g).to(torch.int32) if from_tokens   # the engine's tok is int32
+           else torch.empty(0, dtype=torch.int32))
     return (tok, *align(sorted_e, E))
 
 
@@ -81,7 +92,7 @@ def make_inputs(shape, dtype, device, g):
 def make_real(shape, dtype, device, g, ints):
     """The captured call's routing (tok when from tokens, sorted_ids, expert_ids), random a and w."""
     M, K, N, E, T, ft = shape
-    tok = torch.tensor(ints[0], dtype=torch.int64) if ft else torch.empty(0, dtype=torch.int64)
+    tok = torch.tensor(ints[0], dtype=torch.int32) if ft else torch.empty(0, dtype=torch.int32)
     sorted_ids, expert_ids = (torch.tensor(x, dtype=torch.int32) for x in ints[-2:])
     return _with_values(T, K, N, E, dtype, device, g, tok, sorted_ids, expert_ids)
 
