@@ -118,11 +118,19 @@ def from_bundle(bundle: str | Path, t=None, gpu: dict | None = None, gates: dict
 def _kernel_distance(gates: dict | None, tasks: list | None) -> dict:
     if not gates:
         return {"pct_of_ceiling": None, "ceiling_missing": "no kernel gate results given (kernels.share.rank joins them)"}
-    from kernels.share import weighted_pct
-    per = {name: weighted_pct(g) for name, g in gates.items()}
+    per = {name: _weighted_pct(g) for name, g in gates.items()}
     known = {k: v for k, v in per.items() if v is not None}
     return {"pct_of_ceiling": sum(known.values()) / len(known) if known else None, "pct_of_roofline_by_task": per,
             "ceiling_basis": "mean over tasks of the call-weighted % of each kernel's roofline bound"}
+
+
+def _weighted_pct(gate: dict) -> float | None:
+    """Call-weighted % of the roofline bound over the shapes a kernel `gate` result timed (as kernels.share.weighted_pct;
+    repeated here because the kernels package imports torch, which the lab does not require)."""
+    rows = [r for k in ("timings", "heldout_timings") for r in json.loads((gate.get("artifacts") or {}).get(k) or "[]")
+            if r.get("pct_of_roofline") is not None]
+    w = sum(r.get("weight") or 1 for r in rows)
+    return sum((r.get("weight") or 1) * r["pct_of_roofline"] for r in rows) / w if rows else None
 
 
 def _decode_distance(t, gpu: dict | None, batch: float | None, context: float | None, measured: float | None) -> dict:
