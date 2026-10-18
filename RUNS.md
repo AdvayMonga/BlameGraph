@@ -5,6 +5,7 @@ local and archived in the store (`python -m store pull`).
 
 | Date | Venue | What | GPU cost | Result | Evidence |
 |---|---|---|---|---|---|
+| 2026-10-18 | Nebius H200 (`lab-gpu-2`) | Engine session 6: per-step prefill breakdown (inference-server #118) to place the tiny-step stalls; main re-measured | ~1 h (~$4.5) | long_prompt 18.3 req/s (x3: default / expandable-segments allocator / fa3; was 12.5 the day before on the same code), saturated 4.11, single_stream TPOT p99 5.87 ms; the 0.5-2 s stalls did not reproduce | `data/engine-h200-20261018/REPORT.md` (session 6), `s8*/` |
 | 2026-10-18 | Nebius H200 (`lab-gpu-2`) | Engine session 5: the unprofiled parts profiled (prefill forward, batch-1 GEMM under ncu, host under bursts and long prompts) and fixed; Qwen-only engine (inference-server #114, #115, #116, #117) | ~2 h 40 min (~$12) | saturated 3.81 -> 4.06 req/s, single_stream TPOT p99 6.01 -> 5.87 ms, prefill 4.0 -> 3.2 ms/layer at 8k tokens, long_prompt 12.5 (14.2 with fa3, unstable); gate PASS | `data/engine-h200-20261018/`, below |
 | 2026-10-17/18 | Nebius H200 (`lab-gpu-2`) | Engine session 4: one-launch router, FlashInfer planned once per wave, split-K MoE GEMMs, padded-step cap, compile A/B (inference-server #113) | ~1 h 20 min (~$6) | saturated 3.58 -> 3.81 req/s, single_stream TPOT p99 6.14 -> 6.01 ms, long_prompt 9.03 -> 12.5 req/s; gate PASS; compile on the MoE decode not viable | `data/engine-h200-20261017/session6/`, below |
 | 2026-10-17 | Nebius H200 (`lab-gpu-2`) | Engine session 3: defaults, decode launch diet, fused MoE routing/epilogue, FlashInfer prefill (inference-server #112) | ~2 h (~$9) | saturated 1.87 -> 3.58 req/s (conc 128 within limits), single_stream TPOT p99 9.26 -> 6.14 ms, long_prompt 6.25 -> 9.03 req/s; gate PASS (ratio 1.0105, CI 0.997-1.024) | `data/engine-h200-20261017/REPORT.md`, below |
@@ -20,6 +21,17 @@ local and archived in the store (`python -m store pull`).
 | 2026-10-08 | Nebius H200 | Profiler tools on the real engine | ~$0.87 | All four tools work unjailed; three fixes | below |
 | 2026-10-05 | Nebius H200 | Full-tier correctness recalibration | ~$16.50 | Policy confirmed; FP8/INT8 pass, Int4 fails | `data/h200-run-20261005/REPORT.md`, `data/equiv-full/` |
 | 2026-10-04 | Verda H200 | Dev-tier correctness calibration | $6.75 | Gate separates Int4; consistency results void | `data/h200-run-20261004/REPORT.md`, `data/equiv/` |
+
+## 2026-10-18 — Engine session 6: where a prefill step's time goes (Nebius H200 `lab-gpu-2`, inference-server #118)
+Each mixed prefill step now records host enqueue time, host time in block allocation (prefix-cache reclaim
+included), the forward's device time (CUDA events, read once the step has synced) and the wait at the first sync.
+long_prompt three times on main after #117 (default / `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` / fa3):
+18.3 req/s each, TTFT p99 0.36-0.52 s, TPOT p99 82-87 ms (the limiter), 1,119 requests, no step over 0.4 s; of 148 s
+of prefill phases, 97 s host enqueue (0.5 s allocation), 2.5 s sync waits, 98 s device. The 0.5-2 s stalls of
+sessions 4-5 did not reproduce on this boot; the worst steps are 1-8-token steps with ~0.3 s of host enqueue and an
+idle device (~5 of 2,500), not allocation, not the allocator, not the attention backend. saturated 4.11 req/s (conc
+128 TTFT p99 0.48 s; 256 at 69% attainment, TTFT 1.8 s), single_stream 5.87 ms. State of the engine vs vLLM
+(5.8 / 4.14 ms / 68): 71% / 71% / 27%.
 
 ## 2026-10-18 — Engine session 5: profile everything that was not, then fix (Nebius H200 `lab-gpu-2`, inference-server #117)
 First the diagnosis. Prefill forward at an 8k-token chunk (never profiled): ~4.0 ms a layer, GEMMs and FlashInfer 2.1 ms
