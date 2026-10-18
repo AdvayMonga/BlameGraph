@@ -77,6 +77,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--usd", type=float, default=10.0, help="cap on model spend")
     ap.add_argument("--model", default="claude-opus-5-5", help="the coder")
     ap.add_argument("--judge-model", default="claude-opus-5-5", help="the judge; `none`: the coder alone")
+    ap.add_argument("--judge-tools", action=argparse.BooleanOptionalAction, default=True,
+                    help="the judge may search the web and query the ledger (its choice when)")
     ap.add_argument("--ncu", action=argparse.BooleanOptionalAction, default=None,
                     help="ncu counters for the judge (default: on with --device cuda)")
     ap.add_argument("--effort", default="high")
@@ -101,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     out = Path(a.out)
     sets, program = prepare(task, _shapes(task, a), out, a.device, tolerances(_target_tolerances()),
                             a.timing_shapes, a.initial)
-    review = None if a.judge_model == "none" else Claude(a.judge_model, a.effort)
+    review = None if a.judge_model == "none" else Claude(a.judge_model, a.effort, tools=a.judge_tools)
     judge = cascade(evaluator.judge_stage, counters=a.ncu)
     system = system_message(task) + ("\n\n" + TUNE_FACT if a.tune_points else "")
     tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.usd, a.seed,

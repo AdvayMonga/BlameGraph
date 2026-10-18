@@ -426,6 +426,62 @@ def test_screeners_score_hypotheses_and_the_log_keeps_labels():
     assert row["scores"] == [0.0, 0.1, 0.9] and cost["usd"] == 0.01
 
 
+def test_the_judge_can_query_the_ledger_and_search_the_web_across_turns():
+    from types import SimpleNamespace
+    from kernels.search import llm
+    turns, sent = iter(["tool_use", "pause_turn", "end_turn"]), []
+
+    class Stream:
+        def __init__(self, **kw):
+            sent.append(kw)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get_final_message(self):
+            stop = next(turns)
+            usage = SimpleNamespace(model_dump=lambda: {"input_tokens": 1000, "output_tokens": 100,
+                                                       "server_tool_use": {"web_search_requests": 2}})
+            content = {"tool_use": [SimpleNamespace(type="tool_use", id="t1", name="query",
+                                                    input={"sql": "SELECT 1"})],
+                       "pause_turn": [SimpleNamespace(type="text", text="searching")],
+                       "end_turn": [SimpleNamespace(type="text", text="[plan]")]}[stop]
+            return SimpleNamespace(model="claude-opus-5-5", usage=usage, stop_reason=stop, content=content)
+
+    c = llm.Claude.__new__(llm.Claude)
+    c.client = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(stream=lambda **kw: Stream(**kw))))
+    c.model, c.effort, c.max_tokens, c.tools, c.max_turns, c.ledger_root = "claude-opus-5-5", "high", 1000, True, 8, None
+    orig = llm.run_query
+    llm.run_query = lambda sql, root=None: json.dumps({"columns": ["x"], "rows": [[1]], "sql": sql})
+    try:
+        text, usd = c("S", "U")
+    finally:
+        llm.run_query = orig
+    assert text == "[plan]" and len(sent) == 3 and {t["name"] for t in sent[0]["tools"]} == {"web_search", "query"}
+    results = next(m["content"] for m in sent[-1]["messages"] if m["role"] == "user" and isinstance(m["content"], list))
+    assert results[0]["type"] == "tool_result" and "SELECT 1" in results[0]["content"]
+    assert abs(usd - 3 * (1000 * 4 + 100 * 20) / 1e6 - 3 * 2 * llm.WEB_SEARCH_USD) < 1e-9
+
+
+def test_inspirations_show_other_branches_and_a_merge_competes_for_the_beam():
+    from kernels.search.loop import merge_hypothesis, prompt
+    t = Tree()
+    ok = lambda sc: {"combined_score": sc, "correct": 1.0, "stage": 2}        # noqa: E731
+    t.add(Node("r", None, "a = 1\nb = 1\n", ok(1.0), {}, 0))
+    t.add(Node("x", "r", "a = 2\nb = 1\n", ok(1.5), {}, 1))
+    t.add(Node("y", "r", "a = 1\nb = 2\n", ok(1.3), {}, 1))
+    m = merge_hypothesis(t, t.nodes["y"])
+    assert m["merge_from"] == "x" and m["expected_speedup"] == 1.5
+    judge_view = prompt(t, t.nodes["y"], coder=False)
+    assert "# Other programs in the tree" in judge_view and "+a = 2" in judge_view and "Program r" not in \
+        judge_view.split("# Other programs")[1]
+    assert "+a = 2" in prompt(t, t.nodes["y"], json.dumps(m)) and "+a = 2" not in prompt(t, t.nodes["y"], '{"p": 1}')
+    assert merge_hypothesis(t, t.nodes["x"])["merge_from"] == "y"
+
+
 def test_the_claude_client_streams_with_effort_and_fallbacks_and_prices_the_call():
     from types import SimpleNamespace
     from kernels.search.llm import FALLBACK_BETA, Claude
@@ -448,7 +504,8 @@ def test_the_claude_client_streams_with_effort_and_fallbacks_and_prices_the_call
 
     c = Claude.__new__(Claude)
     c.client = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(stream=lambda **kw: Stream(**kw))))
-    c.model, c.effort, c.max_tokens = "claude-opus-5-5", "high", 64000
+    c.model, c.effort, c.max_tokens, c.tools, c.max_turns, c.ledger_root = "claude-opus-5-5", "high", 64000, False, 8, \
+        None
     text, usd = c("sys", "user")
     assert text == "hi" and abs(usd - (4.0 + 2.0)) < 1e-9                 # $4/MTok in + $20/MTok out
     assert seen["output_config"] == {"effort": "high"} and seen["fallbacks"] == "default"
