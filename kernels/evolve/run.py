@@ -53,6 +53,12 @@ def system_message(task) -> str:
     refused = "; ".join(dict.fromkeys(core.FORBIDDEN.values()))
     graphs = (", both captured in CUDA graphs and timed as graph replays, as the engine runs them (a kernel that "
               "cannot be captured scores 0)") if task.graphs else ""
+    from kernels.evolve.jailed import TIMEOUT_S
+    cuda = ("\n- A program may build CUDA C++ when it is imported, with `torch.utils.cpp_extension.load_inline` (the "
+            "evaluation host's CUDA toolkit at $CUDA_HOME, ninja on PATH, the GPU's own architecture unless the program "
+            f"passes flags). The build is not timed; it counts against each stage's {TIMEOUT_S:.0f} s limit and is kept "
+            "per program source across its stages and re-timings. Its C++ is screened like the Python.") \
+        if task.entry else ""
     return f"""The program defines `kernel`, a replacement for {base}. It must compute what the task's reference \
 computes, on the same inputs, within dtype tolerance ({', '.join(str(d).removeprefix('torch.') for d in task.dtypes)}).
 
@@ -67,7 +73,7 @@ over {core.PHYSICS_MARGIN_PCT}% of its roofline bound. Held-out shapes are judge
 - Refused before running: source that uses {refused}, or writes into anything it imports. Scores 0: anything the \
 evaluator uses found patched.
 - Lower precision inside the kernel is allowed while the output stays within tolerance; each result reports its \
-error against the reference beside the baseline's.
+error against the reference beside the baseline's.{cuda}
 
 The goal is the highest score."""
 

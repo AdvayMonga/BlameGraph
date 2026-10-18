@@ -300,9 +300,12 @@ def test_the_grid_search_picks_launch_parameters_and_rewrites_them_as_constants(
         assert len(rows) == 3 and "'chunk': 1," not in code and result["metrics"]["correct"] == 1.0
         best = max(rows, key=lambda r: r["score"])
         assert best["config"]["chunk"] > 1 and best["score"] > rows[0]["score"]          # chunk 1 is the slow one
-        out, metrics, rec = _tune(CHUNKED, {"combined_score": rows[0]["score"]}, judge, 3)
+        out, metrics, rec = _tune([(CHUNKED, {"combined_score": rows[0]["score"]}, None)], judge, 3)
         assert rec["promoted"] and rec["median"] > rec["base_median"] and "'chunk': 1," not in out
-        assert _tune("def kernel(x, w): ...\n", {}, judge, 3)[2] == {}                  # no grid declared
+        assert _tune([("def kernel(x, w): ...\n", {}, None)], judge, 3)[2] == {}          # no grid declared
+        plain = "def kernel(x, w): ...\n"                     # a winner with no grid, the runner-up with one
+        out, metrics, rec = _tune([(plain, {"combined_score": 0.01}, 0.01), (CHUNKED, None, 0.005)], judge, 3)
+        assert rec["from"] == 1 and rec["promoted"] and rec["base_median"] == 0.01 and "TUNABLES" in out
 
 
 def test_the_ab_harness_runs_both_arms_and_gates_each_winner_on_held_out_shapes():

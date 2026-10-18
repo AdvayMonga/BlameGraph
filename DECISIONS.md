@@ -5,6 +5,17 @@ a reversed decision gets a new entry that names the old one. Change any of these
 
 
 
+## 2026-10-18 — Kernel candidates may be CUDA C++; the top 4 are tuned
+A layer-1 program may build CUDA C++ at import (`torch.utils.cpp_extension.load_inline`) beside Triton, the model's
+choice; the build is cached per program source. Why: every frontier kernel system with the strongest numbers writes
+CUDA (CudaForge, KernelPro, MANTIS), Triton cannot reach warp specialization, TMA or wgmma, and the engine's own
+decode megakernel is CUDA. Rust was considered and not taken: no GPU kernel toolchain in use. Accepted risk: C++ in
+the evaluator's process can do what ctypes can (banned in Python); correctness stays guarded by outputs verified in a
+separate process; faked timing is guarded by the C++ screen (Python C-API, dynamic loading, syscalls, threads,
+streams, graphs, timer events), the roofline physics alarm and the gaming detector. Tuning moves from the winner
+only to each of the top 4 re-timed programs (8 grid points each; KernelEvolve tunes every candidate). The judge and
+coder stay on the metered API (the user, 2026-10-18).
+
 ## 2026-10-18 — Short gates: bench, equiv and submit sized by significance
 The user asked for the least data that keeps each gate statistically meaningful. Bench defaults to the general regime
 (saturated) plus the task's objective and constrained regimes when a task names them (was single_stream, saturated,

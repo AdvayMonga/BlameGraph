@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -75,6 +76,84 @@ def test_the_screen_refuses_exploit_routes_and_passes_real_kernels():
         bad.write_text("import gc\ndef kernel(x, w):\n    return x\n")
         r = judge(t, bad, list(t.seen_default), [], None, "cpu", None, 1)
         assert r["metrics"]["combined_score"] == 0.0 and "refused before running" in r["artifacts"]["error"]
+
+
+CUDA_PROGRAM = r'''import torch
+from torch.utils.cpp_extension import load_inline
+
+CUDA = """
+#include <torch/extension.h>
+#include <ATen/cuda/CUDAContext.h>
+__global__ void scale_k(const float* x, float* y, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) y[i] = 2.0f * x[i];
+}
+torch::Tensor scale(torch::Tensor x) {
+    auto y = torch::empty_like(x);
+    int n = x.numel();
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    scale_k<<<(n + 255) / 256, 256, 0, stream>>>(x.data_ptr<float>(), y.data_ptr<float>(), n);
+    return y;
+}
+"""
+_ext = load_inline("scale_ext", cpp_sources="torch::Tensor scale(torch::Tensor x);", cuda_sources=CUDA,
+                   functions=["scale"], extra_cuda_cflags=["-O3"])
+
+
+def kernel(x):
+    return _ext.scale(x)
+'''
+
+
+def test_the_screen_passes_a_cuda_extension_and_refuses_its_cpp_routes():
+    from kernels.evolve.core import screen
+    assert screen(CUDA_PROGRAM) == []
+    for bad in ('PyObject* m = PyImport_ImportModule("kernels.timing");', "py::module_::import(\"gc\");",
+                'void* h = dlopen("libc.so.6", 1);', "std::thread t(f);", 'FILE* f = fopen("/proc/self/mem", "r");',
+                "cudaStream_t s; cudaStreamCreate(&s);", "cudaEventRecord(e, 0);", "cudaGraphLaunch(g, 0);",
+                'popen("id", "r");'):
+        assert screen(CUDA_PROGRAM.replace("int n = x.numel();", "int n = x.numel(); " + bad)), bad
+
+
+def test_a_programs_cpp_builds_once_for_all_its_stages_and_only_for_that_source():
+    from kernels.evolve import jailed
+    seen = []
+
+    def fake(tree, argv, *, timeout_s, env_extra, read):
+        ext = Path(env_extra["TORCH_EXTENSIONS_DIR"])
+        seen.append(sorted(p.name for p in ext.rglob("*")) if ext.exists() else [])
+        (ext / "scale_ext").mkdir(parents=True, exist_ok=True)
+        (ext / "scale_ext" / "scale_ext.so").write_bytes(b"built")
+        if not (ext / "scale_ext" / "outside").is_symlink():
+            (ext / "scale_ext" / "outside").symlink_to("/etc/hosts")     # kept as a link, never read here
+        return subprocess.CompletedProcess(argv, 1, "", "stop")
+    orig, cache = jailed.grader.jailed, jailed.EXT_CACHE
+    with tempfile.TemporaryDirectory() as d:
+        jailed.grader.jailed, jailed.EXT_CACHE = fake, Path(d) / "cache"
+        try:
+            cfg = {"task": "toy_rmsnorm", "seen": [[4, 8]], "device": "cpu"}
+            for _ in range(2):
+                jailed.judge_jailed(cfg, CUDA_PROGRAM, 1)
+            jailed.judge_jailed(cfg, CUDA_PROGRAM + "\n# another program\n", 1)
+            kept = next((Path(d) / "cache").iterdir())
+        finally:
+            jailed.grader.jailed, jailed.EXT_CACHE = orig, cache
+        assert seen == [[], ["outside", "scale_ext", "scale_ext.so"], []]      # cached for its source only
+        assert (kept / "scale_ext" / "outside").is_symlink() and len(list((Path(d) / "cache").iterdir())) == 2
+
+
+def test_a_cuda_extension_builds_in_the_jail_and_is_judged_on_the_gpu():
+    import shutil
+    from kernels.evolve.core import screen
+    from kernels.evolve.jailed import judge_jailed
+    src = (ROOT / "tests" / "fixtures" / "cuda_toy_rmsnorm.py").read_text()
+    assert screen(src) == []
+    if not torch.cuda.is_available() or not (shutil.which("nvcc") or Path("/usr/local/cuda/bin/nvcc").exists()):
+        print("skip: no CUDA GPU or no nvcc")
+        return
+    cfg = {"task": "toy_rmsnorm", "seen": [[8, 256], [32, 512], [64, 1024]], "device": "cuda", "iters": 10}
+    r = judge_jailed(cfg, src, 2)
+    assert r["metrics"]["correct"] == 1.0 and r["metrics"]["combined_score"] > 0, r["artifacts"]
 
 
 def test_value_distributions_catch_a_kernel_tuned_to_one_scale():

@@ -223,8 +223,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   timed calls' outputs are checked against the reference too, so a kernel that does less only when timed scores 0; every
   plain check case's and timed call's outputs are verified again outside the jail by a process that never loads the
   candidate, `kernels/evolve/verify.py`, gate `verified_outside`), score = call-weighted geometric-mean speedup, a shape counting 1.0 when the middle half of its paired ratios
-  includes 1; at the end the top candidates are re-judged 3x and the highest median is promoted, `run --retime`); a candidate is
-  refused if its source reaches for an exploit route or writes into anything it imported, under any alias
+  includes 1; at the end the top candidates are re-judged 3x and the highest median is promoted, `run --retime`); a program may build CUDA C++ at import with
+  `torch.utils.cpp_extension.load_inline` (nvcc from the host's toolkit, mounted read-only into the jail; the build is
+  cached per program source across its stages, `jailed._builds`); a candidate is
+  refused if its source, its C++ included, reaches for an exploit route or writes into anything it imported, under any alias
   (`core.screen`), and scores 0 if any function the checker or timer uses is patched, checked after loading and
   after every call the checker makes (`core._watched`; the timer binds its own at import); the exploit canaries in
   `tests/test_kernels_evolve.py` must all score 0; selection never sees held-out shapes, `gate` judges them (correctness, and their speedup as a fact); `validate_gpu.sh` = the GPU validation; tolerances from the target's
@@ -243,7 +245,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   the beam (CodeEvolve's inspirations), including CudaForge's 24 ncu counters
   (`kernels/evolve/ncu.py`, stage 3 of the jailed evaluator), and the coder writing it; a failed child is repaired in
   correction mode, chained up to 3 deep; launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen afterwards by a grid
-  search on the winner, written back as constants, promoted only if their re-timed median is higher
+  search on each of the top 4 re-timed programs (8 points each, no ncu), written back as constants, the best point
+  promoted only if its re-timed median beats the winner's
   (`kernels/search/tune.py`), and when different points win in different size regions a dispatcher picks CONFIG per
   call from the call's size (`Task.size_expr`, tensor shapes only, so CUDA graphs bake it per captured size), promoted
   on the same rule; the search stops once the best program is at `--stop-pct` (80) of its call-weighted
