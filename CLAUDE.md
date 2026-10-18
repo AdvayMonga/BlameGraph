@@ -241,7 +241,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   on the same rule; the search stops once the best program is at `--stop-pct` (80) of its call-weighted
   roofline bound, a figure the prompt states, or after `--patience` (16) judged programs with no new best (MANTIS);
   each timed shape carries its bound type (memory or compute) and the achieved % of peak bandwidth and of peak FLOPs,
-  and ncu runs on the smallest and the largest seen shape; every call priced (OpenEvolve's too, via a usage log);
+  and ncu runs on the smallest and the largest seen shape; before promotion a model (`--detector-model`, Opus 5.5) reads each would-be winner for gaming and a flagged one is
+  passed over, recorded with its evidence (`kernels/search/detect.py`, MANTIS; never changes a score);
+  every call priced (OpenEvolve's too, via a usage log);
   `python -m kernels.search.ab` runs OpenEvolve and kernels.search on one task with the same shapes, start, evaluator,
   single model and judged-program budget, gates each winner on held-out shapes, and writes `ab.json`; same evaluator, run dir, re-timed promotion and `kernels` record as `kernels.evolve run`). `kernels/evolve/ship.py` (`python -m kernels.evolve ship`: a program with a passing held-out gate becomes a
   commit on a new engine branch, built with git plumbing so the engine's tree is untouched; `--budget` starts the

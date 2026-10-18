@@ -16,7 +16,7 @@ import torch
 
 from kernels.evolve import evaluator
 from kernels.evolve.run import _shapes, _target_tolerances, prepare, record, retime, system_message, tolerances
-from kernels.search import screen, tune
+from kernels.search import detect, screen, tune
 from kernels.search.llm import Claude
 from kernels.search.loop import cascade, search
 from kernels.tasks import TASKS, load
@@ -86,6 +86,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--initial")
     ap.add_argument("--timing-shapes", type=int, default=8)
     ap.add_argument("--retime", type=int, default=3)
+    ap.add_argument("--detector-model", default="claude-opus-5-5",
+                    help="reads each would-be winner for gaming before promotion; `none`: off")
     ap.add_argument("--tune-points", type=int, default=16, help="grid points tried on the winner's TUNABLES; 0: none")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--stop-pct", type=float, default=80.0,
@@ -110,8 +112,15 @@ def main(argv: list[str] | None = None) -> int:
                         review=review, stop_pct=a.stop_pct or None, patience=a.patience or None,
                         n_hypotheses=a.hypotheses, beam=a.beam, explore=a.explore, max_repairs=a.max_repairs,
                         screen=screen.make(a.screen, a.seed))
-    code, metrics, retimed = retime(out / "trace.jsonl", a.retime) if a.retime else (None, None, [])
+    spent: list = []
+    exclude = detect.detector(Claude(a.detector_model, a.effort), spent) if a.detector_model != "none" else None
+    code, metrics, retimed = (retime(out / "trace.jsonl", a.retime, exclude=exclude) if a.retime
+                              else (None, None, []))
+    cost["usd"] = round(cost["usd"] + sum(spent), 4)
     best = tree.best()
+    if code is None and (any("excluded" in r for r in retimed) or (exclude and exclude(best.code, {
+            "child_metrics": best.metrics}))):
+        best = tree.root()                       # every candidate flagged: nothing is promoted over the engine's kernel
     code, metrics, tuned = _tune(code or best.code, metrics or best.metrics, judge, a.tune_points, task.size_expr)
     (out / "best_program.py").write_text(code or best.code)
     (out / "best_metrics.json").write_text(json.dumps(metrics or best.metrics, indent=1))

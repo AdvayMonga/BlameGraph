@@ -482,6 +482,33 @@ def test_inspirations_show_other_branches_and_a_merge_competes_for_the_beam():
     assert merge_hypothesis(t, t.nodes["x"])["merge_from"] == "y"
 
 
+def test_a_flagged_candidate_is_passed_over_at_promotion():
+    from kernels.evolve.run import retime
+    from kernels.search.detect import detector
+    from kernels.tasks import load
+    spent = []
+    flag = detector(lambda s, u: (('{"gaming": true, "evidence": "if x.shape[0] == 64"}' if "SPECIAL" in u
+                                   else '{"gaming": false, "evidence": ""}'), 0.003), spent)
+    assert flag("x = 1  # SPECIAL\n", {}) == "flagged as gaming: if x.shape[0] == 64"
+    assert flag("x = 1\n", {}) is None and spent == [0.003, 0.003]
+    t = load("toy_rmsnorm")
+    fast = SEED.read_text().replace(LOOP, "    xf = x.float()\n    return (xf * torch.rsqrt(xf.pow(2).mean(-1, "
+                                         "keepdim=True) + 1e-6) * w.float()).to(x.dtype)")
+    with tempfile.TemporaryDirectory() as d:
+        cfg = Path(d) / "eval.json"
+        cfg.write_text(json.dumps({"task": t.name, "seen": [[8, 256]], "device": "cpu", "iters": 3}))
+        os.environ["KERNEL_EVAL_CONFIG"] = str(cfg)
+        trace = Path(d) / "trace.jsonl"
+        rows = [{"child_id": "gamer", "child_code": fast + "# SPECIAL\n", "child_metrics": {"combined_score": 9.0}},
+                {"child_id": "honest", "child_code": fast, "child_metrics": {"combined_score": 2.0}}]
+        trace.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+        code, metrics, timed = retime(trace, 1, exclude=flag)
+        assert "SPECIAL" not in code and metrics["correct"] == 1.0
+        assert timed[0] == {"id": "gamer", "selected_score": 9.0, "excluded": "flagged as gaming: if x.shape[0] == 64"}
+        assert timed[1]["id"] == "honest" and len(timed[1]["scores"]) == 3
+        assert retime(trace, 1, exclude=lambda c, r: "no")[0] is None                     # all flagged: none promoted
+
+
 def test_the_claude_client_streams_with_effort_and_fallbacks_and_prices_the_call():
     from types import SimpleNamespace
     from kernels.search.llm import FALLBACK_BETA, Claude
