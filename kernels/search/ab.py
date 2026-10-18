@@ -5,14 +5,19 @@ OpenEvolve against kernels.search on one task, everything else equal: the same s
 model (OpenEvolve given the same single model, so the search and prompting are what differ), number of programs judged
 and re-timed promotion. Each arm and seed runs in its own dir; each winner then goes through `gate` (all seen shapes
 plus the held-out ones, jailed). The summary, per arm: re-timed seen score, held-out speedup, whether every gate
-passed, model $ and calls, programs judged; written to <out>/ab.json. Model calls and GPU time cost money."""
+passed, model $ and calls, programs judged; written to <out>/ab.json. An arm dir holding a result.json is reused, so
+an interrupted A/B resumes. With $KERNEL_EVAL_SSH the gate runs on that host, like the evaluator. Model calls and GPU
+time cost money."""
 from __future__ import annotations
 
 import argparse
 import contextlib
 import io
 import json
+import os
+import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 import torch
@@ -63,10 +68,21 @@ ARMS = {"openevolve": _openevolve, "kernels.search": _search, "search-roi": _var
 def _gate(a, program: Path) -> dict:
     from kernels.evolve import run
     from kernels.evolve.ship import gate_passed
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        run.main(["gate", "--task", a.task, "--shapes", a.shapes, "--program", str(program), "--device", a.device])
-    text = buf.getvalue()
+    remote = os.environ.get("KERNEL_EVAL_SSH")
+    if remote:                    # the GPU is where the evaluator runs: the gate runs there, on copies sent by stdin
+        tar = io.BytesIO()
+        with tarfile.open(fileobj=tar, mode="w") as t:
+            t.add(a.shapes, "shapes.json")
+            t.add(program, "best_program.py")
+        cmd = ('d=$(mktemp -d) && tar -xf - -C "$d" && ' + os.environ.get("KERNEL_EVAL_REMOTE", "") +
+               f' python -m kernels.evolve gate --task {a.task} --shapes "$d/shapes.json"'
+               f' --program "$d/best_program.py" --device {a.device}')
+        text = subprocess.run(json.loads(remote) + [cmd], input=tar.getvalue(), capture_output=True).stdout.decode()
+    else:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            run.main(["gate", "--task", a.task, "--shapes", a.shapes, "--program", str(program), "--device", a.device])
+        text = buf.getvalue()
     g = json.loads(text[text.index("{"):]) if "{" in text else {}       # gate prints one indented JSON object
     return {**g, "passed": gate_passed(g) if g else False}
 
@@ -101,8 +117,11 @@ def main(argv: list[str] | None = None) -> int:
             fn = ARMS[arm]
             d = out / f"{arm}-{seed}"
             d.mkdir(parents=True, exist_ok=True)
-            res = fn(a, d, seed)
-            (d / "result.json").write_text(json.dumps(res, default=str))
+            if (d / "result.json").exists():         # a finished arm from an earlier invocation is kept, not rerun
+                res = json.loads((d / "result.json").read_text())
+            else:
+                res = fn(a, d, seed)
+                (d / "result.json").write_text(json.dumps(res, default=str))
             g = _gate(a, d / "best_program.py")
             c = _cost(d)
             m = (g.get("metrics") or {})
