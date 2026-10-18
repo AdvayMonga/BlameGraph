@@ -5,6 +5,7 @@ local and archived in the store (`python -m store pull`).
 
 | Date | Venue | What | GPU cost | Result | Evidence |
 |---|---|---|---|---|---|
+| 2026-10-18 | Verda H200 (`lab-kern`) | Layer 1: moe_gemm smoke, then the first A/B: OpenEvolve vs kernels.search on paged_decode from the pre-#106 kernel, 30 programs each, Opus 5.5 | ~3.1 h (~$17); models ~$17 | Both winners pass every gate: OpenEvolve 1.26x seen / 1.31x held-out ($9.35), kernels.search 1.26x / 1.27x ($6.58; 1.18x before its grid search); one seed, a tie | `lab/runs/kernels-ab/run/ab.json`, ledger `ev-20261018-8f4ebf07a007`, `ev-20261018-d94584effd2d` |
 | 2026-10-18 | Nebius H200 (`lab-gpu-2`) | Engine session 6: per-step prefill breakdown (inference-server #118) to place the tiny-step stalls; main re-measured | ~1 h (~$4.5) | long_prompt 18.3 req/s (x3: default / expandable-segments allocator / fa3; was 12.5 the day before on the same code), saturated 4.11, single_stream TPOT p99 5.87 ms; the 0.5-2 s stalls did not reproduce | `data/engine-h200-20261018/REPORT.md` (session 6), `s8*/` |
 | 2026-10-18 | Nebius H200 (`lab-gpu-2`) | Engine session 5: the unprofiled parts profiled (prefill forward, batch-1 GEMM under ncu, host under bursts and long prompts) and fixed; Qwen-only engine (inference-server #114, #115, #116, #117) | ~2 h 40 min (~$12) | saturated 3.81 -> 4.06 req/s, single_stream TPOT p99 6.01 -> 5.87 ms, prefill 4.0 -> 3.2 ms/layer at 8k tokens, long_prompt 12.5 (14.2 with fa3, unstable); gate PASS | `data/engine-h200-20261018/`, below |
 | 2026-10-17/18 | Nebius H200 (`lab-gpu-2`) | Engine session 4: one-launch router, FlashInfer planned once per wave, split-K MoE GEMMs, padded-step cap, compile A/B (inference-server #113) | ~1 h 20 min (~$6) | saturated 3.58 -> 3.81 req/s, single_stream TPOT p99 6.14 -> 6.01 ms, long_prompt 9.03 -> 12.5 req/s; gate PASS; compile on the MoE decode not viable | `data/engine-h200-20261017/session6/`, below |
@@ -21,6 +22,19 @@ local and archived in the store (`python -m store pull`).
 | 2026-10-08 | Nebius H200 | Profiler tools on the real engine | ~$0.87 | All four tools work unjailed; three fixes | below |
 | 2026-10-05 | Nebius H200 | Full-tier correctness recalibration | ~$16.50 | Policy confirmed; FP8/INT8 pass, Int4 fails | `data/h200-run-20261005/REPORT.md`, `data/equiv-full/` |
 | 2026-10-04 | Verda H200 | Dev-tier correctness calibration | $6.75 | Gate separates Int4; consistency results void | `data/h200-run-20261004/REPORT.md`, `data/equiv/` |
+
+## 2026-10-18 — Layer 1: the first A/B, OpenEvolve vs kernels.search (Verda H200 `lab-kern`)
+Controller on the laptop (generators, model calls), every candidate judged on the VM over SSH. Smoke A, moe_gemm:
+the engine's kernel failed its own gate until the task passed `block_m` from the block count and compared split-K
+fp32 output in the reference dtype (#85); pricing broke on a dated model id (#86); then gate PASS and a short
+kernels.search run, best 1.0065x for $1.14 (`ev-20261018-f267ecefcea6`). The A/B: paged_decode, 147 seen / 29
+held-out captured shapes, starting from the kernel before inference-server #106 (0.144x of today's), 30 judged
+programs per arm, Opus 5.5 everywhere. OpenEvolve: best 1.30x in search, 1.26x seen / 1.31x held-out at the gate, 29
+calls, $9.35. kernels.search (Haiku screen, judge tools on): 8 expansions, 135 hypotheses, 29 measured, 22 beat their
+parent (random picks 5 of 7), no failed child; best 1.18x after re-timing, 1.29x once the grid search over its
+declared launch parameters was promoted (16 points); 1.26x seen / 1.27x held-out at the gate, 48 calls, $6.58. Both
+stay at 22% of roofline on their worst shape. One seed each: the difference is inside run-to-run spread. The A/B
+crashed after the first arm, gating on the laptop instead of the VM (fixed in #89, resumes from finished arms).
 
 ## 2026-10-18 — Engine session 6: where a prefill step's time goes (Nebius H200 `lab-gpu-2`, inference-server #118)
 Each mixed prefill step now records host enqueue time, host time in block allocation (prefix-cache reclaim
