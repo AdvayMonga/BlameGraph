@@ -209,10 +209,12 @@ def prepare(task, sets: dict, out: Path, device: str, tol: dict, timing_shapes: 
     return sets, program
 
 
-def retime(trace: Path, k: int, repeats: int = 3) -> tuple[str | None, dict | None, list]:
+def retime(trace: Path, k: int, repeats: int = 3, exclude=None) -> tuple[str | None, dict | None, list]:
     """The top `k` candidates by score re-judged `repeats` times through the evaluator (stage 2, local or remote);
     the one with the highest median score is promoted. One timing of each is what selection saw, and one timing can
-    win by noise. Returns (code, metrics of its median run, every re-timing)."""
+    win by noise. `exclude(code, row) -> reason | None` passes over a candidate (e.g. flagged as gaming the
+    evaluator), the next-best taking its place. Returns (code, metrics of its median run, every re-timing, the
+    excluded ones included with their reason)."""
     import statistics
     import tempfile
     from kernels.evolve import evaluator
@@ -221,8 +223,15 @@ def retime(trace: Path, k: int, repeats: int = 3) -> tuple[str | None, dict | No
     for r in rows:
         if r.get("child_code") and (r.get("child_metrics") or {}).get("combined_score", 0) > 0:
             best.setdefault(r["child_id"], r)
-    top = sorted(best.values(), key=lambda r: -r["child_metrics"]["combined_score"])[:k]
-    out = []
+    ranked, top, out = sorted(best.values(), key=lambda r: -r["child_metrics"]["combined_score"]), [], []
+    for r in ranked:
+        if len(top) >= k:
+            break
+        why = exclude(r["child_code"], r) if exclude else None
+        if why:
+            out.append({"id": r["child_id"], "selected_score": r["child_metrics"]["combined_score"], "excluded": why})
+        else:
+            top.append(r)
     for r in top:
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
             f.write(r["child_code"])
@@ -233,9 +242,10 @@ def retime(trace: Path, k: int, repeats: int = 3) -> tuple[str | None, dict | No
         out.append({"id": r["child_id"], "selected_score": r["child_metrics"]["combined_score"], "scores": scores,
                     "median": med, "code": r["child_code"],
                     "metrics": min(runs, key=lambda m: abs(m.get("combined_score", 0.0) - med))})
-    if not out:
-        return None, None, []
-    win = max(out, key=lambda x: x["median"])
+    timed = [x for x in out if "median" in x]
+    if not timed:
+        return None, None, out
+    win = max(timed, key=lambda x: x["median"])
     return win["code"], win["metrics"], [{k: v for k, v in x.items() if k not in ("code", "metrics")} for x in out]
 
 
