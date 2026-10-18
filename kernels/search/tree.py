@@ -106,18 +106,27 @@ class Tree:
     def open(self) -> list[Node]:
         return [n for n in self.nodes.values() if self.expandable(n)]
 
+    def uct(self, parent: Node, visits: int, value: float) -> float:
+        return value + self.c * math.sqrt(math.log(max(parent.visits, 1)) / max(visits, 1))
+
     def select(self) -> Node | None:
-        """Descend from the root by UCT; stop at a node that may still widen (or whose children are all closed)."""
+        """Descend from the root by UCT. A node under its widening cap takes a new child only when KernelPro's virtual
+        child (the node's mean reward as its prior, a fair share of the node's visits) has a higher UCT than its best
+        existing child; otherwise the search descends. Widening whenever under the cap (the 2026-10-18 A/Bs) kept
+        every tree at depth 2: the root and its weak children took new children while the best nodes waited."""
         node = self.root()
         if not self._open_below(node):
             return None
         while True:
             kids = [self.nodes[c] for c in node.children if self.nodes[c].visits and self._open_below(self.nodes[c])]
-            if self.expandable(node) and (len(node.children) < math.ceil(max(node.visits, 1) ** self.alpha) or not kids):
-                return node
             if not kids:
                 return node if self.expandable(node) else None
-            node = max(kids, key=lambda k: self.value(k) + self.c * math.sqrt(math.log(max(node.visits, 1)) / k.visits))
+            best = max(kids, key=lambda k: self.uct(node, k.visits, self.value(k)))
+            if self.expandable(node) and len(node.children) < math.ceil(max(node.visits, 1) ** self.alpha):
+                virtual = self.uct(node, node.visits // (len(node.children) + 1), self.value(node))
+                if virtual > self.uct(node, best.visits, self.value(best)):
+                    return node
+            node = best
 
     def best(self) -> Node:
         return max(self.nodes.values(), key=lambda n: (n.score, -n.iteration))

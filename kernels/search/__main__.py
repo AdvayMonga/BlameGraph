@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -90,6 +91,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="reads each would-be winner for gaming before promotion; `none`: off")
     ap.add_argument("--tune-points", type=int, default=16, help="grid points tried on the winner's TUNABLES; 0: none")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--uct-c", type=float, default=math.sqrt(2),
+                    help="UCT exploration constant (KernelPro: sqrt 2; lower goes deeper sooner)")
     ap.add_argument("--stop-pct", type=float, default=80.0,
                     help="stop once the best is at this %% of its roofline (MANTIS: within 25%% of speed-of-light)")
     ap.add_argument("--patience", type=int, default=16, help="stop after this many judged programs with no new best")
@@ -111,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
     tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.usd, a.seed,
                         review=review, stop_pct=a.stop_pct or None, patience=a.patience or None,
                         n_hypotheses=a.hypotheses, beam=a.beam, explore=a.explore, max_repairs=a.max_repairs,
-                        screen=screen.make(a.screen, a.seed))
+                        screen=screen.make(a.screen, a.seed), uct_c=a.uct_c)
     spent: list = []
     exclude = detect.detector(Claude(a.detector_model, a.effort), spent) if a.detector_model != "none" else None
     code, metrics, retimed = (retime(out / "trace.jsonl", a.retime, exclude=exclude) if a.retime

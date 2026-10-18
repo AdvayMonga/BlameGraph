@@ -210,7 +210,8 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
            review: Callable[[str, str], tuple[str, float]] | None = None,
            stop_pct: float | None = None, patience: int | None = None, n_hypotheses: int = 16, beam: int = 4,
            explore: int = 1, max_repairs: int = 3,
-           screen: Callable[[str, str, list[dict]], tuple[list[float], float]] | None = None) -> tuple[Tree, dict]:
+           screen: Callable[[str, str, list[dict]], tuple[list[float], float]] | None = None,
+           uct_c: float = math.sqrt(2)) -> tuple[Tree, dict]:
     """Search until `evals` programs are judged, `usd` is spent on model calls, nothing is left to try, or the best
     program reaches `stop_pct`% of its roofline bound, or `patience` programs have been judged since the best last
     improved (MANTIS, Hari et al.: within 25% of speed-of-light or 16 attempts without progress kept 96% of the geomean
@@ -223,7 +224,7 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
     coder alone proposes `beam` children. Every hypothesis, its score and what became of it go to
     `<out>/hypotheses.jsonl`. Returns the tree and the run's cost {usd, model_calls, evals, ...}."""
     out.mkdir(parents=True, exist_ok=True)
-    tree, spent, calls, judged, it, repairs, tried = Tree(seed), 0.0, 0, 0, 0, [], []
+    tree, spent, calls, judged, it, repairs, tried = Tree(seed, c=uct_c), 0.0, 0, 0, 0, [], []
     with open(out / "trace.jsonl", "w") as trace, open(out / "hypotheses.jsonl", "w") as hyplog:
         def keep(node: Node, cost: float) -> None:
             tree.add(node)

@@ -63,6 +63,13 @@ def test_mcts_descends_by_uct_widens_progressively_and_skips_closed_nodes():
     t.add(Node("c", "r", "x = 9", ok(1.8), {}, 1))
     assert t.reward(t.nodes["c"]) == t.reward(t.nodes["a"]) == (2 + 0.5) / 3                # a tie splits
     t.nodes["r"].children.remove("c"); del t.nodes["c"]; root.visits -= 1
+    for i in range(8):                                   # a strong, well-visited branch under `a`
+        t.add(Node(f"a{i}", "a", f"x = {10 + i}", ok(2.0 + i / 10), {}, 3))
+    assert len(root.children) < math.ceil(root.visits ** 0.5)           # the root is under its widening cap...
+    assert t.select().id == "b"               # ...but C = sqrt 2 explores the once-visited `b` over widening or `a`
+    t.c = 0.1
+    assert t.lineage(t.select())[1].id == "a"                            # a small C descends into `a`'s subtree
+    t.c = math.sqrt(2)
     for i in range(2):
         t.add(Node(f"f{i}", "a", "", {"combined_score": 0.0, "correct": 0.0, "stage": 1}, {}, 2 + i))
     assert not t.expandable(t.nodes["a"]) and t.select().id in ("r", "b")      # `a` closed after 2 failed children
@@ -366,13 +373,13 @@ def test_every_arm_differs_from_kernels_search_in_one_flag():
     try:
         from types import SimpleNamespace
         a = SimpleNamespace(task="t", shapes="s", evals=3, usd=1.0, model="m", device="cpu", initial=None)
-        for arm in ("kernels.search", "search-roi", "search-random", "search-no-tools"):
+        for arm in ("kernels.search", "search-roi", "search-random", "search-no-tools", "search-c0.5"):
             ab.ARMS[arm](a, Path("/tmp/x"), 0)
     finally:
         cli.main = orig
     base = seen[0]
     extras = [argv[len(base):] for argv in seen[1:]]
-    assert extras == [["--screen", "roi"], ["--screen", "random"], ["--no-judge-tools"]]
+    assert extras == [["--screen", "roi"], ["--screen", "random"], ["--no-judge-tools"], ["--uct-c", "0.5"]]
     assert all(argv[:len(base)] == base for argv in seen)
     try:
         ab.main(["--task", "t", "--shapes", "s", "--out", "/tmp/x", "--arms", "nope"])
