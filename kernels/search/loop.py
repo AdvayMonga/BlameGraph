@@ -135,7 +135,19 @@ def inspirations(tree: Tree, node: Node, k: int = 2) -> list[Node]:
     return sorted(others, key=lambda n: -n.score)[:k]
 
 
-def prompt(tree: Tree, node: Node, plan: str = "", coder: bool = True) -> str:
+def history(tree: Tree, measured: list[dict], limit: int = 80) -> str:
+    """Every hypothesis measured anywhere in the tree with what came of it, newest last: the judge sees what was
+    tried on other branches too (in the 2026-10-18 A/B it re-proposed the same ~20 changes at every expansion)."""
+    lines = []
+    for m in measured[-limit:]:
+        c = tree.nodes.get(m["child_id"])
+        plan = str(m.get("plan") or "")[:200]
+        why = f"; failed: {(c.artifacts.get('error') or '')[:120]}" if c is not None and c.score <= 0 else ""
+        lines.append(f"- on {m['parent_id']} ({m['parent_score']:.4f}) -> {m['child_id']} {m['child_score']:.4f}{why}: {plan}")
+    return "\n".join(lines) or "none"
+
+
+def prompt(tree: Tree, node: Node, plan: str = "", coder: bool = True, measured: list[dict] | None = None) -> str:
     path = " -> ".join(f"{n.id} ({n.score:.4f})" for n in tree.lineage(node))
     tried = [tree.nodes[c] for c in node.children]
     kids = "\n".join(f"- {c.id}: score {c.score:.4f}" + (f", {c.artifacts.get('error', '')[:300]}"
@@ -154,19 +166,23 @@ def prompt(tree: Tree, node: Node, plan: str = "", coder: bool = True) -> str:
             f"```python\n{node.code}\n```\n\n# Its measurements\n{facts(node)}\n\n"
             f"# Lineage (node, score)\n{path}\n\n# Programs already derived from it\n{kids}\n\n"
             + (f"# Other programs in the tree\n{other}\n" if other else "")
+            + (f"# Hypotheses already measured, anywhere in the tree (parent -> child score; plan)\n"
+               f"{history(tree, measured)}\n\n" if measured is not None and not coder else "")
             + (f"# The change to make (from the judge)\n{plan}\n\n" if plan else "") + (FORMAT if coder else ""))
 
 
 def merge_hypothesis(tree: Tree, node: Node) -> dict | None:
     """Combine this program with the best program on another branch (a crossover the beam can pick like any other
-    hypothesis; its expected speedup is that program's measured score over the start's)."""
+    hypothesis; its expected speedup is that program's measured score over this one's, so it outranks the judge's
+    changes only where the other branch is really ahead; over the start's, as in the 2026-10-18 A/B, it was 8x and
+    took a slot in every beam)."""
     o = inspirations(tree, node, 1)
     if not o:
         return None
     return {"bottleneck": "", "optimisation_method": "merge",
             "modification_plan": f"combine this program with program {o[0].id}: apply its changes (its diff against the "
                                  "starting program is shown) to this program",
-            "merge_from": o[0].id, "expected_speedup": round(o[0].score / (tree.root().score or 1.0), 4),
+            "merge_from": o[0].id, "expected_speedup": round(o[0].score / (node.score or 1.0), 4),
             "implementation_risk": 2, "performance_risk": 2}
 
 
@@ -207,7 +223,7 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
     coder alone proposes `beam` children. Every hypothesis, its score and what became of it go to
     `<out>/hypotheses.jsonl`. Returns the tree and the run's cost {usd, model_calls, evals, ...}."""
     out.mkdir(parents=True, exist_ok=True)
-    tree, spent, calls, judged, it, repairs = Tree(seed), 0.0, 0, 0, 0, []
+    tree, spent, calls, judged, it, repairs, tried = Tree(seed), 0.0, 0, 0, 0, [], []
     with open(out / "trace.jsonl", "w") as trace, open(out / "hypotheses.jsonl", "w") as hyplog:
         def keep(node: Node, cost: float) -> None:
             tree.add(node)
@@ -269,7 +285,7 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
                     attempt(parent, "", "optimization", 0.0)
                 continue
             text, cost = review(system + "\n\n" + JUDGE.format(mode_spec=MODES["optimization"].format(n=n_hypotheses)),
-                                prompt(tree, parent, coder=False))
+                                prompt(tree, parent, coder=False, measured=tried))
             spent, calls = spent + cost, calls + 1
             hs = hypotheses(text, n_hypotheses)
             mh = merge_hypothesis(tree, parent) if hs else None
@@ -282,14 +298,18 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
             ranks = [roi(h, parent.pct_of_roofline) for h in hs]
             scores, c = screen(system, prompt(tree, parent, coder=False), hs) if screen else (ranks, 0.0)
             spent, calls = spent + c, calls + (1 if c else 0)   # a model screener's call; roi/random cost 0
-            measured = []
+            measured, best_before = [], tree.best().score
             for i, random_pick in choose(scores, beam, explore, tree.rng):
                 child = attempt(parent, json.dumps(hs[i]), "optimization", cost if not measured else 0.0)
-                if child is not None:                # the label: did it beat its parent? (scores already count
-                    measured.append({"index": i, "random": random_pick, "child_id": child.id,   # noise as 1.0)
-                                     "child_score": child.score, "improved": child.score > parent.score})
+                if child is not None:                # the labels: did it beat its parent? the tree's best so far?
+                    measured.append({"index": i, "random": random_pick, "child_id": child.id,
+                                     "child_score": child.score, "improved": child.score > parent.score,
+                                     "new_best": child.score > best_before})
+                    tried.append({"parent_id": parent.id, "parent_score": parent.score, "child_id": child.id,
+                                  "child_score": child.score, "plan": hs[i].get("modification_plan") or hs[i]})
             hyplog.write(json.dumps({"iteration": it, "parent_id": parent.id, "parent_score": parent.score,
-                                     "hypotheses": hs, "roi": ranks, "scores": scores, "measured": measured}) + "\n")
+                                     "hypotheses": hs, "roi": ranks, "scores": scores, "measured": measured,
+                                     "screen": getattr(screen, "last", None)}, default=str) + "\n")
             hyplog.flush()
     near = bool(stop_pct and (tree.best().pct_of_roofline or 0) >= stop_pct)
     stalled = bool(patience and not near and judged < evals and spent < usd and judged - best_at >= patience)

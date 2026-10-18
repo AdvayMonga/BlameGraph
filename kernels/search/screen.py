@@ -24,17 +24,15 @@ numbers, one per change, in order, and nothing else."""
 
 
 def parse(text: str, n: int) -> list[float] | None:
-    m = re.search(r"\[.*?\]", text or "", re.S)
-    try:
-        v = json.loads(m.group(0)) if m else None
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(v, list) or len(v) != n:
-        return None
-    try:
-        return [min(max(float(x), 0.0), 1.0) for x in v]
-    except (TypeError, ValueError):
-        return None
+    """The first flat array of exactly n numbers anywhere in the reply (prose and other brackets around it ignored)."""
+    for m in re.findall(r"\[[^\[\]]*\]", text or ""):
+        try:
+            v = json.loads(m)
+            if isinstance(v, list) and len(v) == n:
+                return [min(max(float(x), 0.0), 1.0) for x in v]
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+    return None
 
 
 def haiku(call: Callable[[str, str], tuple[str, float]]):
@@ -43,6 +41,7 @@ def haiku(call: Callable[[str, str], tuple[str, float]]):
         listing = "\n".join(f"{i}. {json.dumps(h)}" for i, h in enumerate(hs))
         text, usd = call(system + "\n\n" + HAIKU, f"{facts}\n\n# Proposed changes\n{listing}")
         scores = parse(text, len(hs))
+        screen.last = {"reply": text, "parsed": scores is not None}      # kept in hypotheses.jsonl beside the scores
         if scores is None:                       # no usable scores: the published triage instead
             return [roi(h, None) for h in hs], usd
         return scores, usd
