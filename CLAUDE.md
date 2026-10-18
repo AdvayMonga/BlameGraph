@@ -28,7 +28,8 @@ kind; `RunConfig.baseline=False` skips it) and only the run's last `session` rec
 Make the loop rely less on the raw model and more on per-layer machinery. The engine is looked at as four layers;
 each needs data, a simulator, a hypothesis generator, measurement tools and an evaluator, and all of them answer to one
 end-to-end judge (`equiv` + `submit` + the held-out guard). The agent chooses which layer to work on; it is given each
-layer's share of time × its distance from the ceiling as a fact. Layer 1 first.
+layer's share of time × its distance from the ceiling as a fact (`lab/layers.py`, in every profile record and the
+brief). Layer 1 first.
 
 ## Layout
 Top-level packages, run from the repo root (no install step; `pyproject.toml` lists optional extras and holds the
@@ -257,6 +258,14 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   window from the device kernels it launches, `Task.kernel_names`, the speedup bound if they took no time, and the
   kernels no task covers, by share: the facts for choosing the next task). `lab/capture.py` + `lab.profile --capture MODULE:FUNCTION` (the `profile` tool's `capture`): every
   call's argument shapes and small int tensors, the first call per shape kept whole as real inputs.
+- `lab/layers.py` — each layer's share of a profiled window and its distance from a ceiling, as facts (2026-10-18):
+  kernels = CUDA kernel time / window; model execution = prefill + decode phase wall time beyond kernel time;
+  runtime = admit + evict phases, with the GPU idle share, batch fill and admissions blocked; serving = window time
+  outside scheduler steps. Distance: the mean decode step against `validity.ceiling`'s step floor at the window's
+  batch and context; kernels' % of roofline from gate results when given; layers 3 and 4 say they have no single
+  ceiling. Every `profile` record carries it under `calibrated.layers`; the brief's harness facts show the latest
+  (`layers`). `python -m lab.layers BUNDLE`. The timeline covers the whole run, so only events inside the window
+  count; nested phases (prefill_mixed inside prefill_chunk) are counted once.
 - `sim/` — the scheduler simulator (layer 3, 2026-10-18): `sim/scheduler.py` drives the engine's real
   `ContinuousBatchScheduler` one `step()` at a time (inference-server #120) on a fake clock (`Clock`, installed as the
   scheduler module's `time`) with `SimBackend`, which runs no model and charges a `CostModel` (prefill and decode

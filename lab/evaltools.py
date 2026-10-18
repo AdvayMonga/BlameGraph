@@ -151,6 +151,7 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
                                    "every launch profile; None where no band was measured for this target",
         "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,
         "ceilings": _ceiling_facts(t, ledger_root),
+        "layers": _layer_facts(ledger_root),
     }
     try:
         facts["heldout_queries_left"] = holdout_guard(t).state()["budget_left"]
@@ -181,6 +182,17 @@ def _ceiling_facts(t: target.Target, ledger_root: Path | None) -> dict:
         return calibrate.facts(t, g)
     except Exception as e:                       # noqa: BLE001
         return {"missing": f"ceilings not computed: {type(e).__name__}: {e}"}
+
+
+def _layer_facts(ledger_root: Path | None) -> dict:
+    """The latest profile's per-layer shares and distances (lab/layers.py), with the record they come from."""
+    if not ledger_root or not (Path(ledger_root) / "ledger.jsonl").exists():
+        return {"missing": "no profile in this ledger yet"}
+    for r in reversed(list(ledger.records(ledger_root, kind="profile"))):
+        cal = (r.get("result") or {}).get("calibrated") or {}
+        if cal.get("layers"):
+            return {"record": r["id"], "run": r.get("run"), "args": r.get("args"), **cal["layers"]}
+    return {"missing": "no profile with a per-layer breakdown in this ledger yet (the `profile` tool writes one)"}
 
 
 def _last_gpu(ledger_root: Path | None) -> dict | None:
