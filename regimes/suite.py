@@ -40,6 +40,7 @@ class Ctx:
     corpus: str | None = None          # a corpus/ dir; None = synthetic prompts (tests, smoke runs)
     workload: str | None = None        # a workloads/ JSONL file instead of the corpus: every regime draws from all of it
     split: str = "seen"
+    synthetic: bool = False            # every pool generated fresh from the corpus's seen split (regimes/synth.py)
     tier: str = "short"
     seed: int = 0
     timeout: float = 600.0
@@ -61,7 +62,7 @@ class Ctx:
         return TIERS[self.tier]["final_s"]
 
     def pool(self, cls: str | None = None) -> list[dict]:
-        """Corpus records of one class (None = every class) for this split."""
+        """Corpus records of one class (None = every class) for this split; generated ones with `synthetic`."""
         if self.workload is not None:
             cls = "workload"
         if cls not in self._pools:
@@ -69,6 +70,9 @@ class Ctx:
                 self._pools[cls] = W.workload_file(self.workload)
             elif self.corpus is None:
                 self._pools[cls] = W.synthetic(100, seed=self.seed, prefix=cls or "mix")
+            elif self.synthetic:
+                from . import synth
+                self._pools[cls] = synth.records(self.corpus, cls, self.seed, self.split)
             else:
                 classes = [cls] if cls else W.corpus_classes(self.corpus)
                 self._pools[cls] = [r for c in classes for r in W.corpus(self.corpus, c, self.split)]

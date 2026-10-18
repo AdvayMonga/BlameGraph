@@ -1,5 +1,5 @@
 """python -m regimes run REGIME[,REGIME...]|all --url URL [--split seen|heldout] [--tier short|full] [--seed N]
-                       [--corpus DIR | --workload FILE] [--tokenizer] [--out FILE] [--target T]
+                       [--corpus DIR | --workload FILE] [--synthetic] [--tokenizer] [--out FILE] [--target T]
 python -m regimes cold-start --url URL --cmd "launch command" [--expect 42] [--no-warm] [--out FILE] [--target T]
 The model, chat kwargs, latency limits and corpus come from the target spec ($LAB_TARGET)."""
 from __future__ import annotations
@@ -24,6 +24,8 @@ def main():
     r.add_argument("--url", required=True)
     r.add_argument("--corpus", help="corpus dir (default: the target's; synthetic prompts if it does not exist)")
     r.add_argument("--workload", help="a data/workloads/*.jsonl file (python -m workloads) instead of the corpus")
+    r.add_argument("--synthetic", action="store_true",
+                   help="traffic generated fresh from the corpus's seen split (regimes/synth.py), by --seed; nothing kept")
     r.add_argument("--split", choices=("seen", "heldout"), default="seen")
     r.add_argument("--tier", choices=tuple(suite.TIERS), default="short")
     r.add_argument("--seed", type=int, default=0); r.add_argument("--timeout", type=float, default=600.0)
@@ -53,6 +55,7 @@ def main():
         if a.corpus:
             ctx.corpus = a.corpus
         ctx.workload = a.workload
+        ctx.synthetic = a.synthetic
         results = []
         for n in names:
             res = suite.REGIMES[n](ctx)
@@ -60,6 +63,7 @@ def main():
             print(f"{n}: {res['objective']} = {res['value']}" + ("" if res["valid"] else f"  INVALID: {res['invalid_reasons']}"),
                   file=sys.stderr)
         report = {"model": t.model, "target": t.name, "url": a.url, "tier": a.tier, "split": a.split, "seed": a.seed,
+                  "synthetic": a.synthetic,
                   "corpus_version": None if a.workload else corpus_version(ctx.corpus),
                   "workload": a.workload and {"file": a.workload, "sha256": _sha256(a.workload)}, "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                   "results": results}

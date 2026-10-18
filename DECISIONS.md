@@ -15,6 +15,13 @@ are hosted-only and cannot be fine-tuned), a fine-tuned local classifier once on
 few hundred; the judge may use web search and read-only ledger SQL, its own choice when, with no research pasted by
 the harness (the facts-only line: the environment hands over facts; what the model chooses to read is its own, as in
 the agent's workbench); a merge hypothesis competing for the beam.
+## 2026-10-18 — Synthetic traffic is generated per run, never kept
+`regimes/synth.py` generates each run's traffic fresh from the public corpus's seen split (whole real sessions,
+the real timing pattern jittered, real text recombined) and keeps nothing: the seed in the run's config regenerates
+it. Why (the user): no second corpus to maintain or leak; the public data stays the credible source and is what the
+traffic is synthesized from. Interchangeable with the corpus for bench/submit once a GPU run shows the two agree
+within the noise band; until then it is a source for experiments and the simulator.
+
 ## 2026-10-18 — Noise bands belong to one engine commit
 `lab.validate` records the engine commit a band was measured at (None for a tree with uncommitted changes), and
 `submit`, experiment records and the brief's harness facts use a band only at the run's base commit; otherwise it is
