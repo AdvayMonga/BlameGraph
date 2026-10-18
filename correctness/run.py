@@ -3,13 +3,18 @@
   reference   once per model/hardware: the unmodified model (vLLM, BF16, VLLM_BATCH_INVARIANT=1) answers every task
               item and scores its own outputs token by token. Saved to a directory.
   candidate   per change: the optimized server answers the same items and scores the reference's tokens; the gate
-              compares. Writes the verdict and an inference-server lab-ledger `equiv` record.
+              compares. Items go in one fixed order (by id hash, the same for every candidate) and the gate looks at
+              200, 400, 800, ... of them, stopping once the accuracy is clear of the line either way (`_decided`).
+              Writes the verdict and an inference-server lab-ledger `equiv` record.
   verdict     re-judge saved candidate results under a policy, without a server.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 from concurrent.futures import ThreadPoolExecutor
+from statistics import NormalDist
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -17,7 +22,34 @@ from . import client
 from .checks import consistency, length_ratio
 from .divergence import Position, compare_positions, divergence_summary
 from .flips import flip_test
-from .gate import Thresholds, evaluate, to_ledger_record
+from .gate import Thresholds, evaluate, pooled_accuracy, to_ledger_record
+
+FIRST_LOOK = 200
+
+
+def _ordered(items: list[dict]) -> list[dict]:
+    """Items in a fixed order independent of the candidate (so a rerun cannot draw a different sample)."""
+    return sorted(items, key=lambda it: hashlib.sha256(it["id"].encode()).hexdigest())
+
+
+def _looks(n: int) -> list[int]:
+    """Sample sizes the gate looks at: FIRST_LOOK, doubling, then all n."""
+    sizes, k = [], FIRST_LOOK
+    while k < n:
+        sizes.append(k)
+        k *= 2
+    return sizes + [n]
+
+
+def _decided(flips: dict, unanswered: int, th: Thresholds, looks: int) -> bool:
+    """Accuracy is clear of the line on this sample: the CI's low end is above it, or the net loss is significant;
+    both Bonferroni-corrected over the looks. Unanswered items keep it open."""
+    acc = pooled_accuracy(flips)
+    if unanswered or not acc["ref_correct"]:
+        return False
+    z = NormalDist().inv_cdf(1 - 0.05 / (2 * looks))
+    low = acc["score_ratio"] - z * math.sqrt(acc["lost"] + acc["gained"]) / acc["ref_correct"]
+    return low >= th.min_score_ratio or (acc["score_ratio"] < th.min_score_ratio and acc["p_degraded"] < th.alpha / looks)
 
 
 class Encoder(Protocol):
@@ -178,23 +210,36 @@ def candidate(ref_dir: str | Path, url: str, model: str, out_path: str | Path, e
               api: client.Api = client.DEFAULT) -> dict:
     from .tasks import score_item as default_score
     score_item = score_item or default_score
+    th = thresholds or Thresholds()
     ref = Path(ref_dir)
-    items = _jsonl_read(ref / "items.jsonl")
+    every = _ordered(_jsonl_read(ref / "items.jsonl"))
     ref_out = {r["id"]: r for r in _jsonl_read(ref / "outputs.jsonl")}
     meta = json.loads((ref / "meta.json").read_text())
     out_path = Path(out_path); out_path.parent.mkdir(parents=True, exist_ok=True)
-    cand_out = collect(url, model, items, out_path.with_suffix(".outputs.jsonl"), concurrency, api)
-    answered = {i: r for i, r in cand_out.items() if not r.get("error")}
-    unanswered = {i: r["error"] for i, r in cand_out.items() if r.get("error")}
-    # flips, per task, over the items the candidate answered: an unanswered item is neither right nor wrong
-    by_task: dict[str, tuple[list, list]] = {}
-    for it in items:
-        r, c = ref_out.get(it["id"]), answered.get(it["id"])
-        if r is None or c is None:
-            continue
-        a, b = by_task.setdefault(it["task"], ([], []))
-        a.append(score_item(it, r.get("text") or "")); b.append(score_item(it, c.get("text") or ""))
-    flips = {t: flip_test(a, b) for t, (a, b) in by_task.items()}
+    scored: dict[tuple[str, str], bool] = {}
+
+    def score(it, side, text):
+        if (it["id"], side) not in scored:
+            scored[it["id"], side] = score_item(it, text or "")
+        return scored[it["id"], side]
+    looks = _looks(len(every))
+    for n in looks:
+        items = every[:n]
+        cand_out = collect(url, model, items, out_path.with_suffix(".outputs.jsonl"), concurrency, api)
+        ids = {it["id"] for it in items}
+        answered = {i: r for i, r in cand_out.items() if i in ids and not r.get("error")}
+        unanswered = {i: r["error"] for i, r in cand_out.items() if i in ids and r.get("error")}
+        # flips, per task, over the items the candidate answered: an unanswered item is neither right nor wrong
+        by_task: dict[str, tuple[list, list]] = {}
+        for it in items:
+            r, c = ref_out.get(it["id"]), answered.get(it["id"])
+            if r is None or c is None:
+                continue
+            a, b = by_task.setdefault(it["task"], ([], []))
+            a.append(score(it, "ref", r.get("text"))); b.append(score(it, "cand", c.get("text")))
+        flips = {t: flip_test(a, b) for t, (a, b) in by_task.items()}
+        if n < len(every) and flips and _decided(flips, len(unanswered), th, len(looks)):
+            break
     # length, counted with the reference tokenizer on both sides
     ids = [it["id"] for it in items if it["id"] in ref_out and it["id"] in answered]
     length = length_ratio([len(encoder.encode(ref_out[i].get("text") or "")) for i in ids],
@@ -212,11 +257,12 @@ def candidate(ref_dir: str | Path, url: str, model: str, out_path: str | Path, e
         probe.append({**s, "reported_tokens": answered.get(it["id"], {}).get("completion_tokens")
                       if (answered.get(it["id"], {}).get("text") == s["text"]) else None})
     cons = consistency(probe, encoder.encode) if probe else None
-    result = evaluate(div, flips, length, cons, thresholds, unanswered=len(unanswered))
+    result = evaluate(div, flips, length, cons, th, unanswered=len(unanswered))
     if probe_errors:
         result["metrics"]["consistency_probe_errors"] = probe_errors[:5]
     result["metrics"]["unanswered"] = {"n": len(unanswered), "of": len(items),
                                        "examples": dict(list(unanswered.items())[:5])}
+    result["metrics"]["sample"] = {"items": len(items), "of": len(every), "looks": looks[:looks.index(len(items)) + 1]}
     if unscored:
         result["metrics"]["divergence_unscored"] = unscored[:5]
     record = to_ledger_record(result, {"split": "seen", "model": model, **(config or {})}, base=meta["model"])

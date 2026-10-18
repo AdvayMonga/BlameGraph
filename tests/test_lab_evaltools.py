@@ -207,7 +207,7 @@ def test_submit_needs_full_equiv_and_a_bench_then_records_one_aggregate_per_metr
     assert "result" not in rec and rec["metrics"] == out["metrics"]        # the ledger's held-out shape, nothing else
     from lab import evaltools
     assert evaltools.holdout_guard(target.load()).state()["n_queries"] == 1
-    assert (s.run_dir / "base-heldout-full.json").exists()
+    assert (s.run_dir / "base-heldout-short.json").exists()
 
 
 def test_submit_takes_the_equiv_tier_the_target_names(lab, monkeypatch):
@@ -239,7 +239,7 @@ def test_submit_is_refused_where_there_is_no_shared_heldout_budget(lab, monkeypa
     tb.equiv({"tier": "full"}); tb.bench({"regimes": ["single_stream"]})
     monkeypatch.delenv("LAB_STORE")
     assert tb.submit({}).startswith("submit refused: no shared held-out budget on this host")
-    assert not (s.run_dir / "base-heldout-full.json").exists()             # refused before anything was measured
+    assert not (s.run_dir / "base-heldout-short.json").exists()             # refused before anything was measured
 
 
 def test_inconclusive_equiv_is_neither_passing_nor_failing(lab, monkeypatch):
@@ -274,14 +274,10 @@ def test_submit_reports_no_heldout_delta_without_a_seen_delta(lab, monkeypatch, 
     assert evaltools.noise_band_pct("single_stream", target.load(), root) is None
     ledger.append({"kind": "noise", "result": {**band, "target": target.load().name}}, root)
     assert evaltools.noise_band_pct("single_stream", target.load(), root) == 1.0
-    # with an engine commit: only a band measured at that commit counts, the latest one
-    assert evaltools.noise_band_pct("single_stream", target.load(), root, commit="abc") is None
+    # the latest band counts, whatever engine commit it was measured at (one calibration per user)
     ledger.append({"kind": "noise", "result": {**band, "target": target.load().name, "engine_commit": "abc",
                                                "band_pct": 2.0}}, root)
-    ledger.append({"kind": "noise", "result": {**band, "target": target.load().name, "engine_commit": "def",
-                                               "band_pct": 3.0}}, root)
-    assert evaltools.noise_band_pct("single_stream", target.load(), root, commit="abc") == 2.0
-    assert evaltools.noise_band_pct("single_stream", target.load(), root) == 3.0
+    assert evaltools.noise_band_pct("single_stream", target.load(), root) == 2.0
 
 
 def test_submit_scores_the_task(lab, tmp_path):
@@ -432,10 +428,10 @@ def test_bench_defaults_follow_the_task():
     from lab.task import Task
     tb = EvalTools()
     tb.s = SimpleNamespace(task=None)
-    assert tb.bench_defaults() == EvalTools.bench_default_regimes
+    assert tb.bench_defaults() == ("saturated",)                          # the general regime alone
     tb.s.task = Task("g", ("long_prompt_short_output",), constraints={"single_stream": {"max_regression_pct": 5},
                                                                      "long_prompt_short_output": {"max_regression_pct": 1}})
-    assert tb.bench_defaults() == ("long_prompt_short_output", "single_stream")
+    assert tb.bench_defaults() == ("saturated", "long_prompt_short_output", "single_stream")
 
 
 def test_with_the_agent_on_a_remote_worker_its_workspace_is_pulled_before_every_audit_and_pushed_after_a_restore(lab):
@@ -464,12 +460,27 @@ def test_bench_takes_the_agents_seed(lab, monkeypatch):
     from lab import evaltools
     tb, _ = lab
     seeds = []
-    monkeypatch.setattr(evaltools, "run_regimes", lambda url, t, names, split, tier, seed, rows=None: seeds.append(seed) or [])
+    monkeypatch.setattr(evaltools, "run_regimes", lambda url, t, names, split, tier, seed, rows=None, *a: seeds.append(seed) or [])
     tb.bench({"regimes": ["single_stream"], "seed": 7})
     tb.bench({"regimes": ["single_stream"]})
     assert seeds == [7, tb.seed]
     with pytest.raises(ValueError):
         tb.bench({"seed": "7"})
+
+
+def test_bench_starts_its_searches_where_the_base_ended(lab, monkeypatch):
+    from lab import evaltools
+    tb, s = lab
+    got = []
+    monkeypatch.setattr(evaltools, "run_regimes", lambda url, t, names, split, tier, seed, rows=None, hints=None,
+                        bands=None: got.append(hints) or [])
+    tb.bench({"regimes": ["saturated"]})                                     # no base measured yet: a cold search
+    (s.run_dir / "base-seen-short.json").write_text(json.dumps(
+        {"saturated": {"value": 3.8, "valid": True, "concurrency": 64}, "bursty": {"value": 2.0, "valid": True},
+         "single_stream": {"value": 0.006, "valid": True}}))
+    tb.bench({"regimes": ["saturated"]})
+    tb.bench({"regimes": ["saturated"], "seed": 3})                          # another sample: not the base's search
+    assert got == [{}, {"saturated": {"concurrency": 64}, "bursty": {"load": 2.0}}, {}]
 
 
 @pytest.fixture
@@ -527,7 +538,7 @@ def test_submit_needs_a_passing_full_equiv_for_each_profile_it_measures(lab):
     _profile(s, "[single_stream]\nMAX_BATCH_SIZE = 1\n")
     tb.equiv({"tier": "full"}); tb.bench({"regimes": ["single_stream"]})
     assert tb.submit({}).startswith("submit refused: no passing full-tier equiv for profile(s) ['single_stream']")
-    assert not (s.run_dir / "base-heldout-full.json").exists()             # refused before anything was measured
+    assert not (s.run_dir / "base-heldout-short.json").exists()             # refused before anything was measured
     assert json.loads(tb.equiv({"tier": "full", "profile": "single_stream"}))["verdict"] == "pass"
     out = json.loads(tb.submit({}))
     assert set(out["metrics"]) == {"single_stream"}

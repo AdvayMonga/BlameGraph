@@ -37,11 +37,11 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   tree (`[general]` + a table per regime, on the agent's write surface). bench, submit and the base measurement serve
   the general config once for every regime, then each regime whose table is non-empty in its own launch with
   `<profile_env>=<regime>`; that number is the headline, the general one beside it (`metrics.<regime>.general`).
-  Each profile is gated on its own: equiv takes `profile`, submit needs a passing full-tier equiv per profile it
+  Each profile is gated on its own: equiv takes `profile`, submit needs a passing submit-tier equiv per profile it
   measures and records them in `config.profiles`, and the verdict checks the same. The harness reads only the file.
   A profile launch that fails makes its regimes invalid with the reason (`profiles_failed`) and the rest is kept; a
   busy GPU, contamination or the general launch failing still fail the measurement. The profiler tools take
-  `profile` too. Noise bands stay the base engine's general config, stated in the harness facts.
+  `profile` too. Noise bands stay the base engine's general config (the latest per target, any engine commit), stated in the harness facts.
 - `targets/<name>.toml` + `lab/target.py` — **the target spec** (since 2026-10-06): model + chat kwargs, engine
   (repo, python, launch command with `{port}`, health path, env, logprobs `api` vllm|sglang|none, write surface,
   add-only globs, test and lint commands, optional `[engine.telemetry] env` with `{dir}`, optional `profiles` +
@@ -81,7 +81,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   GPU tools charge them at `LAB_GPU_USD_PER_HOUR` / the target's `[cost] gpu_usd_per_hour` to the run's budget) +
   `proftools.py` (trace = nsys, kernel = ncu, hostprof = py-spy, each wrapping lab.profile's workload in the jail
   with validated args) + `evaltools.py` (bench → `regimes` on
-  the seen split; equiv → `correctness` candidate vs the target's reference, 32 requests in flight (scoring at 4); submit → held-out full tier vs the
+  the seen split, default regimes saturated + the task's, each search started where the run's base measurement ended and
+  resolved to the regime's noise band; equiv → `correctness` candidate vs the target's reference, 32 requests in flight (scoring at 4),
+  items in one fixed order and stopped at 200, 400, 800, ... once accuracy is clear of the line; submit → held-out short tier vs the
   base commit, one aggregate per regime through the Thresholdout guard; nothing is measured while another process holds
   the GPU (`refused`), and a process other than the engine on the GPU mid-run makes it `contaminated` (never evidence,
   never the cached base; `serve.Served.exclusive()`); all three serve the pristine tree via

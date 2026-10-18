@@ -5,7 +5,7 @@ ledger stay here.
   bench    the regimes on the seen split, short tier -> one headline per regime, raw
   equiv    the correctness gate against the target's reference -> pass | fail | inconclusive, with every metric
   submit   the only thing that can produce a win: needs a passing equiv at the target's submit tier and a seen bench for this
-           snapshot, measures the held-out split at the full tier, compares with the base commit measured the same
+           snapshot, measures the held-out split at the short tier, compares with the base commit measured the same
            way, and records one aggregate per metric through the Thresholdout guard (the held-out numbers
            themselves never reach the ledger). Verdict per metric: improved | regressed | within_band | unknown_band.
 
@@ -23,7 +23,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from lab import artifacts, calibrate, engine, ledger, profiles, serve, target, worker
+from lab import artifacts, calibrate, ledger, profiles, serve, target, worker
 from validity.holdout import HoldoutGuard, Refused
 
 HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT = 100, 2.0, 0.5
@@ -42,10 +42,12 @@ def _regimes(args: dict, default: tuple[str, ...]) -> list[str]:
 
 
 def run_regimes(url: str, t: target.Target, names: list[str], split: str, tier: str, seed: int,
-                rows: list | None = None) -> list[dict]:
-    """Each regime's result; with `rows`, every measured client row is appended to it, tagged with its regime."""
+                rows: list | None = None, hints: dict | None = None, bands: dict | None = None) -> list[dict]:
+    """Each regime's result; with `rows`, every measured client row is appended to it, tagged with its regime.
+    `hints` / `bands`: where the base's searches ended and each regime's noise band (`suite.Ctx`)."""
     from regimes import suite
-    ctx = suite.Ctx.from_target(t, url, split=split, tier=tier, seed=seed, rows=rows)
+    ctx = suite.Ctx.from_target(t, url, split=split, tier=tier, seed=seed, rows=rows, hints=hints or {},
+                                bands=bands or {})
     out = []
     for n in names:
         k = len(rows) if rows is not None else 0
@@ -61,7 +63,7 @@ def headline(results: list[dict]) -> dict:
     out: dict = {}
     for r in results:
         h = {"objective": r["objective"], "value": r["value"], "better": r["better"], "valid": r["valid"],
-             "invalid_reasons": r["invalid_reasons"]}
+             "invalid_reasons": r["invalid_reasons"], **({"concurrency": r["concurrency"]} if r.get("concurrency") else {})}
         if r.get("profile"):
             g = out.get(r["regime"])
             h.update(profile=r["profile"], general={"value": g["value"], "valid": g["valid"]} if g else None)
@@ -69,18 +71,32 @@ def headline(results: list[dict]) -> dict:
     return out
 
 
-def noise_band_pct(regime: str, t: target.Target | None = None, root: Path = ledger.ROOT,
-                   commit: str | None = None) -> float | None:
+def noise_band_pct(regime: str, t: target.Target | None = None, root: Path = ledger.ROOT) -> float | None:
     """The latest run-to-run band for a regime from the ledger's `noise` records, only if it was measured on this
-    target's engine and, with `commit`, at that engine commit (a band from another engine, model or engine version
-    says nothing about this one)."""
+    target's engine (at any engine commit: the calibration is once per user); a band from another target is ignored."""
     d = None
     for r in ledger.records(root, kind="noise"):
         x = r["result"]
-        if (x.get("regime") == regime and (t is None or (x.get("target") == t.name and x.get("server") == "engine"))
-                and (commit is None or x.get("engine_commit") == commit)):
+        if x.get("regime") == regime and (t is None or (x.get("target") == t.name and x.get("server") == "engine")):
             d = x
     return None if d is None else d.get("band_pct")
+
+
+LOAD_SEARCHED = ("bursty", "long_prompt_short_output", "short_prompt_long_output", "shared_prefix_multi_turn")
+
+
+def search_hints(base: dict) -> dict:
+    """Where each of the base's valid searches ended (saturated: its concurrency; a load search: its load), for a
+    candidate's search to start there."""
+    out = {}
+    for n, h in base.items():
+        if not h.get("valid") or h.get("value") is None:
+            continue
+        if h.get("concurrency"):
+            out[n] = {"concurrency": h["concurrency"]}
+        elif n in LOAD_SEARCHED:
+            out[n] = {"load": h["value"]}
+    return out
 
 
 def delta_pct(base: dict, new: dict) -> float | None:
@@ -114,10 +130,10 @@ def heldout_context(seen_cal: dict, base: dict, delta: float | None, better: str
     return {"ceiling": c, "pct_of_ceiling_base": pct_of(b, c, better), "pct_of_ceiling_new": pct_of(new, c, better),
             "ceiling_from": "the base commit's seen-split request shape" if c is not None
             else (seen_cal.get("ceiling_missing") or "no seen-split calibration of the base in this run"),
-            "reference_missing": "the reference is measured on the seen split at tier short; this is held-out at tier full"}
+            "reference_missing": "the reference is measured on the seen split; this is the held-out split"}
 
 
-def harness_facts(t: target.Target, ledger_root: Path | None = None, commit: str | None = None) -> dict:
+def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
     """What the referee measures against: the parameters the agent cannot read off its ledger. Facts, not advice."""
     from regimes import suite
     from regimes.workload import corpus_version
@@ -129,11 +145,10 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None, commit: str
         "correctness": {"policy": f"pooled task score >= {t.min_score_ratio} of the reference, length >= {t.min_length_ratio}, "
                         f"consistent streams; under the line fails only when the net loss is significant",
                         "tasks": list(t.tasks)},
-        "noise_bands_pct": {n: noise_band_pct(n, t, ledger_root or ledger.ROOT, commit) for n in suite.REGIMES},
+        "noise_bands_pct": {n: noise_band_pct(n, t, ledger_root or ledger.ROOT) for n in suite.REGIMES},
         "noise_bands_measured_on": "the base commit's engine with its general config, repeated unchanged runs "
-                                   "(lab.validate); submit applies them to every candidate and every launch profile; "
-                                   "None where no band was measured at this engine commit",
-        "noise_bands_engine_commit": commit,
+                                   "(lab.validate, the latest at any engine commit); submit applies them to every candidate and "
+                                   "every launch profile; None where no band was measured for this target",
         "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,
         "ceilings": _ceiling_facts(t, ledger_root),
     }
@@ -230,8 +245,10 @@ class EvalTools:
         t0 = time.monotonic()
         work = self._work("bench")
         try:
+            base = self.s.run_dir / f"base-seen-{tier}.json"
+            hints = search_hints(json.loads(base.read_text())) if base.exists() and seed == self.seed else {}
             r = self._measure(tree, work, "serve-bench.log", names=names, split="seen", tier=tier, passive=True,
-                              seed=seed)
+                              seed=seed, hints=hints, bands=self._bands(names))
         except Exception as e:                      # a tool never crashes the session: the failure is the record
             result = {**_failed(e), "seconds": time.monotonic() - t0,
                       "artifacts": artifacts.store(work, self.s.ledger_root)}
@@ -329,7 +346,8 @@ class EvalTools:
             # held-out passive data stays operator-only: never a blob, never in the record, never inside the jail.
             # A contaminated run raises here, before the holdout guard: it spends no query.
             private = self.s.run_dir / "heldout-private" / f"{snap.id}-{time.strftime('%Y%m%dT%H%M%S')}"
-            r = self._measure(tree, private, "serve-submit.log", names=names, split="heldout", tier="full", passive=True)
+            r = self._measure(tree, private, "serve-submit.log", names=names, split="heldout", tier=BENCH_TIER,
+                              passive=True, hints=search_hints(base), bands=self._bands(names))
             # which profile launches failed and how (did not start / the exception's type), never its text
             failed = {p: why.split(":", 1)[0] for p, why in (r.get("profiles_failed") or {}).items()}
             new = headline(r["results"])
@@ -342,7 +360,7 @@ class EvalTools:
                 # with the seen one. Without a seen delta to compare, nothing held-out is reported at all.
                 held_d = guard.query(seen_d, held_d)["value"] if held_d is not None and seen_d is not None else None
                 better[n] = new[n].get("better", "higher")
-                metrics[n] = {**aggregate(base.get(n, {}), held_d, better[n], noise_band_pct(n, t, self.s.ledger_root, engine.commit(self.s.workspace.repo, self.s.workspace.base))),
+                metrics[n] = {**aggregate(base.get(n, {}), held_d, better[n], noise_band_pct(n, t, self.s.ledger_root)),
                               **heldout_context(seen_cal.get(n) or {}, base.get(n, {}), held_d, better[n])}
         except Refused as e:
             self._record("submit", "submit", args, {"verdict": "refused", "reason": str(e)}, snap)
@@ -351,9 +369,9 @@ class EvalTools:
             result = _failed(e)
             self._record("submit", "submit", args, result, snap)
             return _said("submit", result)
-        config = {"tier": "full", **({"profiles": own} if own else {}), **({"profiles_failed": failed} if failed else {})}
+        config = {"tier": BENCH_TIER, **({"profiles": own} if own else {}), **({"profiles_failed": failed} if failed else {})}
         rec = self._record_heldout("submit", "submit", args, config, metrics, snap)
-        out = {"snapshot": snap.id, "split": "heldout", "tier": "full", "metrics": metrics, "record": rec["id"],
+        out = {"snapshot": snap.id, "split": "heldout", "tier": BENCH_TIER, "metrics": metrics, "record": rec["id"],
                **({"profiles_failed": failed} if failed else {}), **_killed(r)}
         task = getattr(self.s, "task", None)
         if task is not None:                       # the task's own win condition, applied to these aggregates
@@ -362,15 +380,21 @@ class EvalTools:
         return json.dumps(out, indent=1)
 
     # -- support ------------------------------------------------------------------------
-    bench_default_regimes = ("single_stream", "saturated", "bursty")      # when the session has no task
+    bench_default_regimes = ("saturated",)      # the general regime: the corpus mix under the conversational limits
 
     def bench_defaults(self) -> tuple[str, ...]:
-        """The task's objective and constrained regimes, so a default bench measures what submit scores."""
+        """The general regime plus, with a task, its objective and constrained regimes (what submit scores)."""
         task = getattr(self.s, "task", None)
-        return tuple(dict.fromkeys((*task.regimes, *task.constraints))) if task else self.bench_default_regimes
+        extra = (*task.regimes, *task.constraints) if task else ()
+        return tuple(dict.fromkeys((*self.bench_default_regimes, *extra)))
     seed = 0
     equiv_concurrency = 32       # dev tier ~26 min on inference-server #107 at 32 (RUNS.md 2026-10-15); sheds are retried
     serve_jailed = True
+
+    def _bands(self, names: list[str]) -> dict:
+        """Each regime's calibrated noise band %, where one exists: the searches resolve to it."""
+        t = target.load()
+        return {n: b for n in names if (b := noise_band_pct(n, t, self.s.ledger_root)) is not None}
 
     def _work(self, tool: str) -> Path:
         """A scratch dir outside the jail for one worker job's output; emptied into blobs or removed after."""
@@ -415,7 +439,7 @@ class EvalTools:
             work = self._work("base")
             try:                                # a contaminated base raises: never cached, every later submit reads it
                 r = self._measure(tree, work, f"serve-base-{split}.log", names=missing, split=split, tier=tier,
-                                  passive=split == "seen")     # held-out rows never leave the worker
+                                  passive=split == "seen", bands=self._bands(missing))   # held-out rows stay on the worker
                 base_rows = artifacts.read_rows(work) if split == "seen" else []
             finally:
                 shutil.rmtree(work, ignore_errors=True)
@@ -449,7 +473,7 @@ class EvalTools:
                               "result": result, "cost": self._cost("baseline")}, self.s.ledger_root)
 
     def base_heldout(self, t, names):
-        return self._base_measure(t, names, "heldout", "full")
+        return self._base_measure(t, names, "heldout", BENCH_TIER)
 
     def base_seen(self, t, names):
         return self._base_measure(t, names, "seen", BENCH_TIER)

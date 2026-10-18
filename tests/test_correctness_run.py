@@ -110,6 +110,11 @@ def test_gate_flow():
             bad = run.candidate(d / "ref", servers["bad"][1], "m", d / "bad2.json", enc, Thresholds(), concurrency=8)
             assert good["passed"], good["reasons"]
             assert not bad["passed"] and any(r.startswith("accuracy:") for r in bad["reasons"]), bad["reasons"]
+            # sequential: a clear loss stops early; an identical candidate stops at the first look
+            assert bad["metrics"]["sample"]["items"] < 3000, bad["metrics"]["sample"]
+            same = run.candidate(d / "ref", servers["ref"][1], "m", d / "same.json", enc, Thresholds(), concurrency=8)
+            assert same["passed"] and same["metrics"]["sample"] == {"items": 200, "of": 3000, "looks": [200]}
+            assert run._looks(3000) == [200, 400, 800, 1600, 3000] and run._looks(150) == [150]
             assert bad["metrics"]["divergence"]["kl_mean"] > good["metrics"]["divergence"]["kl_mean"]
             rec = json.loads((d / "bad2.json").read_text())["ledger_record"]
             assert rec["kind"] == "equiv" and rec["gates"]["consistency"]["passed"] is True
