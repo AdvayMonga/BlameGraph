@@ -313,7 +313,7 @@ def test_the_ab_harness_runs_both_arms_and_gates_each_winner_on_held_out_shapes(
             shapes.write_text(json.dumps({"seen": [list(x) for x in t.seen_default],
                                           "heldout": [list(x) for x in t.heldout_default]}))
             assert ab.main(["--task", t.name, "--shapes", str(shapes), "--out", str(Path(d) / "ab"), "--device", "cpu",
-                            "--evals", "2"]) == 0
+                            "--evals", "2", "--arms", "openevolve,kernels.search"]) == 0
             rows = json.loads((Path(d) / "ab" / "ab.json").read_text())
     finally:
         ab.ARMS.clear()
@@ -342,6 +342,30 @@ def test_the_openevolve_arm_gets_the_same_single_model_and_the_facts_only_prompt
         run.main = orig
     assert cfg["llm"]["models"] == [{"name": "claude-opus-5-5", "weight": 1.0}] and cfg["random_seed"] == 1
     assert Path(cfg["prompt"]["template_dir"]).is_dir() and seen["argv"][seen["argv"].index("--iterations") + 1] == "29"
+
+
+def test_every_arm_differs_from_kernels_search_in_one_flag():
+    from kernels.search import ab
+    from kernels.search import __main__ as cli
+    seen = []
+    orig = cli.main
+    cli.main = lambda argv: seen.append(argv) or print('{"ledger": null}')
+    try:
+        from types import SimpleNamespace
+        a = SimpleNamespace(task="t", shapes="s", evals=3, usd=1.0, model="m", device="cpu", initial=None)
+        for arm in ("kernels.search", "search-roi", "search-random", "search-no-tools"):
+            ab.ARMS[arm](a, Path("/tmp/x"), 0)
+    finally:
+        cli.main = orig
+    base = seen[0]
+    extras = [argv[len(base):] for argv in seen[1:]]
+    assert extras == [["--screen", "roi"], ["--screen", "random"], ["--no-judge-tools"]]
+    assert all(argv[:len(base)] == base for argv in seen)
+    try:
+        ab.main(["--task", "t", "--shapes", "s", "--out", "/tmp/x", "--arms", "nope"])
+        raise AssertionError("an unknown arm ran")
+    except SystemExit:
+        pass
 
 
 def test_openevolve_calls_are_priced_into_a_usage_log():

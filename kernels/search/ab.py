@@ -1,5 +1,5 @@
 """python -m kernels.search.ab --task T --shapes SHAPES.json --out DIR [--initial PROGRAM.py] [--evals N] [--usd X]
-                             [--model M] [--seeds K] [--device cuda]
+                             [--model M] [--seeds K] [--device cuda] [--arms A,B,...]
 
 OpenEvolve against kernels.search on one task, everything else equal: the same shapes, starting program, evaluator,
 model (OpenEvolve given the same single model, so the search and prompting are what differ), number of programs judged
@@ -40,17 +40,24 @@ def _openevolve(a, out: Path, seed: int) -> dict:
     return _last_json(buf.getvalue())
 
 
-def _search(a, out: Path, seed: int) -> dict:
+def _search(a, out: Path, seed: int, extra: tuple = ()) -> dict:
     from kernels.search.__main__ import main
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         main(["--task", a.task, "--shapes", a.shapes, "--out", str(out), "--evals", str(a.evals), "--usd", str(a.usd),
               "--model", a.model, "--judge-model", a.model, "--device", a.device, "--seed", str(seed),
-              *(["--initial", a.initial] if a.initial else [])])
+              *(["--initial", a.initial] if a.initial else []), *extra])
     return _last_json(buf.getvalue())
 
 
-ARMS = {"openevolve": _openevolve, "kernels.search": _search}
+def _variant(*extra: str):
+    return lambda a, out, seed: _search(a, out, seed, extra)
+
+
+# Each arm differs from `kernels.search` (Haiku screen, judge tools on) in one thing, so a difference in the summary
+# is that thing's: the screener (MANTIS ROI, random), the judge's web search and ledger SQL, or the whole generator.
+ARMS = {"openevolve": _openevolve, "kernels.search": _search, "search-roi": _variant("--screen", "roi"),
+        "search-random": _variant("--screen", "random"), "search-no-tools": _variant("--no-judge-tools")}
 
 
 def _gate(a, program: Path) -> dict:
@@ -82,10 +89,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--model", default="claude-opus-5-5")
     ap.add_argument("--seeds", type=int, default=1)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--arms", default="openevolve,kernels.search", help=f"comma-separated, of: {', '.join(ARMS)}")
     a = ap.parse_args(argv)
+    arms = [x for x in a.arms.split(",") if x]
+    unknown = [x for x in arms if x not in ARMS]
+    if unknown:
+        ap.error(f"unknown arms {unknown}; one of {list(ARMS)}")
     out, rows = Path(a.out), []
     for seed in range(a.seeds):
-        for arm, fn in ARMS.items():
+        for arm in arms:
+            fn = ARMS[arm]
             d = out / f"{arm}-{seed}"
             d.mkdir(parents=True, exist_ok=True)
             res = fn(a, d, seed)
