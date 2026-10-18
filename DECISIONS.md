@@ -39,6 +39,16 @@ can add up past the regimes' noise bands. Why: one kernel's gain (moe_gemm 1.09x
 end to end) sits inside the bands, so judging it alone costs hours of GPU for a within-band verdict. Each kernel still
 passes its own held-out gate before it ships; a failing stack is bisected with `equiv`.
 
+## 2026-10-18 — Manual measurements enter the ledger as numbers, visible to the agent
+A run measured by hand (`python -m regimes run`, `python -m correctness candidate` on a branch) is imported as a
+`bench` / `equiv` record under a `manual-<date>` run (`python -m lab.import_runs`): the engine commit and launch env
+as its config, the numbers as its result, no text. The agent sees it like any measurement (`ledger`, `query`,
+`search` index the numbers; there is no hypothesis to search). Why: four days of engine sessions had their results
+only in `RUNS.md` prose and `data/` files, where nothing compounds; the 2026-10-15 rule hid a person's runs because
+their *reasoning* would reach the agent — numbers alone carry no judgment. `RUNS.md` is frozen as the history of
+the runs before this; new runs are not added to it (the ledger is the record, `python -m store sql` the view). The
+researcher's reasoning stays out of the ledger. Amends 2026-10-15 for manual runs and 2026-10-16 (`RUNS.md`).
+
 ## 2026-10-16 — No status file
 `STATE.md` is removed; the record is `DECISIONS.md` and `RUNS.md`, both append-only. Why: a rewritten-in-place
 status file went stale between sessions (it still listed merged engine PRs as open). Replaces the three-file entry of

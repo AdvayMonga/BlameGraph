@@ -76,6 +76,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   missing; bench, baseline, profile and kernel records carry a `calibrated` block, the brief shows the baseline's;
   submit's held-out aggregates carry the ceiling from the base's seen-split shape and % of it, never anything computed
   from held-out requests; harness facts carry peaks and floors for the GPU the ledger last measured on),
+  `import_runs.py` (a hand-made run dir → `bench`/`equiv` records under a `manual-` run, numbers only),
   `tools.py` (metered tools: test, profile, ledger, query, search, budget, restore, note; every record's `cost` has wall seconds, and
   GPU tools charge them at `LAB_GPU_USD_PER_HOUR` / the target's `[cost] gpu_usd_per_hour` to the run's budget) +
   `proftools.py` (trace = nsys, kernel = ncu, hostprof = py-spy, each wrapping lab.profile's workload in the jail
@@ -302,12 +303,15 @@ corpus lacks (short/long output, overload, shared prefix) belong in `corpus/buil
 them from existing records meanwhile.
 
 ## Decisions and runs
-Two append-only files; add to them as part of the change that makes the decision or the run:
-- `DECISIONS.md` — one dated entry per decision (what, why, what it replaced), newest first. The eval conventions
-  (2026-10-02) are there; change any decision only with the user.
-- `RUNS.md` — every GPU run: a row (date, venue, cost, result, evidence) and its details.
+- `DECISIONS.md` — append-only, one dated entry per decision (what, why, what it replaced), newest first. The eval
+  conventions (2026-10-02) are there; change any decision only with the user.
+- GPU runs go into the ledger, not a file (decided 2026-10-18). A run made through the lab's tools records itself;
+  a run made by hand (`python -m regimes run --out DIR`, `python -m correctness candidate --out DIR/equiv.json`) is
+  imported with `python -m lab.import_runs --run manual-<date> --commit SHA [--env K=V ...] DIR...` (`bench` / `equiv`
+  records, numbers only, visible to the agent), then `python -m store push`. `RUNS.md` is the frozen history of the
+  runs before that (2026-10-04 to 2026-10-18); nothing is added to it.
 
-There is no status file: what works now is the code, the merged PRs and `RUNS.md`.
+There is no status file: what works now is the code, the merged PRs and the ledger (`python -m store sql`).
 
 @DECISIONS.md
 
