@@ -431,17 +431,18 @@ def test_screeners_score_hypotheses_and_the_log_keeps_labels():
     from kernels.search import screen
     from kernels.search.loop import search
     hs = [{"modification_plan": "a", "expected_speedup": 1.5}, {"modification_plan": "b", "expected_speedup": 1.1}]
-    assert screen.parse("ok: [0.2, 1.7]", 2) == [0.2, 1.0] and screen.parse("[0.1]", 2) is None
+    assert screen.parse("ok: [0.2, 1.7]", 2) == ([0.2, 1.0], False) and screen.parse("[0.1]", 3) is None
+    assert screen.parse("[0.1, 0.5, 0.9]", 4) == ([0.1, 0.5, 0.9, 0.5], True)    # one short: the median fills the last
     seen = {}
     fake = lambda system, user: seen.update(system=system, user=user) or ("[0.1, 0.9]", 0.002)      # noqa: E731
     scores, usd = screen.haiku(fake)("TASK FACTS", "PROGRAM AND MEASUREMENTS", hs)
     assert scores == [0.1, 0.9] and usd == 0.002 and "PROGRAM AND MEASUREMENTS" in seen["user"]
-    assert '1. {"modification_plan": "b"' in seen["user"] and "probability" in seen["system"]
+    assert '1. {"modification_plan": "b"' in seen["user"] and "exactly 2 numbers" in seen["system"]
     sc = screen.haiku(lambda s, u: ("no idea", 0.0))
     scores, _ = sc("S", "F", hs)
-    assert scores[0] > scores[1] and sc.last == {"reply": "no idea", "parsed": False}   # unparsable: MANTIS ROI order
-    assert screen.parse("Scores [0 to 1] for the 2 changes:\n```json\n[0.3, 0.7]\n```", 2) == [0.3, 0.7]
-    assert screen.parse("[0.3, 0.7, 0.1]", 2) is None and screen.parse("", 2) is None
+    assert scores[0] > scores[1] and sc.last == {"reply": "no idea", "parsed": False, "padded": False}   # ROI order
+    assert screen.parse("Scores [0 to 1] for the 2 changes:\n```json\n[0.3, 0.7]\n```", 2) == ([0.3, 0.7], False)
+    assert screen.parse("[0.3, 0.7, 0.1, 0.2]", 2) is None and screen.parse("", 2) is None
     assert screen.make("roi") is None and len(screen.make("random")("S", "F", hs)[0]) == 2
 
     def review(system, user):
