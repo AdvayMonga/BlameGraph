@@ -127,13 +127,17 @@ def _peaks(device: str):
     return peaks.load(torch.cuda.get_device_name(torch.device(device)))
 
 
-def _pct_of_roofline(task: Task, shape, dtype, ms: float, hw, inputs: list) -> float | None:
-    """The bound for the very inputs the timer rotated through, averaged."""
+def _roofline(task: Task, shape, dtype, ms: float, hw, inputs: list) -> dict:
+    """For the very inputs the timer rotated through (averaged): % of the roofline bound, which term binds (memory:
+    bytes over HBM bandwidth; compute: FLOPs over peak), and the achieved fraction of each peak. Facts, from the
+    task's FLOPs and bytes and the measured peaks."""
     if hw is None or not ms:
-        return None
+        return {"pct_of_roofline": None}
     costs = [task.cost(shape, dtype, x) for x in inputs]
-    bound_s = sum(max(f / hw.bf16_flops, b / hw.bw_bytes_s) for f, b in costs) / len(costs)
-    return bound_s / (ms / 1e3) * 100
+    flops, nbytes = (sum(c[i] for c in costs) / len(costs) for i in (0, 1))
+    t_mem, t_flop, t = nbytes / hw.bw_bytes_s, flops / hw.bf16_flops, ms / 1e3
+    return {"pct_of_roofline": max(t_mem, t_flop) / t * 100, "bound": "memory" if t_mem >= t_flop else "compute",
+            "pct_of_peak_bandwidth": t_mem / t * 100, "pct_of_peak_flops": t_flop / t * 100}
 
 
 # Outputs of the plain check cases and the timed calls, kept for kernels/evolve/verify.py, which recomputes the
@@ -321,7 +325,7 @@ def _timed(task, cand, base, shapes, weights, dtype, device, iters, hw, toleranc
                      "baseline_ms": b["median_ms"], "baseline_iqr_ms": b["iqr_ms"], "speedup": speed,
                      "speedup_p25": p["ratio"]["p25"], "speedup_p75": p["ratio"]["p75"], "weight": w,
                      "beyond_noise": shown, "clock": p["clock"],
-                     "pct_of_roofline": _pct_of_roofline(task, s, dtype, c["median_ms"], hw, p["inputs"])})
+                     **_roofline(task, s, dtype, c["median_ms"], hw, p["inputs"])})
     return rows, math.exp(logs), math.exp(raw)
 
 

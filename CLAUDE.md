@@ -230,12 +230,15 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   search on the winner, written back as constants, promoted only if their re-timed median is higher
   (`kernels/search/tune.py`), and when different points win in different size regions a dispatcher picks CONFIG per
   call from the call's size (`Task.size_expr`, tensor shapes only, so CUDA graphs bake it per captured size), promoted
-  on the same rule; the search stops once the best program is at `--stop-pct` (90) of its call-weighted
-  roofline bound, a figure the prompt states; every call priced (OpenEvolve's too, via a usage log);
+  on the same rule; the search stops once the best program is at `--stop-pct` (80) of its call-weighted
+  roofline bound, a figure the prompt states, or after `--patience` (16) judged programs with no new best (MANTIS);
+  each timed shape carries its bound type (memory or compute) and the achieved % of peak bandwidth and of peak FLOPs,
+  and ncu runs on the smallest and the largest seen shape; every call priced (OpenEvolve's too, via a usage log);
   `python -m kernels.search.ab` runs OpenEvolve and kernels.search on one task with the same shapes, start, evaluator,
   single model and judged-program budget, gates each winner on held-out shapes, and writes `ab.json`; same evaluator, run dir, re-timed promotion and `kernels` record as `kernels.evolve run`). `kernels/evolve/ship.py` (`python -m kernels.evolve ship`: a program with a passing held-out gate becomes a
   commit on a new engine branch, built with git plumbing so the engine's tree is untouched; `--budget` starts the
-  `lab.experiment` researcher run on it, measured end to end by `bench`/`equiv`/`submit`). `kernels/share.py` (`python -m kernels.evolve share --profile BUNDLE`: each task's share of a profiled engine
+  `lab.experiment` researcher run on it, measured end to end by `bench`/`equiv`/`submit`). `kernels/share.py` (`python -m kernels.evolve share --profile BUNDLE [--profile ...] [--gate TASK=GATE.json]`: tasks
+  ranked by share x (1 - % of roofline) across profiles, each task's share of a profiled engine
   window from the device kernels it launches, `Task.kernel_names`, the speedup bound if they took no time, and the
   kernels no task covers, by share: the facts for choosing the next task). `lab/capture.py` + `lab.profile --capture MODULE:FUNCTION` (the `profile` tool's `capture`): every
   call's argument shapes and small int tensors, the first call per shape kept whole as real inputs.
