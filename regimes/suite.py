@@ -49,6 +49,8 @@ class Ctx:
     interactive: Limits = INTERACTIVE  # MLPerf limits; probes must last well beyond the TTFT limit to see overload
     conversational: Limits = CONVERSATIONAL
     rows: list | None = None           # when a list, every measured row lands here (no text), tagged with its call
+    hints: dict = field(default_factory=dict)   # {regime: {"load" | "concurrency": x}}: where the base's search ended
+    bands: dict = field(default_factory=dict)   # {regime: run-to-run band %}: the search resolves to it, not finer
     _pools: dict = field(default_factory=dict)
     _calls: int = 0
 
@@ -98,6 +100,15 @@ class Ctx:
             self._calls += 1
         return rows
 
+    def search(self, regime: str, start: float) -> dict:
+        """find_goodput's start, growth and tolerance for a regime: from the base's result when hinted (steps of two
+        bands), resolved to the regime's noise band when one is known (else 10%)."""
+        tol = (self.bands.get(regime) or 10.0) / 100
+        hint = (self.hints.get(regime) or {}).get("load")
+        if not hint:
+            return {"start": start, "rel_tol": tol}
+        return {"start": hint, "rel_tol": tol, "growth": 1 + 2 * tol, "min_load": hint / 16}
+
     @classmethod
     def from_target(cls, t, url: str, **kw) -> "Ctx":
         """A Ctx for the target: its model, chat kwargs, corpus and limits; `kw` overrides (tier, split, seed...)."""
@@ -127,10 +138,10 @@ def _result(name, objective, value, direction, summary, **extra) -> dict:
             "invalid_reasons": summary["invalid_reasons"] if summary else ["no measurement"], **extra}
 
 
-def _search_and_confirm(measure, start: float) -> tuple[float | None, dict | None, list]:
+def _search_and_confirm(measure, search_args: dict) -> tuple[float | None, dict | None, list]:
     """find_goodput with measure(load, final=False), then confirm with measure(load, final=True), backing off 15%
     up to 5 times. Returns (confirmed load or None, final summary, probes)."""
-    search = find_goodput(lambda x: measure(x, False), start)
+    search = find_goodput(lambda x: measure(x, False), **search_args)
     load, final = search["goodput"], None
     for _ in range(6):
         if load is None:
@@ -155,7 +166,7 @@ def _goodput_regime(ctx: Ctx, name: str, objective: str, build, limits: Limits, 
         duration = ctx.duration(load * per_unit, final)
         rows = ctx.run_open(build(load, duration + ramp_s))
         return summarize([r for r in rows if ramp_s <= r.scheduled_s < ramp_s + duration], limits, duration)
-    load, final, probes = _search_and_confirm(measure, ctx.min_requests / (ctx.probe_s * per_unit))
+    load, final, probes = _search_and_confirm(measure, ctx.search(name, ctx.min_requests / (ctx.probe_s * per_unit)))
     return _result(name, objective, load, "higher", final, probes=probes)
 
 
@@ -169,23 +180,36 @@ def single_stream(ctx: Ctx) -> dict:
 
 
 def saturated(ctx: Ctx, max_concurrency: int = 512) -> dict:
-    """Doubling concurrency; goodput = good req/s at the best level whose requests meet the limits."""
+    """Doubling concurrency; goodput = good req/s at the best level whose requests meet the limits. With a hint the
+    sweep starts at the base's concurrency, halving first while that level fails."""
     pool = ctx.pool(None)
     _warmup(ctx, pool)
     order = random.Random(ctx.seed).sample(pool, len(pool))
-    levels, best, c, misses = [], None, 1, 0
-    while c <= max_concurrency:
+    levels, best, misses = [], None, 0
+
+    def probe(c):
         rows, elapsed = ctx.run_closed(_cycle(order, f"c{c}"), c, ctx.probe_s)
-        s = summarize(rows, ctx.conversational, elapsed)
-        levels.append({"concurrency": c, **s})
+        levels.append({"concurrency": c, **summarize(rows, ctx.conversational, elapsed)})
+        return levels[-1]
+    c = int((ctx.hints.get("saturated") or {}).get("concurrency") or 1)
+    s = probe(c)
+    down = False
+    while s["valid"] and not s["meets_limits"] and c > 1 and ctx.hints.get("saturated"):
+        c, down = c // 2, True                     # the base's level fails: halve until one meets the limits
+        s = probe(c)
+    if s["valid"] and s["meets_limits"]:
+        best = s
+    else:
+        misses = 1
+    c *= 2
+    while s["valid"] and not down and misses < 2 and c <= max_concurrency:   # down: the level above already failed
+        s = probe(c)
         if not s["valid"]:
             break
         if s["meets_limits"] and (best is None or s["good_req_per_s"] > best["good_req_per_s"]):
-            best, misses = levels[-1], 0
+            best, misses = s, 0
         elif not s["meets_limits"]:
             misses += 1
-            if misses >= 2:
-                break
         c *= 2
     final, best = None, None
     passing = sorted((lv for lv in levels if lv["meets_limits"]), key=lambda lv: -lv["good_req_per_s"])
@@ -211,7 +235,7 @@ def bursty(ctx: Ctx) -> dict:
 
     def measure(speed, _final):                     # the trace is its own duration; confirming is a rerun
         return summarize(ctx.run_open(W.replay(trace, speed, window)), ctx.conversational)
-    speed, final, probes = _search_and_confirm(measure, 1.0)
+    speed, final, probes = _search_and_confirm(measure, ctx.search("bursty", 1.0))
     return _result("bursty", "speedup", speed, "higher", final, probes=probes,
                    good_req_per_s=final and final["good_req_per_s"])
 
@@ -266,7 +290,7 @@ def overload(ctx: Ctx, factor: float = 2.0, rate: float | None = None) -> dict:
         return summarize(ctx.run_open(W.poisson(pool, r, duration, ctx.seed)), ctx.conversational, duration)
     found = None
     if rate is None:
-        found = find_goodput(lambda r: measure(r, False), ctx.min_requests / ctx.probe_s)
+        found = find_goodput(lambda r: measure(r, False), **ctx.search("overload", ctx.min_requests / ctx.probe_s))
         rate = found["goodput"]
     if rate is None:
         return _result("overload", "good_req_per_s", None, "higher", found["probes"][-1] if found else None)

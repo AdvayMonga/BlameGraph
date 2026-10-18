@@ -176,10 +176,11 @@ def summarize(rows: list[Row], limits: Limits, elapsed_s: float | None = None) -
 
 
 def find_goodput(probe: Callable[[float], dict], start: float, max_probes: int = 10, rel_tol: float = 0.1,
-                 min_load: float | None = None) -> dict:
-    """Highest load x with probe(x)["meets_limits"]: double from `start` until a probe fails, then bisect.
-    An invalid probe (client bottleneck, silent drops, crashes) stops the search, as does halving below
-    `min_load` (default start/16: a server that fails there has no goodput worth finding). Returns {goodput, probes}."""
+                 min_load: float | None = None, growth: float = 2.0) -> dict:
+    """Highest load x with probe(x)["meets_limits"]: grow by `growth` from `start` until a probe fails (or shrink by
+    it until one passes), then bisect until the bracket is within `rel_tol`. An invalid probe (client bottleneck,
+    silent drops, crashes) stops the search, as does going below `min_load` (default start/16: a server that fails
+    there has no goodput worth finding). Returns {goodput, probes}."""
     min_load = start / 16 if min_load is None else min_load
     probes, lo, hi, x = [], 0.0, None, start
     for _ in range(max_probes):
@@ -192,9 +193,9 @@ def find_goodput(probe: Callable[[float], dict], start: float, max_probes: int =
         else:
             hi = x
         if hi is None:
-            x *= 2
+            x *= growth
         elif lo == 0.0:
-            x = hi / 2
+            x = hi / growth
             if x < min_load:
                 break
         elif (hi - lo) / hi <= rel_tol:

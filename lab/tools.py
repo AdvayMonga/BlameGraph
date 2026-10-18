@@ -80,8 +80,7 @@ class Toolbox(EvalTools, ProfTools):
         from lab.evaltools import noise_band_pct
         base = next(ledger.records(self.s.ledger_root, run=self.s.run_id, kind="baseline"), None)
         name = args["expect"].get("metric")
-        band = (noise_band_pct(name, target.load(), self.s.ledger_root,
-                               engine.commit(self.s.workspace.repo, self.s.workspace.base))
+        band = (noise_band_pct(name, target.load(), self.s.ledger_root)
                 if tool in ("bench", "submit") and isinstance(name, str) else None)
         body["experiment"] = experiments.outcome(tool, args, result, metrics,
                                                  ((base or {}).get("result") or {}).get("metrics"), band)
@@ -348,13 +347,17 @@ class Toolbox(EvalTools, ProfTools):
                      f"regimes on the seen split. `regimes`: default {_names(self.bench_defaults())}; 'all'; or "
                      f"any of {_names(suite.REGIMES)}. `tier`: short (default) or full. `seed`: the seen-split workload sample "
                      f"(default {self.seed}). Returns one headline per regime "
-                     f"(objective, value, direction, validity), raw. Takes {windows}." + prof + gpu("5-25 min per regime"),
+                     f"(objective, value, direction, validity), raw. Takes {windows}. At the default seed and tier short, each "
+                     "search starts where the run's base measurement of that regime ended; every search stops once its "
+                     "bracket is within the regime's noise band (10% where none is measured)." + prof + gpu("5-25 min per regime"),
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}},
                                                        "tier": {"type": "string", "enum": ["short", "full"]},
                                                        "seed": {"type": "integer"}}}, self.bench),
             ToolSpec("equiv", "Serve your current workspace and run the correctness gate against the reference "
                      "model's outputs at `tier` dev (default) or full. Returns pass, fail or inconclusive with every "
-                     "metric. `tier` quick generates nothing: the engine scores the dev reference's own answers "
+                     "metric. Items are answered in one fixed order and the gate stops at 200, 400, 800, ... items once "
+                     "the pooled score ratio's CI is above the line or the net loss is significant (Bonferroni over the "
+                     "looks), else after the whole tier; `metrics.sample` says where. `tier` quick generates nothing: the engine scores the dev reference's own answers "
                      "teacher-forced (its sequences.jsonl, a few hundred) and returns the divergence (KL mean, p99 and "
                      "worst sequence, top-1 agreement, reference-token logprob shift) as facts, with no verdict; "
                      "measured cost not yet known. "
@@ -365,14 +368,14 @@ class Toolbox(EvalTools, ProfTools):
                      {"type": "object", "properties": {"tier": {"type": "string", "enum": ["quick", "dev", "full"]},
                                                        **({"profile": {"type": "string"}} if tg.profiles else {})}},
                      self.equiv),
-            ToolSpec("submit", "Measure your current workspace on the held-out split at the full tier and compare it "
+            ToolSpec("submit", "Measure your current workspace on the held-out split at the short tier and compare it "
                      f"with the base commit measured the same way. Needs a passing {tg.submit_tier}-tier equiv and a completed "
                      "short-tier seen bench on this snapshot. `regimes`: default those of that bench. The only thing "
                      "that can produce a win. Returns one aggregate per regime (base, new, delta %, noise band % (measured on "
                      "the base engine's general config), "
-                     "verdict, and % of the ceiling computed from the base's seen-split request shape) and, with a task, its score. Takes one engine start plus a held-out full-tier "
+                     "verdict, and % of the ceiling computed from the base's seen-split request shape) and, with a task, its score. Takes one engine start plus a held-out short-tier "
                      f"measurement per regime, the base commit's held-out measurement once per run, and up to one of the "
-                     f"{HOLDOUT_BUDGET} held-out queries per regime." + prof + gpu("15-25 min per regime"),
+                     f"{HOLDOUT_BUDGET} held-out queries per regime." + prof + gpu("5-25 min per regime"),
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}}}},
                      self.submit),
             *self.prof_specs(gpu),

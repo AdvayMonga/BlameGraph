@@ -5,6 +5,23 @@ a reversed decision gets a new entry that names the old one. Change any of these
 
 
 
+## 2026-10-18 — Short gates: bench, equiv and submit sized by significance
+The user asked for the least data that keeps each gate statistically meaningful. Bench defaults to the general regime
+(saturated) plus the task's objective and constrained regimes when a task names them (was single_stream, saturated,
+bursty without a task). Load searches start where the run's base measurement of that regime ended and stop once the
+bracket is within the regime's noise band (10% where none is measured; was always 10%, from a cold start). Submit
+measures the held-out split at the short tier with the same searches (was full: 600 s finals, and a band calibrated at
+short applied to full-tier numbers). Equiv answers items in one fixed order and looks at 200, 400, 800, ... of them,
+stopping once the pooled ratio's CI is above the line or the net loss is significant (both Bonferroni-corrected over
+the looks); otherwise it runs the tier's whole set and the rule is unchanged. The order is the same for every
+candidate, so a rerun cannot draw a new sample. The Thresholdout guard stays. Replaces, in part, the eval conventions'
+full-tier submit (2026-10-02).
+
+## 2026-10-18 — Noise bands: one calibration per user, any engine commit
+Reverses "Noise bands belong to one engine commit" (same day): the latest band measured for the target counts at
+any engine commit. Why: the user wants calibration as a one-time setup per user, not a re-run after every engine
+change. `lab.validate` still records the commit a band was measured at.
+
 ## 2026-10-18 — The layer-1 loop copies the frontier per component (kernels/METHOD.md)
 Every component copies the published method with the strongest numbers, or is ours with a reason and an A/B arm
 (the user, 2026-10-17). Adopted: MCTS parents (KernelPro), 16 hypotheses ranked then a beam of 4 measured (MANTIS,
