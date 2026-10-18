@@ -5,6 +5,7 @@ local and archived in the store (`python -m store pull`).
 
 | Date | Venue | What | GPU cost | Result | Evidence |
 |---|---|---|---|---|---|
+| 2026-10-17/18 | Nebius H200 (`lab-gpu-2`) | Engine session 4: one-launch router, FlashInfer planned once per wave, split-K MoE GEMMs, padded-step cap, compile A/B (inference-server #113) | ~1 h 20 min (~$6) | saturated 3.58 -> 3.81 req/s, single_stream TPOT p99 6.14 -> 6.01 ms, long_prompt 9.03 -> 12.5 req/s; gate PASS; compile on the MoE decode not viable | `data/engine-h200-20261017/session6/`, below |
 | 2026-10-17 | Nebius H200 (`lab-gpu-2`) | Engine session 3: defaults, decode launch diet, fused MoE routing/epilogue, FlashInfer prefill (inference-server #112) | ~2 h (~$9) | saturated 1.87 -> 3.58 req/s (conc 128 within limits), single_stream TPOT p99 9.26 -> 6.14 ms, long_prompt 6.25 -> 9.03 req/s; gate PASS (ratio 1.0105, CI 0.997-1.024) | `data/engine-h200-20261017/REPORT.md`, below |
 | 2026-10-16 | Nebius H200 (`lab-gpu-2`) | Engine session 2: mixed prefill + async decode measured (inference-server #110, #111) and three fixes; the kernel loop's Phase A/B ran on the same VM (its own entry) | ~4 h (~$18) | saturated 1.11 -> 1.87 req/s (conc 64 within limits), single_stream TPOT p99 9.5 -> 9.26 ms, 0 OOMs; gate PASS 1,597/1,597 (ratio 1.0032, CI 0.989-1.017) | `data/engine-h200-20261016/REPORT.md`, below |
 | 2026-10-16 | Nebius H200 (`lab-gpu-2`) | Engine wide-batch work (inference-server #109) | ~2 h | single_stream TPOT p99 9.6 ms, saturated 1.07-1.65 req/s (conc 64 marginal), long_prompt 6.25; gate PASS | `data/engine-h200-20261015/nebius2/`, below |
@@ -18,6 +19,22 @@ local and archived in the store (`python -m store pull`).
 | 2026-10-08 | Nebius H200 | Profiler tools on the real engine | ~$0.87 | All four tools work unjailed; three fixes | below |
 | 2026-10-05 | Nebius H200 | Full-tier correctness recalibration | ~$16.50 | Policy confirmed; FP8/INT8 pass, Int4 fails | `data/h200-run-20261005/REPORT.md`, `data/equiv-full/` |
 | 2026-10-04 | Verda H200 | Dev-tier correctness calibration | $6.75 | Gate separates Int4; consistency results void | `data/h200-run-20261004/REPORT.md`, `data/equiv/` |
+
+## 2026-10-17/18 — Engine session 4: router, single plan, split-K, step cap (Nebius H200 `lab-gpu-2`, inference-server #113)
+Built off the GPU after session 3, measured against its end state (3.58 req/s / 6.14 ms / 9.03). A batch-1 kernel
+profile first (`prof6-b1`): 20 launches a layer (~49 two days earlier), 5.4 ms of kernels in a 5.9 ms step, the two
+MoE grouped GEMMs 43% of it at 3x their weight-read floor (192 programs on 132 SMs). Changes: the whole router in one
+launch for <= 32 tokens (softmax, top-k, grouping, padding; 16 us a layer, about what the four launches cost);
+FlashInfer planned once per wave (block ids are identical across layers: every layer allocates and releases in the same
+order, checked on CPU); kv_store gathers its block id, the rope kernel reads the q/k GEMM slices without copying;
+split-K (fp32 atomics) for the small-M grouped GEMMs; a mixed step's padded size capped at max_prefill_tokens after a
+62-row step padded to 8192 asked 3.9 GiB for q and OOMed 99 long-prompt requests (3.1 req/s). Results: saturated 3.81
+req/s (conc 128 within limits, TTFT p99 0.56 s; conc 256 at 67% attainment, TTFT p99 1.91 s), single_stream 6.01 ms
+(split-K bought ~0.1 ms, not the ~1.5 the profile suggested: what the GEMM waits on at M=8 needs ncu), long_prompt
+12.5 req/s. torch.compile on the MoE decode (first A/B): recompiles per step, 64 s decode, truncated streams; not
+viable, off. Gate (dev tier, 32 in flight) PASS, 0 unanswered, consistency clean. Gaps to vLLM (5.8 / 4.14 ms / 68):
+the batch-1 step is kernel-time-bound at ~20 launches a layer; saturated at 256 clients fails on TTFT p99 1.9 s;
+long prompt 12.5 vs 68.
 
 ## 2026-10-17 — Engine session 3: defaults, launch diet, fused MoE, FlashInfer prefill (Nebius H200 `lab-gpu-2`, inference-server #112)
 Four changes built off the GPU the day before, measured one at a time on the short tier against the 2026-10-16 end
