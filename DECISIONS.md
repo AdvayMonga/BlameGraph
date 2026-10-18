@@ -4,6 +4,17 @@ One entry per decision, newest first: what was decided, why (as recorded at the 
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
 
+
+## 2026-10-18 — The layer-1 loop copies the frontier per component (kernels/METHOD.md)
+Every component copies the published method with the strongest numbers, or is ours with a reason and an A/B arm
+(the user, 2026-10-17). Adopted: MCTS parents (KernelPro), 16 hypotheses ranked then a beam of 4 measured (MANTIS,
+Kevin), chained repairs (CudaForge, KernelPro), MANTIS's stop rule, two-shape ncu facts and per-shape bound type, a
+gaming detector at promotion (MANTIS; its library-only filter not copied: a faster library call is a real engine
+gain). Ours, measured by the A/B: a System-1 screener over hypotheses, Haiku 4.5 now (Jev and OpenAI's Decisions API
+are hosted-only and cannot be fine-tuned), a fine-tuned local classifier once one random pick per beam has labelled a
+few hundred; the judge may use web search and read-only ledger SQL, its own choice when, with no research pasted by
+the harness (the facts-only line: the environment hands over facts; what the model chooses to read is its own, as in
+the agent's workbench); a merge hypothesis competing for the beam.
 ## 2026-10-18 — Noise bands belong to one engine commit
 `lab.validate` records the engine commit a band was measured at (None for a tree with uncommitted changes), and
 `submit`, experiment records and the brief's harness facts use a band only at the run's base commit; otherwise it is
