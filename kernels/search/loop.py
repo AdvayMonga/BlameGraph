@@ -11,6 +11,7 @@ repair (the judge in correction mode on it; Kernel Forge's bounded repair loop).
 Every node goes to `<out>/trace.jsonl` in the fields `kernels.evolve.run.record` and `retime` read."""
 from __future__ import annotations
 
+import difflib
 import json
 import math
 import re
@@ -119,16 +120,54 @@ def facts(node: Node) -> str:
     return "\n".join(out)
 
 
+def diff_from_root(tree: Tree, node: Node, limit: int = 3000) -> str:
+    root = tree.root()
+    d = "".join(difflib.unified_diff(root.code.splitlines(keepends=True), node.code.splitlines(keepends=True),
+                                     "start", node.id, n=2))
+    return d if len(d) <= limit else d[:limit] + f"\n... ({len(d) - limit} more characters)\n"
+
+
+def inspirations(tree: Tree, node: Node, k: int = 2) -> list[Node]:
+    """The best judged programs off this program's lineage that beat the start (CodeEvolve: 2-3 inspirations)."""
+    mine = {n.id for n in tree.lineage(node)}
+    base = tree.root().score
+    others = [n for n in tree.nodes.values() if n.id not in mine and n.metrics.get("correct") == 1.0 and n.score > base]
+    return sorted(others, key=lambda n: -n.score)[:k]
+
+
 def prompt(tree: Tree, node: Node, plan: str = "", coder: bool = True) -> str:
     path = " -> ".join(f"{n.id} ({n.score:.4f})" for n in tree.lineage(node))
     tried = [tree.nodes[c] for c in node.children]
     kids = "\n".join(f"- {c.id}: score {c.score:.4f}" + (f", {c.artifacts.get('error', '')[:300]}"
                                                           if c.score <= 0 else "") for c in tried) or "none"
     sol = f"; {node.pct_of_roofline:.1f}% of its roofline bound, call-weighted" if node.pct_of_roofline else ""
+    others = inspirations(tree, node)
+    if coder:                                   # the coder sees another program only when told to merge it
+        try:
+            merge = json.loads(plan).get("merge_from") if plan.startswith("{") else None
+        except (json.JSONDecodeError, AttributeError):
+            merge = None
+        others = [tree.nodes[merge]] if merge in tree.nodes else []
+    other = "".join(f"## Program {o.id} (score {o.score:.4f}), its diff against the starting program\n"
+                    f"```diff\n{diff_from_root(tree, o)}```\n" for o in others)
     return (f"# Program {node.id} (score {node.score:.4f}{sol}; best in the tree {tree.best().score:.4f})\n"
             f"```python\n{node.code}\n```\n\n# Its measurements\n{facts(node)}\n\n"
             f"# Lineage (node, score)\n{path}\n\n# Programs already derived from it\n{kids}\n\n"
+            + (f"# Other programs in the tree\n{other}\n" if other else "")
             + (f"# The change to make (from the judge)\n{plan}\n\n" if plan else "") + (FORMAT if coder else ""))
+
+
+def merge_hypothesis(tree: Tree, node: Node) -> dict | None:
+    """Combine this program with the best program on another branch (a crossover the beam can pick like any other
+    hypothesis; its expected speedup is that program's measured score over the start's)."""
+    o = inspirations(tree, node, 1)
+    if not o:
+        return None
+    return {"bottleneck": "", "optimisation_method": "merge",
+            "modification_plan": f"combine this program with program {o[0].id}: apply its changes (its diff against the "
+                                 "starting program is shown) to this program",
+            "merge_from": o[0].id, "expected_speedup": round(o[0].score / (tree.root().score or 1.0), 4),
+            "implementation_risk": 2, "performance_risk": 2}
 
 
 def cascade(judge_stage: Callable[[str, int], dict], counters: bool = False) -> Callable[[str], dict]:
@@ -233,6 +272,8 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
                                 prompt(tree, parent, coder=False))
             spent, calls = spent + cost, calls + 1
             hs = hypotheses(text, n_hypotheses)
+            mh = merge_hypothesis(tree, parent) if hs else None
+            hs += [mh] if mh else []
             if not hs:
                 keep(Node(uuid.uuid4().hex[:8], parent.id, parent.code, {"combined_score": 0.0, "correct": 0.0,
                                                                         "stage": 0},
