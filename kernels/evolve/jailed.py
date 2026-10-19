@@ -25,30 +25,38 @@ ROOT = Path(__file__).resolve().parents[2]
 HARNESS = {"kernels": None, "validity": ("__init__.py", "peaks.py"), "lab": ("__init__.py", "target.py")}
 TIMEOUT_S = float(os.environ.get("KERNEL_EVAL_TIMEOUT_S", "600"))
 NCU_STAGE = 3                    # not a judging stage: ncu counters for a program that passed stage 2 (kernels/evolve/ncu.py)
-EXT_CACHE = Path(os.environ.get("KERNEL_EXT_CACHE") or Path(tempfile.gettempdir()) / "kernel-ext")
-EXT_MAX_BYTES = 512 * 2**20      # a build dir larger than this is not kept
+EVAL_DIRS = Path(os.environ.get("KERNEL_EVAL_DIRS") or Path(tempfile.gettempdir()) / "kernel-eval")
 CUDA = Path("/usr/local/cuda")
 
 
-def _builds(source: str, tree: Path) -> tuple[Path, Path]:
-    """(the jail's TORCH_EXTENSIONS_DIR inside its tree, this source's cache): a program's C++ builds once for all its
-    stages and re-timings. Keyed by the source, so a program only ever reads what an identical program built."""
-    ext, cache = tree / "torch_extensions", EXT_CACHE / hashlib.sha256(source.encode()).hexdigest()[:24]
-    if cache.is_dir():
-        shutil.copytree(cache, ext, symlinks=True)
-    return ext, cache
+def cuda_home() -> Path | None:
+    """The toolkit for the CUDA torch was built with (an extension linked against another runtime does not load:
+    Verda's image is CUDA 12.8 beside torch cu130), else /usr/local/cuda; None without nvcc."""
+    import torch
+    v = torch.version.cuda
+    for p in ([Path(f"/usr/local/cuda-{v}")] if v else []) + [CUDA]:
+        if (p / "bin" / "nvcc").exists():
+            return p.resolve()
+    return None
 
 
-def _keep_builds(ext: Path, cache: Path) -> None:
-    """Keep the build dir the jail wrote (links copied as links, never followed on this side), once per source."""
-    if cache.exists() or not ext.is_dir():
-        return
-    files = [f for f in ext.rglob("*") if f.is_file() and not f.is_symlink()]
-    if not files or sum(f.stat().st_size for f in files) > EXT_MAX_BYTES:
-        return
-    tmp = cache.with_name(cache.name + f".{os.getpid()}.tmp")
-    shutil.copytree(ext, tmp, symlinks=True)
-    tmp.rename(cache)
+def _eval_dir(source: str, toolkit: Path | None) -> tuple[Path, Path]:
+    """(the dir, its tree) where this program is judged, the same path every time: torch reuses a C++ build only at
+    the absolute path it was built in, so a program's build serves all its stages and re-timings. Keyed by the source
+    and the toolkit; everything in the tree but the build dir is removed (links unlinked, never followed) before each
+    judgment. A program cannot keep answers there: file reads and writes are refused by the screen."""
+    d = EVAL_DIRS / hashlib.sha256(f"{toolkit}\0{source}".encode()).hexdigest()[:24]
+    tree = d / "tree"
+    tree.mkdir(parents=True, exist_ok=True)
+    for x in tree.iterdir():
+        if x.name == "torch_extensions" and x.is_dir() and not x.is_symlink():
+            continue
+        if x.is_dir() and not x.is_symlink():
+            shutil.rmtree(x)
+        else:
+            x.unlink()
+    shutil.rmtree(d / "harness", ignore_errors=True)
+    return d, tree
 
 
 def stage_harness(dest: Path) -> Path:
@@ -89,14 +97,14 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
                                            {"error": a.get("ncu_error", "")[-500:]})})
         return {"metrics": {"stage": stage}, "artifacts": {"ncu": json.dumps({"shapes": out})}}
     fail = {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage}}
-    with tempfile.TemporaryDirectory(prefix="kernel-eval-") as d:
-        tree, harness = Path(d, "tree"), stage_harness(Path(d, "harness"))
-        tree.mkdir()
+    home = cuda_home()
+    d, tree = _eval_dir(source, home)
+    try:
+        harness = stage_harness(d / "harness")
         (tree / "candidate.py").write_text(source)
         if stage == 2:                           # outputs to verify outside the jail
             cfg = {**cfg, "record": str(tree / "outputs.pt")}
         (tree / "eval_config.json").write_text(json.dumps(cfg))
-        ext, cache = _builds(source, tree)
         src = _engine_src(load(cfg["task"]))
         path = os.pathsep.join(str(p) for p in (harness, src) if p)
         read = [harness] + ([src] if src else [])
@@ -112,10 +120,10 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
         else:
             argv = [engine.python(), "-m", "kernels.evolve.core", str(tree / "eval_config.json"),
                     str(tree / "candidate.py"), str(stage)]
-        env = {"PYTHONPATH": path, "TORCH_EXTENSIONS_DIR": str(ext),
-               **({"CUDA_HOME": str(CUDA.resolve())} if CUDA.exists() else {})}   # mounted at its resolved path
+        env = {"PYTHONPATH": path, "TORCH_EXTENSIONS_DIR": str(tree / "torch_extensions"),
+               **({"CUDA_HOME": str(home)} if home else {})}
+        read += [home] if home else []
         p = grader.jailed(tree, argv, timeout_s=timeout_s, env_extra=env, read=read)
-        _keep_builds(ext, cache)
         lines = [x for x in p.stdout.splitlines() if x.startswith("{")]
         if stage == 2 and p.returncode == 0 and lines:
             r = json.loads(lines[-1])
@@ -127,6 +135,8 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
                 if not ok:
                     r["metrics"] = {**r["metrics"], "combined_score": 0.0, "correct": 0.0}
             return r
+    finally:
+        shutil.rmtree(d / "harness", ignore_errors=True)
     if stage == NCU_STAGE:
         if p.returncode != 0:
             return {"metrics": {"stage": stage}, "artifacts": {"ncu_error": (p.stderr or p.stdout)[-2000:]}}

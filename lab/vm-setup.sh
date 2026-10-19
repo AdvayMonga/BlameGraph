@@ -28,6 +28,14 @@ fi
 echo "== CUDA toolkit"
 # The image's nvcc decides what JIT-compiling libraries can do: vLLM's DeepGEMM FP8 path needs nvcc >= 12.9.
 nvcc --version 2>/dev/null | tail -1 || ls /usr/local/cuda/bin/nvcc 2>/dev/null || echo "nvcc: not on PATH"
+# A C++ extension (the kernel loop's CUDA candidates, the engine's megakernel) loads only when nvcc matches the CUDA
+# torch was built with: install that toolkit beside the image's (Verda's is 12.8 beside torch cu130).
+tv=$(.venv/bin/python -c "import torch; print(torch.version.cuda or '')" 2>/dev/null || true)
+if [ -n "$tv" ] && [ ! -x "/usr/local/cuda-$tv/bin/nvcc" ]; then
+  DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq "cuda-toolkit-${tv/./-}" >/dev/null \
+    || echo "cuda-toolkit-$tv: not in apt (finding, not failure)"
+fi
+[ -n "$tv" ] && { "/usr/local/cuda-$tv/bin/nvcc" --version 2>/dev/null | tail -1 || true; }
 
 echo "== Nsight"
 # CUDA images keep ncu in /usr/local/cuda/bin, on no login PATH, and that one is only a launcher for the install under
