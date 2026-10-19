@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Callable
 
 from kernels.search import diff
-from kernels.search.tree import Node, Tree, fingerprint
+from kernels.search.tree import UCT_C, Node, Tree, fingerprint
 
 FORMAT = """Answer with SEARCH/REPLACE blocks against the program shown. Each SEARCH section must match the program
 exactly once, or the answer is not applied. Any number of blocks:
@@ -211,7 +211,7 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
            stop_pct: float | None = None, patience: int | None = None, n_hypotheses: int = 16, beam: int = 4,
            explore: int = 1, max_repairs: int = 3,
            screen: Callable[[str, str, list[dict]], tuple[list[float], float]] | None = None,
-           uct_c: float = math.sqrt(2)) -> tuple[Tree, dict]:
+           uct_c: float = UCT_C) -> tuple[Tree, dict]:
     """Search until `evals` programs are judged, `usd` is spent on model calls, nothing is left to try, or the best
     program reaches `stop_pct`% of its roofline bound, or `patience` programs have been judged since the best last
     improved (MANTIS, Hari et al.: within 25% of speed-of-light or 16 attempts without progress kept 96% of the geomean

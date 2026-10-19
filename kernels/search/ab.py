@@ -60,10 +60,11 @@ def _variant(*extra: str):
 
 
 # Each arm differs from `kernels.search` (Haiku screen, judge tools on) in one thing, so a difference in the summary
-# is that thing's: the screener (MANTIS ROI, random), the judge's web search and ledger SQL, or the whole generator.
+# is that thing's: the screener (MANTIS ROI, random), the judge's web search and ledger SQL, KernelPro's literal UCT
+# constant, or the whole generator.
 ARMS = {"openevolve": _openevolve, "kernels.search": _search, "search-roi": _variant("--screen", "roi"),
         "search-random": _variant("--screen", "random"), "search-no-tools": _variant("--no-judge-tools"),
-        "search-c0.5": _variant("--uct-c", "0.5")}
+        "search-c1.41": _variant("--uct-c", "1.4142")}
 
 
 def _gate(a, program: Path) -> dict:

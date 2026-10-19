@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import sys
 from pathlib import Path
 
@@ -20,6 +19,7 @@ from kernels.evolve.run import _shapes, _target_tolerances, prepare, record, ret
 from kernels.search import detect, screen, tune
 from kernels.search.llm import Claude
 from kernels.search.loop import cascade, search
+from kernels.search.tree import UCT_C
 from kernels.tasks import TASKS, load
 
 
@@ -111,8 +111,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--tune-points", type=int, default=8,
                     help="grid points tried on each re-timed candidate's TUNABLES; 0: none")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--uct-c", type=float, default=math.sqrt(2),
-                    help="UCT exploration constant (KernelPro: sqrt 2; lower goes deeper sooner)")
+    ap.add_argument("--uct-c", type=float, default=UCT_C,
+                    help="UCT exploration constant on rewards in [0, 1] (KernelPro's sqrt 2 is on ln speedup)")
     ap.add_argument("--stop-pct", type=float, default=80.0,
                     help="stop once the best is at this %% of its roofline (MANTIS: within 25%% of speed-of-light)")
     ap.add_argument("--patience", type=int, default=16, help="stop after this many judged programs with no new best")
