@@ -60,6 +60,7 @@ def test_judge_scores_a_correct_kernel_and_zeroes_a_wrong_one():
 def test_the_screen_refuses_exploit_routes_and_passes_real_kernels():
     from kernels.evolve.core import screen
     for src in ("import gc\n", "torch.cuda.Stream()\n", "x.elapsed_time(y)\n", "import threading\n",
+                "torch.save(out, 'memo.pt')\n", "Path('m').write_bytes(b)\n", "import pickle\n", "np.load('m.npy')\n",
                 "import time\n", "sys.modules['kernels'].timing = 1\n", "from kernels import timing\n",
                 "os.system('id')\n", "open('/etc/passwd')\n", "import ctypes\n", "inspect.stack()\n"):
         assert screen(src), src
@@ -111,7 +112,7 @@ def test_the_screen_passes_a_cuda_extension_and_refuses_its_cpp_routes():
     for bad in ('PyObject* m = PyImport_ImportModule("kernels.timing");', "py::module_::import(\"gc\");",
                 'void* h = dlopen("libc.so.6", 1);', "std::thread t(f);", 'FILE* f = fopen("/proc/self/mem", "r");',
                 "cudaStream_t s; cudaStreamCreate(&s);", "cudaEventRecord(e, 0);", "cudaGraphLaunch(g, 0);",
-                'popen("id", "r");'):
+                'popen("id", "r");', "std::ofstream f(\"memo\");"):
         assert screen(CUDA_PROGRAM.replace("int n = x.numel();", "int n = x.numel(); " + bad)), bad
 
 
@@ -121,25 +122,27 @@ def test_a_programs_cpp_builds_once_for_all_its_stages_and_only_for_that_source(
 
     def fake(tree, argv, *, timeout_s, env_extra, read):
         ext = Path(env_extra["TORCH_EXTENSIONS_DIR"])
-        seen.append(sorted(p.name for p in ext.rglob("*")) if ext.exists() else [])
+        seen.append((str(tree), sorted(p.name for p in tree.rglob("*") if p.parent == tree or ext in p.parents)))
         (ext / "scale_ext").mkdir(parents=True, exist_ok=True)
         (ext / "scale_ext" / "scale_ext.so").write_bytes(b"built")
-        if not (ext / "scale_ext" / "outside").is_symlink():
-            (ext / "scale_ext" / "outside").symlink_to("/etc/hosts")     # kept as a link, never read here
+        (tree / "memo.pt").write_bytes(b"left behind")                      # removed before the next judgment
+        if not (tree / "candidate.py.link").is_symlink():
+            (tree / "candidate.py.link").symlink_to("/etc/hosts")          # unlinked, never followed
         return subprocess.CompletedProcess(argv, 1, "", "stop")
-    orig, cache = jailed.grader.jailed, jailed.EXT_CACHE
+    orig, dirs = jailed.grader.jailed, jailed.EVAL_DIRS
     with tempfile.TemporaryDirectory() as d:
-        jailed.grader.jailed, jailed.EXT_CACHE = fake, Path(d) / "cache"
+        jailed.grader.jailed, jailed.EVAL_DIRS = fake, Path(d) / "eval"
         try:
             cfg = {"task": "toy_rmsnorm", "seen": [[4, 8]], "device": "cpu"}
             for _ in range(2):
                 jailed.judge_jailed(cfg, CUDA_PROGRAM, 1)
             jailed.judge_jailed(cfg, CUDA_PROGRAM + "\n# another program\n", 1)
-            kept = next((Path(d) / "cache").iterdir())
         finally:
-            jailed.grader.jailed, jailed.EXT_CACHE = orig, cache
-        assert seen == [[], ["outside", "scale_ext", "scale_ext.so"], []]      # cached for its source only
-        assert (kept / "scale_ext" / "outside").is_symlink() and len(list((Path(d) / "cache").iterdir())) == 2
+            jailed.grader.jailed, jailed.EVAL_DIRS = orig, dirs
+    (t1, a), (t2, b), (t3, c) = seen
+    assert t1 == t2 != t3                                         # one fixed tree per source: the build path is stable
+    assert a == ["candidate.py", "eval_config.json"] and c == a
+    assert b == ["candidate.py", "eval_config.json", "scale_ext", "scale_ext.so", "torch_extensions"]   # build kept only
 
 
 def test_a_cuda_extension_builds_in_the_jail_and_is_judged_on_the_gpu():

@@ -33,7 +33,8 @@ FORBIDDEN = {
     r"(?<![.\w])(eval|exec|compile)\s*\(|__subclasses__|\btypes\.(FunctionType|CodeType)\b": "code built at run time",
     r"\bkernels\.(check|timing|evolve)\b|\bfrom kernels\b|\bimport kernels\b": "the evaluator itself",
     r"\bopen\s*\(|\bos\.(system|popen|fork|exec\w*|spawn\w*|kill|remove|unlink|open|write|dup2?)\b|\bsubprocess\b"
-    r"|\bsocket\b|\burllib\b|\brequests\b": "files, processes or the network",
+    r"|\bsocket\b|\burllib\b|\brequests\b|\btorch\.(save|load)\b|\b(np|numpy)\.(save\w*|load\w*|fromfile)\b|\.tofile\s*\("
+    r"|\bpickle\b|\bshelve\b|\.(write|read)_(text|bytes)\b|\b[io]?fstream\b": "files, processes or the network",
     # C++ built with torch.utils.cpp_extension runs in the evaluator's process: the same routes, spelled in C++
     r"\bPy[A-Z][a-z]+_[A-Z]\w*|\bPyObject\b|\b(py|pybind11)::(module_?::import|eval|exec|globals)\b":
         "the Python C-API",
