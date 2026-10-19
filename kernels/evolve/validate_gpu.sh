@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Layer-1 GPU validation, run on the VM from this environment's dir with the engine's venv on PATH:
 #   python -m lab.vm run --env --keep -- bash kernels/evolve/validate_gpu.sh [ITERATIONS] [TASK]   (TASK: paged_decode)
-# 1. capture the engine's calls to the task's entry point under two corpus classes (real shapes, real inputs), CUDA graphs off:
+# 1. capture the engine's calls to the task's entry point under real corpus traffic at several concurrencies, CUDA graphs off:
 #    replayed graphs never reach Python, so with them on most calls would be invisible
 # 2. split them into seen / held-out regions
 # 3. judge the engine's own kernel against the reference on both (correctness on the GPU, the baseline timing)
@@ -22,11 +22,15 @@ export PYTHONPATH="$PWD:$ENGINE/src${PYTHONPATH:+:$PYTHONPATH}"
 python -c "import openevolve" 2>/dev/null || "$HOME/.local/bin/uv" pip install -q --python "$(command -v python)" "openevolve==0.4.0"
 
 echo "== 1. capture"
-for spec in steady_interactive:64 long_context:24; do     # long_context's seen split holds ~30 requests
+# Real traffic only, at several concurrencies (CLASS:REQUESTS fired together, so decode batches run REQUESTS..1):
+# mixed_* cross regimes (post-idle burst, spike, steady) with ~600-1200 seen requests each; long_context is 60
+# requests of >= 3000 tokens. Synthetic prompts give every row of a batch the same length, which real traffic never
+# does (the 2026-10-19 paged_decode kernel: 1.40x on real, mixed-length batches, 0.98x on synthetic, uniform ones).
+for spec in ${CAPTURE_SPECS:-mixed_1:256 mixed_3:64 long_context:60}; do
   cls=${spec%%:*}; n=${spec##*:}
   ls -d "$OUT/profile-$cls"/*/captures >/dev/null 2>&1 && continue      # already captured
   CUSTOM_BACKEND_CUDA_GRAPH=0 \
-  python -m lab.profile --corpus-class "$cls" --requests "$n" --max-tokens 64 --capture "$ENTRY" --out "$OUT/profile-$cls" \
+  python -m lab.profile --corpus-class "$cls" --requests "$n" --max-tokens 128 --capture "$ENTRY" --out "$OUT/profile-$cls" \
     > "$OUT/profile-$cls.log" 2>&1 || { tail -20 "$OUT/profile-$cls.log"; exit 1; }
 done
 CAPS=$(ls -d "$OUT"/profile-*/*/captures | sed 's/^/--captures /' | tr '\n' ' ')

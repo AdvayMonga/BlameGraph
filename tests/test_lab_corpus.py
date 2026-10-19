@@ -247,6 +247,8 @@ def test_sample_is_seeded_and_carries_its_provenance(tmp_path):
     (tmp_path / "manifest.json").write_text(json.dumps(m.to_dict(), indent=2) + "\n")
     w = sample("cold_start", "seen", 3, 4, tmp_path)
     assert w == sample("cold_start", "seen", 3, 4, tmp_path) and len(set(w["source"]["lines"])) == 4
+    with pytest.raises(CorpusError, match="requests; 100000 asked for"):
+        sample("cold_start", "seen", 3, 100000, tmp_path)
     assert w["source"] == {"kind": "corpus", "class": "cold_start", "split": "seen", "seed": 3,
                            "corpus_version": m.corpus_version, "lines": w["source"]["lines"]}
     assert w["messages"][0] == [{"role": "user", "content": f"p{w['source']['lines'][0]}"}]

@@ -197,6 +197,8 @@ def load_trace(class_name: str, split: str,
 def sample(class_name: str, split: str, seed: int, n: int, corpus_dir: Path = CORPUS_DIR) -> dict[str, Any]:
     """`n` requests of one (class, split) drawn without replacement by `seed`: chat messages plus their provenance."""
     m, reqs = load_trace(class_name, split, corpus_dir)
+    if not 0 <= n <= len(reqs):
+        raise CorpusError(f"{class_name}/{split} has {len(reqs)} requests; {n} asked for")
     lines = random.Random(seed).sample(range(len(reqs)), n)
     return {"source": {"kind": "corpus", "class": class_name, "split": split, "seed": seed,
                        "corpus_version": m.corpus_version, "lines": lines},
