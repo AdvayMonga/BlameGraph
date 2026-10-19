@@ -124,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
                 res = fn(a, d, seed)
                 (d / "result.json").write_text(json.dumps(res, default=str))
             g = _gate(a, d / "best_program.py")
+            (d / "gate.json").write_text(json.dumps(g, indent=1))       # what `kernels.evolve ship --gate` reads
             c = _cost(d)
             m = (g.get("metrics") or {})
             rows.append({"arm": arm, "seed": seed, "seen_score": m.get("combined_score"),
