@@ -1,5 +1,5 @@
 """The search tree: every evaluated program is a node, kept whether it won, lost or failed. Parents are chosen by
-Monte Carlo tree search as KernelPro does (UCT, C = sqrt(2), progressive widening alpha = 0.5: a node takes another
+Monte Carlo tree search as KernelPro does (UCT, C = sqrt(2) on its scale, progressive widening alpha = 0.5: a node takes another
 expansion while its children number fewer than visits^alpha; KernelPro: MCTS 4.60x vs greedy 3.65x, p = 0.004). A
 node closes after `max_failures` failed children (KernelPro marks one terminal after 3), so search leaves dead ends
 without forgetting them."""
@@ -47,8 +47,11 @@ def fingerprint(code: str) -> str:
     return hashlib.sha256(re.sub(r"\s+", "", body).encode()).hexdigest()[:16]
 
 
+UCT_C = 0.6      # KernelPro's sqrt 2 over its ln(speedup) rewards (about 2.3 wide for 0.5x-5x), scaled to ours in [0, 1]
+
+
 class Tree:
-    def __init__(self, seed: int = 0, c: float = math.sqrt(2), alpha: float = 0.5, max_failures: int = 3):
+    def __init__(self, seed: int = 0, c: float = UCT_C, alpha: float = 0.5, max_failures: int = 3):
         self.nodes: dict[str, Node] = {}
         self.seen: set[str] = set()
         self.rng, self.c, self.alpha, self.max_failures = random.Random(seed), c, alpha, max_failures
@@ -85,9 +88,11 @@ class Tree:
         return below / len(others)
 
     def value(self, node: Node) -> float:
-        """Mean reward over the judged programs in the node's subtree, recomputed at every selection."""
+        """The best reward among the judged programs in the node's subtree (max backup), recomputed at every
+        selection: only the best program found is kept, so a branch is worth its best. The mean, as KernelPro backs
+        up, hid the 2026-10-19 run's best program (1.42x) under its 0.86x parent: never expanded in 13 programs."""
         rs = [self.reward(n) for n in self.subtree(node) if self.judged(n)]
-        return sum(rs) / len(rs) if rs else 0.0
+        return max(rs) if rs else 0.0
 
     def subtree(self, node: Node) -> list[Node]:
         out, stack = [], [node]
@@ -111,7 +116,7 @@ class Tree:
 
     def select(self) -> Node | None:
         """Descend from the root by UCT. A node under its widening cap takes a new child only when KernelPro's virtual
-        child (the node's mean reward as its prior, a fair share of the node's visits) has a higher UCT than its best
+        child (the node's own reward as its prior, a fair share of the node's visits) has a higher UCT than its best
         existing child; otherwise the search descends. Widening whenever under the cap (the 2026-10-18 A/Bs) kept
         every tree at depth 2: the root and its weak children took new children while the best nodes waited."""
         node = self.root()
@@ -123,7 +128,7 @@ class Tree:
                 return node if self.expandable(node) else None
             best = max(kids, key=lambda k: self.uct(node, k.visits, self.value(k)))
             if self.expandable(node) and len(node.children) < math.ceil(max(node.visits, 1) ** self.alpha):
-                virtual = self.uct(node, node.visits // (len(node.children) + 1), self.value(node))
+                virtual = self.uct(node, node.visits // (len(node.children) + 1), self.reward(node))
                 if virtual > self.uct(node, best.visits, self.value(best)):
                     return node
             node = best

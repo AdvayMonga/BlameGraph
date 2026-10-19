@@ -51,7 +51,7 @@ def test_diff_applies_exact_blocks_and_refuses_the_rest():
 
 def test_mcts_descends_by_uct_widens_progressively_and_skips_closed_nodes():
     import math
-    t = Tree(seed=0, max_failures=2)
+    t = Tree(seed=0, c=math.sqrt(2), max_failures=2)
     ok = lambda sc: {"combined_score": sc, "correct": 1.0, "stage": 2}        # noqa: E731
     root = t.add(Node("r", None, "x = 1", ok(1.0), {}, 0))
     assert t.select().id == "r" and root.visits == 1 and t.reward(root) == 0.5           # alone: the middle
@@ -78,6 +78,20 @@ def test_mcts_descends_by_uct_widens_progressively_and_skips_closed_nodes():
     assert t.lineage(t.select())[1].id == "a"                            # a small C descends into `a`'s subtree
     t.c = math.sqrt(2)
     assert fingerprint("x = 1  # note\n") == fingerprint("x=1\n")
+
+
+def test_a_branch_is_worth_its_best_program_so_a_strong_child_of_a_weak_parent_is_expanded():
+    t = Tree(seed=0)                                     # the 2026-10-19 run's shape: the best under a weak parent
+    ok = lambda sc: {"combined_score": sc, "correct": 1.0, "stage": 2}        # noqa: E731
+    t.add(Node("r", None, "r", ok(1.0), {}, 0))
+    for i, sc in enumerate((0.86, 1.0, 0.99, 0.0)):
+        t.add(Node(f"c{i}", "r", f"c{i}", ok(sc) if sc else {"combined_score": 0.0, "correct": 0.0, "stage": 1}, {}, 1))
+    for i, sc in enumerate((1.42, 1.25, 1.27, 0.92)):    # under the 0.86x one
+        t.add(Node(f"w{i}", "c0", f"w{i}", ok(sc), {}, 2))
+    for i, sc in enumerate((1.02, 1.04, 1.0, 1.26)):     # under the 1.0x one
+        t.add(Node(f"s{i}", "c1", f"s{i}", ok(sc), {}, 3))
+    assert t.value(t.nodes["c0"]) == t.reward(t.nodes["w0"]) == 1.0        # the branch's best, not its mean
+    assert t.select().id == "w0"
 
 
 def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_node():
@@ -377,13 +391,13 @@ def test_every_arm_differs_from_kernels_search_in_one_flag():
     try:
         from types import SimpleNamespace
         a = SimpleNamespace(task="t", shapes="s", evals=3, usd=1.0, model="m", device="cpu", initial=None)
-        for arm in ("kernels.search", "search-roi", "search-random", "search-no-tools", "search-c0.5"):
+        for arm in ("kernels.search", "search-roi", "search-random", "search-no-tools", "search-c1.41"):
             ab.ARMS[arm](a, Path("/tmp/x"), 0)
     finally:
         cli.main = orig
     base = seen[0]
     extras = [argv[len(base):] for argv in seen[1:]]
-    assert extras == [["--screen", "roi"], ["--screen", "random"], ["--no-judge-tools"], ["--uct-c", "0.5"]]
+    assert extras == [["--screen", "roi"], ["--screen", "random"], ["--no-judge-tools"], ["--uct-c", "1.4142"]]
     assert all(argv[:len(base)] == base for argv in seen)
     try:
         ab.main(["--task", "t", "--shapes", "s", "--out", "/tmp/x", "--arms", "nope"])
