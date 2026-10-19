@@ -330,6 +330,7 @@ def test_the_ab_harness_runs_both_arms_and_gates_each_winner_on_held_out_shapes(
             assert ab.main(["--task", t.name, "--shapes", str(shapes), "--out", str(Path(d) / "ab"), "--device", "cpu",
                             "--evals", "2", "--arms", "openevolve,kernels.search"]) == 0
             rows = json.loads((Path(d) / "ab" / "ab.json").read_text())
+            assert json.loads((Path(d) / "ab" / "kernels.search-0" / "gate.json").read_text())["passed"]
             ab.ARMS.update({"openevolve": None, "kernels.search": None})      # finished arms are reused, not rerun
             env = {"KERNEL_EVAL_SSH": json.dumps(["sh", "-c"]),                  # the gate over a stand-in for ssh
                    "KERNEL_EVAL_REMOTE": f"cd {Path(__file__).parent.parent} && PATH={Path(sys.executable).parent}:$PATH"}
