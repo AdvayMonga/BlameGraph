@@ -4,9 +4,9 @@ lineage's scores, what its earlier children scored or why they failed), apply it
 the result with the cascade (stage 1, then stage 2). Lessons it builds on: serial refinement over parallel sampling
 (Kevin), a tree with caps and pruning (STARK), keeping slower and failed nodes as context (Kernel Forge), no
 conversation history, only the latest program and its facts (CudaForge), duplicates refused before any GPU time.
-With a judge (a strong model), each step is two calls (CudaForge, KForge): the judge reads the facts, including
-CudaForge's curated ncu counters, and names one change as JSON; the coder writes it. A judged child that fails gets one
-repair (the judge in correction mode on it; Kernel Forge's bounded repair loop).
+With a judge (a strong model), each expansion is: the judge reads the facts (ncu counters among them when the host
+allows) and names several changes as JSON, a screener orders them, and the coder writes the chosen ones (CudaForge,
+KForge, MANTIS); a judged child that fails is repaired in correction mode, chained a few deep (`search`).
 
 Every node goes to `<out>/trace.jsonl` in the fields `kernels.evolve.run.record` and `retime` read."""
 from __future__ import annotations
@@ -162,13 +162,14 @@ def prompt(tree: Tree, node: Node, plan: str = "", coder: bool = True, measured:
         others = [tree.nodes[merge]] if merge in tree.nodes else []
     other = "".join(f"## Program {o.id} (score {o.score:.4f}), its diff against the starting program\n"
                     f"```diff\n{diff_from_root(tree, o)}```\n" for o in others)
+    who = "a merge, named by the harness" if '"merge_from"' in plan else "from the judge"
     return (f"# Program {node.id} (score {node.score:.4f}{sol}; best in the tree {tree.best().score:.4f})\n"
             f"```python\n{node.code}\n```\n\n# Its measurements\n{facts(node)}\n\n"
             f"# Lineage (node, score)\n{path}\n\n# Programs already derived from it\n{kids}\n\n"
             + (f"# Other programs in the tree\n{other}\n" if other else "")
             + (f"# Hypotheses already measured, anywhere in the tree (parent -> child score; plan)\n"
                f"{history(tree, measured)}\n\n" if measured is not None and not coder else "")
-            + (f"# The change to make (from the judge)\n{plan}\n\n" if plan else "") + (FORMAT if coder else ""))
+            + (f"# The change to make ({who})\n{plan}\n\n" if plan else "") + (FORMAT if coder else ""))
 
 
 def merge_hypothesis(tree: Tree, node: Node) -> dict | None:
@@ -183,6 +184,7 @@ def merge_hypothesis(tree: Tree, node: Node) -> dict | None:
             "modification_plan": f"combine this program with program {o[0].id}: apply its changes (its diff against the "
                                  "starting program is shown) to this program",
             "merge_from": o[0].id, "expected_speedup": round(o[0].score / (node.score or 1.0), 4),
+            "expected_speedup_is": "measured: that program's score over this one's, not an estimate",
             "implementation_risk": 2, "performance_risk": 2}
 
 
@@ -244,7 +246,7 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
             code, why = diff.apply(parent.code, text) if text else (None, "the model returned no text")
             if code is not None and fingerprint(code) in tree.seen:
                 code, why = None, "identical to a program already judged (comments and whitespace aside)"
-            deep = parent.repairs + (mode == "correction")
+            deep = parent.repairs + 1 if mode == "correction" else 0     # a repair chain's length, reset on success
             if code is None:                     # no GPU time spent: a failed child of its parent
                 zero = {"combined_score": 0.0, "correct": 0.0, "stage": 0}
                 child = Node(uuid.uuid4().hex[:8], parent.id, parent.code, zero, {"error": why}, it, text, plan, mode,

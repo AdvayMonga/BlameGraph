@@ -80,6 +80,52 @@ def test_mcts_descends_by_uct_widens_progressively_and_skips_closed_nodes():
     assert fingerprint("x = 1  # note\n") == fingerprint("x=1\n")
 
 
+def test_review_fixes_parents_repairs_duplicates_and_noise():
+    from kernels.search.__main__ import _median, _tune
+    ok = lambda sc: {"combined_score": sc, "correct": 1.0, "stage": 2}        # noqa: E731
+    t = Tree(seed=0)
+    t.add(Node("r", None, "r", ok(1.0), {}, 0))
+    t.add(Node("z", "r", "z", {"combined_score": 0.0, "correct": 1.0, "stage": 2}, {}, 1))   # correct, zeroed by a gate
+    assert not t.expandable(t.nodes["z"])
+    for i in range(3):                                   # edits that never reached the GPU: misses, not failures
+        t.add(Node(f"m{i}", "r", "r", {"combined_score": 0.0, "correct": 0.0, "stage": 0}, {"error": "x"}, 1))
+    assert t.nodes["r"].failures == 1 and t.nodes["r"].misses == 3 and not t.expandable(t.nodes["r"])
+    a = 'C = """\n#define B 64\n"""\n'
+    assert fingerprint(a) != fingerprint(a.replace("64", "128")) and fingerprint("x = 1  # n\n") == fingerprint("x=1\n")
+    runs = iter([1.2, 0.0, 1.3])                          # one failed judgment: not promoted
+    assert _median("x", lambda c: {"metrics": {"combined_score": next(runs)}})[0] == 0.0
+    grid = "CONFIG = {'a': 1}\nTUNABLES = {'a': [1, 2]}\n"
+    judge = lambda c: {"metrics": {"combined_score": 1.02 if "'a': 2" in c else 1.0, "correct": 1.0}, "artifacts": {}}  # noqa: E731
+    assert not _tune([(grid, {}, 1.0)], judge, 2, margin=0.05)[2]["promoted"]      # +2% inside a 5% spread
+    assert _tune([(grid, {}, 1.0)], judge, 2, margin=0.01)[2]["promoted"]
+
+
+def test_a_repair_chain_resets_when_a_repair_succeeds():
+    from kernels.search.loop import search
+
+    def review(system, user):
+        if "failed (see its measurements)" in system:
+            return '{"critical_issue": "x", "why_it_matters": "y", "minimal_fix_hint": "z"}', 0.0
+        return json.dumps([{"modification_plan": "set x = 0", "expected_speedup": 1.0}]), 0.0
+
+    def propose(system, user):                           # optimization breaks it (x = 0), a repair fixes it (x = 2)
+        cur = re.search(r"```python\nx = (\d)", user).group(1)
+        v = "2" if "critical_issue" in user else "0"
+        return f"<<<<<<< SEARCH\nx = {cur}\n=======\nx = {v}\n>>>>>>> REPLACE", 0.0
+
+    def judge(code):
+        x = int(code.split("=")[1])
+        return {"metrics": {"combined_score": {1: 1.0, 0: 0.0, 2: 1.5}[x], "correct": float(x != 0), "stage": 2},
+                "artifacts": {}}
+    with tempfile.TemporaryDirectory() as d:
+        tree, _ = search("x = 1\n", "S", propose, judge, Path(d), evals=6, usd=1.0, review=review, beam=1, explore=0,
+                         screen=lambda s, f, hs: ([1.0] * len(hs), 0.0))
+    fixed = [n for n in tree.nodes.values() if n.score == 1.5]
+    assert fixed and all(n.mode == "correction" and n.repairs == 1 for n in fixed)
+    under = [n for n in tree.nodes.values() if n.parent in {f.id for f in fixed} and n.mode == "optimization"]
+    assert under and all(n.repairs == 0 for n in under)          # was 1: the chain leaked into new work
+
+
 def test_a_branch_is_worth_its_best_program_so_a_strong_child_of_a_weak_parent_is_expanded():
     t = Tree(seed=0)                                     # the 2026-10-19 run's shape: the best under a weak parent
     ok = lambda sc: {"combined_score": sc, "correct": 1.0, "stage": 2}        # noqa: E731

@@ -1,8 +1,9 @@
 """The search tree: every evaluated program is a node, kept whether it won, lost or failed. Parents are chosen by
 Monte Carlo tree search as KernelPro does (UCT, C = sqrt(2) on its scale, progressive widening alpha = 0.5: a node takes another
 expansion while its children number fewer than visits^alpha; KernelPro: MCTS 4.60x vs greedy 3.65x, p = 0.004). A
-node closes after `max_failures` failed children (KernelPro marks one terminal after 3), so search leaves dead ends
-without forgetting them."""
+node closes after `max_failures` judged children that failed, or as many edits that never reached the GPU (unapplied,
+duplicate), counted apart (ours; KernelPro marks a node terminal after 3 failed repairs), so search leaves dead ends
+without forgetting them, and a node whose edits keep missing cannot spend the model budget."""
 from __future__ import annotations
 
 import hashlib
@@ -26,7 +27,8 @@ class Node:
     repairs: int = 0                         # repairs in the chain that led here (a repair of a repair counts 2)
     visits: int = 0                          # MCTS: judged programs in its subtree, itself included
     children: list[str] = field(default_factory=list)
-    failures: int = 0
+    failures: int = 0                        # judged children that failed
+    misses: int = 0                          # edits that never reached the GPU
 
     @property
     def score(self) -> float:
@@ -42,8 +44,16 @@ class Node:
 
 
 def fingerprint(code: str) -> str:
-    """Hash of the program with comments and whitespace removed: two proposals that differ only there are one."""
-    body = re.sub(r"#[^\n]*", "", code)
+    """Hash of the program with its Python comments and whitespace removed: two proposals that differ only there are
+    one. Strings are kept whole, so a C++ `#define` or `#pragma` inside one still counts."""
+    import io
+    import tokenize
+    try:
+        body = " ".join(t.string for t in tokenize.generate_tokens(io.StringIO(code).readline)
+                        if t.type not in (tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT,
+                                          tokenize.DEDENT))
+    except (tokenize.TokenError, SyntaxError, IndentationError):
+        body = code
     return hashlib.sha256(re.sub(r"\s+", "", body).encode()).hexdigest()[:16]
 
 
@@ -63,8 +73,10 @@ class Tree:
         if node.parent:
             p = self.nodes[node.parent]
             p.children.append(node.id)
-            if node.score <= 0:
+            if node.score <= 0 and self.judged(node):
                 p.failures += 1
+            elif not self.judged(node):
+                p.misses += 1
         if self.judged(node):
             for n in self.lineage(node):
                 n.visits += 1
@@ -103,7 +115,9 @@ class Tree:
         return out
 
     def expandable(self, n: Node) -> bool:
-        return n.metrics.get("correct") == 1.0 and n.failures < self.max_failures
+        """Correct and scored (a correct program zeroed by the memory, timing or physics gate is not a parent)."""
+        return (n.metrics.get("correct") == 1.0 and n.score > 0 and n.failures < self.max_failures
+                and n.misses < self.max_failures)
 
     def _open_below(self, n: Node) -> bool:
         return self.expandable(n) or any(self._open_below(self.nodes[c]) for c in n.children)

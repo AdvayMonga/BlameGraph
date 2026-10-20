@@ -30,18 +30,20 @@ TUNE_FACT = ("A program may define, at module level, `CONFIG` (a dict of the lau
 
 
 def _median(code: str, judge, n: int = 3) -> tuple[float, dict]:
+    """The median of n judgments; 0 when any of them scored 0 (a gate failed once: not promoted)."""
     runs = [judge(code)["metrics"] for _ in range(n)]
     scores = sorted(float(m.get("combined_score") or 0.0) for m in runs)
-    med = scores[n // 2]
+    med = scores[n // 2] if scores[0] > 0 else 0.0
     return med, min(runs, key=lambda m: abs(float(m.get("combined_score") or 0.0) - med))
 
 
 def _tune(cands: list[tuple[str, dict, float | None]], judge, points: int,
-          size_expr: str | None = None) -> tuple[str, dict, dict]:
+          size_expr: str | None = None, margin: float = 0.0) -> tuple[str, dict, dict]:
     """`cands`: (code, metrics, re-timed median or None), the winner first. Every candidate that declares a grid is
     swept at `points` points (KernelEvolve tunes every candidate; tuning only the winner picks the program before its
     parameters are known); the best point overall, then a per-size-region dispatch over that candidate's grid, replace
-    the winner only if their median beats the incumbent's: (code, metrics, a record of the sweeps)."""
+    the winner only if their median beats the incumbent's by more than `margin` (the spread of the winner's own
+    re-timings: a gain inside it is noise): (code, metrics, a record of the sweeps)."""
     code, metrics, base = cands[0]
     swept = [(i, c) + tune.sweep(c, judge, points)[::2] for i, (c, _, _) in enumerate(cands)
              if points and tune.params(c) is not None]
@@ -59,14 +61,14 @@ def _tune(cands: list[tuple[str, dict, float | None]], judge, points: int,
     best, best_m = code, metrics
     if variant != code:
         med, m = _median(variant, judge)
-        rec.update(median=med, base_median=base)
-        if med > base:
+        rec.update(median=med, base_median=base, margin=margin)
+        if med > base + margin:
             best, best_m, base, rec["promoted"] = variant, m, med, True
     if table:
         regional = tune.dispatch(variant, size_expr, table)
         med, m = _median(regional, judge)
-        rec["regions"] = {"table": table, "median": med, "promoted": med > base}
-        if med > base:
+        rec["regions"] = {"table": table, "median": med, "promoted": med > base + margin}
+        if med > base + margin:
             best, best_m, rec["promoted"] = regional, m, True
     return best, best_m, rec
 
@@ -146,8 +148,11 @@ def main(argv: list[str] | None = None) -> int:
             "child_metrics": best.metrics}))):
         best = tree.root()                       # every candidate flagged: nothing is promoted over the engine's kernel
     plain = cascade(evaluator.judge_stage)       # tuning reads scores only: no ncu per grid point
+    won = max((r for r in retimed if "median" in r), key=lambda r: r["median"], default=None)
+    margin = max(won["scores"]) - min(won["scores"]) if won and code is not None else 0.0
     code, metrics, tuned = _tune(_top(out / "trace.jsonl", retimed, code, metrics, best, a.retime), plain,
-                                 a.tune_points, task.size_expr)
+                                 a.tune_points, task.size_expr, margin)
+    cost["eval_s"] = evaluator.seconds(out / "eval_seconds.log")
     (out / "best_program.py").write_text(code or best.code)
     (out / "best_metrics.json").write_text(json.dumps(metrics or best.metrics, indent=1))
     models = [{"name": a.model, "role": "coder", "effort": a.effort}] + (
