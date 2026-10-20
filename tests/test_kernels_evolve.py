@@ -270,7 +270,14 @@ def test_split_holds_out_a_region_even_when_calls_pile_up_at_the_largest_value()
     t = load("moe_gemm")
     counts = Counter({(m, 64, 96, 8, m, 1): (1000 if m == 512 else 3) for m in range(8, 513, 8)})
     s = shapes.split(t, counts)
-    assert s["cut_by"] == "distinct" and s["heldout"] and max(x[0] for x in s["seen"]) < min(x[0] for x in s["heldout"])
+    assert s["cut_by"] == "distinct" and s["heldout"] and (512, 64, 96, 8, 512, 1) in s["seen"]   # the top stays seen
+    assert max(x[0] for x in s["seen"] if x[0] != 512) < min(x[0] for x in s["heldout"])          # a whole region
+    two = Counter({(n, 32, 4, 128, 16, L): (900 if (n, L) == (33, 8032) else 10)                  # 2026-10-19 regate
+                   for n in range(1, 257, 8) for L in (650, 8032)})
+    two.update({(n, 32, 4, 128, 16, 8032): 300 for n in range(200, 257, 8)})
+    s2 = shapes.split(load("paged_decode"), two)
+    held = sum(two[x] for x in s2["heldout"])
+    assert s2["heldout"] and held <= sum(two.values()) / 2 and (33, 32, 4, 128, 16, 8032) in s2["seen"]
     g1, g2 = torch.Generator().manual_seed(3), torch.Generator().manual_seed(3)
     assert torch.equal(randn((4, 5), g1, "cpu", torch.float32), randn((4, 5), g2, "cpu", torch.float32))
 
