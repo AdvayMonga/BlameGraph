@@ -266,6 +266,52 @@ def test_the_fused_tasks_start_launches_what_the_engine_module_launches():
     assert len(runs[0]) == 5 and runs[0] == runs[1] and enabled == [True, True]   # same launches, args, switch
     from kernels.evolve.ship import unstart
     assert unstart(load("rmsnorm"), start).rstrip() == src.rstrip()      # shipping undoes the edits
+def test_the_fp8_moe_tasks_judge_the_engines_calls():
+    """References against an independent per-pair computation; an engine-shaped kernel passes every gate and the value
+    scalings (fp8 weights kept, their scales scaled); a 5% scale error fails; each task reads only its own calls."""
+    from kernels.check import _gen, check_kernel
+    from kernels.evolve.core import _scaled
+    from kernels.tasks.moe_gemm import _block_m
+    t, u = load("moe_gemm_fp8"), load("moe_gemm_scatter_fp8")
+
+    def pairs(sid, eid, M, E):
+        bm, out = _block_m(sid, eid), {}
+        for blk, e in enumerate(eid.tolist()):
+            out.update({r: e for r in sid[blk * bm:(blk + 1) * bm].tolist() if r < M and e < E})
+        return out
+    a, tok, w, sc, sid, eid = t.make_inputs(t.seen_default[1], torch.bfloat16, "cpu", _gen(0))
+    pe, wd = pairs(sid, eid, tok.numel(), w.shape[0]), w.float() * sc[..., None]
+    want = torch.stack([a[tok[r]].float() @ wd[pe[r]].T for r in range(tok.numel())])
+    assert w.dtype == torch.float8_e4m3fn and (t.reference(a, tok, w, sc, sid, eid).float() - want).abs().max() < 2e-2
+    a, w, sc, sid, eid, tok, pw, out0 = u.make_inputs(u.seen_default[1], torch.bfloat16, "cpu", _gen(1))
+    pe, wd, want = pairs(sid, eid, a.shape[0], w.shape[0]), w.float() * sc[..., None], torch.zeros_like(out0)
+    for r in range(a.shape[0]):
+        want[tok[r]] += pw[r] * (a[r].float() @ wd[pe[r]].T)
+    assert (u.reference(a, w, sc, sid, eid, tok, pw, out0) - want).abs().max() < 1e-3
+
+    def gemm(a, tok, w, sorted_ids, expert_ids, M, block_m=16, split_k=None, w_scale=None):
+        return t.reference(a, tok if tok is not None else torch.empty(0, dtype=torch.int32), w, w_scale, sorted_ids,
+                           expert_ids)
+
+    def scatter(a, w, sorted_ids, expert_ids, M, tok, pair_w, out, block_m=16, w_scale=None):
+        out += u.reference(a, w, w_scale, sorted_ids, expert_ids, tok, pair_w, out)
+    for task, fn in ((t, gemm), (u, scatter)):
+        r = check_kernel(task.reference, task.bind(fn), task.make_inputs, list(task.seen_default),
+                         list(task.heldout_default), dtypes=task.dtypes, edge_shapes=task.edge_shapes(task.seen_default[0]),
+                         layouts=())
+        assert r["passed"], (task.name, r["reasons"])
+        assert check_kernel(task.reference, task.bind(fn), _scaled(task.make_inputs, -1.0), list(task.seen_default[:2]),
+                            [], dtypes=task.dtypes, edge_shapes=[], layouts=())["passed"]
+    off = lambda a, tok, w, s, e, M, block_m=16, split_k=None, w_scale=None: gemm(a, tok, w, s, e, M, w_scale=w_scale * 1.05)  # noqa: E731
+    assert not check_kernel(t.reference, t.bind(off), t.make_inputs, list(t.seen_default), [], dtypes=t.dtypes,
+                            edge_shapes=[], layouts=())["passed"]
+    arg = lambda shape, dtype: {"shape": shape, "dtype": dtype}                                       # noqa: E731
+    ints = {**arg([32], "int32"), "values": []}
+    fp8 = {"args": [arg([4, 2048], "bfloat16"), ints, arg([128, 1536, 2048], "float8_e4m3fn"), ints, ints, {"value": 32}],
+           "kwargs": {"w_scale": arg([128, 1536], "float32")}}
+    bf16 = {"args": fp8["args"][:2] + [arg([128, 1536, 2048], "bfloat16")] + fp8["args"][3:], "kwargs": {}}
+    assert t.shape_of(fp8) == load("moe_gemm").shape_of(bf16) == (32, 2048, 1536, 128, 4, 1)
+    assert t.shape_of(bf16) is None and load("moe_gemm").shape_of(fp8) is None
 
 
 def test_value_distributions_catch_a_kernel_tuned_to_one_scale():
