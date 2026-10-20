@@ -156,7 +156,8 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "share":
         from kernels.share import rank
         gates = {k: json.loads(Path(v).read_text()) for k, v in (g.split("=", 1) for g in a.gate)}
-        print(json.dumps(rank([Path(p) for p in a.profile], [load(n) for n in TASKS], gates), indent=1))
+        names = list(gates) or list(TASKS)       # with gates, only the gated tasks: two tasks can name one kernel
+        print(json.dumps(rank([Path(p) for p in a.profile], [load(n) for n in names], gates), indent=1))
         return 0
     task = load(a.task)
     sets = _shapes(task, a)
