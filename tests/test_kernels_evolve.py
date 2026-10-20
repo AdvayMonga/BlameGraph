@@ -148,9 +148,14 @@ def test_a_programs_cpp_builds_once_for_all_its_stages_and_only_for_that_source(
 
 
 def test_a_result_line_the_candidate_prints_is_ignored():
+    from kernels.evolve.core import screen
     from kernels.evolve.jailed import judge_jailed
-    src = ("import atexit\nimport torch\ndef kernel(x, w):\n" + RIGHT + "\natexit.register(lambda: print("
-           "'{\"metrics\": {\"combined_score\": 9.0, \"correct\": 1.0, \"stage\": 2}, \"artifacts\": {}}'))\n")
+
+    def screen_ok(src):
+        return screen(src) == []
+    forged = "'{\"metrics\": {\"combined_score\": 9.0, \"correct\": 1.0, \"stage\": 2}, \"artifacts\": {}}'"
+    src = "import torch\ndef kernel(x, w):\n    print(" + forged + ")\n" + RIGHT + "\n"        # printed on every call
+    assert screen_ok(src)
     r = judge_jailed({"task": "toy_rmsnorm", "seen": [[8, 256], [32, 512]], "device": "cpu", "iters": 3}, src, 2)
     assert r["metrics"]["correct"] == 1.0 and r["metrics"]["combined_score"] != 9.0 and "timings" in r["artifacts"]
 
@@ -312,6 +317,23 @@ def test_the_fp8_moe_tasks_judge_the_engines_calls():
     bf16 = {"args": fp8["args"][:2] + [arg([128, 1536, 2048], "bfloat16")] + fp8["args"][3:], "kwargs": {}}
     assert t.shape_of(fp8) == load("moe_gemm").shape_of(bf16) == (32, 2048, 1536, 128, 4, 1)
     assert t.shape_of(bf16) is None and load("moe_gemm").shape_of(fp8) is None
+def test_the_evaluators_modules_are_out_of_reach():
+    from kernels.evolve import core
+    for bad in ("import sys as s\n", "from sys import modules as M\n", "import os, sys\n", "import os\nm = os.sys\n",
+                "import atexit\n", "import weakref\n", "import torch\nwith torch.profiler.profile(): pass\n",
+                "import pynvml\n", 'C = "cuptiSubscribe(&s, cb, 0);"\n', "import torch\nD = torch.ops\nD['x'] = 1\n",
+                "import os\nos.environ['TORCH_ALLOW_TF32'] = '1'\n"):
+        assert core.screen(bad), bad
+    assert core.screen("def k(x):\n    out = x.clone()\n    out[0] = 1\n    return out\n") == []   # its own tensors
+    t = load("toy_rmsnorm")
+    before = core._watched(t)
+    real = sys.modules["kernels.check"]
+    sys.modules["kernels.check"] = type(sys)("kernels.check")                    # a module swapped under its name
+    try:
+        assert "sys.modules[kernels.check]" in core._patched(before, t)
+    finally:
+        sys.modules["kernels.check"] = real
+    assert core._patched(before, t) == [] and core._compare is real._compare      # compare bound at import
 
 
 def test_value_distributions_catch_a_kernel_tuned_to_one_scale():

@@ -14,6 +14,7 @@ from pathlib import Path
 import torch
 
 from kernels import check_kernel, time_pair
+from kernels.check import TOLERANCES, _compare       # bound here, before any candidate loads
 from kernels.tasks import Task, from_config
 
 
@@ -34,6 +35,8 @@ FORBIDDEN = {
     r"\bkernels\.(check|timing|evolve)\b|\bfrom kernels\b|\bimport kernels\b|\b(import|from) __main__\b":
         "the evaluator itself",
     r"\bsys\.(settrace|setprofile)\b|\bsignal\b": "frame introspection",
+    r"(?m)^\s*(import|from)\s[^\n]*\bsys\b|\.sys\b|\batexit\b|\bweakref\b": "patching modules",
+    r"\btorch\.profiler\b|\bautograd\.profiler\b|\bkineto\b|\bcupti\w*|\b(py)?nvml\w*|\bcuProfiler\w*": "the clock",
     r"\btorch\.cuda\.graph\b|\bmake_graphed_callables\b": "streams or timer events",
     r"\btorch\.from_file\b|\bio\.(FileIO|open)\b|\bshutil\b|\btempfile\b": "files, processes or the network",
     r"\bopen\s*\(|\bos\.(system|popen|fork|exec\w*|spawn\w*|kill|remove|unlink|open|write|dup2?)\b|\bsubprocess\b"
@@ -97,8 +100,9 @@ def _cpp_built_at_run_time(source: str) -> list[str]:
 
 def _writes_into(source: str) -> list[str]:
     """Attribute writes or deletes whose root is an imported name, a name bound to one (`m = torch.cuda`) or to a call
-    (`T = type(x)`), or a call (`type(x).abs = f`): patching a library under any alias. Writes on other objects
-    (`self.x = 1`, a parameter's attribute) are left alone."""
+    (`T = type(x)`), or a call (`type(x).abs = f`), and item writes or deletes into an imported name or a name bound to
+    one (`M = os.environ; M[k] = v`): patching a library under any alias. Writes on other objects (`self.x = 1`,
+    `out[i] = v` on a tensor the program made, a parameter's attribute) are left alone."""
     import ast
     try:
         tree = ast.parse(source)
@@ -112,22 +116,31 @@ def _writes_into(source: str) -> list[str]:
         while isinstance(e, (ast.Attribute, ast.Subscript)):
             e = e.value
         return e
-    grew = True
-    while grew:                                  # names bound to an imported name or an attribute chain of one
-        grew = False
-        for n in nodes:
-            if isinstance(n, (ast.Assign, ast.AnnAssign, ast.NamedExpr)) and n.value is not None:
-                r = root(n.value) if isinstance(n.value, (ast.Name, ast.Attribute, ast.Call)) else None
-                if isinstance(r, ast.Call) or (isinstance(r, ast.Name) and r.id in held):
-                    for t in (n.targets if isinstance(n, ast.Assign) else [n.target]):
-                        if isinstance(t, ast.Name) and t.id not in held:
-                            held.add(t.id)
-                            grew = True
+    def bound(names: set, calls: bool) -> set:
+        """`names` grown by every name bound to one of them or an attribute chain of one (and, with `calls`, to a
+        call's result)."""
+        names, grew = set(names), True
+        while grew:
+            grew = False
+            for n in nodes:
+                if isinstance(n, (ast.Assign, ast.AnnAssign, ast.NamedExpr)) and n.value is not None:
+                    r = root(n.value) if isinstance(n.value, (ast.Name, ast.Attribute, ast.Call)) else None
+                    if (calls and isinstance(r, ast.Call)) or (isinstance(r, ast.Name) and r.id in names):
+                        for t in (n.targets if isinstance(n, ast.Assign) else [n.target]):
+                            if isinstance(t, ast.Name) and t.id not in names:
+                                names.add(t.id)
+                                grew = True
+        return names
+    held, mods = bound(held, True), bound(held, False)
     out = []
     for n in nodes:
         if isinstance(n, ast.Attribute) and isinstance(n.ctx, (ast.Store, ast.Del)):
             r = root(n)
             if isinstance(r, ast.Call) or (isinstance(r, ast.Name) and r.id in held):
+                out.append(ast.unparse(n))
+        elif isinstance(n, ast.Subscript) and isinstance(n.ctx, (ast.Store, ast.Del)):
+            r = root(n)
+            if isinstance(r, ast.Name) and r.id in mods:
                 out.append(ast.unparse(n))
     return out
 
@@ -150,6 +163,7 @@ def _watched(task: Task) -> dict:
                 out[f"{m.__name__}.{k}"] = id(v)
     for c in (torch.Tensor, torch.cuda.Event, torch.cuda.CUDAGraph):
         out.update({f"{c.__module__}.{c.__qualname__}.{k}": id(v) for k, v in vars(c).items()})
+    out.update({f"sys.modules[{m.__name__}]": id(sys.modules.get(m.__name__)) for m in mods})   # a module swapped
     return out
 
 
@@ -357,7 +371,6 @@ def _timed(task, cand, base, shapes, weights, dtype, device, iters, hw, toleranc
     """Per-shape paired timings against the baseline, and the call-weighted geometric-mean speedup with gains inside
     the noise counted as 1.0 (and without that rule). Raises if the timed calls' output differs from the reference:
     a kernel that does less only when timed (e.g. while a CUDA graph captures it) is caught here."""
-    from kernels.check import TOLERANCES, _compare
     atol, rtol = {**TOLERANCES, **(tolerances or {})}[dtype]
     rows, logs, raw = [], 0.0, 0.0
     total = sum((weights or {}).get(json.dumps(list(s)), 1) for s in shapes)
