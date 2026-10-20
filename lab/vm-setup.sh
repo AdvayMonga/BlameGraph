@@ -97,15 +97,21 @@ if [ "$(restrict)" = "1" ]; then
   echo "options nvidia NVreg_RestrictProfilingToAdminUsers=0" | $SUDO tee /etc/modprobe.d/lab-profiling.conf >/dev/null
   busy=$( { nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null;
             $SUDO docker ps -q --filter label=lab.jail 2>/dev/null;
-            $SUDO docker ps -q --filter label=lab.workbench 2>/dev/null; } | head -1)
+            $SUDO docker ps -q --filter label=lab.workbench 2>/dev/null; } | head -1 || true)
   if [ -z "$busy" ]; then
     $SUDO systemctl stop nvidia-persistenced >/dev/null 2>&1 || true
-    $SUDO modprobe -r nvidia_uvm nvidia_drm nvidia_modeset nvidia >/dev/null 2>&1 \
+    extra=$(lsmod | awk '$1 ~ /^nvidia_(peermem|fs)$/ {print $1}' | tr '\n' ' ' || true)   # IB/GDS images hold nvidia
+    $SUDO modprobe -r $extra nvidia_uvm nvidia_drm nvidia_modeset nvidia >/dev/null 2>&1 \
       || echo "counters: the driver could not be unloaded here; they open at the next reboot (sudo reboot, then rerun setup)"
     # Whatever the unload did, bring every module back: a partial unload must not leave CUDA without nvidia_uvm.
     $SUDO modprobe nvidia && $SUDO modprobe nvidia_uvm && { $SUDO nvidia-modprobe -u -c=0 2>/dev/null || true; }
+    for m in $extra; do $SUDO modprobe "$m" || true; done
     $SUDO systemctl start nvidia-persistenced >/dev/null 2>&1 || true
     nvidia-smi -L >/dev/null 2>&1 || { echo "counters: the GPU did not come back after the driver reload: reboot the VM"; exit 1; }
+    $SUDO docker run --rm --gpus all --network none lab-jail nvidia-smi -L >/dev/null 2>&1 \
+      && .venv/bin/python -c "import torch; assert torch.cuda.is_available()" \
+      && echo "counters: driver reloaded; the jail and torch still see the GPU" \
+      || { echo "counters: after the driver reload the jail or torch lost the GPU: reboot the VM"; exit 1; }
   else
     echo "counters: the GPU or a jail is in use; they open at the next reboot"
   fi
