@@ -5,6 +5,13 @@ a reversed decision gets a new entry that names the old one. Change any of these
 
 
 
+## 2026-10-20 — The judge names 4 changes and all 4 are measured: no screener, no merge hypothesis
+Reverses part of "The layer-1 loop copies the frontier per component" (2026-10-18): the 16 hypotheses ranked by a
+screener (Haiku 4.5; MANTIS ROI and random as arms), the random slot for a learned screener's labels, and the merge
+hypothesis are removed. Why (the user, on the review's numbers): ranked picks beat their parent 60% of the time and
+random ones 69% (81 vs 29 measured, 2026-10-18/19); 12 of every 16 named changes were thrown away; the merge reached
+a new best 2 times in 17. Inspirations (other branches' best programs shown to the judge) stay.
+
 ## 2026-10-18 — Kernel candidates may be CUDA C++; the top 4 are tuned
 A layer-1 program may build CUDA C++ at import (`torch.utils.cpp_extension.load_inline`) beside Triton, the model's
 choice; the build is cached per program source. Why: every frontier kernel system with the strongest numbers writes

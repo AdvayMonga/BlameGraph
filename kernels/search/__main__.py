@@ -16,7 +16,7 @@ import torch
 
 from kernels.evolve import evaluator
 from kernels.evolve.run import _shapes, _target_tolerances, prepare, record, retime, system_message, tolerances
-from kernels.search import detect, screen, tune
+from kernels.search import detect, tune
 from kernels.search.llm import Claude
 from kernels.search.loop import cascade, search
 from kernels.search.tree import UCT_C
@@ -84,7 +84,7 @@ def _top(trace: Path, retimed: list, code: str | None, metrics: dict | None, bes
 
 
 def _blob(path: Path) -> str | None:
-    """The run's hypothesis log as a ledger blob: the labels a learned screener trains on."""
+    """The run's hypothesis log as a ledger blob: every change the judge named and what became of it."""
     from lab import ledger
     return ledger.put_blob(path, ledger.ROOT, ".jsonl") if path.exists() and path.stat().st_size else None
 
@@ -118,12 +118,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--stop-pct", type=float, default=80.0,
                     help="stop once the best is at this %% of its roofline (MANTIS: within 25%% of speed-of-light)")
     ap.add_argument("--patience", type=int, default=16, help="stop after this many judged programs with no new best")
-    ap.add_argument("--hypotheses", type=int, default=16, help="changes the judge names per expansion")
-    ap.add_argument("--beam", type=int, default=4, help="of those, programs written and judged per expansion")
-    ap.add_argument("--explore", type=int, default=1, help="of the beam, picked at random (unbiased labels)")
+    ap.add_argument("--beam", type=int, default=4, help="changes the judge names per expansion, each written and judged")
     ap.add_argument("--max-repairs", type=int, default=3, help="repairs of a failed child, chained")
-    ap.add_argument("--screen", default="haiku", choices=("haiku", "roi", "random"),
-                    help="scores the judge's hypotheses before any code: Haiku 4.5, MANTIS ROI, or random")
     a = ap.parse_args(argv)
     a.ncu = a.device.startswith("cuda") if a.ncu is None else a.ncu
     task = load(a.task)
@@ -135,8 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     system = system_message(task) + ("\n\n" + TUNE_FACT.format(points=a.tune_points) if a.tune_points else "")
     tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.usd, a.seed,
                         review=review, stop_pct=a.stop_pct or None, patience=a.patience or None,
-                        n_hypotheses=a.hypotheses, beam=a.beam, explore=a.explore, max_repairs=a.max_repairs,
-                        screen=screen.make(a.screen, a.seed), uct_c=a.uct_c)
+                        beam=a.beam, max_repairs=a.max_repairs, uct_c=a.uct_c)
     spent: list = []
     exclude = detect.detector(Claude(a.detector_model, a.effort), spent) if a.detector_model != "none" else None
     code, metrics, retimed = (retime(out / "trace.jsonl", a.retime, exclude=exclude) if a.retime
@@ -156,11 +151,10 @@ def main(argv: list[str] | None = None) -> int:
     (out / "best_program.py").write_text(code or best.code)
     (out / "best_metrics.json").write_text(json.dumps(metrics or best.metrics, indent=1))
     models = [{"name": a.model, "role": "coder", "effort": a.effort}] + (
-        [{"name": a.judge_model, "role": "judge", "effort": a.effort}] if review else []) + (
-        [{"name": "claude-haiku-4-5", "role": "screen"}] if review and a.screen == "haiku" else [])
+        [{"name": a.judge_model, "role": "judge", "effort": a.effort}] if review else [])
     rec = record(task, sets, models, a.evals, a.device,
                  out / "trace.jsonl", out / "best_program.py", metrics or best.metrics, retimed=retimed,
-                 tool="kernels.search", cost=cost, extra={"tuned": tuned, "screen": a.screen,
+                 tool="kernels.search", cost=cost, extra={"tuned": tuned,
                                                           "hypotheses": _blob(out / "hypotheses.jsonl")})
     print(json.dumps({"best": metrics or best.metrics, "cost": cost, "nodes": len(tree.nodes), "out": str(out),
                       "ledger": rec["id"]}))
