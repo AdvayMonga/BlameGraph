@@ -33,6 +33,15 @@ def module_source(program: str, attr: str) -> str:
     return src
 
 
+def unstart(task, src: str) -> str:
+    """The task's start edits undone where the program kept them as they were (`run._start`): the engine gets back its
+    own spelling, and the commit holds the kernel change only."""
+    for old, new in task.start_edits:
+        if src.count(new) == 1:
+            src = src.replace(new, old)
+    return src
+
+
 def gate_passed(gate: dict) -> bool:
     """Every gate passed (correctness, physics, memory, timing/capture) and the held-out check judged > 0 cases."""
     gates = json.loads(gate.get("artifacts", {}).get("gates") or "{}")
@@ -56,7 +65,7 @@ def ship(task, program: str, gate: dict, repo: Path, base: str = "HEAD", branch:
     module, _, attr = task.entry.partition(":")
     base = _git(repo, "rev-parse", base)
     path = _module_path(repo, base, module)
-    blob = _git(repo, "hash-object", "-w", "--stdin", data=module_source(program, attr))
+    blob = _git(repo, "hash-object", "-w", "--stdin", data=unstart(task, module_source(program, attr)))
     with tempfile.TemporaryDirectory() as d:
         env = {"GIT_INDEX_FILE": str(Path(d) / "index")}
         _git(repo, "read-tree", base, env=env)

@@ -242,17 +242,30 @@ def test_the_fused_tasks_start_launches_what_the_engine_module_launches():
         for task in ("rmsnorm", "silu_mul", "topk_softmax"):
             start = _start(load(task), src, "x").split("# EVOLVE-BLOCK-END")[0].replace("# EVOLVE-BLOCK-START\n", "")
             assert screen(start) == [], (task, screen(start))
-        for code in (src, start):
-            ns, log[:] = {"__name__": "fused_under_test"}, []
-            exec(compile(code, "fused.py", "exec"), ns)                 # noqa: S102  the module under test
-            x, w = torch.randn(4, 64, dtype=torch.bfloat16), torch.ones(64, dtype=torch.bfloat16)
-            ns["rmsnorm"](x, w, 1e-6), ns["silu_mul"](torch.randn(4, 128, dtype=torch.bfloat16))
-            ns["topk_softmax"](torch.randn(4, 128, dtype=torch.bfloat16), 8, True, fp32=True)
-            runs.append(list(log))
+        import importlib.util
+        find, enabled = importlib.util.find_spec, []
+        importlib.util.find_spec = lambda name, *a: object() if name == "triton" else find(name, *a)   # triton present
+        try:
+            for code in (src, start):
+                ns, log[:] = {"__name__": "fused_under_test"}, []
+                exec(compile(code, "fused.py", "exec"), ns)             # noqa: S102  the module under test
+                bf = dict(dtype=torch.bfloat16)
+                x, w = torch.randn(4, 64, **bf), torch.ones(64, **bf)
+                ns["rmsnorm"](x, w, 1e-6), ns["add_rmsnorm"](x, x.clone(), w, 1e-6)
+                q, cs = torch.randn(1, 2, 4, 16, **bf), torch.randn(1, 2, 16, **bf)
+                ns["rmsnorm_rope"](q, torch.ones(16, **bf), cs, cs.clone(), 1e-6)
+                ns["silu_mul"](torch.randn(4, 128, **bf))
+                ns["topk_softmax"](torch.randn(4, 128, **bf), 8, True, fp32=True)
+                runs.append(list(log))
+                enabled.append(ns["ENABLED"])
+        finally:
+            importlib.util.find_spec = find
     finally:
         for k, v in saved.items():
             sys.modules.pop(k, None) if v is None else sys.modules.__setitem__(k, v)
-    assert runs[0] and runs[0] == runs[1]                                # the same launches, same arguments
+    assert len(runs[0]) == 5 and runs[0] == runs[1] and enabled == [True, True]   # same launches, args, switch
+    from kernels.evolve.ship import unstart
+    assert unstart(load("rmsnorm"), start).rstrip() == src.rstrip()      # shipping undoes the edits
 
 
 def test_value_distributions_catch_a_kernel_tuned_to_one_scale():
