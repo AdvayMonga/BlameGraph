@@ -41,8 +41,10 @@ def ints_from_captures(task: Task, dirs: list[Path]) -> dict:
 
 def split(task: Task, counts: Counter, quantile: float = 0.8) -> dict:
     """Held out: a shape whose value on any held-out axis is above that axis's `quantile` (by calls; by distinct values
-    when that holds out nothing, i.e. most calls sit at the largest value). Seen: the rest.
-    Each list is ordered by call count, most frequent first."""
+    when that holds out nothing, i.e. most calls sit at the largest value). By distinct values the most-called shape
+    always stays seen, and axes are added smallest region first while at most half of all calls are held out (on
+    2026-10-19 the union of two such regions held out 83% of calls, the most-called shapes among them).
+    Seen: the rest. Each list is ordered by call count, most frequent first."""
     if not counts:
         return {"seen": list(task.seen_default), "heldout": list(task.heldout_default), "source": "defaults"}
     cut = {}
@@ -52,11 +54,15 @@ def split(task: Task, counts: Counter, quantile: float = 0.8) -> dict:
     held = {s for s in counts if any(s[ax] > cut[ax] for ax in task.heldout_axes)}
     by = "calls"
     if not held:                                 # calls pile up at the largest value: cut over distinct values instead
-        by = "distinct"
+        by, top, total, cut = "distinct", max(counts, key=lambda s: counts[s]), sum(counts.values()), {}
+        tails = {}
         for ax in task.heldout_axes:
             vals = sorted({s[ax] for s in counts})
-            cut[ax] = vals[min(len(vals) - 1, int(quantile * len(vals)))]
-        held = {s for s in counts if any(s[ax] > cut[ax] for ax in task.heldout_axes)}
+            c = vals[min(len(vals) - 1, int(quantile * len(vals)))]
+            tails[ax] = (c, {s for s in counts if s[ax] > c} - {top})
+        for ax, (c, region) in sorted(tails.items(), key=lambda kv: sum(counts[s] for s in kv[1][1])):
+            if region and sum(counts[s] for s in held | region) <= total / 2:
+                held, cut[ax] = held | region, c
     order = sorted(counts, key=lambda s: -counts[s])
     seen = [s for s in order if s not in held]
     return {"seen": seen, "heldout": [s for s in order if s in held], "source": "captures",
