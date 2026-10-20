@@ -212,8 +212,10 @@ MEMORY_FACTOR, MEMORY_SLACK = 1.5, 64 * 2**20
 
 
 def _scaled(make_inputs, k: float):
+    """Inputs with every floating tensor times k; 1-byte floats (fp8 weights) are kept, their scales scaled instead."""
     def make(shape, dtype, device, g):
-        return tuple(t * k if t.is_floating_point() else t for t in make_inputs(shape, dtype, device, g))
+        return tuple(t * k if t.is_floating_point() and t.element_size() > 1 else t
+                     for t in make_inputs(shape, dtype, device, g))
     return make
 
 

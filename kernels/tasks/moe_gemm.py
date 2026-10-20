@@ -99,8 +99,8 @@ def make_real(shape, dtype, device, g, ints):
 
 def shape_of(call):
     a = call["args"]
-    if len(a) < 6 or "shape" not in a[0] or "shape" not in a[2]:
-        return None
+    if len(a) < 6 or "shape" not in a[0] or "shape" not in a[2] or a[2].get("dtype") == "float8_e4m3fn":
+        return None                              # fp8 weights: `moe_gemm_fp8`'s calls
     T, K = a[0]["shape"]
     E, N, _ = a[2]["shape"]
     ft = int("shape" in a[1])

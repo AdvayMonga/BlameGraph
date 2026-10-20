@@ -89,8 +89,8 @@ def load(name: str) -> Task:
     return importlib.import_module(f"kernels.tasks.{name}").TASK
 
 
-TASKS = ("toy_rmsnorm", "paged_decode", "moe_gemm", "rmsnorm", "add_rmsnorm", "rmsnorm_rope", "silu_mul",
-         "topk_softmax")
+TASKS = ("toy_rmsnorm", "paged_decode", "moe_gemm", "moe_gemm_fp8", "moe_gemm_scatter_fp8", "rmsnorm", "add_rmsnorm",
+         "rmsnorm_rope", "silu_mul", "topk_softmax")
 
 
 def from_config(cfg: dict) -> Task:
