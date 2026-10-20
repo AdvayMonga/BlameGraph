@@ -95,15 +95,19 @@ echo "== counters: open GPU performance counters to non-admin users (the jails r
 restrict() { grep -o 'RestrictProfilingToAdminUsers: [0-9]' /proc/driver/nvidia/params 2>/dev/null | grep -o '[0-9]$'; }
 if [ "$(restrict)" = "1" ]; then
   echo "options nvidia NVreg_RestrictProfilingToAdminUsers=0" | $SUDO tee /etc/modprobe.d/lab-profiling.conf >/dev/null
-  if [ -z "$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null)" ]; then
+  busy=$( { nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null;
+            $SUDO docker ps -q --filter label=lab.jail 2>/dev/null;
+            $SUDO docker ps -q --filter label=lab.workbench 2>/dev/null; } | head -1)
+  if [ -z "$busy" ]; then
     $SUDO systemctl stop nvidia-persistenced >/dev/null 2>&1 || true
     $SUDO modprobe -r nvidia_uvm nvidia_drm nvidia_modeset nvidia >/dev/null 2>&1 \
-      && $SUDO modprobe nvidia && $SUDO modprobe nvidia_uvm && { $SUDO nvidia-modprobe -u -c=0 2>/dev/null || true; } \
-      && nvidia-smi -L >/dev/null \
-      || echo "counters: driver not reloaded here; they open at the next reboot (sudo reboot, then rerun setup)"
+      || echo "counters: the driver could not be unloaded here; they open at the next reboot (sudo reboot, then rerun setup)"
+    # Whatever the unload did, bring every module back: a partial unload must not leave CUDA without nvidia_uvm.
+    $SUDO modprobe nvidia && $SUDO modprobe nvidia_uvm && { $SUDO nvidia-modprobe -u -c=0 2>/dev/null || true; }
     $SUDO systemctl start nvidia-persistenced >/dev/null 2>&1 || true
+    nvidia-smi -L >/dev/null 2>&1 || { echo "counters: the GPU did not come back after the driver reload: reboot the VM"; exit 1; }
   else
-    echo "counters: the GPU is in use; they open at the next reboot"
+    echo "counters: the GPU or a jail is in use; they open at the next reboot"
   fi
 fi
 echo "RestrictProfilingToAdminUsers: $(restrict || echo unknown)"
