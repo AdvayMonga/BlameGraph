@@ -28,6 +28,7 @@ TIMEOUT_S = float(os.environ.get("KERNEL_EVAL_TIMEOUT_S", "600"))
 NCU_STAGE = 3                    # not a judging stage: ncu counters for a program that passed stage 2 (kernels/evolve/ncu.py)
 EVAL_DIRS = Path(os.environ.get("KERNEL_EVAL_DIRS") or Path(tempfile.gettempdir()) / "kernel-eval")
 CUDA = Path("/usr/local/cuda")
+MEMORY = os.environ.get("KERNEL_EVAL_MEMORY", "32g")   # host RAM a judgment may use: a program cannot starve the host
 
 
 def cuda_home() -> Path | None:
@@ -165,7 +166,7 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
         env = {"PYTHONPATH": path, "TORCH_EXTENSIONS_DIR": str(tree / "torch_extensions"),
                **({"CUDA_HOME": str(home)} if home else {})}
         read += [home] if home else []
-        p = grader.jailed(tree, argv, timeout_s=timeout_s, env_extra=env, read=read)
+        p = grader.jailed(tree, argv, timeout_s=timeout_s, env_extra=env, read=read, memory=MEMORY)
         _keep_builds_only(tree)
         r, why = _result(p.stdout, key) if stage != NCU_STAGE else (None, "")
         if stage == 2 and p.returncode == 0 and r is not None:

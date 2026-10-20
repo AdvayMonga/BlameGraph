@@ -120,7 +120,7 @@ def test_a_programs_cpp_builds_once_for_all_its_stages_and_only_for_that_source(
     from kernels.evolve import jailed
     seen = []
 
-    def fake(tree, argv, *, timeout_s, env_extra, read):
+    def fake(tree, argv, *, timeout_s, env_extra, read, memory=None):
         ext = Path(env_extra["TORCH_EXTENSIONS_DIR"])
         seen.append((str(tree), sorted(p.name for p in tree.rglob("*") if p.parent == tree or ext in p.parents)))
         (ext / "scale_ext").mkdir(parents=True, exist_ok=True)
@@ -191,6 +191,20 @@ def test_a_cuda_extension_builds_in_the_jail_and_is_judged_on_the_gpu():
     cfg = {"task": "toy_rmsnorm", "seen": [[8, 256], [32, 512], [64, 1024]], "device": "cuda", "iters": 10}
     r = judge_jailed(cfg, src, 2)
     assert r["metrics"]["correct"] == 1.0 and r["metrics"]["combined_score"] > 0, r["artifacts"]
+
+
+def test_ncu_counters_reach_the_judge_on_the_gpu():
+    import shutil
+    from kernels.evolve.jailed import judge_jailed
+    if not torch.cuda.is_available() or not shutil.which("ncu"):
+        print("skip: no CUDA GPU or no ncu")
+        return
+    src = (ROOT / "tests" / "fixtures" / "cuda_toy_rmsnorm.py").read_text()
+    cfg = {"task": "toy_rmsnorm", "seen": [[8, 256], [64, 1024]], "device": "cuda", "iters": 3}
+    a = judge_jailed(cfg, src, 3)["artifacts"]
+    assert "ncu" in a and "ERR_NVGPUCTRPERM" not in json.dumps(a), a
+    shapes = json.loads(a["ncu"])["shapes"]
+    assert len(shapes) == 2 and all(s.get("kernels") for s in shapes), shapes      # counters on both shapes
 
 
 def test_value_distributions_catch_a_kernel_tuned_to_one_scale():
@@ -703,6 +717,7 @@ def test_the_jail_sees_a_fresh_tree_and_a_copied_harness_never_this_repo():
     argv, mounts = seen["argv"], [a for a in seen["argv"] if a.startswith("type=bind")]
     assert r["metrics"]["combined_score"] == 1.0 and argv[:2] == ["docker", "run"]
     assert argv[argv.index("--network") + 1] == "none" and "heldout" not in seen["config"]
+    assert argv[argv.index("--memory") + 1] == argv[argv.index("--memory-swap") + 1] == "32g"     # host RAM capped
     assert any("harness" in m and m.endswith(",readonly") for m in mounts)
     assert not any(f"src={ROOT}," in m for m in mounts)          # this repo is never mounted
 
