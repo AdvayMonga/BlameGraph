@@ -89,11 +89,34 @@ $SUDO docker run --rm lab-jail python3 -c "import socket; socket.create_connecti
 $SUDO docker run --rm lab-jail python3 -c "import socket; socket.create_connection(('pypi.org', 443), timeout=10)" \
   2>/dev/null && echo "workbench: internet ok (DNS and egress)" || echo "workbench: NO INTERNET (DNS or egress)"
 
-echo "== counters: can a non-admin process read GPU performance counters?"
-# ncu needs NVreg_RestrictProfilingToAdminUsers=0 (or root). Recorded as a fact about this venue.
-if [ -r /proc/driver/nvidia/params ]; then
-  grep -o 'RestrictProfilingToAdminUsers: [0-9]' /proc/driver/nvidia/params || echo "RestrictProfilingToAdminUsers: unknown"
+echo "== counters: open GPU performance counters to non-admin users (the jails run as one)"
+# ncu needs NVreg_RestrictProfilingToAdminUsers=0 or root; the jails are neither. A single-use VM may open them
+# (lab/RUNTIME.md): the option is set for the driver, which is reloaded when nothing holds the GPU, else at reboot.
+restrict() { grep -o 'RestrictProfilingToAdminUsers: [0-9]' /proc/driver/nvidia/params 2>/dev/null | grep -o '[0-9]$'; }
+if [ "$(restrict)" = "1" ]; then
+  echo "options nvidia NVreg_RestrictProfilingToAdminUsers=0" | $SUDO tee /etc/modprobe.d/lab-profiling.conf >/dev/null
+  busy=$( { nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null;
+            $SUDO docker ps -q --filter label=lab.jail 2>/dev/null;
+            $SUDO docker ps -q --filter label=lab.workbench 2>/dev/null; } | head -1 || true)
+  if [ -z "$busy" ]; then
+    $SUDO systemctl stop nvidia-persistenced >/dev/null 2>&1 || true
+    extra=$(lsmod | awk '$1 ~ /^nvidia_(peermem|fs)$/ {print $1}' | tr '\n' ' ' || true)   # IB/GDS images hold nvidia
+    $SUDO modprobe -r $extra nvidia_uvm nvidia_drm nvidia_modeset nvidia >/dev/null 2>&1 \
+      || echo "counters: the driver could not be unloaded here; they open at the next reboot (sudo reboot, then rerun setup)"
+    # Whatever the unload did, bring every module back: a partial unload must not leave CUDA without nvidia_uvm.
+    $SUDO modprobe nvidia && $SUDO modprobe nvidia_uvm && { $SUDO nvidia-modprobe -u -c=0 2>/dev/null || true; }
+    for m in $extra; do $SUDO modprobe "$m" || true; done
+    $SUDO systemctl start nvidia-persistenced >/dev/null 2>&1 || true
+    nvidia-smi -L >/dev/null 2>&1 || { echo "counters: the GPU did not come back after the driver reload: reboot the VM"; exit 1; }
+    $SUDO docker run --rm --gpus all --network none lab-jail nvidia-smi -L >/dev/null 2>&1 \
+      && .venv/bin/python -c "import torch; assert torch.cuda.is_available()" \
+      && echo "counters: driver reloaded; the jail and torch still see the GPU" \
+      || { echo "counters: after the driver reload the jail or torch lost the GPU: reboot the VM"; exit 1; }
+  else
+    echo "counters: the GPU or a jail is in use; they open at the next reboot"
+  fi
 fi
+echo "RestrictProfilingToAdminUsers: $(restrict || echo unknown)"
 
 echo "== clocks: can we lock them?"
 $SUDO nvidia-smi -pm 1 >/dev/null 2>&1 && echo "persistence mode: on" || echo "persistence mode: refused"
