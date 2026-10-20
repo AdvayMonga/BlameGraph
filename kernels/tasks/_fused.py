@@ -38,5 +38,5 @@ START_EDITS = (
     ('importlib.util.find_spec("triton") is not None', "K is not None"),
     ('class _Lazy:\n    """The kernels module, imported on first use."""\n    def __getattr__(self, name):\n'
      "        from inference_server.models import fused_kernels\n        return getattr(fused_kernels, name)\n\n\n"
-     "K = _Lazy()\n\n\n", ""),
+     "K = _Lazy()\n\n\n", "# K, the kernels module, is imported above\n\n\n"),
 )
