@@ -31,7 +31,11 @@ FORBIDDEN = {
     r"\bsys\.modules\b|\bbuiltins\b|__builtins__|\bimportlib\b|__import__|\b(set|get)attr\s*\(|__setattr__|__dict__"
     r"|\bglobals\s*\(|\bvars\s*\(|\b(torch|triton|time|math|statistics)(\.\w+)+\s*=(?!=)": "patching modules",
     r"(?<![.\w])(eval|exec|compile)\s*\(|__subclasses__|\btypes\.(FunctionType|CodeType)\b": "code built at run time",
-    r"\bkernels\.(check|timing|evolve)\b|\bfrom kernels\b|\bimport kernels\b": "the evaluator itself",
+    r"\bkernels\.(check|timing|evolve)\b|\bfrom kernels\b|\bimport kernels\b|\b(import|from) __main__\b":
+        "the evaluator itself",
+    r"\bsys\.(settrace|setprofile)\b|\bsignal\b": "frame introspection",
+    r"\btorch\.cuda\.graph\b|\bmake_graphed_callables\b": "streams or timer events",
+    r"\btorch\.from_file\b|\bio\.(FileIO|open)\b|\bshutil\b|\btempfile\b": "files, processes or the network",
     r"\bopen\s*\(|\bos\.(system|popen|fork|exec\w*|spawn\w*|kill|remove|unlink|open|write|dup2?)\b|\bsubprocess\b"
     r"|\bsocket\b|\burllib\b|\brequests\b|\btorch\.(save|load)\b|\b(np|numpy)\.(save\w*|load\w*|fromfile)\b|\.tofile\s*\("
     r"|\bpickle\b|\bshelve\b|\.(write|read)_(text|bytes)\b|\b[io]?fstream\b": "files, processes or the network",
@@ -40,16 +44,55 @@ FORBIDDEN = {
         "the Python C-API",
     r"\bdl(open|sym)\b|\bmprotect\b|\bmmap\b|/proc/|\bf(open|write)\b|\bstd::(thread|async|system)\b|\bpthread_\w+"
     r"|\b(popen|fork|exec[lv]\w*)\s*\(": "processes, threads, files or raw memory from C++",
+    r"\bsyscall\s*\(|\bopenat\s*\(|\bfreopen\s*\(": "processes, threads, files or raw memory from C++",
     r"\bcuda(StreamCreate\w*|StreamBeginCapture|StreamEndCapture|Graph\w+|Event(Create\w*|Record|ElapsedTime|Synchronize"
-    r"|Query))\b|\bgetStreamFromPool\b|\bsetCurrentCUDAStream\b|\bCUDAStreamGuard\b": "streams or timer events",
+    r"|Query)|LaunchHostFunc|StreamAddCallback)\b|\bcu(Stream\w+|Graph\w+|Event\w+|LaunchHostFunc)\b"
+    r"|\bgetStreamFromPool\b|\bsetCurrentCUDAStream\b|\bCUDAStreamGuard\b": "streams or timer events",
+    r"globaltimer|\bclock64\b|\bstd::chrono\b": "the clock",
 }
 
 
 def screen(source: str) -> list[str]:
-    """Reasons a program is refused before it runs (static: a pattern anywhere in the source, plus `_writes_into`)."""
+    """Reasons a program is refused before it runs (static: a pattern anywhere in the source, plus `_writes_into`
+    and `_cpp_built_at_run_time`)."""
     import re
     return ([f"uses {why}: `{m.group(0)}`" for pat, why in FORBIDDEN.items() if (m := re.search(pat, source))] +
-            [f"assigns into what it imported: `{w}`" for w in _writes_into(source)])
+            [f"assigns into what it imported: `{w}`" for w in _writes_into(source)] + _cpp_built_at_run_time(source))
+
+
+def _cpp_built_at_run_time(source: str) -> list[str]:
+    """C++ handed to cpp_extension must be string literals in the source (or names bound once to them), with no
+    token pasting (`##`) or quoted includes: otherwise the screen above never sees the code that runs."""
+    import ast
+    import re
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    lits = {}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
+            ok = isinstance(n.value, ast.Constant) and isinstance(n.value.value, str)
+            lits[n.targets[0].id] = n.value.value if ok and n.targets[0].id not in lits else None
+    out = []
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.Call):          # torch.utils.cpp_extension's load_inline, or cpp_extension.load
+            continue
+        name = getattr(n.func, "attr", None) or getattr(n.func, "id", None)
+        if not (name == "load_inline" or name == "load" and isinstance(n.func, ast.Attribute)
+                and "cpp_extension" in ast.unparse(n.func.value)):
+            continue
+        args = n.args[1:3] + [k.value for k in n.keywords if k.arg in ("cpp_sources", "cuda_sources", "sources")]
+        for a in args:
+            vals = a.elts if isinstance(a, (ast.List, ast.Tuple)) else [a]
+            for v in vals:
+                text = v.value if isinstance(v, ast.Constant) and isinstance(v.value, str) else \
+                    lits.get(v.id) if isinstance(v, ast.Name) else None
+                if text is None:
+                    out.append(f"builds C++ from a value computed at run time: `{ast.unparse(v)[:80]}`")
+                elif "##" in text or re.search(r'#\s*include\s*"', text):
+                    out.append("C++ with token pasting (##) or a quoted #include")
+    return out
 
 
 def _writes_into(source: str) -> list[str]:
@@ -296,6 +339,8 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
                             f"(max {max(x['pct_of_roofline'] for x in over):.0f}%): work was skipped or not timed"}
         return {"metrics": {"combined_score": 0.0, "correct": 1.0, "stage": stage},
                 "artifacts": {"timings": json.dumps(rows, indent=1), "gates": json.dumps(gates, indent=1)}}
+    if hw is None:                               # a fact: the alarm above needs this device's measured peaks
+        gates["physics"] = {"passed": True, "reason": "not checked: no measured peaks for this device"}
     metrics = {"combined_score": score, "correct": 1.0, "speedup": score, "raw_speedup": raw, "stage": stage,
                "min_pct_of_roofline": min((x["pct_of_roofline"] for x in rows if x["pct_of_roofline"]), default=0.0)}
     artifacts = {"timings": json.dumps(rows, indent=1), "gates": json.dumps(gates, indent=1),
@@ -341,6 +386,10 @@ def main() -> int:
     """python -m kernels.evolve.core CONFIG.json PROGRAM|- STAGE  ->  one JSON object on stdout ("-": the program's
     source on stdin, as a remote evaluation sends it)."""
     cfg, stage = json.loads(Path(sys.argv[1]).read_text()), int(sys.argv[3])
+    key = None                                   # read and removed before the candidate loads: its result line's key
+    if cfg.get("result_key"):
+        key = Path(cfg["result_key"]).read_text()
+        Path(cfg["result_key"]).unlink()
     if sys.argv[2] == "-":
         import tempfile
         fd, name = tempfile.mkstemp(suffix=".py", prefix="candidate-")
@@ -355,7 +404,7 @@ def main() -> int:
                 cfg.get("weights"), cfg.get("device", "cpu"), tol or None, stage, cfg.get("iters", 30))
     if cfg.get("record"):
         _save({"records": RECORDS}, cfg["record"])
-    sys.stdout.write("\n" + json.dumps(out) + "\n")
+    sys.stdout.write("\n" + json.dumps({**out, "result_key": key} if key else out) + "\n")
     return 0
 
 

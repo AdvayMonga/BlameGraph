@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import secrets
 import shutil
 import sys
 import tempfile
@@ -40,12 +41,50 @@ def cuda_home() -> Path | None:
     return None
 
 
-def _eval_dir(source: str, toolkit: Path | None) -> tuple[Path, Path]:
+BUILD_FILES = ("build.ninja", ".ninja_deps", ".ninja_log", "main.cpp", "cuda.cu", "lock")
+
+
+def _keep_builds_only(tree: Path) -> None:
+    """After a judgment: in each extension's build dir keep torch's build files and its .so, nothing else, so no other
+    file a program wrote outlives its judgment (e.g. answers kept for the next one)."""
+    ext = tree / "torch_extensions"
+    if not ext.is_dir() or ext.is_symlink():
+        return
+    for d in ext.iterdir():
+        if not d.is_dir() or d.is_symlink():
+            d.unlink()
+            continue
+        for f in d.iterdir():
+            keep = not f.is_symlink() and f.is_file() and (f.name in BUILD_FILES or f.suffix == ".o"
+                                                            or f.name == f"{d.name}.so")
+            if not keep:
+                shutil.rmtree(f) if f.is_dir() and not f.is_symlink() else f.unlink()
+
+
+def _result(stdout: str, key: str) -> tuple[dict | None, str]:
+    """The one result line carrying this judgment's key (core reads the key and removes it before the candidate loads,
+    so a line the candidate prints cannot carry it), or None and why."""
+    found = []
+    for x in stdout.splitlines():
+        if x.startswith("{"):
+            try:
+                d = json.loads(x)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(d, dict) and d.get("result_key") == key:
+                found.append(d)
+    if len(found) != 1:
+        return None, f"{len(found)} result lines carry this judgment's key (one expected)"
+    found[0].pop("result_key")
+    return found[0], ""
+
+
+def _eval_dir(source: str, toolkit: Path | None, purpose: str = "") -> tuple[Path, Path]:
     """(the dir, its tree) where this program is judged, the same path every time: torch reuses a C++ build only at
     the absolute path it was built in, so a program's build serves all its stages and re-timings. Keyed by the source
     and the toolkit; everything in the tree but the build dir is removed (links unlinked, never followed) before each
     judgment. A program cannot keep answers there: file reads and writes are refused by the screen."""
-    d = EVAL_DIRS / hashlib.sha256(f"{toolkit}\0{source}".encode()).hexdigest()[:24]
+    d = EVAL_DIRS / hashlib.sha256(f"{toolkit}\0{purpose}\0{source}".encode()).hexdigest()[:24]
     tree = d / "tree"
     tree.mkdir(parents=True, exist_ok=True)
     for x in tree.iterdir():
@@ -98,10 +137,13 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
         return {"metrics": {"stage": stage}, "artifacts": {"ncu": json.dumps({"shapes": out})}}
     fail = {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage}}
     home = cuda_home()
-    d, tree = _eval_dir(source, home)
+    d, tree = _eval_dir(source, home, "gate" if cfg.get("heldout") else "")   # the gate never shares selection's dir
+    key = secrets.token_hex(16)
     try:
         harness = stage_harness(d / "harness")
         (tree / "candidate.py").write_text(source)
+        (tree / ".result_key").write_text(key)
+        cfg = {**cfg, "result_key": str(tree / ".result_key")}
         if stage == 2:                           # outputs to verify outside the jail
             cfg = {**cfg, "record": str(tree / "outputs.pt")}
         (tree / "eval_config.json").write_text(json.dumps(cfg))
@@ -124,11 +166,11 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
                **({"CUDA_HOME": str(home)} if home else {})}
         read += [home] if home else []
         p = grader.jailed(tree, argv, timeout_s=timeout_s, env_extra=env, read=read)
-        lines = [x for x in p.stdout.splitlines() if x.startswith("{")]
-        if stage == 2 and p.returncode == 0 and lines:
-            r = json.loads(lines[-1])
+        _keep_builds_only(tree)
+        r, why = _result(p.stdout, key) if stage != NCU_STAGE else (None, "")
+        if stage == 2 and p.returncode == 0 and r is not None:
             if r["metrics"].get("correct") == 1.0:
-                ok, why = verify(cfg, tree / "outputs.pt")
+                ok, why = verify(cfg, tree / "outputs.pt", timed=r["metrics"].get("combined_score", 0) > 0)
                 gates = {**json.loads(r["artifacts"].get("gates") or "{}"),
                          "verified_outside": {"passed": ok, "reason": why}}
                 r["artifacts"]["gates"] = json.dumps(gates, indent=1)
@@ -141,11 +183,11 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
         if p.returncode != 0:
             return {"metrics": {"stage": stage}, "artifacts": {"ncu_error": (p.stderr or p.stdout)[-2000:]}}
         return {"metrics": {"stage": stage}, "artifacts": {"ncu": json.dumps(ncu.parse(p.stdout))}}
-    lines = [x for x in p.stdout.splitlines() if x.startswith("{")]
-    if p.returncode != 0 or not lines:
-        return {**fail, "artifacts": {"error": f"evaluation process exited {p.returncode}:\n"
+    if p.returncode != 0 or r is None:
+        return {**fail, "artifacts": {"error": f"evaluation process exited {p.returncode}"
+                                               f"{'; ' + why if p.returncode == 0 else ''}:\n"
                                                f"{(p.stderr or p.stdout)[-3000:]}"}}
-    return json.loads(lines[-1])
+    return r
 
 
 def main() -> int:

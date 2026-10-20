@@ -222,7 +222,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   graph replay behind a GPU spin so its launch is not timed, and a kernel that cannot be captured scores 0; the
   timed calls' outputs are checked against the reference too, so a kernel that does less only when timed scores 0; every
   plain check case's and timed call's outputs are verified again outside the jail by a process that never loads the
-  candidate, `kernels/evolve/verify.py`, gate `verified_outside`), score = call-weighted geometric-mean speedup, a shape counting 1.0 when the middle half of its paired ratios
+  candidate, `kernels/evolve/verify.py`, gate `verified_outside`, which requires every record the config implies:
+  each seen and held-out shape x dtype x seed, each value scale, each timed buffer; the result is the one stdout line
+  carrying a per-judgment key that core reads and removes before the candidate loads; between judgments only torch's
+  build files survive in a program's dir, and the gate has its own), score = call-weighted geometric-mean speedup, a shape counting 1.0 when the middle half of its paired ratios
   includes 1; at the end the top candidates are re-judged 3x and the highest median is promoted, `run --retime`); a program may build CUDA C++ at import with
   `torch.utils.cpp_extension.load_inline` (nvcc from the host's toolkit, mounted read-only into the jail; the build is
   cached per program source across its stages, `jailed._builds`); a candidate is
