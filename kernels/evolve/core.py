@@ -14,7 +14,7 @@ from pathlib import Path
 import torch
 
 from kernels import check_kernel, time_pair
-from kernels.tasks import Task, load
+from kernels.tasks import Task, from_config
 
 
 # What the published exploits used (Sakana's reused buffers, CUDA-L1's extra streams, METR's timer overwrite, KernelBot's
@@ -398,7 +398,7 @@ def main() -> int:
         program = Path(name)
     else:
         program = Path(sys.argv[2])
-    task = load(cfg["task"]).with_ints(cfg.get("ints"))      # captured int args (real sequence lengths) where given
+    task = from_config(cfg)      # captured int args (real sequence lengths) where given
     tol = {getattr(torch, k): tuple(v) for k, v in (cfg.get("tolerances") or {}).items()}
     out = judge(task, program, [tuple(s) for s in cfg["seen"]], [tuple(s) for s in cfg.get("heldout", [])],
                 cfg.get("weights"), cfg.get("device", "cpu"), tol or None, stage, cfg.get("iters", 30))
