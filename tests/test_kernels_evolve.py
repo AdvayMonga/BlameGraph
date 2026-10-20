@@ -243,6 +243,19 @@ def test_noise_rule_and_physics_alarm():
     assert r["metrics"]["combined_score"] == 0.0 and g["physics"]["passed"] is False
 
 
+def test_paged_decode_tables_are_as_wide_as_the_engines_graphs():
+    from kernels.check import _gen
+    from kernels.tasks import from_config
+    t, shape = load("paged_decode"), (3, 8, 2, 16, 16, 40)
+    wide = from_config({"task": "paged_decode", "options": {"context_window": 32768}})
+    narrow_in, wide_in = t.make_inputs(shape, torch.float32, "cpu", _gen(0)), wide.make_inputs(shape, torch.float32,
+                                                                                                "cpu", _gen(0))
+    assert narrow_in[3].shape == (3, 3) and wide_in[3].shape == (3, 2048) and not wide_in[3][:, 3:].any()
+    assert torch.equal(t.reference(*narrow_in), t.reference(*wide_in))        # same answer, the engine's layout
+    real = wide.with_ints({json.dumps(list(shape)): [[40, 7, 33]]})
+    assert real.make_inputs(shape, torch.float32, "cpu", _gen(0))[3].shape == (3, 2048)
+
+
 def test_paged_decode_checks_with_no_edge_shapes_do_not_fall_back_to_the_defaults():
     from kernels import check_kernel
     t = load("paged_decode")                    # its default edge shapes (Hq = 1 < Hkv) are not valid GQA inputs

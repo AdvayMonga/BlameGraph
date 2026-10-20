@@ -203,7 +203,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
 (`kernels.tasks.randn`: generating them on the CPU took seconds per check case at real shapes).
   `kernels/tasks/` (a kernel task: the engine entry point it replaces = the baseline, a reference, an input builder,
   how to read a shape from a captured call, the held-out axes, the layouts its callers pass, bytes and FLOPs per call
-  for the roofline; `toy_rmsnorm` for CPU, `paged_decode` = the example engine's `paged_decode_attention`, `moe_gemm` = its MoE grouped
+  for the roofline; `toy_rmsnorm` for CPU, `paged_decode` = the example engine's `paged_decode_attention` (block tables as wide as its graphed decode passes them, from the target's CONTEXT_WINDOW: `Task.options`, `tasks.from_config`), `moe_gemm` = its MoE grouped
   GEMM `moe_kernel.moe_gemm`, both projections, real routing from captures; `rmsnorm`, `add_rmsnorm`, `rmsnorm_rope`,
   `silu_mul`, `topk_softmax` = its fused kernels in `models/fused.py`, references from its own eager paths; prefill
   attention has no task: `sdpa_prefill` takes the backend's paged context, not tensors),

@@ -23,7 +23,7 @@ import torch
 
 from kernels import shapes as shapes_mod
 from kernels.evolve.jailed import judge_jailed
-from kernels.tasks import TASKS, load
+from kernels.tasks import TASKS, load, options_from_target
 
 HERE = Path(__file__).resolve().parent
 
@@ -158,7 +158,8 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "gate":
         out = judge_jailed({"task": task.name, "seen": [list(s) for s in sets["seen"]],
                             "heldout": [list(s) for s in sets["heldout"]], "weights": sets.get("calls"),
-                            "device": a.device, "tolerances": tol, "ints": _ints(sets, ("seen", "heldout"))},
+                            "device": a.device, "tolerances": tol, "ints": _ints(sets, ("seen", "heldout")),
+                            "options": options_from_target(task)},
                            Path(a.program).read_text(), 2, timeout_s=3600)
         print(json.dumps(out, indent=1))
         from kernels.evolve.ship import gate_passed
@@ -206,7 +207,8 @@ def prepare(task, sets: dict, out: Path, device: str, tol: dict, timing_shapes: 
     seen = {json.dumps(list(x)) for x in sets["seen"]}
     cfg_path.write_text(json.dumps({"task": task.name, "seen": [list(s) for s in sets["seen"]],
                                     "weights": {k: v for k, v in (sets.get("calls") or {}).items() if k in seen},
-                                    "device": device, "tolerances": tol, "ints": _ints(sets, ("seen",))}))
+                                    "device": device, "tolerances": tol, "ints": _ints(sets, ("seen",)),
+                                    "options": options_from_target(task)}))
     (out / "shapes.json").write_text(json.dumps({k: [list(s) for s in v] if k in ("seen", "heldout") else v
                                                  for k, v in sets.items()}, indent=1))
     program = Path(initial) if initial else out / "initial_program.py"

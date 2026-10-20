@@ -35,7 +35,7 @@ def verify(cfg: dict, path: Path, timed: bool = False) -> tuple[bool, str]:
     import torch
     from kernels.check import TOLERANCES, _compare, _gen
     from kernels.evolve.core import _scaled
-    from kernels.tasks import load
+    from kernels.tasks import from_config
     path = Path(path)
     st = path.lstat() if path.is_symlink() or path.exists() else None
     if st is None:
@@ -45,7 +45,7 @@ def verify(cfg: dict, path: Path, timed: bool = False) -> tuple[bool, str]:
     recs = torch.load(path, weights_only=True).get("records") or []
     if not recs:
         return False, "no outputs were recorded"
-    task, device = load(cfg["task"]).with_ints(cfg.get("ints")), cfg.get("device", "cpu")
+    task, device = from_config(cfg), cfg.get("device", "cpu")
     have = {(r["kind"], json.dumps(list(r["shape"])), r["dtype"], r["seed"], r.get("scale")) for r in recs}
     missing = expected(cfg, task, timed) - have
     if missing:
