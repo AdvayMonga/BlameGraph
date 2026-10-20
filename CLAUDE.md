@@ -205,7 +205,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   how to read a shape from a captured call, the held-out axes, the layouts its callers pass, bytes and FLOPs per call
   for the roofline; `toy_rmsnorm` for CPU, `paged_decode` = the example engine's `paged_decode_attention` (block tables as wide as its graphed decode passes them, from the target's CONTEXT_WINDOW: `Task.options`, `tasks.from_config`), `moe_gemm` = its MoE grouped
   GEMM `moe_kernel.moe_gemm`, both projections, real routing from captures; `rmsnorm`, `add_rmsnorm`, `rmsnorm_rope`,
-  `silu_mul`, `topk_softmax` = its fused kernels in `models/fused.py`, references from its own eager paths; prefill
+  `silu_mul`, `topk_softmax` = its fused kernels in `models/fused.py`, references from its own eager paths, the start
+  that module with its kernels module imported directly (`Task.start_edits`: the screen refuses its importlib/getattr); prefill
   attention has no task: `sdpa_prefill` takes the backend's paged context, not tensors),
   `kernels/shapes.py` (shapes and call counts from captures; held-out = whole regions above the 80th percentile on the
   task's axes, never random samples; `ints_from_captures` keeps each shape's captured int args, e.g. real sequence
