@@ -33,7 +33,7 @@ METRICS = (
 
 def flags() -> list[str]:
     return ["--profile-from-start", "off", "--target-processes", "all", "--csv", "--page", "raw",
-            "--metrics", ",".join(METRICS)]
+            "--print-units", "base", "--metrics", ",".join(METRICS)]          # ns and bytes, never rescaled per row
 
 
 def parse(stdout: str, top: int = 3) -> dict:

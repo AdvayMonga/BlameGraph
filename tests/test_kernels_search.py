@@ -126,6 +126,26 @@ def test_a_repair_chain_resets_when_a_repair_succeeds():
     assert under and all(n.repairs == 0 for n in under)          # was 1: the chain leaked into new work
 
 
+def test_counters_are_not_asked_for_again_once_the_host_refuses_them():
+    from kernels.search.loop import cascade
+    calls = []
+
+    def stage(path, n):
+        calls.append(n)
+        if n == 3:
+            return {"metrics": {}, "artifacts": {"ncu": json.dumps({"shapes": [{"error": "==ERROR== ERR_NVGPUCTRPERM"}]})}}
+        return {"metrics": {"correct": 1.0, "combined_score": 1.1, "stage": n}, "artifacts": {}}
+    judge = cascade(stage, counters=True)
+    first, second = judge("x = 1\n"), judge("x = 2\n")
+    assert calls == [1, 2, 3, 1, 2] and "unavailable on this host" in first["artifacts"]["ncu_missing"]
+    assert "ncu" not in second["artifacts"]
+
+
+def test_every_ab_arm_gets_the_same_promotion():
+    from kernels.search import ab
+    assert ab.SAME_PROMOTION == ("--retime", "3", "--tune-points", "0", "--detector-model", "none")
+
+
 def test_a_branch_is_worth_its_best_program_so_a_strong_child_of_a_weak_parent_is_expanded():
     t = Tree(seed=0)                                     # the 2026-10-19 run's shape: the best under a weak parent
     ok = lambda sc: {"combined_score": sc, "correct": 1.0, "stage": 2}        # noqa: E731

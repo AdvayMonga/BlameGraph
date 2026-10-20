@@ -188,9 +188,15 @@ def merge_hypothesis(tree: Tree, node: Node) -> dict | None:
             "implementation_risk": 2, "performance_risk": 2}
 
 
+REFUSED = "ERR_NVGPUCTRPERM"        # ncu: this host does not let the jail read GPU performance counters
+
+
 def cascade(judge_stage: Callable[[str, int], dict], counters: bool = False) -> Callable[[str], dict]:
     """Stage 1, then stage 2 for a program that passes it, then (counters=True) its ncu counters: {metrics,
-    artifacts}."""
+    artifacts}. Once the host refuses counters, they are not asked for again (two jailed runs per program, for an
+    error: every profile of 2026-10-18/19)."""
+    on = [counters]
+
     def judge(code: str) -> dict:
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
             f.write(code)
@@ -199,8 +205,12 @@ def cascade(judge_stage: Callable[[str, int], dict], counters: bool = False) -> 
             if r["metrics"].get("correct") != 1.0:
                 return r
             r = judge_stage(f.name, 2)
-            if counters and r["metrics"].get("correct") == 1.0 and r["metrics"].get("combined_score", 0) > 0:
-                r["artifacts"] = {**r["artifacts"], **judge_stage(f.name, 3)["artifacts"]}
+            if on[0] and r["metrics"].get("correct") == 1.0 and r["metrics"].get("combined_score", 0) > 0:
+                a = judge_stage(f.name, 3)["artifacts"]
+                if REFUSED in json.dumps(a):
+                    on[0] = False
+                    a = {"ncu_missing": f"ncu counters unavailable on this host ({REFUSED}); not collected this run"}
+                r["artifacts"] = {**r["artifacts"], **a}
             return r
         finally:
             Path(f.name).unlink()
