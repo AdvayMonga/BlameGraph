@@ -240,14 +240,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   that never reached the GPU, the model shown only the
   parent program, its measurements and its lineage, SEARCH/REPLACE answers, duplicates refused before any GPU time,
   with a judge (default) each step is two calls,
-  the judge (Opus 5.5) naming 16 changes as JSON with its own speedup and risk estimates, scored by a
-  System-1 screener (`kernels/search/screen.py`, `--screen haiku` default: Claude Haiku 4.5's probability of beating
-  the parent; `roi` = MANTIS's ROI; `random`; a learned local classifier replaces it once the random picks have
-  labelled a few hundred), the top 3 plus 1 random written and judged (`--hypotheses/--beam/--explore`; every
-  hypothesis and its fate in `hypotheses.jsonl`), from the facts (and, its choice when, Anthropic's web search
+  the judge (Opus 5.5) naming as many changes as the beam is wide (`--beam`, 4) as JSON, every one written and judged
+  (each and its fate in `hypotheses.jsonl`), from the facts (and, its choice when, Anthropic's web search
   and read-only SQL over the agent's view of the ledger index, `--judge-tools`; the harness pastes no research), with
-  up to 2 better programs from other branches as diffs and a merge-with-the-best-other-branch hypothesis competing for
-  the beam (CodeEvolve's inspirations), including CudaForge's 24 ncu counters
+  up to 2 better programs from other branches as diffs (CodeEvolve's inspirations), including CudaForge's 24 ncu counters
   (`kernels/evolve/ncu.py`, stage 3 of the jailed evaluator; none collected yet: every profile so far failed with
   ERR_NVGPUCTRPERM, and a run stops asking after the first refusal), and the coder writing it; a failed child is repaired in
   correction mode, chained up to 3 deep; launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen afterwards by a grid
@@ -262,7 +258,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   passed over, recorded with its evidence (`kernels/search/detect.py`, MANTIS; never changes a score);
   every call priced (OpenEvolve's too, via a usage log);
   `python -m kernels.search.ab --arms ...` runs OpenEvolve and kernels.search (and variants differing in one flag:
-  `search-roi`, `search-random`, `search-no-tools`, `search-c1.41`) on one task with the same shapes, start, evaluator,
+  `search-no-tools`, `search-c1.41`) on one task with the same shapes, start, evaluator,
   the same post-search promotion for every arm (`ab.SAME_PROMOTION`: top 3 re-timed, no tuning, no detector), single model
   and judged-program budget, gates each winner on held-out shapes, and writes `ab.json`; `kernels/METHOD.md` maps
   every component to its published source and number, or says why ours; same evaluator, run dir, re-timed promotion and `kernels` record as `kernels.evolve run`). `kernels/evolve/ship.py` (`python -m kernels.evolve ship`: a program with a passing held-out gate becomes a

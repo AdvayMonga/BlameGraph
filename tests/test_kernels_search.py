@@ -118,8 +118,7 @@ def test_a_repair_chain_resets_when_a_repair_succeeds():
         return {"metrics": {"combined_score": {1: 1.0, 0: 0.0, 2: 1.5}[x], "correct": float(x != 0), "stage": 2},
                 "artifacts": {}}
     with tempfile.TemporaryDirectory() as d:
-        tree, _ = search("x = 1\n", "S", propose, judge, Path(d), evals=6, usd=1.0, review=review, beam=1, explore=0,
-                         screen=lambda s, f, hs: ([1.0] * len(hs), 0.0))
+        tree, _ = search("x = 1\n", "S", propose, judge, Path(d), evals=6, usd=1.0, review=review, beam=1)
     fixed = [n for n in tree.nodes.values() if n.score == 1.5]
     assert fixed and all(n.mode == "correction" and n.repairs == 1 for n in fixed)
     under = [n for n in tree.nodes.values() if n.parent in {f.id for f in fixed} and n.mode == "optimization"]
@@ -208,8 +207,8 @@ def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_node():
         assert len(rec["result"]["candidates"]) == len(tree.nodes)
 
 
-def test_an_expansion_ranks_many_hypotheses_measures_a_beam_and_repairs_failures_in_a_chain():
-    from kernels.search.loop import choose, hypotheses, roi, search
+def test_an_expansion_measures_every_change_the_judge_names_and_repairs_failures_in_a_chain():
+    from kernels.search.loop import hypotheses, search
     calls = []
 
     def review(system, user):
@@ -217,9 +216,8 @@ def test_an_expansion_ranks_many_hypotheses_measures_a_beam_and_repairs_failures
             calls.append(("judge", "correction", user))
             return json.dumps({"critical_issue": "x"}), 1.0
         calls.append(("judge", "optimization", user))
-        hs = [{"modification_plan": f"set x = {v}", "expected_speedup": sp, "implementation_risk": 1,
-               "performance_risk": 1} for v, sp in ((2, 1.1), (3, 1.9), (9, 1.5), (4, 1.0))]
-        return "Here: " + json.dumps(hs), 1.0
+        assert "Name 3 distinct changes" in system and "expected_speedup" not in system
+        return "Here: " + json.dumps([{"modification_plan": f"set x = {v}"} for v in (2, 3, 9)]), 1.0
 
     def propose(system, user):
         calls.append(("coder", system, user))
@@ -237,19 +235,15 @@ def test_an_expansion_ranks_many_hypotheses_measures_a_beam_and_repairs_failures
 
     assert len(hypotheses("pre " + json.dumps([{"a": 1}, {"b": 2}, 3]) + " post", 16)) == 2
     assert hypotheses("not json", 4) == [{"plan": "not json"}] and hypotheses("", 4) == []
-    assert roi({"expected_speedup": 2.0}, 100.0) > roi({"expected_speedup": 2.0, "implementation_risk": 3}, 100.0)
-    assert roi({"expected_speedup": 2.0, "implementation_risk": 1, "performance_risk": 1}, 10.0) > 2.0  # gap 10 > 5
-    import random as _r
-    picks = choose([0.1, 0.9, 0.5, 0.3], 3, 1, _r.Random(0))
-    assert [i for i, rnd in picks if not rnd] == [1, 2] and sum(rnd for _, rnd in picks) == 1
     with tempfile.TemporaryDirectory() as d:
-        tree, cost = search("x = 1\n", "SYSTEM", propose, judge, Path(d), evals=8, usd=100.0, review=review,
-                            n_hypotheses=16, beam=3, explore=0, max_repairs=3)
+        tree, cost = search("x = 1\n", "SYSTEM", propose, judge, Path(d), evals=8, usd=100.0, review=review, beam=3,
+                            max_repairs=3)
         log = [json.loads(x) for x in (Path(d) / "hypotheses.jsonl").read_text().splitlines()]
     first = log[0]
-    assert len(first["hypotheses"]) == 4 and [m["index"] for m in first["measured"]] == [1, 2, 0]   # ROI order
+    assert len(first["hypotheses"]) == 3 and [m["index"] for m in first["measured"]] == [0, 1, 2]   # all, in order
+    assert set(first) == {"iteration", "parent_id", "parent_score", "hypotheses", "measured"}
     coder = [c for c in calls if c[0] == "coder"]
-    assert "SEARCH/REPLACE" in coder[0][1] and "set x = 3" in coder[0][2]
+    assert "SEARCH/REPLACE" in coder[0][1] and "set x = 2" in coder[0][2] and "Other programs" not in coder[0][2]
     assert "SEARCH/REPLACE" not in [c for c in calls if c[0] == "judge"][0][2]
     chain = [n for n in tree.nodes.values() if n.mode == "correction"]
     assert [n.repairs for n in sorted(chain, key=lambda n: n.repairs)] == [1, 2, 3]       # repaired up to 3 deep
@@ -457,13 +451,13 @@ def test_every_arm_differs_from_kernels_search_in_one_flag():
     try:
         from types import SimpleNamespace
         a = SimpleNamespace(task="t", shapes="s", evals=3, usd=1.0, model="m", device="cpu", initial=None)
-        for arm in ("kernels.search", "search-roi", "search-random", "search-no-tools", "search-c1.41"):
+        for arm in ("kernels.search", "search-no-tools", "search-c1.41"):
             ab.ARMS[arm](a, Path("/tmp/x"), 0)
     finally:
         cli.main = orig
     base = seen[0]
     extras = [argv[len(base):] for argv in seen[1:]]
-    assert extras == [["--screen", "roi"], ["--screen", "random"], ["--no-judge-tools"], ["--uct-c", "1.4142"]]
+    assert extras == [["--no-judge-tools"], ["--uct-c", "1.4142"]]
     assert all(argv[:len(base)] == base for argv in seen)
     try:
         ab.main(["--task", "t", "--shapes", "s", "--out", "/tmp/x", "--arms", "nope"])
@@ -518,47 +512,6 @@ def test_regions_pick_a_config_per_size_and_the_dispatcher_sets_it_per_call():
                                            "silu_mul", "topk_softmax"))
 
 
-def test_screeners_score_hypotheses_and_the_log_keeps_labels():
-    from kernels.search import screen
-    from kernels.search.loop import search
-    hs = [{"modification_plan": "a", "expected_speedup": 1.5}, {"modification_plan": "b", "expected_speedup": 1.1}]
-    assert screen.parse("ok: [0.2, 1.7]", 2) == ([0.2, 1.0], False) and screen.parse("[0.1]", 3) is None
-    assert screen.parse("[0.1, 0.5, 0.9]", 4) == ([0.1, 0.5, 0.9, 0.5], True)    # one short: the median fills the last
-    seen = {}
-    fake = lambda system, user: seen.update(system=system, user=user) or ("[0.1, 0.9]", 0.002)      # noqa: E731
-    scores, usd = screen.haiku(fake)("TASK FACTS", "PROGRAM AND MEASUREMENTS", hs)
-    assert scores == [0.1, 0.9] and usd == 0.002 and "PROGRAM AND MEASUREMENTS" in seen["user"]
-    assert '1. {"modification_plan": "b"' in seen["user"] and "exactly 2 numbers" in seen["system"]
-    sc = screen.haiku(lambda s, u: ("no idea", 0.0))
-    scores, _ = sc("S", "F", hs)
-    assert scores[0] > scores[1] and sc.last == {"reply": "no idea", "parsed": False, "padded": False}   # ROI order
-    assert screen.parse("Scores [0 to 1] for the 2 changes:\n```json\n[0.3, 0.7]\n```", 2) == ([0.3, 0.7], False)
-    assert screen.parse("[0.3, 0.7, 0.1, 0.2]", 2) is None and screen.parse("", 2) is None
-    assert screen.make("roi") is None and len(screen.make("random")("S", "F", hs)[0]) == 2
-
-    def review(system, user):
-        return json.dumps([{"modification_plan": f"set x = {v}", "expected_speedup": 1.0} for v in (2, 3, 4)]), 0.0
-
-    def propose(system, user):
-        v = re.search(r"set x = (\d+)", user).group(1)
-        return f"<<<<<<< SEARCH\nx = 1\n=======\nx = {v}\n>>>>>>> REPLACE", 0.0
-
-    def judge(code):
-        x = int(code.split("=")[1])
-        return {"metrics": {"combined_score": {1: 1.0, 2: 0.9, 3: 1.4, 4: 1.2}[x], "correct": 1.0, "stage": 2},
-                "artifacts": {}}
-
-    pick_third = lambda system, facts, hs: ([0.0, 0.1, 0.9][: len(hs)], 0.01)                          # noqa: E731
-    with tempfile.TemporaryDirectory() as d:
-        tree, cost = search("x = 1\n", "S", propose, judge, Path(d), evals=2, usd=1.0, review=review, beam=1,
-                            explore=0, screen=pick_third)
-        row = json.loads((Path(d) / "hypotheses.jsonl").read_text().splitlines()[0])
-    assert row["measured"] == [{"index": 2, "random": False, "child_id": row["measured"][0]["child_id"],
-                                "child_score": 1.2, "improved": True, "new_best": True}] and row["parent_score"] == 1.0
-    assert row["screen"] is None                                                   # pick_third keeps no reply
-    assert row["scores"] == [0.0, 0.1, 0.9] and cost["usd"] == 0.01 and cost["model_calls"] == 3   # judge, screen, coder
-
-
 def test_the_judge_can_query_the_ledger_and_search_the_web_across_turns():
     from types import SimpleNamespace
     from kernels.search import llm
@@ -599,26 +552,19 @@ def test_the_judge_can_query_the_ledger_and_search_the_web_across_turns():
     assert abs(usd - 3 * (1000 * 4 + 100 * 20) / 1e6 - 3 * 2 * llm.WEB_SEARCH_USD) < 1e-9
 
 
-def test_inspirations_show_other_branches_and_a_merge_competes_for_the_beam():
-    from kernels.search.loop import merge_hypothesis, prompt
+def test_inspirations_show_other_branches_to_the_judge_only():
+    from kernels.search.loop import prompt
     t = Tree()
     ok = lambda sc: {"combined_score": sc, "correct": 1.0, "stage": 2}        # noqa: E731
     t.add(Node("r", None, "a = 1\nb = 1\n", ok(1.0), {}, 0))
     t.add(Node("x", "r", "a = 2\nb = 1\n", ok(1.5), {}, 1))
     t.add(Node("y", "r", "a = 1\nb = 2\n", ok(1.3), {}, 1))
-    m = merge_hypothesis(t, t.nodes["y"])
-    assert m["merge_from"] == "x" and m["expected_speedup"] == round(1.5 / 1.3, 4)      # over this program, not the start
-    tried = [{"parent_id": "r", "parent_score": 1.0, "child_id": "x", "child_score": 1.5, "plan": "set a = 2"}]
-    assert "# Hypotheses already measured" not in prompt(t, t.nodes["y"], coder=False)
-    seen = prompt(t, t.nodes["y"], coder=False, measured=tried)
-    assert "on r (1.0000) -> x 1.5000: set a = 2" in seen and "Hypotheses already measured" not in \
-        prompt(t, t.nodes["y"], "plan", measured=tried)                                    # the coder is not shown it
     judge_view = prompt(t, t.nodes["y"], coder=False)
     assert "# Other programs in the tree" in judge_view and "+a = 2" in judge_view and "Program r" not in \
         judge_view.split("# Other programs")[1]
-    assert "+a = 2" in prompt(t, t.nodes["y"], json.dumps(m)) and "+a = 2" not in prompt(t, t.nodes["y"], '{"p": 1}')
-    assert merge_hypothesis(t, t.nodes["x"])["merge_from"] == "y"
-
+    assert "+a = 2" not in prompt(t, t.nodes["y"], '{"modification_plan": "p"}')         # the coder: its plan only
+    tried = [{"parent_id": "r", "parent_score": 1.0, "child_id": "x", "child_score": 1.5, "plan": "set a = 2"}]
+    assert "on r (1.0000) -> x 1.5000: set a = 2" in prompt(t, t.nodes["y"], coder=False, measured=tried)
 
 def test_a_flagged_candidate_is_passed_over_at_promotion():
     from kernels.evolve.run import retime
