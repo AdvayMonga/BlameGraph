@@ -33,7 +33,16 @@ def initial_program(task) -> str:
     if task.entry is None:
         return (HERE / "seeds" / f"{task.name}.py").read_text()
     mod, _, attr = task.entry.partition(":")
-    src = inspect.getsource(importlib.import_module(mod))
+    return _start(task, inspect.getsource(importlib.import_module(mod)), attr)
+
+
+def _start(task, src: str, attr: str) -> str:
+    """The engine module as the starting program: the task's start edits applied (each must apply exactly once, so a
+    changed engine module is noticed), `kernel` bound to the entry point."""
+    for old, new in task.start_edits:
+        if src.count(old) != 1:
+            raise ValueError(f"{task.name}: a start edit no longer matches the engine module: {old[:60]!r}")
+        src = src.replace(old, new)
     return f"# EVOLVE-BLOCK-START\n{src}\n# EVOLVE-BLOCK-END\n\nkernel = {attr}\n"
 
 
@@ -43,7 +52,7 @@ def initial_program_at(task, repo: Path, ref: str) -> str:
     from kernels.evolve.ship import _git, _module_path
     mod, _, attr = task.entry.partition(":")
     src = _git(repo, "show", f"{ref}:{_module_path(repo, _git(repo, 'rev-parse', ref), mod)}")
-    return f"# EVOLVE-BLOCK-START\n{src}\n# EVOLVE-BLOCK-END\n\nkernel = {attr}\n"
+    return _start(task, src, attr)
 
 
 def system_message(task) -> str:

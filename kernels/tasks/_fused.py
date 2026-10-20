@@ -26,3 +26,17 @@ def rows_edges(shape):
 
 def weight(d, g):
     return 1 + 0.1 * torch.randn(d, generator=g)
+
+
+# models/fused.py finds triton with importlib.util.find_spec and reaches its kernels module through a lazy object's
+# getattr; the source screen refuses both. The starting program imports the kernels module directly instead: the same
+# kernels, the same eager fallback without triton.
+START_EDITS = (
+    ("\nimport importlib.util\n", "\ntry:                                    # its kernels module\n"
+     "    from inference_server.models import fused_kernels as K\nexcept ImportError:                     # no triton\n"
+     "    K = None\n"),
+    ('importlib.util.find_spec("triton") is not None', "K is not None"),
+    ('class _Lazy:\n    """The kernels module, imported on first use."""\n    def __getattr__(self, name):\n'
+     "        from inference_server.models import fused_kernels\n        return getattr(fused_kernels, name)\n\n\n"
+     "K = _Lazy()\n\n\n", ""),
+)

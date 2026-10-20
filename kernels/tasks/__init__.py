@@ -39,6 +39,8 @@ class Task:
     kernel_names: tuple[str, ...] = ()      # regexes of the device kernels its entry launches (kernels/share.py)
     make_real: Callable = None              # make_real(shape, dtype, device, generator, ints) -> inputs, `ints` being a
                                             # captured call's 1-D int args by value (e.g. its real sequence lengths)
+    start_edits: tuple = ()                 # (old, new) exact edits to the engine module before it is the starting
+                                            # program: same behaviour, spelled so the source screen accepts it
     options: tuple[str, ...] = ()           # deployment facts make_inputs/make_real take as keywords (from the
                                             # target spec: `options_from_target`), e.g. the engine's context window
     seen_default: tuple = field(default_factory=tuple)      # shapes to use with no capture (tests, toys)

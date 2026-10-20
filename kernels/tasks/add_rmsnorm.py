@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 
 from kernels.tasks import Task, randn
-from kernels.tasks._fused import EPS, HIDDEN, rms, rows_cost, rows_edges, weight
+from kernels.tasks._fused import EPS, HIDDEN, START_EDITS, rms, rows_cost, rows_edges, weight
 
 
 def reference(h, a, w):
@@ -31,6 +31,6 @@ def shape_of(call):
 
 TASK = Task("add_rmsnorm", "inference_server.models.fused:add_rmsnorm", reference, make_inputs, shape_of,
             lambda shape, dtype, inputs=None: rows_cost(*shape, 2, 2, dtype),
-            call=lambda fn, h, a, w: fn(h, a, w, EPS), graphs=True, kernel_names=(r"^_add_rmsnorm_kernel",),
+            call=lambda fn, h, a, w: fn(h, a, w, EPS), start_edits=START_EDITS, graphs=True, kernel_names=(r"^_add_rmsnorm_kernel",),
             size_expr="args[0].numel() // args[0].shape[-1]", heldout_axes=(0,), edge_shapes=rows_edges, dtypes=(torch.bfloat16,), layouts=(),
             seen_default=((4, HIDDEN), (32, HIDDEN)), heldout_default=((512, HIDDEN),))

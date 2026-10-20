@@ -205,6 +205,54 @@ def test_ncu_counters_reach_the_judge_on_the_gpu():
     assert "ncu" in a and "ERR_NVGPUCTRPERM" not in json.dumps(a), a
     shapes = json.loads(a["ncu"])["shapes"]
     assert len(shapes) == 2 and all(s.get("kernels") for s in shapes), shapes      # counters on both shapes
+def test_the_fused_tasks_start_launches_what_the_engine_module_launches():
+    """The start edits only change how the kernels module is reached: with a stand-in kernels module, the original
+    fused.py and the edited start make the same launches with the same arguments, and the start passes the screen."""
+    import types
+    from kernels.evolve.core import screen
+    from kernels.evolve.run import _start
+    from lab import engine
+    try:
+        src = (engine.repo() / "src" / "inference_server" / "models" / "fused.py").read_text()
+    except Exception:                            # noqa: BLE001  no engine checkout here (CI)
+        print("skip: no engine source")
+        return
+    log = []
+
+    class Launch:
+        def __init__(self, name):
+            self.name = name
+
+        def __getitem__(self, grid):
+            return lambda *a, **k: log.append((self.name, grid, [tuple(x.shape) if hasattr(x, "shape") else x
+                                                                 for x in a], sorted(k.items())))
+    stub = types.ModuleType("inference_server.models.fused_kernels")
+    stub.triton = types.SimpleNamespace(next_power_of_2=lambda n: 1 << (n - 1).bit_length(), cdiv=lambda a, b: -(-a // b))
+    for name in ("_rmsnorm_kernel", "_add_rmsnorm_kernel", "_rmsnorm_rope_kernel", "_silu_mul_kernel",
+                 "_kv_store_kernel", "_topk_softmax_kernel", "_add_cast_kernel"):
+        setattr(stub, name, Launch(name))
+    saved = {k: sys.modules.get(k) for k in ("inference_server", "inference_server.models",
+                                             "inference_server.models.fused_kernels")}
+    pkg, models = types.ModuleType("inference_server"), types.ModuleType("inference_server.models")
+    pkg.models, models.fused_kernels = models, stub
+    sys.modules.update({"inference_server": pkg, "inference_server.models": models,
+                        "inference_server.models.fused_kernels": stub})
+    try:
+        runs = []
+        for task in ("rmsnorm", "silu_mul", "topk_softmax"):
+            start = _start(load(task), src, "x").split("# EVOLVE-BLOCK-END")[0].replace("# EVOLVE-BLOCK-START\n", "")
+            assert screen(start) == [], (task, screen(start))
+        for code in (src, start):
+            ns, log[:] = {"__name__": "fused_under_test"}, []
+            exec(compile(code, "fused.py", "exec"), ns)                 # noqa: S102  the module under test
+            x, w = torch.randn(4, 64, dtype=torch.bfloat16), torch.ones(64, dtype=torch.bfloat16)
+            ns["rmsnorm"](x, w, 1e-6), ns["silu_mul"](torch.randn(4, 128, dtype=torch.bfloat16))
+            ns["topk_softmax"](torch.randn(4, 128, dtype=torch.bfloat16), 8, True, fp32=True)
+            runs.append(list(log))
+    finally:
+        for k, v in saved.items():
+            sys.modules.pop(k, None) if v is None else sys.modules.__setitem__(k, v)
+    assert runs[0] and runs[0] == runs[1]                                # the same launches, same arguments
 
 
 def test_value_distributions_catch_a_kernel_tuned_to_one_scale():
