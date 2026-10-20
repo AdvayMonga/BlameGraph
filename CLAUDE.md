@@ -228,14 +228,16 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   build files survive in a program's dir, and the gate has its own), score = call-weighted geometric-mean speedup, a shape counting 1.0 when the middle half of its paired ratios
   includes 1; at the end the top candidates are re-judged 3x and the highest median is promoted, `run --retime`); a program may build CUDA C++ at import with
   `torch.utils.cpp_extension.load_inline` (nvcc from the host's toolkit, mounted read-only into the jail; the build is
-  cached per program source across its stages, `jailed._builds`); a candidate is
+  cached per program source and toolkit across its stages, in one fixed dir per program, `jailed._eval_dir`; C++ only as
+  literals, `core._cpp_built_at_run_time`); a candidate is
   refused if its source, its C++ included, reaches for an exploit route or writes into anything it imported, under any alias
   (`core.screen`), and scores 0 if any function the checker or timer uses is patched, checked after loading and
   after every call the checker makes (`core._watched`; the timer binds its own at import); the exploit canaries in
   `tests/test_kernels_evolve.py` must all score 0; selection never sees held-out shapes, `gate` judges them (correctness, and their speedup as a fact); `validate_gpu.sh` = the GPU validation (shapes captured under real corpus traffic at several concurrencies, `CAPTURE_SPECS`; never synthetic prompts, whose batches have uniform lengths); tolerances from the target's
   `[kernels]`). `kernels/search/` (extra `kernel-search`; our own layer-1 generator, replacing OpenEvolve, which stays as the A/B baseline: `python -m
-  kernels.search`; a tree of refinement chains, parents chosen by MCTS (UCT, C = sqrt 2, progressive widening
-  alpha = 0.5, KernelPro), a node closed after 3 failed children, the model shown only the
+  kernels.search`; a tree of refinement chains, parents chosen by MCTS (UCT with C = 0.6 on percentile rewards and max backup,
+  KernelPro's progressive widening and virtual-child rule), a node closed after 3 judged failed children or 3 edits
+  that never reached the GPU, the model shown only the
   parent program, its measurements and its lineage, SEARCH/REPLACE answers, duplicates refused before any GPU time,
   with a judge (default) each step is two calls,
   the judge (Opus 5.5) naming 16 changes as JSON with its own speedup and risk estimates, scored by a
@@ -246,7 +248,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   and read-only SQL over the agent's view of the ledger index, `--judge-tools`; the harness pastes no research), with
   up to 2 better programs from other branches as diffs and a merge-with-the-best-other-branch hypothesis competing for
   the beam (CodeEvolve's inspirations), including CudaForge's 24 ncu counters
-  (`kernels/evolve/ncu.py`, stage 3 of the jailed evaluator), and the coder writing it; a failed child is repaired in
+  (`kernels/evolve/ncu.py`, stage 3 of the jailed evaluator; none collected yet: every profile so far failed with
+  ERR_NVGPUCTRPERM, and a run stops asking after the first refusal), and the coder writing it; a failed child is repaired in
   correction mode, chained up to 3 deep; launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen afterwards by a grid
   search on each of the top 4 re-timed programs (8 points each, no ncu), written back as constants, the best point
   promoted only if its re-timed median beats the winner's
@@ -259,7 +262,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   passed over, recorded with its evidence (`kernels/search/detect.py`, MANTIS; never changes a score);
   every call priced (OpenEvolve's too, via a usage log);
   `python -m kernels.search.ab --arms ...` runs OpenEvolve and kernels.search (and variants differing in one flag:
-  `search-roi`, `search-random`, `search-no-tools`) on one task with the same shapes, start, evaluator, single model
+  `search-roi`, `search-random`, `search-no-tools`, `search-c1.41`) on one task with the same shapes, start, evaluator,
+  the same post-search promotion for every arm (`ab.SAME_PROMOTION`: top 3 re-timed, no tuning, no detector), single model
   and judged-program budget, gates each winner on held-out shapes, and writes `ab.json`; `kernels/METHOD.md` maps
   every component to its published source and number, or says why ours; same evaluator, run dir, re-timed promotion and `kernels` record as `kernels.evolve run`). `kernels/evolve/ship.py` (`python -m kernels.evolve ship`: a program with a passing held-out gate becomes a
   commit on a new engine branch, built with git plumbing so the engine's tree is untouched; `--budget` starts the
