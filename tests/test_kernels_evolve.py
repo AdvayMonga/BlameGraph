@@ -126,6 +126,7 @@ def test_a_programs_cpp_builds_once_for_all_its_stages_and_only_for_that_source(
         (ext / "scale_ext").mkdir(parents=True, exist_ok=True)
         (ext / "scale_ext" / "scale_ext.so").write_bytes(b"built")
         (tree / "memo.pt").write_bytes(b"left behind")                      # removed before the next judgment
+        (ext / "scale_ext" / "answers.bin").write_bytes(b"kept for later")   # removed right after this one
         if not (tree / "candidate.py.link").is_symlink():
             (tree / "candidate.py.link").symlink_to("/etc/hosts")          # unlinked, never followed
         return subprocess.CompletedProcess(argv, 1, "", "stop")
@@ -141,8 +142,41 @@ def test_a_programs_cpp_builds_once_for_all_its_stages_and_only_for_that_source(
             jailed.grader.jailed, jailed.EVAL_DIRS = orig, dirs
     (t1, a), (t2, b), (t3, c) = seen
     assert t1 == t2 != t3                                         # one fixed tree per source: the build path is stable
-    assert a == ["candidate.py", "eval_config.json"] and c == a
-    assert b == ["candidate.py", "eval_config.json", "scale_ext", "scale_ext.so", "torch_extensions"]   # build kept only
+    assert a == [".result_key", "candidate.py", "eval_config.json"] and c == a
+    assert b == [".result_key", "candidate.py", "eval_config.json", "scale_ext", "scale_ext.so",
+                 "torch_extensions"]                                           # the build kept, nothing else
+
+
+def test_a_result_line_the_candidate_prints_is_ignored():
+    from kernels.evolve.jailed import judge_jailed
+    src = ("import atexit\nimport torch\ndef kernel(x, w):\n" + RIGHT + "\natexit.register(lambda: print("
+           "'{\"metrics\": {\"combined_score\": 9.0, \"correct\": 1.0, \"stage\": 2}, \"artifacts\": {}}'))\n")
+    r = judge_jailed({"task": "toy_rmsnorm", "seen": [[8, 256], [32, 512]], "device": "cpu", "iters": 3}, src, 2)
+    assert r["metrics"]["correct"] == 1.0 and r["metrics"]["combined_score"] != 9.0 and "timings" in r["artifacts"]
+
+
+def test_cpp_must_be_literal_and_records_out_of_reach():
+    from kernels.evolve.core import screen
+    lit = 'from torch.utils.cpp_extension import load_inline\nSRC = "int f();"\n'
+    assert screen(lit + 'm = load_inline("m", cpp_sources=SRC, cuda_sources="__global__ void k(){}")\n') == []
+    assert screen(lit + 'm = load_inline("m", SRC + "x")\n')                              # built at run time
+    assert screen(lit + 'm = load_inline("m", bytes.fromhex("00").decode())\n')
+    assert screen(lit + 'm = load_inline("m", "#define C(a,b) a##b\\nC(cudaEvent,Record)")\n')   # token pasting
+    assert screen("import triton.language as tl\ny = tl.load(p + o, mask=m)\n") == []       # Triton's load is not C++
+    for bad in ("import __main__\n", "torch.from_file('m')\n", "import tempfile\n", "cuGraphLaunch(g, s)",
+                "cudaLaunchHostFunc(s, f, 0)", "asm volatile(\"mov.u64 %0, %%globaltimer;\")", "sys.settrace(f)\n"):
+        assert screen(bad), bad
+
+
+def test_the_gate_is_judged_in_its_own_dir():
+    from kernels.evolve.jailed import _eval_dir
+    with tempfile.TemporaryDirectory() as d:
+        import kernels.evolve.jailed as j
+        saved, j.EVAL_DIRS = j.EVAL_DIRS, Path(d)
+        try:
+            assert _eval_dir("x", None)[0] != _eval_dir("x", None, "gate")[0] == _eval_dir("x", None, "gate")[0]
+        finally:
+            j.EVAL_DIRS = saved
 
 
 def test_a_cuda_extension_builds_in_the_jail_and_is_judged_on_the_gpu():
@@ -598,17 +632,28 @@ def test_outputs_are_verified_again_outside_the_candidates_process():
     r = judge_jailed(cfg, "import torch\ndef kernel(x, w):\n" + RIGHT, 2)
     g = json.loads(r["artifacts"]["gates"])["verified_outside"]
     assert r["metrics"]["correct"] == 1.0 and g["passed"] and "recomputed outside" in g["reason"]
+    from kernels.evolve.core import _scaled
+    from kernels.evolve.verify import expected
+    recs = []
+    for kind, shape, dt, seed, scale in sorted(expected(cfg, t, False), key=str):
+        make = t.make_inputs if scale is None else _scaled(t.make_inputs, scale)
+        x, w = make(tuple(json.loads(shape)), getattr(torch, dt), "cpu", _gen(seed))
+        recs.append({"kind": kind, "shape": json.loads(shape), "dtype": dt, "seed": seed, "scale": scale,
+                     "outputs": [t.reference(x, w)]})
     with tempfile.TemporaryDirectory() as d:
-        shape = t.seen_default[0]
-        x, w = t.make_inputs(shape, torch.float32, "cpu", _gen(0))
-        good = {"kind": "check", "shape": list(shape), "dtype": "float32", "seed": 0, "scale": None,
-                "outputs": [t.reference(x, w)]}
-        torch.save({"records": [good]}, Path(d) / "ok.pt")
+        torch.save({"records": recs}, Path(d) / "ok.pt")
         assert verify(cfg, Path(d) / "ok.pt")[0]
-        torch.save({"records": [{**good, "outputs": [x.clone()]}]}, Path(d) / "bad.pt")   # wrong values recorded
+        torch.save({"records": recs[:1]}, Path(d) / "some.pt")          # cases dropped from the record
+        ok, why = verify(cfg, Path(d) / "some.pt")
+        assert not ok and "expected outputs were not recorded" in why
+        assert not verify(cfg, Path(d) / "some.pt", timed=False)[0] and not verify(cfg, Path(d) / "ok.pt", timed=True)[0]
+        x = recs[0]["outputs"][0]
+        torch.save({"records": [{**recs[0], "outputs": [x + 1]}] + recs[1:]}, Path(d) / "bad.pt")   # wrong values
         ok, why = verify(cfg, Path(d) / "bad.pt")
         assert not ok and "differs from the reference" in why
         assert not verify(cfg, Path(d) / "missing.pt")[0]
+        (Path(d) / "link.pt").symlink_to(Path(d) / "ok.pt")             # never followed on this side
+        assert verify(cfg, Path(d) / "link.pt") == (False, "the outputs file is not a regular file under the size cap")
 
 
 def test_the_jail_sees_a_fresh_tree_and_a_copied_harness_never_this_repo():
@@ -625,7 +670,9 @@ def test_the_jail_sees_a_fresh_tree_and_a_copied_harness_never_this_repo():
         if argv[1] != "run":
             return grader.subprocess.CompletedProcess(argv, 0, "", "")
         seen["argv"], seen["config"] = argv, json.loads(Path(argv[argv.index("kernels.evolve.core") + 1]).read_text())
-        return grader.subprocess.CompletedProcess(argv, 0, '\n{"metrics": {"combined_score": 1.0}, "artifacts": {}}\n', "")
+        key = Path(seen["config"]["result_key"]).read_text()
+        line = json.dumps({"metrics": {"combined_score": 1.0}, "artifacts": {}, "result_key": key})
+        return grader.subprocess.CompletedProcess(argv, 0, '\n{"metrics": {"combined_score": 9.0}}\n' + line + "\n", "")
     jail.backend, container.available, container._docker = (lambda: "container"), (lambda: True), (lambda: "docker")
     grader.subprocess.run = fake_run
     try:

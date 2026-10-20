@@ -5,20 +5,52 @@ from its seed, runs the reference itself and compares. A candidate that patches 
 `weights_only=True`: tensors and plain values only, no code."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
-def verify(cfg: dict, path: Path) -> tuple[bool, str]:
+MAX_BYTES = 32 * 2**30
+
+
+def expected(cfg: dict, task, timed: bool) -> set:
+    """The records a full stage-2 judgment under `cfg` keeps (kernels.evolve.core.judge): every seen and held-out
+    shape x dtype x seed 0-2, the two most-called seen shapes at each value scale (seed 7), and with `timed` the
+    four timed buffers of every timed shape. A candidate cannot drop or swap any of them unnoticed."""
+    import inspect
+    from kernels.evolve.core import SCALES
+    from kernels.timing import time_pair
+    dts = [str(d).removeprefix("torch.") for d in task.dtypes]
+    seen, held = [list(x) for x in cfg["seen"]], [list(x) for x in cfg.get("heldout", [])]
+    out = {("check", json.dumps(s), d, sd, None) for s in seen + held for d in dts for sd in (0, 1, 2)}
+    out |= {("check", json.dumps(s), d, 7, k) for k in (SCALES if task.scales is None else task.scales)
+            for s in seen[:2] for d in dts}
+    if timed:
+        n = inspect.signature(time_pair).parameters["n_buffers"].default
+        out |= {("time", json.dumps(s), dts[0], i, None) for s in seen + held for i in range(n)}
+    return out
+
+
+def verify(cfg: dict, path: Path, timed: bool = False) -> tuple[bool, str]:
+    import stat
     import torch
     from kernels.check import TOLERANCES, _compare, _gen
     from kernels.evolve.core import _scaled
     from kernels.tasks import load
-    if not Path(path).exists():
+    path = Path(path)
+    st = path.lstat() if path.is_symlink() or path.exists() else None
+    if st is None:
         return False, "the candidate's process left no outputs to verify"
+    if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_BYTES:    # a link, a FIFO or a huge file: never opened here
+        return False, "the outputs file is not a regular file under the size cap"
     recs = torch.load(path, weights_only=True).get("records") or []
     if not recs:
         return False, "no outputs were recorded"
     task, device = load(cfg["task"]).with_ints(cfg.get("ints")), cfg.get("device", "cpu")
+    have = {(r["kind"], json.dumps(list(r["shape"])), r["dtype"], r["seed"], r.get("scale")) for r in recs}
+    missing = expected(cfg, task, timed) - have
+    if missing:
+        k = sorted(missing, key=str)[0]
+        return False, f"{len(missing)} expected outputs were not recorded (e.g. {k[0]} at shape {k[1]} seed {k[3]})"
     tol = {**TOLERANCES, **{getattr(torch, k): tuple(v) for k, v in (cfg.get("tolerances") or {}).items()}}
     for r in recs:
         dt = getattr(torch, r["dtype"])
