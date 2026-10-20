@@ -167,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
     sets, program = prepare(task, sets, out, a.device, tol, a.timing_shapes, a.initial)
     if "OPENAI_API_KEY" not in os.environ and "ANTHROPIC_API_KEY" in os.environ:
         os.environ["OPENAI_API_KEY"] = os.environ["ANTHROPIC_API_KEY"]     # the config's endpoint is Anthropic's
+    from kernels.evolve.evaluator import seconds
     from openevolve import run_evolution
     from openevolve.config import load_config
     from kernels.evolve.llm import init_client
@@ -183,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
     (out / "best_metrics.json").write_text(json.dumps(metrics or res.metrics, indent=1, default=str))
     rec = record(task, sets, [{"name": m.name, "weight": m.weight} for m in config.llm.models], a.iterations,
                  a.device, trace, out / "best_program.py", metrics or res.metrics, retimed=retimed,
-                 cost={**usage(out / "usage.jsonl"),
+                 cost={**usage(out / "usage.jsonl"), "eval_s": seconds(out / "eval_seconds.log"),
                        "evals": sum(1 for x in trace.read_text().splitlines() if x.strip()) if trace.exists() else 0})
     print(json.dumps({"best_score": res.best_score, "metrics": res.metrics, "out": str(out), "ledger": rec["id"]},
                      default=str))
@@ -212,6 +213,7 @@ def prepare(task, sets: dict, out: Path, device: str, tol: dict, timing_shapes: 
     if not initial:
         program.write_text(initial_program(task))
     os.environ["KERNEL_EVAL_CONFIG"] = str(cfg_path)
+    os.environ["KERNELS_EVAL_LOG"] = str(out / "eval_seconds.log")        # every judgment's wall seconds
     return sets, program
 
 
@@ -244,6 +246,10 @@ def retime(trace: Path, k: int, repeats: int = 3, exclude=None) -> tuple[str | N
         runs = [evaluator.judge_stage(f.name, 2)["metrics"] for _ in range(repeats)]
         Path(f.name).unlink()
         scores = [m.get("combined_score", 0.0) for m in runs]
+        if min(scores) <= 0:                     # a gate failed in one re-judgment: an intermittent kernel is out
+            out.append({"id": r["child_id"], "selected_score": r["child_metrics"]["combined_score"], "scores": scores,
+                        "excluded": "a re-judgment scored 0 (a gate failed)"})
+            continue
         med = statistics.median(scores)
         out.append({"id": r["child_id"], "selected_score": r["child_metrics"]["combined_score"], "scores": scores,
                     "median": med, "code": r["child_code"],

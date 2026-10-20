@@ -1,6 +1,6 @@
 """ncu counters for one candidate, a fact for the search's judge: CudaForge's curated 24 Nsight Compute metrics (its
 Table 8; it found them better than the full set, and KernelPro found a raw dump worse than none) plus each kernel's
-duration, for the device kernels of one call on the most-called seen shape.
+duration, for the device kernels of one call on the seen shape it is given (jailed runs the smallest and largest).
 
 `python -m kernels.evolve.ncu CONFIG PROGRAM` is the probe ncu wraps (stage 3 of kernels.evolve.jailed): it warms the
 candidate up, then makes one call between cudaProfilerStart/Stop, so ncu (`--profile-from-start off`) sees only that."""

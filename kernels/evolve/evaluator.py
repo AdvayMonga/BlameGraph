@@ -12,15 +12,31 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 TIMEOUT_S = float(os.environ.get("KERNEL_EVAL_TIMEOUT_S", "600"))
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def seconds(log: Path) -> float:
+    """Wall seconds spent judging (the GPU host busy or reserved), summed from the log `judge_stage` appends to."""
+    return round(sum(float(x) for x in Path(log).read_text().split()), 1) if Path(log).exists() else 0.0
+
+
 def judge_stage(program_path: str, stage: int) -> dict:
     """{metrics, artifacts} for one stage of one candidate, judged jailed (here or on the GPU host): no OpenEvolve
-    types, so kernels.search uses it too."""
+    types, so kernels.search uses it too. Its wall time goes to $KERNELS_EVAL_LOG when set."""
+    t0 = time.monotonic()
+    try:
+        return _judge_stage(program_path, stage)
+    finally:
+        if os.environ.get("KERNELS_EVAL_LOG"):
+            with open(os.environ["KERNELS_EVAL_LOG"], "a") as f:
+                f.write(f"{time.monotonic() - t0:.2f}\n")
+
+
+def _judge_stage(program_path: str, stage: int) -> dict:
     env = {k: v for k, v in os.environ.items() if not k.endswith("_API_KEY")}       # candidates never see a key
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(ROOT), os.environ.get("PYTHONPATH")]))
     remote = os.environ.get("KERNEL_EVAL_SSH")

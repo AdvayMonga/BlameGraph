@@ -11,6 +11,7 @@ screener is an A/B arm, and the random slot of each beam keeps its labels unbias
 from __future__ import annotations
 
 import json
+import math
 import random
 import re
 from typing import Callable
@@ -31,7 +32,7 @@ def parse(text: str, n: int) -> tuple[list[float], bool] | None:
     for m in re.findall(r"\[[^\[\]]*\]", text or ""):
         try:
             v = json.loads(m)
-            if isinstance(v, list) and len(v) in (n, n - 1) and n > 1:
+            if isinstance(v, list) and len(v) in (n, n - 1) and n > 1 and all(math.isfinite(float(x)) for x in v):
                 arrays.append([min(max(float(x), 0.0), 1.0) for x in v])
         except (json.JSONDecodeError, TypeError, ValueError):
             continue
