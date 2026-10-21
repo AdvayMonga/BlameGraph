@@ -145,6 +145,22 @@ def test_every_ab_arm_gets_the_same_promotion():
     assert ab.SAME_PROMOTION == ("--retime", "3", "--tune-points", "0", "--detector-model", "none")
 
 
+def test_share_with_gates_ranks_only_the_gated_tasks():
+    from kernels import share
+    from kernels.evolve import run
+    seen, orig = {}, share.rank
+    share.rank = lambda bundles, tasks, gates: seen.update(tasks=[t.name for t in tasks]) or {"tasks": []}
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "g.json").write_text("{}")
+            run.main(["share", "--profile", d, "--gate", f"paged_decode={d}/g.json"])
+            assert seen["tasks"] == ["paged_decode"]               # not every task naming the same kernel
+            run.main(["share", "--profile", d])
+            assert len(seen["tasks"]) > 1
+    finally:
+        share.rank = orig
+
+
 def test_a_branch_is_worth_its_best_program_so_a_strong_child_of_a_weak_parent_is_expanded():
     t = Tree(seed=0)                                     # the 2026-10-19 run's shape: the best under a weak parent
     ok = lambda sc: {"combined_score": sc, "correct": 1.0, "stage": 2}        # noqa: E731
