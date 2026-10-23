@@ -71,7 +71,7 @@ def documents(root: Path, researcher: bool = False) -> list[dict]:
         m = {"record": r["id"], "tool": r.get("tool"), "at": r.get("at"), "snapshot": r.get("snapshot"),
              "config": r.get("config"), "gpu": (res.get("gpu") or {}).get("name") if isinstance(res.get("gpu"), dict)
              else res.get("gpu"), **{k: x[k] for k in ("expect", "actual", "actual_missing", "gap",
-                                                        "gap_pct_of_expected", "noise_band_pct") if k in x}}
+                                                        "gap_pct_of_expected", "noise_band_pct", "mechanism") if k in x}}
         if r["id"] in refl:
             m["reflection"] = refl[r["id"]]["reflection"]
             if refl[r["id"]].get("alternative"):
@@ -87,6 +87,8 @@ def text(doc: dict) -> str:
         e = m.get("expect") or {}
         parts += [f"{m.get('tool')} {e.get('metric')} expected {e.get('value')} {e.get('unit')} measured "
                   f"{m.get('actual')}", e.get("why", ""), m.get("reflection", ""), m.get("alternative", "")]
+        parts += [f"{p.get('metric')} expected {p.get('value')} {p.get('unit')} measured {p.get('actual')}\n"
+                  f"{p.get('why', '')}" for p in m.get("mechanism") or []]
     return "\n".join(p for p in parts if p)
 
 

@@ -83,7 +83,8 @@ class Toolbox(EvalTools, ProfTools):
         band = (noise_band_pct(name, target.load(), self.s.ledger_root)
                 if tool in ("bench", "submit") and isinstance(name, str) else None)
         body["experiment"] = experiments.outcome(tool, args, result, metrics,
-                                                 ((base or {}).get("result") or {}).get("metrics"), band)
+                                                 ((base or {}).get("result") or {}).get("metrics"), band,
+                                                 (base or {}).get("result"))
 
     def _audited(self, tool: str, args: dict):
         """Snapshot, and stop the run on a surface violation: integrity failures are the one hard rule."""
@@ -250,14 +251,18 @@ class Toolbox(EvalTools, ProfTools):
                 return text
             x = last["experiment"]
             measured = x.get("actual") if "actual_missing" not in x else f"not computed ({x['actual_missing']})"
+            how = "".join(f"; {p['metric']} expected {p['value']} ({p['unit']}), measured "
+                          + (f"{p['actual']}, gap {p['gap']:+.4g}" if "actual_missing" not in p
+                             else f"not computed ({p['actual_missing']})") for p in x.get("mechanism") or [])
             return (f"{text}\n\nExperiment record {last['id']}: expected {x['expect']['metric']} = "
                     f"{x['expect']['value']} ({x['expect']['unit']}), measured {measured}"
-                    + (f", gap {x['gap']:+.4g}" if x.get("gap") is not None else "")
+                    + (f", gap {x['gap']:+.4g}" if x.get("gap") is not None else "") + how
                     + f". The next measured call is refused until `reflect` records a reflection on {last['id']}.")
         schema = {**spec.schema, "properties": {**spec.schema.get("properties", {}), **experiments.MEASURED_PROPS},
                   "required": sorted(set(spec.schema.get("required", [])) | {"hypothesis_id", "expect"})}
         note = (" Requires `hypothesis_id` (a `hypothesis` record of this run) and `expect` (metric, value, unit, "
-                "why); the record keeps both with the measured value and the gap.")
+                "why; optional `mechanism`: the same for other numbers in the result, each by its dotted path); the "
+                "record keeps them with each measured value and gap.")
         return ToolSpec(spec.name, spec.description + note, schema, call)
 
     def specs(self) -> list[ToolSpec]:

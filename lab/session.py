@@ -150,7 +150,7 @@ def closing_prompt(s: Session, rec: dict) -> str:
             f"This call records that reflection with `reflect`; its tools are {' and '.join(f'`{t}`' for t in CLOSING_TOOLS)}.\n\n"
             f"Hypothesis {x['hypothesis']}:\n{json.dumps({k: h[k] for k in ('hypothesis', 'rationale', 'abandon_if') if k in h})}\n\n"
             f"Record {rec['id']} ({rec.get('tool')}):\n"
-            f"{json.dumps({k: x[k] for k in ('expect', 'actual', 'actual_missing', 'gap', 'gap_pct_of_expected', 'noise_band_pct') if k in x})}")
+            f"{json.dumps({k: x[k] for k in ('expect', 'actual', 'actual_missing', 'gap', 'gap_pct_of_expected', 'noise_band_pct', 'mechanism') if k in x})}")
 
 
 def closing(provider: agent.Provider, spec: agent.AgentSpec, tools: Toolbox, s: Session) -> dict | None:

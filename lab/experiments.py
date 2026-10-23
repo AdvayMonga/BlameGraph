@@ -28,7 +28,18 @@ EXPECT_SCHEMA = {
         "value": {"type": "number"},
         "unit": {"type": "string", "enum": list(UNITS),
                  "description": "absolute: the metric's own value; change_pct: % change from the run's baseline"},
-        "why": {"type": "string"}}}
+        "why": {"type": "string"},
+        "mechanism": {"type": "array", "description": "optional: how the change should work, as predictions on other "
+                      "numbers in this tool's result",
+                      "items": {"type": "object", "required": ["metric", "value", "unit", "why"],
+                                "properties": {
+                                    "metric": {"type": "string", "description": "a dotted path to a number in this "
+                                               "tool's result, e.g. calibrated.layers.runtime.gpu_idle_share"},
+                                    "value": {"type": "number"},
+                                    "unit": {"type": "string", "enum": list(UNITS),
+                                             "description": "absolute: the number itself; change_pct: % change from "
+                                                            "the same path in the run's baseline record"},
+                                    "why": {"type": "string"}}}}}}
 MEASURED_PROPS = {"hypothesis_id": {"type": "string"}, "expect": EXPECT_SCHEMA}
 
 
@@ -72,15 +83,29 @@ def check(root: Path, run: str, tool: str, args: dict) -> None:
     if not isinstance(hid, str) or hid not in hypotheses(root, run):
         raise ValueError("`hypothesis_id` must be the id of a `hypothesis` record of this run")
     e = args.get("expect")
+    _prediction(e, "expect")
+    m = e.get("mechanism")
+    if m is not None:
+        if tool == "submit":
+            raise ValueError("`expect.mechanism` is not taken by submit: its held-out record keeps one aggregate per "
+                             "regime and nothing else")
+        if not isinstance(m, list) or not m:
+            raise ValueError("`expect.mechanism` must be a non-empty list of predictions")
+        for i, p in enumerate(m):
+            _prediction(p, f"expect.mechanism[{i}]")
+
+
+def _prediction(e, where: str) -> None:
+    """One prediction: a metric, a finite number, its unit and why."""
     if not isinstance(e, dict):
-        raise ValueError("`expect` must be an object: metric, value, unit, why")
+        raise ValueError(f"`{where}` must be an object: metric, value, unit, why")
     for k in ("metric", "why"):
         if not isinstance(e.get(k), str) or not e[k].strip():
-            raise ValueError(f"`expect.{k}` must be non-empty text")
+            raise ValueError(f"`{where}.{k}` must be non-empty text")
     if isinstance(e.get("value"), bool) or not isinstance(e.get("value"), (int, float)) or not math.isfinite(e["value"]):
-        raise ValueError("`expect.value` must be a finite number")
+        raise ValueError(f"`{where}.value` must be a finite number")
     if e.get("unit") not in UNITS:
-        raise ValueError(f"`expect.unit` must be one of {list(UNITS)}")
+        raise ValueError(f"`{where}.unit` must be one of {list(UNITS)}")
 
 
 def new_hypothesis(args: dict) -> dict:
@@ -129,10 +154,31 @@ def _actual(tool: str, expect: dict, result: dict | None, metrics: dict | None, 
     return (value - base) / base * 100, None
 
 
+def _number(obj, path: str):
+    for k in path.split("."):
+        if not isinstance(obj, dict) or k not in obj:
+            return None
+        obj = obj[k]
+    return obj if isinstance(obj, (int, float)) and not isinstance(obj, bool) and math.isfinite(obj) else None
+
+
+def _mechanism(p: dict, result: dict | None, base_result: dict | None) -> dict:
+    """One mechanism prediction with the number at its path in this result (or why there is none) and the gap."""
+    v = _number(result, p["metric"])
+    if v is not None and p["unit"] == "change_pct":
+        b = _number(base_result, p["metric"])
+        if not b:
+            return {**p, "actual": None, "actual_missing": f"no baseline value at `{p['metric']}` in this run"}
+        v = (v - b) / b * 100
+    if v is None:
+        return {**p, "actual": None, "actual_missing": f"`{p['metric']}` is not a number in this result"}
+    return {**p, "actual": v, "gap": v - p["value"]}
+
+
 def outcome(tool: str, args: dict, result: dict | None = None, metrics: dict | None = None,
-            baseline: dict | None = None, band_pct: float | None = None) -> dict:
-    """The experiment block a measured record carries: hypothesis id, the prediction, and the computed gap."""
-    e = args["expect"]
+            baseline: dict | None = None, band_pct: float | None = None, base_result: dict | None = None) -> dict:
+    """The experiment block a measured record carries: hypothesis id, the predictions, and the computed gaps."""
+    e = {k: v for k, v in args["expect"].items() if k != "mechanism"}
     actual, missing = _actual(tool, e, result, metrics, baseline)
     out = {"hypothesis": args["hypothesis_id"], "expect": e, "actual": actual}
     if missing:
@@ -142,6 +188,8 @@ def outcome(tool: str, args: dict, result: dict | None = None, metrics: dict | N
         out["gap_pct_of_expected"] = (actual - e["value"]) / abs(e["value"]) * 100 if e["value"] else None
     if band_pct is not None:
         out["noise_band_pct"] = band_pct
+    if args["expect"].get("mechanism"):
+        out["mechanism"] = [_mechanism(p, result, base_result) for p in args["expect"]["mechanism"]]
     return out
 
 
@@ -157,6 +205,7 @@ def summary(root: Path, run: str) -> list[dict]:
         if x["hypothesis"] in out:
             out[x["hypothesis"]]["measurements"].append(
                 {"record": m["id"], "tool": m.get("tool"), "expect": x["expect"], "actual": x.get("actual"),
-                 "gap": x.get("gap"), "reflection": (refl.get(m["id"]) or {}).get("reflection"),
+                 "gap": x.get("gap"), **({"mechanism": x["mechanism"]} if x.get("mechanism") else {}),
+                 "reflection": (refl.get(m["id"]) or {}).get("reflection"),
                  "alternative": (refl.get(m["id"]) or {}).get("alternative")})
     return list(out.values())
