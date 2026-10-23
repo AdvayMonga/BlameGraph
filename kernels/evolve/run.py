@@ -87,6 +87,63 @@ error against the reference beside the baseline's.{cuda}
 The goal is the highest score."""
 
 
+def setting(task, sets: dict, device: str, tol: dict) -> str:
+    """The facts a program is judged under, the same for every generator: the seen shapes with their calls, their
+    share of the score and the traffic they were captured under; the GPU, its measured peaks and the toolchain; the
+    engine's launch settings; the tolerances. Never the held-out shapes."""
+    from kernels.check import TOLERANCES
+    calls, src = sets.get("calls") or {}, sets.get("sources") or {}
+    seen = [json.dumps(list(x)) for x in sets["seen"]]
+    total = sum(calls.get(k, 1) for k in seen) or 1
+    out = ["# The setting (facts)", "Seen shapes, each with its calls in the captured traffic and its weight in the "
+           "score:"]
+    for k in seen:
+        by = ", ".join(f"{c} {n}" for c, n in sorted((src.get(k) or {}).items()))
+        out.append(f"- {k}: {calls.get(k, 1)} calls, {100 * calls.get(k, 1) / total:.1f}% of the score"
+                   + (f" (captured under: {by})" if by else ""))
+    out.append(_hardware(device))
+    try:
+        from lab import target
+        out.append(f"The engine's launch settings: {json.dumps(target.load().engine.env, sort_keys=True)}")
+    except Exception:                           # noqa: BLE001  no target: nothing to state
+        pass
+    opts = options_from_target(task)
+    if opts:
+        out.append(f"Options the task's inputs are built with: {json.dumps(opts)}")
+    if task.graphs:
+        out.append("The engine replays this entry point inside CUDA graphs.")
+    eff = {str(d).removeprefix("torch."): list(TOLERANCES.get(d, ())) for d in task.dtypes}
+    eff.update({k: v for k, v in tol.items() if k in eff})
+    out.append(f"Tolerances (atol, rtol) per dtype: {json.dumps(eff)}")
+    return "\n".join(out)
+
+
+def _hardware(device: str) -> str:
+    """The device, its limits and measured peaks, and the toolchain, as one line of facts."""
+    if not str(device).startswith("cuda") or not torch.cuda.is_available():
+        return f"Device: {device}; torch {torch.__version__}."
+    p = torch.cuda.get_device_properties(device)
+    facts = {"gpu": p.name, "compute_capability": f"{p.major}.{p.minor}", "sms": p.multi_processor_count,
+             "memory_gib": round(p.total_memory / 2**30, 1)}
+    for k in ("L2_cache_size", "shared_memory_per_block_optin", "shared_memory_per_multiprocessor",
+              "regs_per_multiprocessor", "max_threads_per_multi_processor", "warp_size"):
+        v = getattr(p, k, None)
+        if v is not None:
+            facts[k] = v
+    from validity import peaks
+    pk = peaks.load(p.name)
+    if pk:
+        facts.update(peak_hbm_gb_s=round(pk.bw_bytes_s / 1e9), peak_bf16_tflops=round(pk.bf16_flops / 1e12),
+                     peaks_source=pk.source)
+    facts.update(torch=torch.__version__, cuda=torch.version.cuda)
+    try:
+        import triton
+        facts["triton"] = triton.__version__
+    except ImportError:
+        pass
+    return f"The GPU and toolchain: {json.dumps(facts)}"
+
+
 def tolerances(target_tol: dict | None) -> dict:
     """The target spec's [kernels] tolerances ({dtype: [atol, rtol]}), as the checker's override."""
     return {k: list(v) for k, v in (target_tol or {}).items()}
@@ -97,7 +154,8 @@ def _shapes(task, a) -> dict:
         return shapes_mod.read(a.shapes)
     dirs = [Path(d) for d in a.captures or []]
     sets = shapes_mod.split(task, shapes_mod.from_captures(task, dirs))
-    return {**sets, "ints": shapes_mod.ints_from_captures(task, dirs)} if dirs else sets
+    return {**sets, "ints": shapes_mod.ints_from_captures(task, dirs),
+            "sources": shapes_mod.sources_from_captures(task, dirs)} if dirs else sets
 
 
 def _ints(sets: dict, which: tuple[str, ...]) -> dict:
@@ -183,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
     from openevolve.config import load_config
     from kernels.evolve.llm import init_client
     config = load_config(a.config)
-    config.prompt.system_message = system_message(task)
+    config.prompt.system_message = system_message(task) + "\n\n" + setting(task, sets, a.device, tol)
     if "anthropic.com" in (config.llm.api_base or ""):       # Claude refuses a temperature; OpenEvolve always sends one
         config.llm.update_model_params({"init_client": init_client}, overwrite=True)
     os.environ["KERNELS_USAGE_LOG"] = str(out / "usage.jsonl")

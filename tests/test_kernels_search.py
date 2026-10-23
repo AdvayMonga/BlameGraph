@@ -579,8 +579,7 @@ def test_inspirations_show_other_branches_to_the_judge_only():
     assert "# Other programs in the tree" in judge_view and "+a = 2" in judge_view and "Program r" not in \
         judge_view.split("# Other programs")[1]
     assert "+a = 2" not in prompt(t, t.nodes["y"], '{"modification_plan": "p"}')         # the coder: its plan only
-    tried = [{"parent_id": "r", "parent_score": 1.0, "child_id": "x", "child_score": 1.5, "plan": "set a = 2"}]
-    assert "on r (1.0000) -> x 1.5000: set a = 2" in prompt(t, t.nodes["y"], coder=False, measured=tried)
+    assert "Hypotheses already measured" not in judge_view          # dropped: the archive lookup does this by similarity
 
 def test_a_flagged_candidate_is_passed_over_at_promotion():
     from kernels.evolve.run import retime
@@ -650,3 +649,29 @@ if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
             fn(); print("ok", name)
+
+
+def test_the_setting_states_seen_shapes_with_calls_weight_and_traffic_never_the_heldout_ones():
+    from kernels.evolve.run import setting
+    from kernels.shapes import source
+    from kernels.tasks import load
+    task = load("toy_rmsnorm")
+    sets = {"seen": [(64, 1024), (8, 1024)], "heldout": [(4096, 1024)],
+            "calls": {"[64, 1024]": 30, "[8, 1024]": 10, "[4096, 1024]": 99},
+            "sources": {"[64, 1024]": {"mixed_1": 20, "long_context": 10}}}
+    text = setting(task, sets, "cpu", {"float32": [0.02, 0.02], "bfloat16": [1, 1]})
+    assert "[64, 1024]: 30 calls, 75.0% of the score (captured under: long_context 10, mixed_1 20)" in text
+    assert "[8, 1024]: 10 calls, 25.0% of the score" in text and "4096" not in text
+    assert 'per dtype: {"float32": [0.02, 0.02]}' in text and "Device: cpu" in text      # its dtypes only
+    assert source(Path("/x/profile-mixed_1/20261019-1/captures")) == "mixed_1"
+
+
+def test_selection_carries_each_buckets_sources():
+    from kernels.shapes import select
+    from kernels.tasks import load
+    task = load("paged_decode")
+    seen = [(b, 32, 4, 128, 16, c) for b in (1, 8, 64, 128, 256) for c in (512, 4096)]
+    sets = {"seen": seen, "heldout": [], "calls": {json.dumps(list(s)): 1 for s in seen},
+            "sources": {json.dumps(list(s)): {"mixed_1": 1} for s in seen}}
+    out = select(task, sets, k=3)
+    assert sum(sum(v.values()) for v in out["sources"].values()) == sum(out["calls"].values())

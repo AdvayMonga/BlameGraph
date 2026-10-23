@@ -24,6 +24,28 @@ def from_captures(task: Task, dirs: list[Path]) -> Counter:
     return c
 
 
+def source(d: Path) -> str:
+    """The traffic a capture dir was recorded under: `profile-<class>/<bundle>/captures` -> <class>."""
+    for q in (Path(d), *Path(d).parents):
+        if q.name.startswith("profile-"):
+            return q.name.removeprefix("profile-")
+    return Path(d).name
+
+
+def sources_from_captures(task: Task, dirs: list[Path]) -> dict:
+    """{json shape: {source: calls}}: how many of each shape's calls each capture's traffic produced."""
+    out: dict = {}
+    for d in dirs:
+        for call in capture.load(d):
+            if task.entry and call["fn"] != task.entry:
+                continue
+            s = task.shape_of(call)
+            if s is not None:
+                by = out.setdefault(json.dumps(list(s)), {})
+                by[source(d)] = by.get(source(d), 0) + 1
+    return out
+
+
 def ints_from_captures(task: Task, dirs: list[Path]) -> dict:
     """{json shape: the 1-D int args by value} from the first captured call of each shape (e.g. its real sequence
     lengths), for `Task.with_ints`. Calls logged by shape only (inside a graph recording) carry none."""
@@ -88,11 +110,19 @@ def select(task: Task, sets: dict, k: int = 8, bins: int = 4) -> dict:
     buckets: dict = {}
     for s in seen:
         buckets.setdefault(key(s), []).append(s)
-    reps = sorted(((max(b, key=lambda s: n[s]), sum(n[s] for s in b)) for b in buckets.values()), key=lambda x: -x[1])[:k]
-    out = {**sets, "seen": [s for s, _ in reps], "calls": {json.dumps(list(s)): w for s, w in reps},
+    reps = sorted(((max(b, key=lambda s: n[s]), sum(n[s] for s in b), b) for b in buckets.values()),
+                  key=lambda x: -x[1])[:k]
+    out = {**sets, "seen": [s for s, _, _ in reps], "calls": {json.dumps(list(s)): w for s, w, _ in reps},
            "selected_from": len(seen)}
+    if "sources" in sets:                        # a representative carries its bucket's sources, like its calls
+        out["sources"] = {}
+        for s, _, b in reps:
+            agg = out["sources"].setdefault(json.dumps(list(s)), {})
+            for m in b:
+                for c, v in (sets["sources"].get(json.dumps(list(m))) or {}).items():
+                    agg[c] = agg.get(c, 0) + v
     if "ints" in sets:                           # the held-out shapes' ints stay: `gate` uses them
-        keep = {json.dumps(list(s)) for s, _ in reps} | {json.dumps(list(s)) for s in sets["heldout"]}
+        keep = {json.dumps(list(s)) for s, _, _ in reps} | {json.dumps(list(s)) for s in sets["heldout"]}
         out["ints"] = {k: v for k, v in sets["ints"].items() if k in keep}
     return out
 

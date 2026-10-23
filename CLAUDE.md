@@ -228,7 +228,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   open AlphaEvolve: `python -m kernels.evolve run|gate|split`; the starting program is the engine's kernel module;
   each run appends one `kernels` ledger record (every candidate's seen-shape metrics and lineage, OpenEvolve's
   evolution trace and the best program as blobs; `lab/LEDGER.md`);
-  prompts carry facts only (`kernels/evolve/prompts/` overrides OpenEvolve's advice; `run.system_message` states how a
+  prompts carry facts only (`kernels/evolve/prompts/` overrides OpenEvolve's advice; `run.setting` states the seen
+  shapes with calls, score weight and capture traffic (`shapes.sources_from_captures`), the GPU, peaks, toolchain,
+  launch settings and tolerances, for both generators; `run.system_message` states how a
   program is judged, from the evaluator's own constants);
   a two-stage cascade, each stage a fresh jailed process (`kernels.evolve.jailed`: the jail gets the candidate, its
   config and a copied harness, never this repo; `core.judge`: stage 1 = two shapes, one seed; stage 2 = the full

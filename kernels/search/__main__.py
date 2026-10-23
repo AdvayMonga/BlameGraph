@@ -15,7 +15,8 @@ from pathlib import Path
 import torch
 
 from kernels.evolve import evaluator
-from kernels.evolve.run import _shapes, _target_tolerances, prepare, record, retime, system_message, tolerances
+from kernels.evolve.run import (_shapes, _target_tolerances, prepare, record, retime, setting, system_message,
+                               tolerances)
 from kernels.search import detect, tune
 from kernels.search.llm import Claude
 from kernels.search.loop import cascade, search
@@ -124,11 +125,12 @@ def main(argv: list[str] | None = None) -> int:
     a.ncu = a.device.startswith("cuda") if a.ncu is None else a.ncu
     task = load(a.task)
     out = Path(a.out)
-    sets, program = prepare(task, _shapes(task, a), out, a.device, tolerances(_target_tolerances()),
-                            a.timing_shapes, a.initial)
+    tol = tolerances(_target_tolerances())
+    sets, program = prepare(task, _shapes(task, a), out, a.device, tol, a.timing_shapes, a.initial)
     review = None if a.judge_model == "none" else Claude(a.judge_model, a.effort, tools=a.judge_tools)
     judge = cascade(evaluator.judge_stage, counters=a.ncu)
-    system = system_message(task) + ("\n\n" + TUNE_FACT.format(points=a.tune_points) if a.tune_points else "")
+    system = (system_message(task) + "\n\n" + setting(task, sets, a.device, tol)
+              + ("\n\n" + TUNE_FACT.format(points=a.tune_points) if a.tune_points else ""))
     tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.usd, a.seed,
                         review=review, stop_pct=a.stop_pct or None, patience=a.patience or None,
                         beam=a.beam, max_repairs=a.max_repairs, uct_c=a.uct_c)
