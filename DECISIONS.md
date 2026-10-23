@@ -10,7 +10,9 @@ A completed `bench` (and the run's baseline) profiles the measured tree once, ri
 own launch, with the `profile` tool's defaults, and keeps it as `profiled` with its layer facts. Why (the user): an
 experiment is checked against how it was meant to work, so each measurement needs fresh profiling, and the layer and
 region facts stay current without a separate call. Not during the timed window, which profiling would slow; not in the
-same launch either, because the profiler runs the engine in process on its own workload. Costs 1-7 GPU minutes per bench.
+same launch either, because the profiler runs the engine in process on its own workload: the general config and the
+profile tool's default 8 requests x 32 tokens, so its facts describe that load, not the regimes'. Costs 1-7 GPU
+minutes per bench, capped at 15; another process on the GPU marks it contaminated.
 
 ## 2026-10-22 — Hypotheses in batches, each tagged with its layer; bundles allowed
 Several hypotheses may be open at once, each naming its layer (kernels, model_execution, runtime, serving), and a

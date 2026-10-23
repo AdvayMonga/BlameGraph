@@ -211,8 +211,8 @@ def _number(obj, path: str):
 def _mechanism(p: dict, result: dict | None, base_result: dict | None) -> dict:
     """One mechanism prediction with the number at its path in this result (or why there is none) and the gap."""
     v = _number(result, p["metric"])
-    if v is not None and p["unit"] == "change_pct":
-        b = _number(base_result, p["metric"])
+    if v is not None and p["unit"] == "change_pct":     # a profile's own path, else the baseline's after-profile
+        b = _number(base_result, p["metric"]) or _number(base_result, f"profiled.{p['metric']}")
         if not b:
             return {**p, "actual": None, "actual_missing": f"no baseline value at `{p['metric']}` in this run"}
         v = (v - b) / b * 100

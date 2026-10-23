@@ -170,13 +170,17 @@ def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
         argv = [engine.python(), "-m", "lab.profile", "--requests", str(n), "--max-tokens", str(a.get("max_tokens", 32)),
                 "--out", str(runs), *T.workload_flags(a, harness, n),
                 *[w for f in a.get("capture") or [] for w in ("--capture", str(f))]]
-        proc = (hooks.get("profile_runner") or T.default_profile_runner)(tree, argv, **prof)
+        from lab import gpu
+        before = gpu.compute_apps()                  # anything on the GPU before or after the run shares it
+        limit = {"timeout_s": args["timeout_s"]} if args.get("timeout_s") else {}
+        proc = (hooks.get("profile_runner") or T.default_profile_runner)(tree, argv, **prof, **limit)
+        others = [*(before or []), *(gpu.compute_apps() or [])]
         bundles = sorted(runs.glob("*")) if runs.exists() else []
         if bundles:
             T._drop_links(bundles[-1])
             shutil.copytree(bundles[-1], files)
-        from lab import gpu
-        return {"returncode": proc.returncode, "output": (proc.stdout + proc.stderr)[-3000:], "gpu": gpu.query()}
+        return {"returncode": proc.returncode, "output": (proc.stdout + proc.stderr)[-3000:], "gpu": gpu.query(),
+                "gpu_others": others}
     ins = proftools.instrument(kind, a)
     exe = shutil.which(ins["binary"])
     if not exe:

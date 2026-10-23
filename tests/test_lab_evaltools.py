@@ -595,3 +595,22 @@ def test_bench_profiles_the_tree_after_measuring_and_a_failed_profile_is_only_a_
     rec = next(ledger.records(s.ledger_root, kind="bench"))
     assert rec["result"]["verdict"] == "ok" and out["metrics"]["single_stream"]["valid"]
     assert "manifest.json" in rec["result"]["profiled"]["error"] and "error" in out["profiled"]
+
+
+def test_the_bench_reply_shows_profiled_in_the_records_shape():
+    from lab.evaltools import _profiled_reply
+    prof = {"returncode": 0, "bundle": "b", "calibrated": {"layers": {"runtime": {"gpu_idle_share": 0.2}}, "kernels": [1]}}
+    assert _profiled_reply(prof)["calibrated"] == {"layers": {"runtime": {"gpu_idle_share": 0.2}}}
+    assert _profiled_reply({"calibrated": {"error": "bad"}})["calibrated"] == {"error": "bad"}
+    assert _profiled_reply({"error": "x"}) == {"error": "x"}
+
+
+def test_an_after_profile_shares_no_gpu_and_spends_no_budget_that_is_gone(lab, monkeypatch):
+    tb, s = lab
+    r = {"returncode": 0, "output": "", "gpu_others": [{"pid": 7, "name": "other"}], "killed": []}
+    monkeypatch.setattr(type(tb), "_profile_job", lambda self, tree, args, timeout_s=None: (r, "blob", "copy", {}))
+    out = tb._after_bench(s.run_dir)
+    assert out["contaminated"] is True and out["gpu_others"][0]["pid"] == 7 and out["launch"] == "general"
+    monkeypatch.setenv("LAB_GPU_USD_PER_HOUR", "3")
+    s.budget.spent_usd = s.budget.cap_usd
+    assert "skipped" in tb._after_bench(s.run_dir)

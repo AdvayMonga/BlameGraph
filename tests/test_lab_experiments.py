@@ -230,3 +230,11 @@ def test_a_prediction_cannot_carry_measured_fields(tb, expect):
     h = hyp(tb)
     with pytest.raises(ValueError, match="takes only"):
         call(tb, "trace", {"hypothesis_id": h, "expect": expect})
+
+def test_a_profile_records_change_pct_reads_the_baselines_after_profile():
+    args = {"hypothesis_id": "h", "expect": {**EXPECT, "mechanism": [
+        {**MECH, "metric": "calibrated.layers.runtime.gpu_idle_share", "unit": "change_pct", "value": -50}]}}
+    result = {"calibrated": {"layers": {"runtime": {"gpu_idle_share": 0.1}}}}
+    base = {"profiled": {"calibrated": {"layers": {"runtime": {"gpu_idle_share": 0.2}}}}}
+    (m,) = experiments.outcome("profile", args, result, base_result=base)["mechanism"]
+    assert m["actual"] == pytest.approx(-50) and m["gap"] == pytest.approx(0)

@@ -18,6 +18,7 @@ from lab.safety import grader
 
 # Tools that occupy the GPU: their wall time is charged at the venue's rate. The rest cost $0.
 QUERY_MAX_BYTES = 64_000           # a query's reply: whole rows up to this, so one call cannot flood the context
+AFTER_BENCH_TIMEOUT_S = 900          # the after-bench profile: 1-7 min measured; a hang costs at most this
 GPU_TOOLS = frozenset({"profile", "trace", "kernel", "hostprof", "bench", "equiv", "submit", "baseline"})
 
 
@@ -159,13 +160,14 @@ class Toolbox(EvalTools, ProfTools):
         return f"bundle at {visible} (in your workspace; left out of your change)\n" + "\n".join(
             f"  {p.name}" for p in sorted((self.s.workspace.path / visible).iterdir())) + killed
 
-    def _profile_job(self, tree: Path, args: dict) -> tuple[dict, str, str, dict | None]:
+    def _profile_job(self, tree: Path, args: dict, timeout_s: int | None = None) -> tuple[dict, str, str, dict | None]:
         """One profile job on `tree`: the worker's reply, the bundle's blob and workspace copy, and its calibration
         with each layer's facts."""
         out = self._work("profile")
+        job = {"kind": "profile", "args": args, "workbench": getattr(self.s, "workbench", None)}
         try:
-            r = self.worker.call("profile", {"tree": tree},
-                                 {"kind": "profile", "args": args, "workbench": getattr(self.s, "workbench", None)}, out)
+            r = self.worker.call("profile", {"tree": tree}, {**job, **({"timeout_s": timeout_s} if timeout_s else {})},
+                                 out)
             blob, visible = self._keep(out / "files") if (out / "files").is_dir() else ("", "")
         finally:
             shutil.rmtree(out, ignore_errors=True)
@@ -178,14 +180,22 @@ class Toolbox(EvalTools, ProfTools):
         return r, blob, visible, cal
 
     def _after_bench(self, tree: Path) -> dict:
-        """The profile a completed bench takes of the same tree right after its measurement, in its own launch, with
-        the profile tool's defaults: the layer facts a mechanism is checked against. Never costs the bench."""
+        """The profile a completed bench takes of the same tree right after its measurement: its own launch, the
+        general config and `profile`'s default workload (8 requests x 32 tokens), so its layer facts describe that load,
+        not the bench's. The layer facts a mechanism is checked against. Never costs the bench."""
+        rate = gpu_rate()[0]
+        if rate > 0 and self.s.budget.remaining_usd <= 0:
+            return {"skipped": "no budget left for GPU time"}
         try:
-            r, blob, visible, cal = self._profile_job(tree, {})
+            r, blob, visible, cal = self._profile_job(tree, {}, timeout_s=AFTER_BENCH_TIMEOUT_S)
         except Exception as e:                   # noqa: BLE001
             return {"error": f"{type(e).__name__}: {e}"}
-        out = {"returncode": r["returncode"], "bundle": blob, "workspace_copy": visible, "calibrated": cal}
+        out = {"launch": "general", "workload": "profile defaults", "returncode": r["returncode"], "bundle": blob,
+               "workspace_copy": visible, "calibrated": cal, **_killed(r)}
+        if r.get("gpu_others"):                  # another process shared the GPU: its numbers are not evidence
+            out.update(contaminated=True, gpu_others=r["gpu_others"])
         return out if r["returncode"] == 0 and blob else {**out, "output": r["output"][-2000:]}
+
 
     def ledger_tool(self, args: dict) -> str:
         match = {k: v for k, v in args.items() if k in ("kind", "session", "snapshot", "tool") and v}
@@ -463,11 +473,12 @@ def workload_flags(args: dict, harness: Path, n: int) -> list[str]:
     return ["--workload", str(harness / "workload.json")] + (["--enable-thinking"] if t.chat_kwargs.get("enable_thinking") else [])
 
 
-def default_profile_runner(tree: Path, argv: list[str], read: list[Path] = (), env: dict | None = None):
+def default_profile_runner(tree: Path, argv: list[str], read: list[Path] = (), env: dict | None = None,
+                           timeout_s: int = 3600):
     """lab.profile in the pristine tree as agent code: jailed, with the target's engine env (and `env`: a launch
     profile's), weights and `read` read-only, harness first on the path."""
     path = os.pathsep.join([str(tree / HARNESS_DIR), str(tree / "src"), str(tree)])
-    return grader.jailed(tree, argv, timeout_s=3600,
+    return grader.jailed(tree, argv, timeout_s=timeout_s,
                          env_extra={**target.load().engine.env, **(env or {}), "PYTHONPATH": path}, read=read)
 
 
