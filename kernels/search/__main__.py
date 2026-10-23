@@ -114,7 +114,7 @@ def _funnel(a, task, review):
     return Funnel(Models(review, Claude(a.cheap_model, "low"), Claude(a.wide_model, a.effort), Claude(a.model, a.effort)),
                   staged(evaluator.judge_stage), entries, task.name, archive._embedder(ledger.ROOT) if entries else None,
                   Path(a.ptx).read_text() if a.ptx else None, a.per_call, a.keep, a.parallel, a.max_repairs,
-                  a.ncu)
+                  a.ncu, a.precheck)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -156,6 +156,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--parallel", type=int, default=4, help="correctness checks run at once")
     ap.add_argument("--archive", help="an exported idea archive (python -m kernels.archive export)")
     ap.add_argument("--ptx", help="the PTX comparison's feature cards (text)")
+    ap.add_argument("--precheck", action=argparse.BooleanOptionalAction, default=True,
+                    help="the funnel's no-GPU build check and compiler report before stage 1")
     a = ap.parse_args(argv)
     a.ncu = a.device.startswith("cuda") if a.ncu is None else a.ncu
     task = load(a.task)

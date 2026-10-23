@@ -297,7 +297,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `search-funnel`): judge calls per slice of facts (measurements, archive matches, winners elsewhere in the tree,
   compiler report, PTX comparison; a slice with no facts is skipped) x `--per-call` hypotheses, same-idea clusters
   merged by `--cheap-model`, ideas like archived ones that never beat their parent kept only when the judge names what
-  differs, `--wide-model` writes each, stage 1 in `--parallel` jails, failures repaired once and survivors rewritten by
+  differs, `--wide-model` writes each, the no-GPU precheck (`--precheck`, default on) drops what fails to build and keeps
+  the compiler's report on the program (the compiler slice of its children), stage 1 in `--parallel` jails, failures repaired once and survivors rewritten by
   the strong coder, a quick timing on the most-called shape (`jailed.QUICK_STAGE`), the fastest `--keep` to stage 2
   (+ncu); only those join the tree (a round that examined nothing is one failure of its parent). Each hypothesis may
   predict ncu counter changes (`mechanism`), measured against the parent's. Every idea's fate goes to
