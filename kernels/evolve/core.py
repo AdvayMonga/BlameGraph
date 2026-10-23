@@ -14,7 +14,7 @@ from pathlib import Path
 import torch
 
 from kernels import check_kernel, time_pair
-from kernels.check import TOLERANCES, _compare       # bound here, before any candidate loads
+from kernels.check import TOLERANCES, _compare, budget_atol    # bound here, before any candidate loads
 from kernels.tasks import Task, from_config
 
 
@@ -155,6 +155,9 @@ def _watched(task: Task) -> dict:
     import kernels.timing
     mods = [torch, torch.cuda, torch.nn.functional, time, math, statistics, kernels.check, kernels.timing,
             kernels.tasks, sys.modules[__name__], sys.modules[task.reference.__module__]]
+    if task.error_budget:                        # the baseline sets the tolerance: its module and the stations' too
+        base = task.baseline()
+        mods += [sys.modules[n] for n in sorted({*task.watch, getattr(base, "__module__", "")}) if n in sys.modules]
     out = {}
     for m in mods:
         own = m.__name__.startswith("kernels")
@@ -281,6 +284,8 @@ def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | 
 def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | None, device: str,
            tolerances: dict | None, stage: int, iters: int, checkpoint) -> dict:
     """The gates and timing; returns {} as soon as `checkpoint` finds a patch (judge reports it)."""
+    bfn = task.baseline() if task.error_budget else None                 # bound before the candidate loads
+    budget = {"baseline": task.bind(bfn), "budget": task.error_budget} if bfn else {}
     try:
         timed = task.bind(load_program(program))
     except Exception as e:                       # noqa: BLE001  a program that does not load scores 0
@@ -301,7 +306,7 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
         r = check_kernel(ref, cand, task.make_inputs, shapes, heldout if stage > 1 else [], dtypes=task.dtypes,
                          device=device, seeds=(0,) if stage == 1 else (0, 1, 2), tolerances=tolerances,
                          edge_shapes=task.edge_shapes(shapes[0]) if task.edge_shapes else None,
-                         repeats=1 if stage == 1 else 3, layouts=task.layouts, record=keep)
+                         repeats=1 if stage == 1 else 3, layouts=task.layouts, record=keep, **budget)
     except Exception:                            # noqa: BLE001
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
                 "artifacts": {"error": "checker raised:\n" + traceback.format_exc()[-3000:]}}
@@ -310,7 +315,7 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
     if r["passed"] and stage > 1:                 # other value distributions, on the two most frequent seen shapes
         for k in (SCALES if task.scales is None else task.scales):
             v = check_kernel(ref, cand, _scaled(task.make_inputs, k), seen[:2], [], dtypes=task.dtypes, device=device,
-                             seeds=(7,), tolerances=tolerances, edge_shapes=[], repeats=1, layouts=(),
+                             seeds=(7,), tolerances=tolerances, edge_shapes=[], repeats=1, layouts=(), **budget,
                              record=lambda case, out, k=k: _keep("check", case["shape"], case["dtype"], case["seed"],
                                                                  out, k))
             g = v["gates"]["correctness_seen"]
@@ -380,7 +385,10 @@ def _timed(task, cand, base, shapes, weights, dtype, device, iters, hw, toleranc
         for i, out in enumerate(p["outputs_a"]):
             _keep("time", s, str(dtype).removeprefix("torch."), i, out)     # time_pair's buffer i: seed i
         for inputs, out in zip(p["inputs"], p["outputs_a"]):
-            d = _compare(task.reference(*[t.clone() for t in inputs]), out, atol, rtol)
+            ref = task.reference(*[t.clone() for t in inputs])
+            a = budget_atol(ref, base(*[t.clone() for t in inputs]), atol, task.error_budget) if task.error_budget \
+                else atol
+            d = _compare(ref, out, a, rtol)
             if not d["ok"]:
                 raise ValueError(f"the timed calls' output differs from the reference at shape {list(s)}: "
                                  f"{d.get('error') or ('max_abs %.3g, max_rel %.3g' % (d['max_abs'], d['max_rel']))}")

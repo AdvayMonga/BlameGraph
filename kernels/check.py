@@ -70,6 +70,13 @@ def _compare(ref, out, atol, rtol) -> dict:
     return {"ok": ok and nonfinite == 0, "max_abs": max_abs, "max_rel": max_rel, "nonfinite_mismatch": nonfinite}
 
 
+def budget_atol(ref, base, atol: float, k: float) -> float:
+    """The absolute tolerance under an error budget: `k` times the baseline's max abs error against the reference,
+    never below `atol` (the dtype's)."""
+    d = _compare(ref, _flat(base), float("inf"), 0.0)
+    return max(atol, k * d.get("max_abs", 0.0)) if d.get("ok") else atol
+
+
 def _describe(c) -> str:
     where = f"{c.get('variant', '')} shape {c['shape']} {c['dtype']} seed {c['seed']}".strip()
     if "error" in c:
@@ -90,12 +97,14 @@ def _summary(cases) -> tuple[bool, str, dict]:
 
 def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes, dtypes=(torch.float32,),
                  device="cpu", seeds=(0, 1, 2), tolerances=None, edge_shapes=None, require_deterministic=False,
-                 repeats=3, layouts=("strided", "transposed"), record=None) -> dict:
+                 repeats=3, layouts=("strided", "transposed"), record=None, baseline=None, budget=None) -> dict:
     """Return {"passed", "reasons", "gates": {name: {passed, reason, evidence}}} for candidate vs reference.
     make_inputs(shape, dtype, device, generator) -> tuple of tensors; generator is a seeded CPU torch.Generator.
     `layouts`: the non-contiguous input variants to test, for a kernel whose callers pass such inputs.
     `record(case, outputs)` is called with each plain case's outputs (inputs straight from make_inputs and the seed),
-    so they can be checked again outside this process (kernels/evolve/verify.py)."""
+    so they can be checked again outside this process (kernels/evolve/verify.py).
+    `budget` (with `baseline`): each case's absolute tolerance is at least `budget` times the baseline's own max abs
+    error against the reference on the same inputs (a region's error budget; never stricter than `tolerances`)."""
     tol = {**TOLERANCES, **(tolerances or {})}
     mutated, aliased, nondet = [], [], []
 
@@ -106,6 +115,9 @@ def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes,
         if variant:
             case["variant"] = variant
         ref = reference(*[t.clone() for t in inputs])
+        if budget and baseline is not None:
+            atol = budget_atol(ref, baseline(*[t.clone() for t in inputs]), atol, budget)
+            case["atol"] = atol
         before = [t.clone() for t in inputs]
         try:
             out = candidate(*inputs)

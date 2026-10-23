@@ -285,6 +285,14 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   window from the device kernels it launches, `Task.kernel_names`, the speedup bound if they took no time, and the
   kernels no task covers, by share: the facts for choosing the next task). `lab/capture.py` + `lab.profile --capture MODULE:FUNCTION` (the `profile` tool's `capture`): every
   call's argument shapes and small int tensors, the first call per shape kept whole as real inputs.
+- `kernels/regions.py` — regions (decided 2026-10-22/23): any run of consecutive decode stations of the engine as a
+  kernel task with a generated harness: `Station(name, reads, writes, fn)`; `interface` (inputs read before written,
+  outputs read after the region or `live`), the stations as the baseline (`Task.baseline_fn`), an fp32 run as the
+  reference, `bytes_moved` (fused vs one-by-one), and the error budget: `Task.error_budget` (2) makes each case's atol
+  at least that times the baseline's own max abs error against the reference, in the checker, the timed outputs and
+  `verify.py`; the baseline is bound before the candidate loads and its modules (`Task.watch`) are watched for
+  patches. The engine's stations, swap-in point and capture hooks are not built yet (handoff in data/notes); until then
+  regions are tested on fake stations.
 - `lab/layers.py` — each layer's share of a profiled window and its distance from a ceiling, as facts (2026-10-18):
   kernels = CUDA kernel time / window; model execution = prefill + decode phase wall time beyond kernel time;
   runtime = admit + evict phases, with the GPU idle share, batch fill and admissions blocked; serving = window time
