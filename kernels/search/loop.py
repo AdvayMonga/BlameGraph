@@ -111,19 +111,7 @@ def inspirations(tree: Tree, node: Node, k: int = 2) -> list[Node]:
     return sorted(others, key=lambda n: -n.score)[:k]
 
 
-def history(tree: Tree, measured: list[dict], limit: int = 80) -> str:
-    """Every hypothesis measured anywhere in the tree with what came of it, newest last: the judge sees what was
-    tried on other branches too (in the 2026-10-18 A/B it re-proposed the same ~20 changes at every expansion)."""
-    lines = []
-    for m in measured[-limit:]:
-        c = tree.nodes.get(m["child_id"])
-        plan = str(m.get("plan") or "")[:200]
-        why = f"; failed: {(c.artifacts.get('error') or '')[:120]}" if c is not None and c.score <= 0 else ""
-        lines.append(f"- on {m['parent_id']} ({m['parent_score']:.4f}) -> {m['child_id']} {m['child_score']:.4f}{why}: {plan}")
-    return "\n".join(lines) or "none"
-
-
-def prompt(tree: Tree, node: Node, plan: str = "", coder: bool = True, measured: list[dict] | None = None) -> str:
+def prompt(tree: Tree, node: Node, plan: str = "", coder: bool = True) -> str:
     path = " -> ".join(f"{n.id} ({n.score:.4f})" for n in tree.lineage(node))
     tried = [tree.nodes[c] for c in node.children]
     kids = "\n".join(f"- {c.id}: score {c.score:.4f}" + (f", {c.artifacts.get('error', '')[:300]}"
@@ -136,8 +124,6 @@ def prompt(tree: Tree, node: Node, plan: str = "", coder: bool = True, measured:
             f"```python\n{node.code}\n```\n\n# Its measurements\n{facts(node)}\n\n"
             f"# Lineage (node, score)\n{path}\n\n# Programs already derived from it\n{kids}\n\n"
             + (f"# Other programs in the tree\n{other}\n" if other else "")
-            + (f"# Hypotheses already measured, anywhere in the tree (parent -> child score; plan)\n"
-               f"{history(tree, measured)}\n\n" if measured is not None and not coder else "")
             + (f"# The change to make (from the judge)\n{plan}\n\n" if plan else "") + (FORMAT if coder else ""))
 
 
@@ -187,7 +173,7 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
     hypothesis and what became of it go to `<out>/hypotheses.jsonl`. Returns the tree and the run's cost
     {usd, model_calls, evals, ...}."""
     out.mkdir(parents=True, exist_ok=True)
-    tree, spent, calls, judged, it, repairs, tried = Tree(seed, c=uct_c), 0.0, 0, 0, 0, [], []
+    tree, spent, calls, judged, it, repairs = Tree(seed, c=uct_c), 0.0, 0, 0, 0, []
     with open(out / "trace.jsonl", "w") as trace, open(out / "hypotheses.jsonl", "w") as hyplog:
         def keep(node: Node, cost: float) -> None:
             tree.add(node)
@@ -249,7 +235,7 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
                     attempt(parent, "", "optimization", 0.0)
                 continue
             text, cost = review(system + "\n\n" + JUDGE.format(mode_spec=MODES["optimization"].format(n=beam)),
-                                prompt(tree, parent, coder=False, measured=tried))
+                                prompt(tree, parent, coder=False))
             spent, calls = spent + cost, calls + 1
             hs = hypotheses(text, beam)
             if not hs:
@@ -263,8 +249,6 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
                 if child is not None:                # what became of it: beat its parent? the tree's best so far?
                     measured.append({"index": i, "child_id": child.id, "child_score": child.score,
                                      "improved": child.score > parent.score, "new_best": child.score > best_before})
-                    tried.append({"parent_id": parent.id, "parent_score": parent.score, "child_id": child.id,
-                                  "child_score": child.score, "plan": h.get("modification_plan") or h})
             hyplog.write(json.dumps({"iteration": it, "parent_id": parent.id, "parent_score": parent.score,
                                      "hypotheses": hs, "measured": measured}, default=str) + "\n")
             hyplog.flush()
