@@ -114,6 +114,13 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   shutdown, because a stalled session once billed 12 h for 3.5 h of work), `corpus.py` +
   `chat_template.py` (corpus loader, template fingerprint). Tests: `tests/test_lab_*.py` (pytest); the ones
   that drive engine code skip unless the engine and its deps import (run them with the engine's python).
+- `lab/dashboard.py` + `dashboard.html` + `lab/live.py` — the researcher's live view (2026-10-23): `python -m
+  lab.dashboard [--port 8080]`, on 127.0.0.1, refreshed every 2 s. Reads only the ledger and each run's
+  `<run>/live.jsonl`, which `session.run` has the lab append to (`live.emit`): run start/end with the cap, each session,
+  the agent's text and tool calls with the API proxy's spend so far (both providers), worker job start/end, and on the
+  seen split each regime and each load call's raw numbers, computed after the call (never the held-out split's).
+  Never touches the engine or the GPU, and no agent view reads it. Live load numbers need `LAB_WORKER=local`; a VM
+  worker's are not pulled back (not built).
 - `lab/rehearsal.py` — `python -m lab.rehearsal setup DIR`: the whole loop on a laptop, no GPU. A practice engine
   (`lab/rehearsal_server.py` copied into a git repo: fixed decode slots and time per token, one-token words in the
   Qwen3 tokenizer), its target spec, a task, a local store, and reference answers to a synthetic multiple-choice set;

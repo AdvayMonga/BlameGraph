@@ -7,6 +7,7 @@ The environment for autoresearch loops that optimize LLM inference. The engine l
 - **Data store:** every run's data kept in R2 and queryable with SQL
 - **Integrity verdict:** did the agent earn its result
 - **Session feedback:** facts for the agent, diagnostics for the researcher
+- **Live dashboard:** what a run is doing, spending and measuring, read from files only
 - **Load regimes:** drives a server the eight ways it gets used and finds its goodput
 - **Correctness gate:** optimized outputs still match the original model
 - **Canaries:** planted cheats that must get caught

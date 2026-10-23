@@ -52,6 +52,7 @@ class Ctx:
     rows: list | None = None           # when a list, every measured row lands here (no text), tagged with its call
     hints: dict = field(default_factory=dict)   # {regime: {"load" | "concurrency": x}}: where the base's search ended
     bands: dict = field(default_factory=dict)   # {regime: run-to-run band %}: the search resolves to it, not finer
+    on_rows: object = None             # called with each run_open/run_closed call's rows (lab.live progress)
     _pools: dict = field(default_factory=dict)
     _calls: int = 0
 
@@ -102,6 +103,8 @@ class Ctx:
         if self.rows is not None:
             self.rows.extend({"call": self._calls, "call_started_at": started, **r.to_dict()} for r in rows)
             self._calls += 1
+        if self.on_rows is not None:
+            self.on_rows(rows)
         return rows
 
     def search(self, regime: str, start: float) -> dict:

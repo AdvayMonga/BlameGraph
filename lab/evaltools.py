@@ -23,7 +23,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from lab import artifacts, calibrate, ledger, profiles, serve, target, worker
+from lab import artifacts, calibrate, ledger, live, profiles, serve, target, worker
 from validity.holdout import HoldoutGuard, Refused
 
 HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT = 100, 2.0, 0.5
@@ -46,15 +46,27 @@ def run_regimes(url: str, t: target.Target, names: list[str], split: str, tier: 
     """Each regime's result; with `rows`, every measured client row is appended to it, tagged with its regime.
     `hints` / `bands`: where the base's searches ended and each regime's noise band (`suite.Ctx`)."""
     from regimes import suite
+    watch = split == "seen"             # the dashboard gets the seen split's progress, never the held-out's
     ctx = suite.Ctx.from_target(t, url, split=split, tier=tier, seed=seed, rows=rows, hints=hints or {},
-                                bands=bands or {})
+                                bands=bands or {}, on_rows=_progress if watch else None)
     out = []
     for n in names:
+        if watch:
+            live.emit("regime", regime=n)
         k = len(rows) if rows is not None else 0
         out.append(suite.REGIMES[n](ctx))
         for r in (rows or [])[k:]:
             r["regime"] = n
     return out
+
+
+def _progress(rows) -> None:
+    """One load call's raw numbers for the dashboard (`lab.live`), computed after the call: never during it."""
+    from regimes.runner import _q
+    ok = [r for r in rows if r.status == "ok"]
+    ttft, tpot = [r.ttft_s for r in ok if r.ttft_s is not None], [r.tpot_s for r in ok if r.tpot_s is not None]
+    live.emit("probe", n=len(rows), ok=len(ok), ttft_p50_s=_q(ttft, 0.5), ttft_p99_s=_q(ttft, 0.99),
+              tpot_p50_s=_q(tpot, 0.5), tpot_p99_s=_q(tpot, 0.99))
 
 
 def headline(results: list[dict]) -> dict:

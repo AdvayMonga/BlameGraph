@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lab import agent, engine, experiments, ledger, target, worker
+from lab import agent, engine, experiments, ledger, live, target, worker
 from lab.budget import Budget, BudgetExceeded
 from lab.safety import grader
 from lab.task import Task
@@ -203,6 +203,8 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
     if remote and not getattr(provider, "remote", False):       # its edits here would be overwritten by the mirror
         raise ValueError(f"provider {provider.name!r} works on this machine; it cannot run with LAB_WORKER=ssh")
     rws = remote.workspace_path(run_id) if remote else None
+    live.path = run_dir / "live.jsonl"
+    live.emit("run", run=run_id, base=base, cap_usd=cfg.budget_usd)
     if cfg.baseline:
         Toolbox(Session(run_id, f"{run_id}-baseline", run_dir, ws, budget, cfg.ledger_root, task=cfg.task,
                         worker=remote)).baseline(base)
@@ -225,6 +227,7 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
         seen.mkdir(parents=True, exist_ok=True)
         (seen / "objective.md").write_text(spec.system)
         (seen / "brief.md").write_text(spec.prompt)
+        live.emit("session", session=s.session_id, n=n, cap_usd=spec.max_budget_usd)
         t0 = time.monotonic()
         try:
             if remote:
@@ -275,6 +278,7 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
         summary["stopped"] = "max_sessions"
     if summary["stopped"] is None:
         summary["stopped"] = "budget"
+    live.emit("run_end", stopped=summary["stopped"], spent_usd=summary["spent_usd"])
     return summary
 
 
