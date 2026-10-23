@@ -20,7 +20,7 @@ on write. Every record: `id`, `at`, `schema` (set by the writer), `kind`, `run`,
 | `noise` | `lab.validate` | `config: {split: seen, tier}`; `result`: regime, band_pct, values, runs, model, target, server, corpus_version, measured_at, engine_commit (None when the engine tree had uncommitted changes); `submit`, experiment records and the brief use the latest band for the target, at any engine commit |
 | `note` | `note`, `restore`, refusals | free text, or `{verdict: refused, reason}` |
 | `note` (`tool: start`) | `python -m lab.experiment start` | a researcher run: `args: {repo, base, change, budget_usd}`, `result: {author, applied, left_out}` |
-| `hypothesis` | `hypothesis` | the agent's text: `hypothesis` (bottleneck and proposed change), `rationale`, optional `abandon_if`, `from_record` |
+| `hypothesis` | `hypothesis` | the agent's text: `hypothesis` (bottleneck and proposed change), `rationale`, `layer` (kernels, model_execution, runtime or serving; older records have none), optional `abandon_if`, `from_record` |
 | `reflection` | `reflect` | the agent's text on one measured record: `record`, `reflection` (why it matched or differed from `expect`), optional `alternative` |
 | `kernels` | `python -m kernels.evolve run` | one kernel-loop run (run id `kernels-…`): `config: {split: seen, task, entry, iterations, device, seen_shapes, selected_from, models}`; `result: {best` (the best program's metrics), `candidates: [{id, parent, iteration, island, metrics}]` (every evaluated candidate, seen shapes only), `retimed: [{id, selected_score, scores, median}]` (the top candidates re-judged 3x; the highest median is `best`), for `kernels.search` runs also `tuned` (`candidates`: each tuned program's index among the re-timed ones and its grid points; `from`: the one whose best point was re-timed; its `median` vs the winner's `base_median`, `promoted`, any `regions` dispatch), `hypotheses` (blob: every expansion's named changes, and each one's child, score, whether it beat its parent and whether it was a new best; runs before 2026-10-20 also carry ROI and screener scores and a random-pick flag, and `screen` names the screener), `trace` (blob: OpenEvolve's evolution trace with code, diff and prompt per candidate), `best_program` (blob)`}`. Held-out shapes are never in it: `gate` judges them and its output stays in the run dir |
 
@@ -30,8 +30,8 @@ gap_pct_of_expected, noise_band_pct}`, or `actual_missing` saying why the lab co
 counterpart (`lab/experiments.py`). An `expect` may carry `mechanism`, a list of further predictions on other numbers
 in the same result (`metric` = a dotted path into `result`, e.g. `calibrated.layers.runtime.gpu_idle_share`;
 `change_pct` against the same path in the run's `baseline` record); the record keeps them as `experiment.mechanism`,
-each with its `actual` and `gap` or `actual_missing`. `submit` takes none: its held-out record is aggregates only. The agent's measured tools refuse a call without an open hypothesis and an
-`expect`, and while the run's latest measured record has no `reflection`. Runs whose id starts `researcher-` are
+each with its `actual` and `gap` or `actual_missing`. `submit` takes none: its held-out record is aggregates only. An `expect` and each mechanism prediction take only their own keys
+(`metric`, `value`, `unit`, `why`; `mechanism`; a mechanism's `hypothesis`): the measured ones are the lab's. Runs whose id starts `researcher-` are
 experiments a person made outside the lab (`lab/experiment.py`), with the same records; the agent's `ledger` tool and
 SQL index leave them out.
 

@@ -86,7 +86,8 @@ def _check(record: dict, kinds: set[str] = KINDS) -> None:
         if not isinstance(exp, dict) or exp.keys() - EXPERIMENT_FIELDS:
             raise LedgerError(f"a held-out experiment may only carry {sorted(EXPERIMENT_FIELDS)}")
         flat = {k: v for k, v in exp.items() if k not in ("expect", "bundle")}
-        if not all(isinstance(h, str) for h in exp.get("bundle") or []) \
+        b = exp.get("bundle", [])
+        if not isinstance(b, list) or not all(isinstance(h, str) for h in b) \
                 or not all(isinstance(v, SCALAR) for v in flat.values()) or not isinstance(exp.get("expect", {}), dict) \
                 or not all(isinstance(v, SCALAR) for v in exp.get("expect", {}).values()):
             raise LedgerError("a held-out experiment carries scalar values only")

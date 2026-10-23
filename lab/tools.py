@@ -246,9 +246,11 @@ class Toolbox(EvalTools, ProfTools):
         reflection; its reply ends with the prediction, the measurement and the gap."""
         def call(args: dict) -> str:
             experiments.check(self.s.ledger_root, self.s.run_id, spec.name, args)
+            before = {r["id"] for r in experiments.measured(self.s.ledger_root, self.s.run_id)}
             text = spec.fn(args)
-            last = experiments.pending(self.s.ledger_root, self.s.run_id)
-            if last is None or last.get("tool") != spec.name:
+            last = next((r for r in reversed(experiments.measured(self.s.ledger_root, self.s.run_id))
+                         if r["id"] not in before), None)          # this call's record, if it measured anything
+            if last is None or last["experiment"].get("hypothesis") != args.get("hypothesis_id"):
                 return text
             x = last["experiment"]
             measured = x.get("actual") if "actual_missing" not in x else f"not computed ({x['actual_missing']})"

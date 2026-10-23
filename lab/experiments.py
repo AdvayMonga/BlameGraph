@@ -119,7 +119,7 @@ def check(root: Path, run: str, tool: str, args: dict) -> None:
                              f"has no reflection; `reflect` with record={r['id']} comes before the next measurement "
                              "of that hypothesis")
     e = args.get("expect")
-    _prediction(e, "expect")
+    _prediction(e, "expect", ("mechanism",))
     m = e.get("mechanism")
     if m is not None:
         if tool == "submit":
@@ -128,15 +128,21 @@ def check(root: Path, run: str, tool: str, args: dict) -> None:
         if not isinstance(m, list) or not m:
             raise ValueError("`expect.mechanism` must be a non-empty list of predictions")
         for i, p in enumerate(m):
-            _prediction(p, f"expect.mechanism[{i}]")
+            _prediction(p, f"expect.mechanism[{i}]", ("hypothesis",))
             if p.get("hypothesis") is not None and p["hypothesis"] not in ids:
                 raise ValueError(f"`expect.mechanism[{i}].hypothesis` must be one of this call's hypotheses")
 
 
-def _prediction(e, where: str) -> None:
-    """One prediction: a metric, a finite number, its unit and why."""
+PREDICTION_KEYS = ("metric", "value", "unit", "why")
+
+
+def _prediction(e, where: str, extra: tuple[str, ...] = ()) -> None:
+    """One prediction: a metric, a finite number, its unit and why; no other keys (the lab writes the measured ones)."""
     if not isinstance(e, dict):
         raise ValueError(f"`{where}` must be an object: metric, value, unit, why")
+    unknown = sorted(e.keys() - set(PREDICTION_KEYS) - set(extra))
+    if unknown:
+        raise ValueError(f"`{where}` takes only {', '.join(PREDICTION_KEYS + extra)}; not {', '.join(unknown)}")
     for k in ("metric", "why"):
         if not isinstance(e.get(k), str) or not e[k].strip():
             raise ValueError(f"`{where}.{k}` must be non-empty text")
