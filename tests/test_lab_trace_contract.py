@@ -123,7 +123,7 @@ def test_inference_server_rows_conform(tmp_path):
     for i, (state, n) in enumerate([("ok", 5), ("ok", 1), ("ok", 0), ("rejected_429", 0), ("cancelled", 2)]):
         rec = telemetry.RequestRecord(
             trace_id=f"bg-{i}", session_id="s", turn_index=0, arrival_ts=time.time(), pending_depth=0,
-            active_size=0, max_batch_size=8, kv_free_blocks=10, kv_free_frac=0.5, concurrent_sessions=0,
+            active_size=0, max_batch_size=8, concurrent_sessions=0,
             prompt_tokens=10, replica_age_s=1.0)
         admitted = state != "rejected_429"
         rec.finish(state, arrival_mono=t0, enqueue_ts=t0 + 0.01, admit_ts=t0 + 0.02 if admitted else 0.0,

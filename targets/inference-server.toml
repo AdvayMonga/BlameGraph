@@ -55,9 +55,9 @@ model_execution = ["src/inference_server/models/qwen3_moe.py", "src/inference_se
                    "src/inference_server/models/fused.py", "src/inference_server/models/launch_table.py",
                    "src/inference_server/backends/*", "src/inference_server/sampling.py"]
 runtime = ["src/inference_server/scheduler.py", "src/inference_server/scheduling_policy.py",
-           "src/inference_server/kv_cache/*", "src/inference_server/models/paged_kv_cache.py"]
+           "src/inference_server/models/paged_kv_cache.py"]
 serving = ["src/inference_server/server.py", "src/inference_server/openai_shim.py", "src/inference_server/tokenizer.py",
-           "src/inference_server/config.py", "src/inference_server/profiles.*", "src/control_plane/*"]
+           "src/inference_server/config.py", "src/inference_server/profiles.*"]
 
 [corpus]
 dir = "corpus"
