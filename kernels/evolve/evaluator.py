@@ -49,9 +49,10 @@ def _judge_stage(program_path: str, stage: int) -> dict:
         stdin = None
     zero = {"combined_score": 0.0, "correct": 0.0, "stage": stage}
     try:
-        p = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=TIMEOUT_S, env=env, cwd=ROOT)
+        limit = float(os.environ.get("KERNEL_EVAL_TIMEOUT_S", TIMEOUT_S))      # read per call: the gate sets more
+        p = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=limit, env=env, cwd=ROOT)
     except subprocess.TimeoutExpired:
-        return {"metrics": zero, "artifacts": {"error": f"evaluation exceeded {TIMEOUT_S:.0f} s"}}
+        return {"metrics": zero, "artifacts": {"error": f"evaluation exceeded {limit:.0f} s"}}
     lines = [x for x in p.stdout.splitlines() if x.startswith("{")]
     if p.returncode != 0 or not lines:
         return {"metrics": zero,

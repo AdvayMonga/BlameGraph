@@ -22,6 +22,7 @@ AFTER_BENCH_TIMEOUT_S = 900          # the after-bench profile: 1-7 min measured
 GPU_TOOLS = frozenset({"profile", "trace", "kernel", "hostprof", "bench", "equiv", "submit", "baseline",
                        "kernel_search"})
 KERNEL_SEARCH_GPU_MIN = 3.0          # GPU minutes per judged program, for sizing a search to its budget (an estimate)
+KERNEL_SEARCH_MIN_EVALS = 8          # fewer judged programs than this is not a search
 
 
 def _drop_links(root: Path) -> None:
@@ -213,21 +214,30 @@ class Toolbox(EvalTools, ProfTools):
             raise ValueError("`budget_usd` must be a positive number")
         if usd > self.s.budget.remaining_usd:
             raise ValueError(f"`budget_usd` {usd} is more than the run has left (${self.s.budget.remaining_usd:.2f})")
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            raise ValueError("kernel_search needs ANTHROPIC_API_KEY on this host (its search calls the models)")
+        rate = gpu_rate()[0]
+        model_usd = usd / 2 if rate else usd
+        evals = int((usd - model_usd) / (rate * KERNEL_SEARCH_GPU_MIN / 60)) if rate else 30
+        if evals < KERNEL_SEARCH_MIN_EVALS:
+            raise ValueError(f"`budget_usd` {usd} covers {evals} judged programs at ${rate:g}/GPU-hour; a search needs at "
+                             f"least {KERNEL_SEARCH_MIN_EVALS} (~${KERNEL_SEARCH_MIN_EVALS * rate * KERNEL_SEARCH_GPU_MIN / 30:.2f})")
+        evals = min(60, evals)
         task = load(args["task"])
         snap = self._audited("kernel_search", args)
         tree = self._pristine()
         out = self.s.run_dir / "kernel_search" / f"{snap.id}-{task.name}-{int(time.time())}"
         out.mkdir(parents=True, exist_ok=True)
-        rate = gpu_rate()[0]
-        model_usd = usd / 2 if rate else usd
-        evals = max(8, min(60, int((usd - model_usd) / (rate * KERNEL_SEARCH_GPU_MIN / 60)))) if rate else 30
 
         def profile(t, a):
             r, blob, _, _ = self._profile_job(t, a)
             return self.s.ledger_root / blob if r["returncode"] == 0 and blob else None
         from lab import worker
         w = self.worker
-        env = pipeline.remote_env(w.prefix, w.env_dir, w.python, w.env) if isinstance(w, worker.Remote) else {}
+        remote = isinstance(w, worker.Remote)
+        env = pipeline.remote_env(w.prefix, w.env_dir, w.python, w.env, w.sudo) if remote else {}
+        import torch
+        device = "cuda" if remote or torch.cuda.is_available() else "cpu"     # judged where the GPU is
         try:
             scored = (*getattr(self.s.task, "regimes", ()), *getattr(self.s.task, "constraints", ())) \
                 if getattr(self.s, "task", None) else ()
@@ -236,11 +246,13 @@ class Toolbox(EvalTools, ProfTools):
                 raise RuntimeError("no capture traffic produced calls to the task's entry point")
             start = out / "start.py"
             start.write_text(pipeline.start_program(task, tree))
-            found = pipeline.search(task, caps, start, out / "search", model_usd, evals, self.s.ledger_root, env)
+            found = pipeline.search(task, caps, start, out / "search", model_usd, evals, self.s.ledger_root, env,
+                                    device=device)
             best = out / "search" / "best_program.py"
             g = pipeline.gate(task, caps, best, out, env)
         except Exception as e:                   # noqa: BLE001  a tool never crashes the session
-            result = {"verdict": "error", "reason": f"{type(e).__name__}: {e}"[-2000:]}
+            model_cost = self._charge_models(pipeline.spent(out / "search"))
+            result = {"verdict": "error", "reason": f"{type(e).__name__}: {e}"[-2000:], "model_usd": model_cost}
             self._record("kernels", "kernel_search", args, result, snap)
             return f"kernel_search failed: {result['reason']}"
         from kernels.evolve.ship import gate_passed
@@ -252,18 +264,27 @@ class Toolbox(EvalTools, ProfTools):
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(text)
             rel = dest.relative_to(self.s.workspace.path).as_posix()
-        model_cost = float((found.get("cost") or {}).get("usd") or 0.0)
-        self.s.budget.charge(model_cost, "kernel_search models")
+        model_cost = self._charge_models(float((found.get("cost") or {}).get("usd") or 0.0))
         gm = g.get("metrics") or {}
         result = {"verdict": "ok", "metrics": {"speedup": (found.get("best") or {}).get("combined_score"),
                                                "heldout_speedup": gm.get("heldout_speedup")},
                   "best": found.get("best"), "search_record": found.get("ledger"), "evals": evals,
                   "model_usd": model_cost, "gate": {"passed": passed, "metrics": gm,
-                                                    "gates": json.loads((g.get("artifacts") or {}).get("gates") or "{}")},
+                                                    "gates": json.loads((g.get("artifacts") or {}).get("gates") or "{}"),
+                                                    **({"error": g["artifacts"]["error"][-1500:]}
+                                                       if (g.get("artifacts") or {}).get("error") else {})},
                   "patch": rel, "captures": len(caps)}
         self._record("kernels", "kernel_search", args, result, snap)
         return json.dumps({k: result[k] for k in ("metrics", "gate", "patch", "search_record", "model_usd")}, indent=1,
                           default=str)
+
+    def _charge_models(self, usd: float) -> float:
+        """Model dollars charged to the run; spent already, so an exhausted budget records them and refuses what's next."""
+        try:
+            self.s.budget.charge(usd, "kernel_search models")
+        except BudgetExceeded:
+            self.s.budget.spent_usd += usd
+        return usd
 
     def ledger_tool(self, args: dict) -> str:
         match = {k: v for k, v in args.items() if k in ("kind", "session", "snapshot", "tool") and v}
@@ -561,7 +582,14 @@ def task_shares(bundle: Path) -> dict:
         tasks = [load(n) for n in TASKS]
     except ImportError as e:                    # the kernel tasks import torch, which the controller may lack
         return {"missing": f"the kernel tasks do not import here: {e}"}
-    return share.shares(bundle, tasks) or {"missing": "no kernel table in the bundle"}
+    out = share.shares(bundle, tasks)
+    if not out:
+        return {"missing": "no kernel table in the bundle"}
+    for t in tasks:                              # tasks matching the same device kernels show the same share
+        same = sorted(o.name for o in tasks if o is not t and set(o.kernel_names) == set(t.kernel_names) and t.kernel_names)
+        if same:
+            out["tasks"][t.name]["same_kernels_as"] = same
+    return out
 
 
 def default_profile_runner(tree: Path, argv: list[str], read: list[Path] = (), env: dict | None = None,
