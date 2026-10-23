@@ -89,7 +89,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `proftools.py` (trace = nsys, kernel = ncu, hostprof = py-spy, each wrapping lab.profile's workload in the jail
   with validated args) + `evaltools.py` (bench → `regimes` on
   the seen split, default regimes saturated + the task's, each search started where the run's base measurement ended and
-  resolved to the regime's noise band; equiv → `correctness` candidate vs the target's reference, 32 requests in flight (scoring at 4),
+  resolved to the regime's noise band, then the same tree profiled once in its own launch (`profiled`: the layer facts
+  a mechanism prediction is measured against; the baseline too); equiv → `correctness` candidate vs the target's reference, 32 requests in flight (scoring at 4),
   items in one fixed order and stopped at 200, 400, 800, ... once accuracy is clear of the line; submit → held-out short tier vs the
   base commit, one aggregate per regime through the Thresholdout guard; nothing is measured while another process holds
   the GPU (`refused`), and a process other than the engine on the GPU mid-run makes it `contaminated` (never evidence,

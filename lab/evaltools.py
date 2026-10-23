@@ -217,6 +217,16 @@ def equiv_rows(out: Path) -> list[dict]:
     return [{k: v for k, v in json.loads(x).items() if k != "text"} for x in p.read_text().splitlines() if x.strip()]
 
 
+def _profiled_reply(prof: dict) -> dict:
+    """The bench reply's `profiled`: the record's own shape (so a path read here resolves in the record), with only
+    the layer facts of its calibration, or the calibration's error."""
+    out = {k: v for k, v in prof.items() if k != "calibrated"}
+    cal = prof.get("calibrated")
+    if isinstance(cal, dict):
+        out["calibrated"] = {"error": cal["error"]} if "error" in cal else {"layers": cal.get("layers")}
+    return out
+
+
 def _failed(e: BaseException) -> dict:
     """The record of a measurement that did not complete; GPU processes that stopped it are kept as facts."""
     if isinstance(e, serve.GpuBusy):
@@ -269,12 +279,14 @@ class EvalTools:
         cal = calibrate.calibrate_results(r["results"], artifacts.read_rows(work), target.load(), r.get("gpu"), tier,
                                           "seen", seed)
         failed = {"profiles_failed": r["profiles_failed"]} if r.get("profiles_failed") else {}
+        stored = artifacts.store(work, self.s.ledger_root)
+        prof = self._after_bench(tree)
         result = {"verdict": "ok", "metrics": headline(r["results"]), "calibrated": cal, "regimes": r["results"],
                   "tier": tier, "seconds": time.monotonic() - t0, "ready_s": r["ready_s"], "gpu": r.get("gpu"),
-                  "artifacts": artifacts.store(work, self.s.ledger_root), **failed, **_killed(r)}
+                  "artifacts": stored, "profiled": prof, **failed, **_killed(r)}
         self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier, "seed": seed})
         return json.dumps({"snapshot": snap.id, "split": "seen", "tier": tier, "metrics": result["metrics"],
-                           "calibrated": cal, **failed, **_killed(r)}, indent=1)
+                           "calibrated": cal, "profiled": _profiled_reply(prof), **failed, **_killed(r)}, indent=1)
 
     # -- equiv --------------------------------------------------------------------------
     def equiv(self, args: dict) -> str:
@@ -480,6 +492,17 @@ class EvalTools:
                       "calibrated": {n: calibrated[n] for n in names if n in calibrated}}
         except Exception as e:                      # no GPU or a base that will not serve is itself the fact
             result = _failed(e)
+        else:                                       # profiled like every bench, for change_pct mechanism predictions
+            from lab.safety import grader
+            tree = self.s.run_dir / "base-tree-profile"
+            shutil.rmtree(tree, ignore_errors=True)
+            try:
+                grader.export(self.s.workspace.repo, self.s.workspace.base, tree)
+                result["profiled"] = self._after_bench(tree)
+            except Exception as e:                  # noqa: BLE001  the baseline record is written regardless
+                result["profiled"] = {"error": f"{type(e).__name__}: {e}"}
+            finally:
+                shutil.rmtree(tree, ignore_errors=True)
         return ledger.append({"kind": "baseline", "run": self.s.run_id, "session": self.s.session_id,
                               "config": {"split": "seen", "tier": BENCH_TIER, "commit": commit},
                               "result": result, "cost": self._cost("baseline")}, self.s.ledger_root)
