@@ -232,7 +232,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   shapes with calls, score weight and capture traffic (`shapes.sources_from_captures`), the GPU, peaks, toolchain,
   launch settings and tolerances, for both generators; `run.system_message` states how a
   program is judged, from the evaluator's own constants);
-  a two-stage cascade, each stage a fresh jailed process (`kernels.evolve.jailed`: the jail gets the candidate, its
+  a precheck with no GPU attached (`jailed.PRECHECK_STAGE`, `kernels/evolve/precheck.py`: the screen, the
+  CUDA C++ build for the GPU's architecture from the config's `arch`, each built kernel's registers, stack, shared and
+  local memory from cuobjdump as `compile_report`; only a failed build drops a program, spills are facts, an import
+  that needs a device is inconclusive; Triton kernels build on first call, so not here), then a two-stage cascade, each stage a fresh jailed process (`kernels.evolve.jailed`: the jail gets the candidate, its
   config and a copied harness, never this repo; `core.judge`: stage 1 = two shapes, one seed; stage 2 = the full
   check on seen shapes + paired timing against the baseline (`kernels.time_pair`: same inputs, random order per
   pair; a task whose callers replay it in CUDA graphs, `Task.graphs`, e.g. `paged_decode`, is captured and timed as a

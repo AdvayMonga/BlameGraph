@@ -27,6 +27,7 @@ HARNESS = {"kernels": None, "validity": ("__init__.py", "peaks.py"), "lab": ("__
 TIMEOUT_S = float(os.environ.get("KERNEL_EVAL_TIMEOUT_S", "600"))
 NCU_STAGE = 3                    # not a judging stage: ncu counters for a program that passed stage 2 (kernels/evolve/ncu.py)
 QUICK_STAGE = 4                  # stage 2 on the most-called seen shape only: the funnel's quick speed test
+PRECHECK_STAGE = 5               # no GPU attached: the screen, the CUDA C++ build, the compiler's report (precheck.py)
 EVAL_DIRS = Path(os.environ.get("KERNEL_EVAL_DIRS") or Path(tempfile.gettempdir()) / "kernel-eval")
 CUDA = Path("/usr/local/cuda")
 MEMORY = os.environ.get("KERNEL_EVAL_MEMORY", "32g")   # host RAM a judgment may use: a program cannot starve the host
@@ -157,7 +158,12 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
         src = _engine_src(load(cfg["task"]))
         path = os.pathsep.join(str(p) for p in (harness, src) if p)
         read = [harness] + ([src] if src else [])
-        if stage == NCU_STAGE:                   # ncu around the probe; its install root mounted read-only
+        gpu = None
+        if stage == PRECHECK_STAGE:              # no device: built for the GPU's architecture, from the config
+            argv = [engine.python(), "-m", "kernels.evolve.precheck", str(tree / "eval_config.json"),
+                    str(tree / "candidate.py")]
+            gpu = False
+        elif stage == NCU_STAGE:                 # ncu around the probe; its install root mounted read-only
             exe = shutil.which("ncu")
             if not exe:
                 return {"metrics": {"stage": stage}, "artifacts": {"ncu_missing": "ncu is not installed here"}}
@@ -171,9 +177,14 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
                     str(tree / "candidate.py"), str(stage)]
         env = {"PYTHONPATH": path, "TORCH_EXTENSIONS_DIR": str(tree / "torch_extensions"),
                **({"CUDA_HOME": str(home)} if home else {})}
+        if stage == PRECHECK_STAGE:
+            env.update(CUDA_VISIBLE_DEVICES="", **({"TORCH_CUDA_ARCH_LIST": cfg["arch"]} if cfg.get("arch") else {}))
         read += [home] if home else []
-        p = grader.jailed(tree, argv, timeout_s=timeout_s, env_extra=env, read=read, memory=MEMORY)
-        _keep_builds_only(tree)
+        p = grader.jailed(tree, argv, timeout_s=timeout_s, env_extra=env, read=read, memory=MEMORY,
+                          **({"gpu": gpu} if gpu is not None else {}))
+        _keep_builds_only(tree)                  # the precheck's build is what stage 1 then imports
+        if stage == PRECHECK_STAGE:
+            return _precheck_result(p, stage)
         r, why = _result(p.stdout, key) if stage != NCU_STAGE else (None, "")
         if stage == 2 and p.returncode == 0 and r is not None:
             if r["metrics"].get("correct") == 1.0:
@@ -195,6 +206,21 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
                                                f"{'; ' + why if p.returncode == 0 else ''}:\n"
                                                f"{(p.stderr or p.stdout)[-3000:]}"}}
     return r
+
+
+def _precheck_result(p, stage: int) -> dict:
+    """The precheck's line as a stage result: passed (correct 1.0), failed (0.0) or inconclusive (no `correct`),
+    with the compiler's report as `compile_report`."""
+    lines = [x for x in p.stdout.splitlines() if x.startswith("{")]
+    if p.returncode != 0 or not lines:
+        return {"metrics": {"stage": stage}, "artifacts": {"precheck": f"exited {p.returncode}: "
+                                                          f"{(p.stderr or p.stdout)[-1500:]}"}}
+    d = json.loads(lines[-1])
+    a = {"precheck": d.get("reason", "")}
+    if d.get("compile_report") is not None:
+        a["compile_report"] = json.dumps(d["compile_report"])
+    m = {"stage": stage, **({"correct": 1.0 if d["passed"] else 0.0} if d.get("passed") is not None else {})}
+    return {"metrics": m, "artifacts": a}
 
 
 def main() -> int:
