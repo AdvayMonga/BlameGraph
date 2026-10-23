@@ -614,3 +614,26 @@ def test_an_after_profile_shares_no_gpu_and_spends_no_budget_that_is_gone(lab, m
     monkeypatch.setenv("LAB_GPU_USD_PER_HOUR", "3")
     s.budget.spent_usd = s.budget.cap_usd
     assert "skipped" in tb._after_bench(s.run_dir)
+
+
+def test_task_shares_come_with_every_profile_and_the_latest_reaches_the_harness_facts(tmp_path):
+    pytest.importorskip("torch")                 # the kernel tasks import it
+    from lab import ledger as L
+    from lab.evaltools import _layer_facts
+    from lab.tools import task_shares
+    b = tmp_path / "bundle"
+    b.mkdir()
+    (b / "meta.json").write_text(json.dumps({"window": {"wall_s": 1.0}}))
+    (b / "kernels.json").write_text(json.dumps({"kernels": [
+        {"name": "_paged_decode_splitk_kernel", "count": 10, "total_us": 200_000.0},
+        {"name": "something_else", "count": 1, "total_us": 100_000.0}]}))
+    got = task_shares(b)
+    assert abs(got["tasks"]["paged_decode"]["share_of_window"] - 0.2) < 1e-9
+    assert got["unmatched"][0]["name"] == "something_else"
+    root = tmp_path / "ledger"
+    assert "missing" in _layer_facts(root, "kernel_tasks")
+    L.append({"kind": "profile", "result": {"calibrated": {"layers": {"kernels": {"share": 0.5}}}}}, root)
+    rec = L.append({"kind": "bench", "result": {"profiled": {"calibrated": {"kernel_tasks": got}}}}, root)
+    facts = _layer_facts(root, "kernel_tasks")
+    assert facts["record"] == rec["id"] and facts["tasks"]["paged_decode"]["share_of_window"] > 0
+    assert _layer_facts(root)["kernels"]["share"] == 0.5        # the latest one that has a per-layer breakdown
