@@ -5,6 +5,15 @@ a reversed decision gets a new entry that names the old one. Change any of these
 
 
 
+## 2026-10-22 — Hypotheses in batches, each tagged with its layer; bundles allowed
+Several hypotheses may be open at once, each naming its layer (kernels, model_execution, runtime, serving), and a
+measured call may measure several together (`bundle`) when the agent states why they do not affect each other. A
+hypothesis is measured again only after a reflection on its last measurement, and a new hypothesis is filed only once
+every measurement has one: a batch is reflected on before the next. Why (the user): the kernel loop's many-ideas
+funnel is the shape for the whole loop; each hypothesis goes to its layer's machinery; separate measurements are
+preferred and bundles obscure causality, so the bundle and its stated independence are on the record, and its
+mechanism predictions check each part. Amends 2026-10-11 (the next measured call waited for the last one's reflection).
+
 ## 2026-10-22 — A hypothesis predicts its mechanism, not only its outcome
 `expect` may carry `mechanism`: predictions on other numbers of the same result (e.g. the GPU idle share in a
 profile's layer facts), each kept with its measured value and gap. Why (the user): an improvement should be checked

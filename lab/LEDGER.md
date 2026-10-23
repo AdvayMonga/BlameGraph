@@ -9,7 +9,7 @@ on write. Every record: `id`, `at`, `schema` (set by the writer), `kind`, `run`,
 
 | kind | written by | `result` (or shape) |
 |---|---|---|
-| `session` | the loop | provider, model, turns, seconds, status (`stop`/`continue`), error, `violation`, `claim.note`, optional `closing: {record, reflected, usd, estimated, tokens, turns, error}` or `{record, skipped: budget}` (the reflection-only call after a session that left `record` unreflected; `cost.usd` includes its `usd`) |
+| `session` | the loop | provider, model, turns, seconds, status (`stop`/`continue`), error, `violation`, `claim.note`, optional `closing: {records, reflected, usd, estimated, tokens, turns, error}` or `{records, skipped: budget}` (the reflection-only call after a session that left `records` unreflected; `cost.usd` includes its `usd`; older records name one `record`) |
 | `test` | `test` | `lint`, `tests` (bools), returncode, output tails, `changed`, `scratch_left_out` |
 | `profile` | `profile` | `bundle` (ledger blob of the profiler output), `workspace_copy`, seconds |
 | `profile` | `trace`, `kernel`, `hostprof` | `bundle` (blob of the instrument's output dir), `workspace_copy`, `instrument` (resolved binary), `argv` (every command run), returncode, seconds, output tail |

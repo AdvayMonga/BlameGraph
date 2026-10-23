@@ -229,6 +229,7 @@ class Toolbox(EvalTools, ProfTools):
         return "noted"
 
     def hypothesis(self, args: dict) -> str:
+        experiments.open_batch(self.s.ledger_root, self.s.run_id)
         fields = experiments.new_hypothesis(args)
         rec = ledger.append({"kind": "hypothesis", "run": self.s.run_id, "session": self.s.session_id, **fields},
                             self.s.ledger_root)
@@ -257,12 +258,15 @@ class Toolbox(EvalTools, ProfTools):
             return (f"{text}\n\nExperiment record {last['id']}: expected {x['expect']['metric']} = "
                     f"{x['expect']['value']} ({x['expect']['unit']}), measured {measured}"
                     + (f", gap {x['gap']:+.4g}" if x.get("gap") is not None else "") + how
-                    + f". The next measured call is refused until `reflect` records a reflection on {last['id']}.")
+                    + f". Further measurements of {', '.join(sorted(experiments.involved(last)))} and any new "
+                    f"hypothesis are refused until `reflect` records a reflection on {last['id']}.")
         schema = {**spec.schema, "properties": {**spec.schema.get("properties", {}), **experiments.MEASURED_PROPS},
                   "required": sorted(set(spec.schema.get("required", [])) | {"hypothesis_id", "expect"})}
         note = (" Requires `hypothesis_id` (a `hypothesis` record of this run) and `expect` (metric, value, unit, "
                 "why; optional `mechanism`: the same for other numbers in the result, each by its dotted path); the "
-                "record keeps them with each measured value and gap.")
+                "record keeps them with each measured value and gap. Optional `bundle` (further hypothesis ids "
+                "measured in the same call) with `independence` (why the changes do not affect each other). Refused "
+                "while an earlier measurement of one of these hypotheses has no reflection.")
         return ToolSpec(spec.name, spec.description + note, schema, call)
 
     def specs(self) -> list[ToolSpec]:
@@ -387,16 +391,20 @@ class Toolbox(EvalTools, ProfTools):
                      self.submit),
             *self.prof_specs(gpu),
             ToolSpec("hypothesis", "Record a hypothesis: `hypothesis` (the bottleneck and the proposed change), "
-                     "`rationale` (why), optional `abandon_if` (the result that would end it) and `from_record` (the "
-                     "measured record whose reflection proposed it). Returns its id, which measured tools take as "
-                     "`hypothesis_id`." + free,
-                     {"type": "object", "required": ["hypothesis", "rationale"],
+                     f"`rationale` (why), `layer` (where the change is: {', '.join(experiments.LAYERS)}), optional "
+                     "`abandon_if` (the result that would end it) and `from_record` (the measured record whose "
+                     "reflection proposed it). Returns its id, which measured tools take as `hypothesis_id`. Several "
+                     "may be open at once; a new one is refused while any measurement of the run has no reflection."
+                     + free,
+                     {"type": "object", "required": ["hypothesis", "rationale", "layer"],
                       "properties": {"hypothesis": {"type": "string"}, "rationale": {"type": "string"},
+                                     "layer": {"type": "string", "enum": list(experiments.LAYERS)},
                                      "abandon_if": {"type": "string"}, "from_record": {"type": "string"}}},
                      self.hypothesis),
             ToolSpec("reflect", "Record a reflection on a measured record: `record` (its id), `reflection` (why the "
                      "result matched or differed from its `expect`), optional `alternative` (another hypothesis). "
-                     "The latest measured record of the run needs one before the next measured call." + free,
+                     "A measurement needs one before its hypotheses are measured again, and every measurement of the "
+                     "run before a new hypothesis." + free,
                      {"type": "object", "required": ["record", "reflection"],
                       "properties": {"record": {"type": "string"}, "reflection": {"type": "string"},
                                      "alternative": {"type": "string"}}}, self.reflect),

@@ -4,7 +4,7 @@ workspace is the change, a `hypothesis`, measurements through the lab's own tool
 
   python -m lab.experiment start --base REF --change REF --budget USD [--repo PATH]   -> prints the run id
   python -m lab.experiment baseline --run ID
-  python -m lab.experiment hypothesis --run ID --hypothesis TEXT --rationale TEXT [--abandon-if TEXT]
+  python -m lab.experiment hypothesis --run ID --hypothesis TEXT --rationale TEXT --layer LAYER [--abandon-if TEXT]
   python -m lab.experiment call TOOL --run ID [--args JSON] [--hypothesis-id H --metric M --value V --unit U --why T]
   python -m lab.experiment reflect --run ID --record ID --reflection TEXT [--alternative TEXT]
 
@@ -100,6 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--run", required=True)
     p.add_argument("--hypothesis", required=True)
     p.add_argument("--rationale", required=True)
+    p.add_argument("--layer", required=True, choices=experiments.LAYERS)
     p.add_argument("--abandon-if")
     p = sub.add_parser("call")
     p.add_argument("tool")
@@ -133,6 +134,7 @@ def _run(a) -> str:
         return json.dumps(tb.baseline(tb.s.workspace.base)["result"])
     if a.cmd == "hypothesis":
         return call(tb, "hypothesis", {k: v for k, v in {"hypothesis": a.hypothesis, "rationale": a.rationale,
+                                                          "layer": a.layer,
                                                           "abandon_if": a.abandon_if}.items() if v})
     if a.cmd == "reflect":
         return call(tb, "reflect", {k: v for k, v in {"record": a.record, "reflection": a.reflection,

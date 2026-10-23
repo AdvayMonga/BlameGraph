@@ -142,34 +142,39 @@ def brief(cfg: RunConfig, s: Session, snapshot_id: str, n: int) -> str:
             "Every record of this and earlier runs is readable with the `ledger` tool.")
 
 
-def closing_prompt(s: Session, rec: dict) -> str:
-    """The facts of the unreflected record: its hypothesis, the prediction, the measurement and the gap."""
-    x = rec["experiment"]
-    h = experiments.hypotheses(s.ledger_root, s.run_id).get(x["hypothesis"], {})
-    return (f"Session {s.session_id} of run {s.run_id} ended with no reflection on measured record {rec['id']}. "
-            f"This call records that reflection with `reflect`; its tools are {' and '.join(f'`{t}`' for t in CLOSING_TOOLS)}.\n\n"
-            f"Hypothesis {x['hypothesis']}:\n{json.dumps({k: h[k] for k in ('hypothesis', 'rationale', 'abandon_if') if k in h})}\n\n"
-            f"Record {rec['id']} ({rec.get('tool')}):\n"
-            f"{json.dumps({k: x[k] for k in ('expect', 'actual', 'actual_missing', 'gap', 'gap_pct_of_expected', 'noise_band_pct', 'mechanism') if k in x})}")
+def closing_prompt(s: Session, recs: list[dict]) -> str:
+    """The facts of each unreflected record: its hypotheses, the predictions, the measurements and the gaps."""
+    hs = experiments.hypotheses(s.ledger_root, s.run_id)
+    parts = [f"Session {s.session_id} of run {s.run_id} ended with no reflection on measured records "
+             f"{', '.join(r['id'] for r in recs)}. This call records those reflections with `reflect`; its tools are "
+             f"{' and '.join(f'`{t}`' for t in CLOSING_TOOLS)}."]
+    for rec in recs:
+        x = rec["experiment"]
+        for h in sorted(experiments.involved(rec)):
+            parts.append(f"Hypothesis {h}:\n{json.dumps({k: hs.get(h, {})[k] for k in ('hypothesis', 'rationale', 'layer', 'abandon_if') if k in hs.get(h, {})})}")
+        parts.append(f"Record {rec['id']} ({rec.get('tool')}):\n"
+                     f"{json.dumps({k: x[k] for k in ('expect', 'actual', 'actual_missing', 'gap', 'gap_pct_of_expected', 'noise_band_pct', 'mechanism', 'bundle', 'independence') if k in x})}")
+    return "\n\n".join(parts)
 
 
 def closing(provider: agent.Provider, spec: agent.AgentSpec, tools: Toolbox, s: Session) -> dict | None:
-    """After a session that left its last measurement unreflected: one short call whose only tools are `reflect` and
+    """After a session that left measurements unreflected: one short call whose only tools are `reflect` and
     `ledger`. Returns what the session record keeps under `closing`, or None when nothing was pending."""
-    rec = experiments.pending(s.ledger_root, s.run_id)
-    if rec is None:
+    recs = experiments.unreflected(s.ledger_root, s.run_id)
+    if not recs:
         return None
+    ids = [r["id"] for r in recs]
     usd = min(CLOSING_USD, s.budget.remaining_usd)
     if usd <= 0:
-        return {"record": rec["id"], "skipped": "budget"}
-    c = dataclasses.replace(spec, prompt=closing_prompt(s, rec), builtin=[], max_turns=CLOSING_TURNS,
+        return {"records": ids, "skipped": "budget"}
+    c = dataclasses.replace(spec, prompt=closing_prompt(s, recs), builtin=[], max_turns=CLOSING_TURNS,
                             max_budget_usd=usd, tools=[t for t in tools.specs() if t.name in CLOSING_TOOLS])
     c.system = system_prompt(target.load(), c)
     try:
         reply = provider.run(c)
     except Exception as e:                      # charged at its cap, like a session whose provider raised
         reply = agent.AgentReply(None, usd, 0, f"provider raised: {e}", True)
-    return {"record": rec["id"], "reflected": experiments.pending(s.ledger_root, s.run_id) is None,
+    return {"records": ids, "reflected": not experiments.unreflected(s.ledger_root, s.run_id),
             "usd": reply.cost_usd, "estimated": reply.cost_estimated, "tokens": reply.usage, "turns": reply.turns,
             "error": reply.error}
 

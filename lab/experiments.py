@@ -13,6 +13,7 @@ from lab import ledger
 
 MEASURED = ("bench", "equiv", "submit", "profile", "trace", "kernel", "hostprof")
 UNITS = ("absolute", "change_pct")
+LAYERS = ("kernels", "model_execution", "runtime", "serving")      # lab/layers.py's four layers
 # Runs made outside the lab by a researcher (`python -m lab.experiment`): their text is a person's, so no agent view
 # (the `ledger` tool, the agent's SQL index) shows any of their records.
 RESEARCHER = "researcher-"
@@ -39,8 +40,14 @@ EXPECT_SCHEMA = {
                                     "unit": {"type": "string", "enum": list(UNITS),
                                              "description": "absolute: the number itself; change_pct: % change from "
                                                             "the same path in the run's baseline record"},
-                                    "why": {"type": "string"}}}}}}
-MEASURED_PROPS = {"hypothesis_id": {"type": "string"}, "expect": EXPECT_SCHEMA}
+                                    "why": {"type": "string"},
+                                    "hypothesis": {"type": "string", "description": "in a bundle: the hypothesis "
+                                                   "this prediction is about"}}}}}}
+MEASURED_PROPS = {"hypothesis_id": {"type": "string"}, "expect": EXPECT_SCHEMA,
+                  "bundle": {"type": "array", "items": {"type": "string"},
+                             "description": "optional: further hypothesis ids measured together in this call"},
+                  "independence": {"type": "string", "description": "with `bundle`: why the changes do not affect "
+                                   "each other"}}
 
 
 def _text(args: dict, key: str, required: bool = True) -> str | None:
@@ -71,17 +78,46 @@ def pending(root: Path, run: str) -> dict | None:
     return ms[-1] if ms and ms[-1]["id"] not in reflected(root, run) else None
 
 
+def unreflected(root: Path, run: str) -> list[dict]:
+    """Every measured record of the run that has no reflection yet, in write order."""
+    done = reflected(root, run)
+    return [r for r in measured(root, run) if r["id"] not in done]
+
+
+def involved(rec: dict) -> set[str]:
+    """The hypotheses a measured record measured: its own and its bundle's."""
+    x = rec.get("experiment") or {}
+    return {x.get("hypothesis"), *(x.get("bundle") or [])} - {None}
+
+
+def open_batch(root: Path, run: str) -> None:
+    """A new hypothesis starts the next batch: refused while a measured record of the run has no reflection."""
+    waiting = unreflected(root, run)
+    if waiting:
+        raise ValueError(f"records {', '.join(r['id'] for r in waiting)} have no reflection; every measurement of "
+                         "this batch is reflected on before a new hypothesis")
+
+
 def check(root: Path, run: str, tool: str, args: dict) -> None:
     """Refuse a measured call that lacks its hypothesis or prediction, or that would leave a result unreflected."""
     if tool not in MEASURED:
         return
-    p = pending(root, run)
-    if p is not None:
-        raise ValueError(f"record {p['id']} ({p.get('tool')}) has no reflection; `reflect` with record={p['id']} "
-                         "comes before the next measured call")
+    hs = hypotheses(root, run)
     hid = args.get("hypothesis_id")
-    if not isinstance(hid, str) or hid not in hypotheses(root, run):
+    if not isinstance(hid, str) or hid not in hs:
         raise ValueError("`hypothesis_id` must be the id of a `hypothesis` record of this run")
+    bundle = args.get("bundle")
+    if bundle is not None:
+        if (not isinstance(bundle, list) or not bundle or len(set(bundle)) != len(bundle) or hid in bundle
+                or not all(isinstance(h, str) and h in hs for h in bundle)):
+            raise ValueError("`bundle` must list other `hypothesis` records of this run, each once")
+        _text(args, "independence")
+    ids = {hid, *(bundle or [])}
+    for r in unreflected(root, run):
+        if ids & involved(r):
+            raise ValueError(f"record {r['id']} ({r.get('tool')}) measured {', '.join(sorted(ids & involved(r)))} and "
+                             f"has no reflection; `reflect` with record={r['id']} comes before the next measurement "
+                             "of that hypothesis")
     e = args.get("expect")
     _prediction(e, "expect")
     m = e.get("mechanism")
@@ -93,6 +129,8 @@ def check(root: Path, run: str, tool: str, args: dict) -> None:
             raise ValueError("`expect.mechanism` must be a non-empty list of predictions")
         for i, p in enumerate(m):
             _prediction(p, f"expect.mechanism[{i}]")
+            if p.get("hypothesis") is not None and p["hypothesis"] not in ids:
+                raise ValueError(f"`expect.mechanism[{i}].hypothesis` must be one of this call's hypotheses")
 
 
 def _prediction(e, where: str) -> None:
@@ -110,7 +148,9 @@ def _prediction(e, where: str) -> None:
 
 def new_hypothesis(args: dict) -> dict:
     """The fields of a `hypothesis` record from the tool's arguments."""
-    out = {"hypothesis": _text(args, "hypothesis"), "rationale": _text(args, "rationale")}
+    if args.get("layer") not in LAYERS:
+        raise ValueError(f"`layer` must be one of {list(LAYERS)}")
+    out = {"hypothesis": _text(args, "hypothesis"), "rationale": _text(args, "rationale"), "layer": args["layer"]}
     for k in ("abandon_if", "from_record"):
         v = _text(args, k, required=False)
         if v is not None:
@@ -181,6 +221,8 @@ def outcome(tool: str, args: dict, result: dict | None = None, metrics: dict | N
     e = {k: v for k, v in args["expect"].items() if k != "mechanism"}
     actual, missing = _actual(tool, e, result, metrics, baseline)
     out = {"hypothesis": args["hypothesis_id"], "expect": e, "actual": actual}
+    if args.get("bundle"):
+        out["bundle"], out["independence"] = list(args["bundle"]), args["independence"].strip()
     if missing:
         out["actual_missing"] = missing
     else:
@@ -194,18 +236,20 @@ def outcome(tool: str, args: dict, result: dict | None = None, metrics: dict | N
 
 
 def summary(root: Path, run: str) -> list[dict]:
-    """This run's hypotheses, each with its measurements (expected, actual, gap) and reflections, for the brief."""
+    """This run's hypotheses, each with its measurements (expected, actual, gap) and reflections, for the brief; a
+    bundled measurement is listed under each hypothesis it measured."""
     hs = hypotheses(root, run)
     refl = {r["record"]: r for r in ledger.records(root, run=run, kind="reflection")}
     out = {h: {"id": h, "hypothesis": r["hypothesis"], "rationale": r["rationale"],
-               **({"abandon_if": r["abandon_if"]} if r.get("abandon_if") else {}), "measurements": []}
+               **{k: r[k] for k in ("layer", "abandon_if") if r.get(k)}, "measurements": []}
            for h, r in hs.items()}
     for m in measured(root, run):
         x = m["experiment"]
-        if x["hypothesis"] in out:
-            out[x["hypothesis"]]["measurements"].append(
+        for h in sorted(involved(m) & out.keys(), key=lambda h: h != x["hypothesis"]):
+            out[h]["measurements"].append(
                 {"record": m["id"], "tool": m.get("tool"), "expect": x["expect"], "actual": x.get("actual"),
                  "gap": x.get("gap"), **({"mechanism": x["mechanism"]} if x.get("mechanism") else {}),
+                 **({k: x[k] for k in ("hypothesis", "bundle", "independence")} if x.get("bundle") else {}),
                  "reflection": (refl.get(m["id"]) or {}).get("reflection"),
                  "alternative": (refl.get(m["id"]) or {}).get("alternative")})
     return list(out.values())
