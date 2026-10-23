@@ -27,6 +27,7 @@ CLASSES = (
     ("mbarrier", "mbarrier."),
     ("setmaxnreg", "setmaxnreg"),             # register reallocation between warpgroups: warp specialization
     ("barrier", "bar."),
+    ("barrier", "barrier."),
     ("shuffle", "shfl."),
     ("atomic", "atom."),
     ("red", "red."),
@@ -38,7 +39,7 @@ CLASSES = (
     ("convert", "cvt."),
     ("branch", "bra"),
 )
-_ENTRY = re.compile(r"\.(?:visible\s+)?\.entry\s+(\S+?)\s*\(")
+_ENTRY = re.compile(r"\.entry\s+(\S+?)\s*\(")
 _OP = re.compile(r"^\s*(?:@!?%\w+\s+)?([a-z][a-z0-9_.]*)", re.M)
 _SHARED = re.compile(r"\.shared\s+(?:\.align\s+\d+\s+)?\.\w+\s+\S+?\[(\d*)\]")
 _REGS = re.compile(r"\.reg\s+\.(\w+)\s+%\w+<(\d+)>")

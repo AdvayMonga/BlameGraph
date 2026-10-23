@@ -56,6 +56,10 @@ class Entry:
     def ever_improved(self) -> bool:
         return any(o.improved for o in self.outcomes)
 
+    def ever_failed(self) -> bool:
+        """Measured at least once without beating its parent (an idea never measured has not failed)."""
+        return any(o.child_id and o.improved is False for o in self.outcomes)
+
 
 def text(idea: dict) -> str:
     return "\n".join(str(idea[k]) for k in FIELDS if idea.get(k)) or json.dumps(idea, sort_keys=True)
@@ -76,12 +80,12 @@ def ideas(root: Path) -> list[tuple[str, dict, Outcome]]:
                 continue
             if "ideas" in row:                   # a funnel round: each idea with how far it got
                 for x in row["ideas"]:
-                    h = x.get("idea") or {}
+                    h, c = x.get("idea") or {}, children.get(x.get("child_id"), {})
                     out.append((task, {k: v for k, v in h.items() if k in FIELDS} or h, Outcome(
                         r["id"], row.get("parent_id"), row.get("parent_score"), x.get("child_id"),
-                        x.get("child_score"), x.get("improved"), None,
-                        None if x.get("child_id") else (x.get("fate", "") + (": " + x["error"] if x.get("error")
-                                                                             else ""))[:300])))
+                        x.get("child_score"), x.get("improved"), c.get("stage"),
+                        c.get("error") if x.get("child_id") else
+                        (x.get("fate", "") + (": " + x["error"] if x.get("error") else ""))[:300])))
                 continue
             got = {m["index"]: m for m in row.get("measured") or []}
             for i, h in enumerate(row.get("hypotheses") or []):
@@ -155,7 +159,7 @@ def matches(entries: list[Entry], query: str, task: str | None = None, k: int = 
 
 def retry(entries: list[Entry], best_parent: dict[str, str]) -> list[Entry]:
     """Ideas that never beat their parent and were tried only on parents other than each task's current best."""
-    return [e for e in entries if e.task in best_parent and e.outcomes and not e.ever_improved()
+    return [e for e in entries if e.task in best_parent and e.ever_failed() and not e.ever_improved()
             and all(o.parent_id != best_parent[e.task] for o in e.outcomes)]
 
 

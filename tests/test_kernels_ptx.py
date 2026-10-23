@@ -66,6 +66,12 @@ def test_a_card_reads_sass_when_a_library_ships_no_ptx():
     assert f["uses"] == ["setmaxnreg", "tma", "wgmma"]
 
 
+def test_entries_without_visible_and_barrier_instructions_are_counted():
+    ptx = ".entry a(\n)\n{\n\tbarrier.sync 0;\n\tbar.sync 0;\n}\n.weak .entry b(\n)\n{\n\tret;\n}\n"
+    es = entries(ptx)
+    assert list(es) == ["a", "b"] and features(es["a"])["barrier"] == 2
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
