@@ -115,7 +115,6 @@ class SimBackend:
     def __init__(self, clock: Clock, cost: CostModel, blocks: int = 4096, block_size: int = 16):
         self._lock = threading.Lock()
         self.clock, self.cost = clock, cost
-        self.cache_adapter = None
         self.last_cache_hit_tokens = 0
         self.last_batch_cache_hit_tokens = 0
         self.blocks, self.block_size, self.reserved = blocks, block_size, 0

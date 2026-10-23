@@ -110,7 +110,7 @@ def test_main_profiles_a_presampled_corpus_workload(tmp_path, stub_backend_cls, 
         def encode_messages(self, msgs, thinking=True):
             return [len(m["content"]) for m in msgs] + [int(thinking)]
     monkeypatch.setattr(tokmod, "Tokenizer", Tok)
-    monkeypatch.setattr(profile, "build_backend", lambda s: (stub_backend_cls(), None))
+    monkeypatch.setattr(profile, "build_backend", lambda s: stub_backend_cls())
     w = {"source": {"kind": "corpus", "class": "steady_interactive", "split": "seen", "seed": 0,
                     "corpus_version": "v", "lines": [0, 1]},
          "messages": [[{"role": "user", "content": "hi"}], [{"role": "user", "content": "hello"}]]}
@@ -122,7 +122,7 @@ def test_main_profiles_a_presampled_corpus_workload(tmp_path, stub_backend_cls, 
 
 
 def test_main_captures_the_calls_of_named_functions_into_the_bundle(tmp_path, stub_backend_cls, monkeypatch):
-    monkeypatch.setattr(profile, "build_backend", lambda s: (stub_backend_cls(), None))
+    monkeypatch.setattr(profile, "build_backend", lambda s: stub_backend_cls())
     out = tmp_path / "o"
     assert profile.main(["--synthetic", "--requests", "2", "--prompt-len", "4", "--max-tokens", "2", "--out", str(out),
                          "--capture", "lab.bundle:workload_hash"]) == 0

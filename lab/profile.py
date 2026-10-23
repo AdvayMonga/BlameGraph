@@ -232,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:
     settings = load_settings()
     overrides = {k: v for k, v in (("backend_name", args.backend), ("model_name", args.model)) if v}
     settings = dataclasses.replace(settings, **overrides)
-    backend, _ = build_backend(settings)
+    backend = build_backend(settings)
     if args.synthetic:
         prompts = synthetic_prompts(args.requests, args.prompt_len, seed=args.seed)
         source = {"kind": "synthetic", "prompt_len": args.prompt_len, "seed": args.seed}
