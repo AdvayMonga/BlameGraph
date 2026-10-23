@@ -6,7 +6,8 @@ From the MCTS-chosen parent:
   2. dedup / merge: hypotheses within `SAME` cosine are one idea, merged by a cheap model keeping every detail
   3. past failures: an idea like an archived one that never beat its parent goes back to the judge with those records
      and survives only if the judge names what differs now
-  4. the wide coder writes each idea; edits that do not apply or repeat a judged program are dropped
+  4. the wide coder writes each idea; edits that do not apply or repeat a judged program are dropped; with
+     `precheck`, what fails to build in a jail with no GPU is dropped too, and the compiler's report is kept
   5. correctness on the GPU (stage 1), `parallel` at a time; failures go to the repair queue
   6. the strong coder rewrites each survivor from the idea and the passing version, checked again
   7. the quick speed test (the most-called shape only); the fastest `keep` go on
@@ -58,6 +59,7 @@ class Funnel:
     parallel: int = 4
     repairs: int = 3
     ncu: bool = False
+    precheck: bool = False                   # the no-GPU build check (jailed stage 5) before stage 1
     spent: float = 0.0
     calls: int = 0
 
@@ -176,10 +178,13 @@ def write(f: Funnel, model, system: str, prompt: str, parent_code: str, seen: se
     return code, why
 
 
-def correct(f: Funnel, codes: list[str]) -> list[dict]:
-    """Stage 1 for each program, `parallel` jails at a time (correctness does not need the GPU to itself)."""
+PRECHECK = 5                 # kernels.evolve.jailed.PRECHECK_STAGE
+
+
+def correct(f: Funnel, codes: list[str], stage: int = 1) -> list[dict]:
+    """Stage 1 (or the precheck) for each program, `parallel` jails at a time (neither needs the GPU to itself)."""
     with ThreadPoolExecutor(max_workers=max(1, f.parallel)) as ex:
-        return list(ex.map(lambda c: f.stage(c, 1), codes))
+        return list(ex.map(lambda c: f.stage(c, stage), codes))
 
 
 def counters(artifacts: dict) -> dict[str, float]:
@@ -214,6 +219,10 @@ def expand(f: Funnel, tree: Tree, parent: Node, system: str, it: int, keep_node:
     """One round from `parent`; the fully examined children are added with `keep_node`; returns them."""
     from kernels.search.loop import prompt
     spent0 = f.spent
+    if f.precheck and "compile_report" not in parent.artifacts:      # the parent's own report, for the compiler slice
+        a = f.stage(parent.code, PRECHECK)["artifacts"]
+        if a.get("compile_report"):
+            parent.artifacts["compile_report"] = a["compile_report"]
     base = prompt(tree, parent, coder=False)
     ideas = generate(f, system, base, slices(f, tree, parent))
     named = len(ideas)
@@ -231,6 +240,16 @@ def expand(f: Funnel, tree: Tree, parent: Node, system: str, it: int, keep_node:
             continue
         seen.add(fingerprint(code))
         written.append((h, plan, code))
+    reports = {}
+    if f.precheck and written:                   # what fails to build never takes GPU time
+        built = []
+        for (h, plan, code), r in zip(written, correct(f, [c for _, _, c in written], PRECHECK)):
+            if r["metrics"].get("correct") == 0.0:
+                fates.append({"idea": h, "fate": "precheck: " + r["artifacts"].get("precheck", "")[:300]})
+                continue
+            reports[code] = r["artifacts"].get("compile_report")
+            built.append((h, plan, code))
+        written = built
     survivors, failed = [], []
     for (h, plan, code), r in zip(written, correct(f, [c for _, _, c in written])):
         (survivors if r["metrics"].get("correct") == 1.0 else failed).append((h, plan, code, r))
@@ -265,6 +284,8 @@ def expand(f: Funnel, tree: Tree, parent: Node, system: str, it: int, keep_node:
         r = f.stage(code, 2)
         if f.ncu and r["metrics"].get("correct") == 1.0 and r["metrics"].get("combined_score", 0) > 0:
             r["artifacts"] = {**r["artifacts"], **f.stage(code, 3)["artifacts"]}
+        if reports.get(code):
+            r["artifacts"] = {**r["artifacts"], "compile_report": reports[code]}
         child = Node(uuid.uuid4().hex[:8], parent.id, code, r["metrics"], r["artifacts"], it, "", plan, "optimization")
         keep_node(child, 0.0)
         children.append(child)

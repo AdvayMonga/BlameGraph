@@ -108,6 +108,26 @@ def test_a_predicted_counter_change_is_measured_against_the_parent():
     assert abs(got[0]["actual_change_pct"] + 30) < 1e-9 and got[1]["actual_change_pct"] is None and got[1]["missing"]
 
 
+def test_the_precheck_drops_what_does_not_build_and_feeds_the_compiler_slice():
+    report = json.dumps([{"kernel": "k", "registers": 32, "stack": 0, "shared": 0, "local": 0}])
+
+    def staged(code, n):
+        if n == 5:
+            ok = "a = 12" not in code                                   # one idea does not build
+            return {"metrics": {"stage": 5, "correct": float(ok)},
+                    "artifacts": {"precheck": "imported" if ok else "the CUDA C++ build failed: k.cu(3): error",
+                                  **({"compile_report": report} if ok else {})}}
+        return stage(code, n)
+    f = Funnel(Models(Judge(), merge, coder, coder), staged, per_call=3, keep=2, parallel=2, ptx="cards", precheck=True)
+    t, rows = Tree(), []
+    root = t.add(Node("r", None, START, {"correct": 1.0, "combined_score": 0.1, "stage": 2}, {}, 0))
+    kids = expand(f, t, root, "SYS", 1, lambda n, c: t.add(n), rows.append)
+    fates = {x["idea"]["modification_plan"]: x["fate"] for x in rows[0]["ideas"]}
+    assert fates["set a = 12"].startswith("precheck: the CUDA C++ build failed")
+    assert root.artifacts["compile_report"] == report and all(k.artifacts["compile_report"] == report for k in kids)
+    assert any("The compiler's report for this program" in u for u in f.models.judge.calls)
+
+
 if __name__ == "__main__":
     import inspect
     import tempfile
