@@ -33,7 +33,7 @@ def expected(cfg: dict, task, timed: bool) -> set:
 def verify(cfg: dict, path: Path, timed: bool = False) -> tuple[bool, str]:
     import stat
     import torch
-    from kernels.check import TOLERANCES, _compare, _gen
+    from kernels.check import TOLERANCES, _compare, _gen, budget_atol
     from kernels.evolve.core import _scaled
     from kernels.tasks import from_config
     path = Path(path)
@@ -56,7 +56,10 @@ def verify(cfg: dict, path: Path, timed: bool = False) -> tuple[bool, str]:
         dt = getattr(torch, r["dtype"])
         make = task.make_inputs if r.get("scale") is None else _scaled(task.make_inputs, r["scale"])
         inputs = make(tuple(r["shape"]), dt, device, _gen(r["seed"]))
-        d = _compare(task.reference(*[t.clone() for t in inputs]), [o.to(device) for o in r["outputs"]], *tol[dt])
+        ref, (atol, rtol) = task.reference(*[t.clone() for t in inputs]), tol[dt]
+        if task.error_budget:                   # the baseline is the engine's own code, never the candidate's
+            atol = budget_atol(ref, task.bind(task.baseline())(*[t.clone() for t in inputs]), atol, task.error_budget)
+        d = _compare(ref, [o.to(device) for o in r["outputs"]], atol, rtol)
         if not d["ok"]:
             why = d.get("error") or f"max_abs {d['max_abs']:.3g}, max_rel {d['max_rel']:.3g}"
             return False, f"{r['kind']} output at shape {r['shape']} seed {r['seed']} differs from the reference: {why}"

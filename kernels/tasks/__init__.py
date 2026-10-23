@@ -43,6 +43,9 @@ class Task:
                                             # program: same behaviour, spelled so the source screen accepts it
     options: tuple[str, ...] = ()           # deployment facts make_inputs/make_real take as keywords (from the
                                             # target spec: `options_from_target`), e.g. the engine's context window
+    error_budget: float | None = None       # regions: a case's atol is at least this times the baseline's own error
+    baseline_fn: Callable | None = None     # the baseline when it is not an engine entry point (a region's stations)
+    watch: tuple[str, ...] = ()             # further modules the evaluator watches for patches (a region's stations)
     seen_default: tuple = field(default_factory=tuple)      # shapes to use with no capture (tests, toys)
     heldout_default: tuple = field(default_factory=tuple)
 
@@ -71,6 +74,8 @@ class Task:
         return dataclasses.replace(self, make_inputs=make)
 
     def baseline(self) -> Callable | None:
+        if self.baseline_fn is not None:
+            return self.baseline_fn
         if not self.entry:
             return None
         mod, _, attr = self.entry.partition(":")

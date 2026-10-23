@@ -5,6 +5,17 @@ a reversed decision gets a new entry that names the old one. Change any of these
 
 
 
+## 2026-10-23 — Regions replace hand-written kernel tasks; a region's error budget is measured
+The kernel layer's unit of work becomes a region: any run of consecutive decode operations (stations), from one kernel
+to the whole step, with its harness generated from the engine's declared stations (inputs, the stations as baseline,
+an fp32 run as reference). Why (the user): a task was only facts plus a test harness, and hand-drawn task boundaries
+made fusion across kernels unreachable; the megakernel's 4.1 vs 5.6 ms at batch 1 came from fusion alone. Today's 10
+tasks become the first single-station regions once the engine has stations. A region's output may be at most 2x as
+wrong as the engine's own code against the fp32 run (k = 2 over k = 1, leaving room for lower precision inside),
+never stricter than the dtype's tolerance; a winner above the baseline's error gets the quick equiv; MLPerf's rule
+stays the end-to-end judge. Captures run under the regimes the task scores (equal weight per regime, call-weighted
+within) and are reused until the engine outside the region, the launch settings or the traffic change.
+
 ## 2026-10-23 — A live dashboard that reads files; no Prometheus/Grafana
 The engine's Prometheus + Grafana stack is removed (inference-server #129; its `/metrics` endpoint stays). Instead
 `lab/dashboard.py` shows a run live from the ledger and a progress file the lab appends to (`lab/live.py`). Why (the
