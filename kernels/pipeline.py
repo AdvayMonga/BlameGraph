@@ -8,7 +8,6 @@ from __future__ import annotations
 import difflib
 import json
 import os
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -20,7 +19,7 @@ from typing import Callable
 CAPTURE_SPECS = (("mixed_1", 256), ("mixed_3", 64), ("long_context", 60))
 REGIME_CAPTURE = {"single_stream": ("steady_interactive", 1), "saturated": ("mixed_1", 256), "bursty": ("mixed_3", 64),
                   "long_prompt_short_output": ("long_context", 60), "short_prompt_long_output": ("steady_interactive", 64),
-                  "shared_prefix_multiturn": ("mixed_3", 64), "overload": ("mixed_1", 256)}
+                  "shared_prefix_multi_turn": ("mixed_3", 64), "overload": ("mixed_1", 256)}
 
 
 def specs(regimes: tuple[str, ...] = ()) -> tuple[tuple[str, int], ...]:
@@ -38,6 +37,7 @@ def tree_key(task, tree: Path, spec: tuple) -> str:
         h.update(f.relative_to(tree).as_posix().encode() + b"\0" + f.read_bytes())
     return h.hexdigest()
 ROOT = Path(__file__).resolve().parents[1]
+GATE_TIMEOUT_S = 3600        # as `kernels.evolve gate`: the held-out shapes on top of the seen ones
 
 
 def module_file(task, tree: Path) -> Path:
@@ -71,19 +71,38 @@ def captures(task, tree: Path, profile: Callable[[Path, dict], Path | None], reg
     return out
 
 
-def remote_env(prefix: list[str], env_dir: str, python: str, env: dict) -> dict:
-    """The evaluator's ssh mode for a worker host: each judgment runs there, config and source on stdin."""
-    exports = " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
+def remote_env(prefix: list[str], env_dir: str, python: str, env: dict, sudo: bool = False) -> dict:
+    """The evaluator's ssh mode for a worker host: each judgment runs there, config and source on stdin. Quoted as
+    `lab.worker.Remote._run` quotes (paths raw, so `~` and `$HOME` expand there; values in double quotes)."""
+    for v in env.values():
+        if any(c in v for c in '"`\\'):
+            raise ValueError(f"unsafe value in the worker's env: {v!r}")
+    exports = " ".join(f'{k}="{v}"' for k, v in env.items())
+    root = 'sudo -n env HOME="$HOME" PATH="$PATH" ' if sudo else ""
     return {"KERNEL_EVAL_SSH": json.dumps(prefix),
-            "KERNEL_EVAL_REMOTE": f"cd {shlex.quote(env_dir)} && PATH={shlex.quote(str(Path(python).parent))}:$PATH "
-                                  f"{exports}"}
+            "KERNEL_EVAL_REMOTE": f"cd {env_dir} && {root}PATH=\"{Path(python).parent}:$PATH\" {exports}"}
+
+
+def spent(out: Path) -> float:
+    """Model dollars a search spent so far, from its logs (a search that died never printed its cost)."""
+    usd = 0.0
+    for name, key in (("trace.jsonl", "cost_usd"), ("hypotheses.jsonl", "usd")):
+        f = Path(out) / name
+        for line in f.read_text().splitlines() if f.exists() else []:
+            try:
+                v = json.loads(line).get(key)
+            except ValueError:
+                continue
+            usd += float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
+    return round(usd, 4)
 
 
 def search(task, caps: list[Path], start: Path, out: Path, usd: float, evals: int, ledger_root: Path, env: dict,
-           funnel: bool = False) -> dict:
+           funnel: bool = False, device: str = "cuda") -> dict:
     """`python -m kernels.search` on the captures: its last JSON line (best, cost, out, ledger record id)."""
     argv = [sys.executable, "-m", "kernels.search", "--task", task.name, "--out", str(out), "--usd", str(usd),
             "--evals", str(evals), "--initial", str(start), "--ledger", str(ledger_root), "--equal-captures",
+            "--device", device,
             *[w for c in caps for w in ("--captures", str(c))], *(["--funnel"] if funnel else [])]
     p = subprocess.run(argv, capture_output=True, text=True, cwd=ROOT, env={**os.environ, **env})
     lines = [x for x in p.stdout.splitlines() if x.startswith("{")]
@@ -104,6 +123,9 @@ def gate(task, caps: list[Path], program: Path, out: Path, env: dict) -> dict:
            "ints": _ints(sets, ("seen", "heldout")), "options": options_from_target(task)}
     path = Path(out) / "gate_config.json"
     path.write_text(json.dumps(cfg))
+    env = {**env, "KERNEL_EVAL_TIMEOUT_S": str(GATE_TIMEOUT_S)}            # every seen and held-out shape: longer
+    if "KERNEL_EVAL_REMOTE" in env:                                         # the worker's jail reads it too
+        env["KERNEL_EVAL_REMOTE"] += f' KERNEL_EVAL_TIMEOUT_S="{GATE_TIMEOUT_S}"'
     saved = {k: os.environ.get(k) for k in ("KERNEL_EVAL_CONFIG", *env)}
     os.environ.update({"KERNEL_EVAL_CONFIG": str(path), **env})
     try:

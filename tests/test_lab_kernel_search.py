@@ -34,31 +34,48 @@ def test_the_start_program_and_the_patch_come_from_the_workspace_tree(tmp_path):
     assert pipeline.patch(task(), tmp_path, start) == ""
 
 
-def test_a_worker_host_gets_the_evaluators_ssh_mode():
-    env = pipeline.remote_env(["ssh", "lab@h"], "/home/lab/BlameGraph", "/home/lab/inf/.venv/bin/python",
-                              {"LAB_TARGET": "targets/x.toml"})
+def test_a_worker_host_gets_the_evaluators_ssh_mode_quoted_as_the_worker_quotes():
+    import os
+    import subprocess
+    env = pipeline.remote_env(["ssh", "lab@h"], "~", "$HOME/inf/.venv/bin/python", {"X": "$HOME/a"})
     assert json.loads(env["KERNEL_EVAL_SSH"]) == ["ssh", "lab@h"]
-    assert env["KERNEL_EVAL_REMOTE"].startswith("cd /home/lab/BlameGraph && PATH=/home/lab/inf/.venv/bin:$PATH")
-    assert "LAB_TARGET=targets/x.toml" in env["KERNEL_EVAL_REMOTE"]
+    line = env["KERNEL_EVAL_REMOTE"] + " sh -c 'printf \"%s|%s|%s\" \"$X\" \"$(pwd)\" \"$PATH\"'"
+    x, pwd, path = subprocess.run(["sh", "-c", line], capture_output=True, text=True, check=True).stdout.split("|")
+    home = os.path.realpath(os.environ["HOME"])
+    assert x == os.environ["HOME"] + "/a" and os.path.realpath(pwd) == home      # ~ and $HOME expand there
+    assert path.startswith(os.environ["HOME"] + "/inf/.venv/bin:")
+    assert "sudo -n" in pipeline.remote_env(["ssh", "h"], "~", "/p/python", {}, sudo=True)["KERNEL_EVAL_REMOTE"]
+    with pytest.raises(ValueError, match="unsafe"):
+        pipeline.remote_env([], "~", "/p", {"X": 'a"b'})
+
+
+def test_every_capture_regime_is_a_real_regime():
+    from regimes import suite
+    assert set(pipeline.REGIME_CAPTURE) <= set(suite.REGIMES)
 
 
 def spec(tb):
     return next(s for s in tb.specs() if s.name == "kernel_search")
 
 
-def test_refused_off_the_kernels_layer_and_beyond_the_budget(tb):
+def test_refused_off_the_kernels_layer_and_beyond_the_budget(tb, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    monkeypatch.setenv("LAB_GPU_USD_PER_HOUR", "3")
     h = next(s for s in tb.specs() if s.name == "hypothesis").fn
     rt = h({"hypothesis": "h", "rationale": "r", "layer": "runtime"}).split()[1]
     with pytest.raises(ValueError, match="kernels layer only"):
         spec(tb).fn({"hypothesis_id": rt, "expect": EXPECT, "task": "silu_mul", "budget_usd": 1})
     k = h({"hypothesis": "k", "rationale": "r", "layer": "kernels"}).split()[1]
     for bad, why in (({"task": "nope", "budget_usd": 1}, "task"), ({"task": "silu_mul", "budget_usd": 0}, "budget_usd"),
-                     ({"task": "silu_mul", "budget_usd": 10_000}, "more than the run has left")):
+                     ({"task": "silu_mul", "budget_usd": 10_000}, "more than the run has left"),
+                     ({"task": "silu_mul", "budget_usd": 0.5}, "a search needs at least")):
         with pytest.raises(ValueError, match=why):
             spec(tb).fn({"hypothesis_id": k, "expect": EXPECT, **bad})
 
 
 def test_one_call_records_the_search_and_saves_a_patch_when_the_gate_passes(tb, monkeypatch, tmp_path):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    monkeypatch.setenv("LAB_GPU_USD_PER_HOUR", "3")
     from kernels.tasks import load as real_load
     import kernels.tasks
     engine_task = dataclasses.replace(task(), entry="inference_server.engine:speed")     # the fixture repo's module
@@ -67,7 +84,7 @@ def test_one_call_records_the_search_and_saves_a_patch_when_the_gate_passes(tb, 
     caps.mkdir()
     monkeypatch.setattr(pipeline, "captures", lambda t, tree, profile, *a: [caps])
 
-    def search(t, cs, start, out, usd, evals, root, env, funnel=False):
+    def search(t, cs, start, out, usd, evals, root, env, funnel=False, device="cuda"):
         out.mkdir(parents=True)
         (out / "best_program.py").write_text(start.read_text().replace("return 1", "return 2"))
         return {"best": {"combined_score": 1.3, "correct": 1.0}, "cost": {"usd": 2.5}, "ledger": "ev-search"}
@@ -113,3 +130,25 @@ def test_captures_follow_the_scored_regimes_weigh_each_the_same_and_are_reused(t
     t = dataclasses.replace(task(), shape_of=lambda call: call["s"])
     assert shapes.from_captures(t, [Path("a"), Path("b")]) == {(8,): 9, (64,): 1}
     assert shapes.from_captures(t, [Path("a"), Path("b")], equal=True) == {(8,): 9, (64,): 9}
+
+
+def test_a_search_that_dies_still_charges_what_it_spent(tb, monkeypatch, tmp_path):
+    from kernels.tasks import load as real_load
+    import kernels.tasks
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    monkeypatch.setenv("LAB_GPU_USD_PER_HOUR", "3")
+    engine_task = dataclasses.replace(task(), entry="inference_server.engine:speed")
+    monkeypatch.setattr(kernels.tasks, "load", lambda n: engine_task if n == "silu_mul" else real_load(n))
+    monkeypatch.setattr(pipeline, "captures", lambda *a: [tmp_path])
+
+    def dies(t, cs, start, out, *a, **k):
+        out.mkdir(parents=True)
+        (out / "trace.jsonl").write_text(json.dumps({"cost_usd": 1.25}) + "\n" + json.dumps({"cost_usd": 0.5}) + "\n")
+        raise RuntimeError("kernels.search exited 1")
+    monkeypatch.setattr(pipeline, "search", dies)
+    h = next(s for s in tb.specs() if s.name == "hypothesis").fn
+    k = h({"hypothesis": "fuse", "rationale": "r", "layer": "kernels"}).split()[1]
+    spent = tb.s.budget.spent_usd
+    out = spec(tb).fn({"hypothesis_id": k, "expect": EXPECT, "task": "silu_mul", "budget_usd": 20})
+    assert out.startswith("kernel_search failed") and tb.s.budget.spent_usd >= spent + 1.75
+    assert list(ledger.records(tb.s.ledger_root, kind="kernels"))[-1]["result"]["model_usd"] == 1.75
