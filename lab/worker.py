@@ -36,7 +36,7 @@ import tarfile
 import tempfile
 from pathlib import Path
 
-from lab import engine, serve, target
+from lab import engine, live, serve, target
 from lab.safety import container
 
 RESULT = "_result.json"
@@ -242,7 +242,11 @@ class Local:
 
     def call(self, job: str, inputs: dict[str, Path], args: dict, out: Path) -> dict:
         out.mkdir(parents=True, exist_ok=True)
-        return JOBS[job](inputs, out, args, self.hooks)
+        live.emit("job", job=job, state="start")
+        try:
+            return JOBS[job](inputs, out, args, self.hooks)
+        finally:
+            live.emit("job", job=job, state="end")
 
 
 def _tar(root: Path) -> bytes:
@@ -335,7 +339,11 @@ class Remote:
         for k, p in inputs.items():
             if shas[k] not in have:
                 self._run(f"put {shas[k]}", _tar(p))
-        _untar(self._run(f"run {job}", json.dumps({"inputs": shas, "args": args}).encode()), out)
+        live.emit("job", job=job, state="start")
+        try:
+            _untar(self._run(f"run {job}", json.dumps({"inputs": shas, "args": args}).encode()), out)
+        finally:
+            live.emit("job", job=job, state="end")
         reply = json.loads((out / RESULT).read_text())
         (out / RESULT).unlink()
         _raise(reply.get("error"))

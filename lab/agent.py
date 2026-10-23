@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shlex
 import sys
@@ -11,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib.parse import urlsplit
 
-from lab import apiproxy, engine
+from lab import apiproxy, engine, live
 from lab.safety import container, jail
 from lab.safety.grader import HF_HUB
 from lab.safety.hooks import WRITE_TOOLS, write_guard
@@ -120,6 +121,22 @@ def workbench_command(name: str, ws: Path, scratch: Path, cli: Path, base_url: s
                                     engine.python())
 
 
+def _live(msg, spent_usd: float) -> None:
+    """What the agent just said or called, for the dashboard (`lab.live`)."""
+    from claude_agent_sdk import AssistantMessage, TextBlock, ThinkingBlock, ToolResultBlock, ToolUseBlock, UserMessage
+    if isinstance(msg, AssistantMessage):
+        for b in msg.content:
+            if isinstance(b, ToolUseBlock):
+                live.emit("agent", kind="tool", name=b.name.removeprefix("mcp__lab__"),
+                          detail=json.dumps(b.input)[:300], spent_usd=spent_usd)
+            elif isinstance(b, (TextBlock, ThinkingBlock)):
+                live.emit("agent", kind="text", detail=(b.text if isinstance(b, TextBlock) else b.thinking)[:600],
+                          spent_usd=spent_usd)
+    elif isinstance(msg, UserMessage) and isinstance(msg.content, list) and any(
+            isinstance(b, ToolResultBlock) for b in msg.content):
+        live.emit("agent", kind="result", spent_usd=spent_usd)
+
+
 class ClaudeAgentSDK:
     """Claude through the Agent SDK CLI, jailed with a wiped env (on Linux in the workbench container, elsewhere under
     srt); its model calls go through the lab's API proxy, so no credential is ever inside; lab tools run out here."""
@@ -168,10 +185,11 @@ class ClaudeAgentSDK:
         script.chmod(0o700)
         return script
 
-    async def _run(self, spec: AgentSpec, base_url: str) -> AgentReply:
+    async def _run(self, spec: AgentSpec, proxy: apiproxy.Proxy) -> AgentReply:
         import claude_agent_sdk
         from claude_agent_sdk import (ClaudeAgentOptions, HookMatcher, ResultMessage,
                                       create_sdk_mcp_server, query, tool)
+        base_url = proxy.url
 
         # The workbench is frozen for every lab tool call, wherever it runs: nothing in it can swap a file or a dir for a
         # link while the tool snapshots, restores, copies into the workspace, or (Remote) rsyncs it as root on the VM.
@@ -207,6 +225,7 @@ class ClaudeAgentSDK:
         )
         reply = AgentReply(None, 0.0, 0, "no result message")
         async for msg in query(prompt=spec.prompt, options=options):
+            _live(msg, proxy.spent_usd)
             if isinstance(msg, ResultMessage):
                 reply = AgentReply(msg.structured_output if not msg.is_error else None,
                                    float(msg.total_cost_usd or 0.0), msg.num_turns,
@@ -223,7 +242,7 @@ class ClaudeAgentSDK:
             return AgentReply(None, 0.0, 0, f"provider failed: {type(e).__name__}: {e}")
         with proxy:
             try:
-                reply = asyncio.run(asyncio.wait_for(self._run(spec, proxy.url), spec.timeout_s))
+                reply = asyncio.run(asyncio.wait_for(self._run(spec, proxy), spec.timeout_s))
             except TimeoutError:
                 reply = AgentReply(None, 0.0, 0, f"timed out after {spec.timeout_s:.0f}s")
             except Exception as e:

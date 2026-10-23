@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
+from lab import live
 from lab.agent import OUTPUT_SCHEMA, AgentReply, AgentSpec
 from lab.safety import grader
 from lab.safety.hooks import allowed
@@ -202,6 +203,8 @@ class OpenAICompatible:
                 cost += step
                 msg = out["choices"][0]["message"]
                 calls = msg.get("tool_calls") or []
+                if msg.get("content"):
+                    live.emit("agent", kind="text", detail=msg["content"][:600], spent_usd=cost)
                 messages.append({"role": "assistant", "content": msg.get("content"),
                                  **({"tool_calls": calls} if calls else {})})
                 if not calls:
@@ -217,7 +220,9 @@ class OpenAICompatible:
                             return AgentReply({"status": args["status"], "note": args.get("note")}, cost, turns, None)
                         text = "finish refused: status must be `continue` or `stop`"
                     elif args is not None:
+                        live.emit("agent", kind="tool", name=name, detail=json.dumps(args)[:300], spent_usd=cost)
                         text = self._call(bench, builtin, lab, name, args)
+                        live.emit("agent", kind="result", spent_usd=cost)
                     messages.append({"role": "tool", "tool_call_id": c["id"], "content": text[-MAX_TOOL_TEXT:]})
                 if cost >= spec.max_budget_usd:
                     return AgentReply(None, cost, turns, f"session budget ${spec.max_budget_usd:.2f} spent")

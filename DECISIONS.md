@@ -5,6 +5,13 @@ a reversed decision gets a new entry that names the old one. Change any of these
 
 
 
+## 2026-10-23 — A live dashboard that reads files; no Prometheus/Grafana
+The engine's Prometheus + Grafana stack is removed (inference-server #129; its `/metrics` endpoint stays). Instead
+`lab/dashboard.py` shows a run live from the ledger and a progress file the lab appends to (`lab/live.py`). Why (the
+user): anything that scrapes the engine during a measurement can move the numbers; the lab already keeps every
+request's client and engine rows, the step timeline and device samples, so the stack only added a live view, which
+the lab's own files give for free. Researcher-only; human-in-the-loop intervention is out of scope.
+
 ## 2026-10-22 — Every bench is followed by a profile of the same tree
 A completed `bench` (and the run's baseline) profiles the measured tree once, right after the measurement and in its
 own launch, with the `profile` tool's defaults, and keeps it as `profiled` with its layer facts. Why (the user): an
