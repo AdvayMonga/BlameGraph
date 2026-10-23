@@ -26,7 +26,8 @@ HELDOUT_FIELDS = {"kind", "config", "metrics", "run", "session", "snapshot", "sn
                   "tool", "args", "cost", "claim", "experiment"}
 HELDOUT_METRIC_KEYS = {"base", "new", "delta_pct", "band_pct", "verdict",
                        "ceiling", "pct_of_ceiling_base", "pct_of_ceiling_new", "ceiling_from", "reference_missing"}
-EXPERIMENT_FIELDS = {"hypothesis", "expect", "actual", "actual_missing", "gap", "gap_pct_of_expected", "noise_band_pct"}
+EXPERIMENT_FIELDS = {"hypothesis", "expect", "actual", "actual_missing", "gap", "gap_pct_of_expected", "noise_band_pct",
+                     "bundle", "independence"}
 SCALAR = (int, float, str, bool, type(None))
 
 
@@ -84,8 +85,9 @@ def _check(record: dict, kinds: set[str] = KINDS) -> None:
     if exp is not None:                      # the agent's prediction and one number derived from an aggregate
         if not isinstance(exp, dict) or exp.keys() - EXPERIMENT_FIELDS:
             raise LedgerError(f"a held-out experiment may only carry {sorted(EXPERIMENT_FIELDS)}")
-        flat = {k: v for k, v in exp.items() if k != "expect"}
-        if not all(isinstance(v, SCALAR) for v in flat.values()) or not isinstance(exp.get("expect", {}), dict) \
+        flat = {k: v for k, v in exp.items() if k not in ("expect", "bundle")}
+        if not all(isinstance(h, str) for h in exp.get("bundle") or []) \
+                or not all(isinstance(v, SCALAR) for v in flat.values()) or not isinstance(exp.get("expect", {}), dict) \
                 or not all(isinstance(v, SCALAR) for v in exp.get("expect", {}).values()):
             raise LedgerError("a held-out experiment carries scalar values only")
     for name, m in metrics.items():

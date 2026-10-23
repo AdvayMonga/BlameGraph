@@ -65,9 +65,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `experiments.py` (decided 2026-10-11: no measured number without the agent's reasoning and no reasoning without
   the number; measured tools require an open `hypothesis` record and an `expect` {metric, value, unit, why, optional
   `mechanism`: the same on other numbers of the result by dotted path, e.g. a profile's layer facts}, the
-  record keeps both with the computed gap, and the next measured call is refused until a `reflection` on the last
-  one is filed; the brief lists the run's hypotheses with their measurements and reflections; a session that ends
-  with its last measurement unreflected is followed by one call (`session.closing`: $0.50, 4 turns, tools `reflect`
+  record keeps both with the computed gap; a hypothesis names its layer, several may be open at once and a call may
+  measure several as a `bundle` with its `independence` stated; a hypothesis is measured again only after a
+  `reflection` on its last measurement, and a new hypothesis only once every measurement has one (batches); the brief lists the run's hypotheses with their measurements and reflections; a session that ends
+  with measurements unreflected is followed by one call (`session.closing`: $0.50, 4 turns, tools `reflect`
   and `ledger` only, prompt = that record's facts), kept under the session record's `closing`; run ids starting
   `researcher-` are a person's, and no agent view (`ledger` tool, `agent.duckdb`) shows their records) +
   `experiment.py` (`python -m lab.experiment start|baseline|hypothesis|call|reflect`: a change made outside the lab,

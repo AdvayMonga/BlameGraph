@@ -41,22 +41,22 @@ def test_refused_without_an_open_hypothesis(tb, args, why):
 @pytest.mark.parametrize("bad", [None, {"metric": "x"}, {**EXPECT, "value": "fast"}, {**EXPECT, "value": True},
                                  {**EXPECT, "unit": "ms"}, {**EXPECT, "why": " "}, {**EXPECT, "value": float("nan")}])
 def test_refused_without_a_numeric_prediction(tb, bad):
-    h = call(tb, "hypothesis", {"hypothesis": "h", "rationale": "r"}).split()[1]
+    h = call(tb, "hypothesis", {"hypothesis": "h", "rationale": "r", "layer": "kernels"}).split()[1]
     with pytest.raises(ValueError, match="expect"):
         call(tb, "trace", {"hypothesis_id": h, "expect": bad})
 
 
 def test_hypothesis_needs_text_and_keeps_optional_fields(tb):
     with pytest.raises(ValueError):
-        call(tb, "hypothesis", {"hypothesis": "", "rationale": "r"})
-    h = call(tb, "hypothesis", {"hypothesis": "decode attention is memory-bound", "rationale": "41% of bandwidth",
+        call(tb, "hypothesis", {"hypothesis": "", "rationale": "r", "layer": "kernels"})
+    h = call(tb, "hypothesis", {"hypothesis": "decode attention is memory-bound", "rationale": "41% of bandwidth", "layer": "kernels",
                                 "abandon_if": "no gain beyond the noise band"}).split()[1]
     rec = next(ledger.records(tb.s.ledger_root, kind="hypothesis"))
     assert rec["id"] == h and rec["abandon_if"] == "no gain beyond the noise band" and rec["run"] == tb.s.run_id
 
 
 def test_a_measurement_carries_the_prediction_and_blocks_until_reflected(tb):
-    h = call(tb, "hypothesis", {"hypothesis": "h", "rationale": "r"}).split()[1]
+    h = call(tb, "hypothesis", {"hypothesis": "h", "rationale": "r", "layer": "kernels"}).split()[1]
     out = call(tb, "trace", {"hypothesis_id": h, "expect": {**EXPECT, "metric": "kernel_ms"}})
     rec = list(ledger.records(tb.s.ledger_root, tool="trace"))[-1]
     x = rec["experiment"]
@@ -114,7 +114,7 @@ def test_a_refused_call_needs_no_reflection(tb, monkeypatch):
     from lab import proftools
     real = sh.which
     monkeypatch.setattr(proftools.shutil, "which", lambda n, *a, **k: None if n == "nsys" else real(n, *a, **k))
-    h = call(tb, "hypothesis", {"hypothesis": "h", "rationale": "r"}).split()[1]
+    h = call(tb, "hypothesis", {"hypothesis": "h", "rationale": "r", "layer": "kernels"}).split()[1]
     assert "refused" in call(tb, "trace", {"hypothesis_id": h, "expect": EXPECT})
     assert experiments.pending(tb.s.ledger_root, tb.s.run_id) is None
 
@@ -123,7 +123,7 @@ MECH = {"metric": "returncode", "value": 0, "unit": "absolute", "why": "the inst
 
 
 def test_mechanism_predictions_are_measured_at_their_paths(tb):
-    h = call(tb, "hypothesis", {"hypothesis": "h", "rationale": "r"}).split()[1]
+    h = call(tb, "hypothesis", {"hypothesis": "h", "rationale": "r", "layer": "kernels"}).split()[1]
     out = call(tb, "trace", {"hypothesis_id": h, "expect": {**EXPECT, "mechanism": [
         MECH, {**MECH, "metric": "calibrated.layers.runtime.gpu_idle_share"}]}})
     x = list(ledger.records(tb.s.ledger_root, tool="trace"))[-1]["experiment"]
@@ -139,13 +139,13 @@ def test_mechanism_predictions_are_measured_at_their_paths(tb):
 @pytest.mark.parametrize("bad", [[], {"metric": "m"}, [{**MECH, "value": "low"}], [{**MECH, "unit": "ms"}],
                                  [{**MECH, "why": ""}]])
 def test_refused_with_a_malformed_mechanism(tb, bad):
-    h = call(tb, "hypothesis", {"hypothesis": "h", "rationale": "r"}).split()[1]
+    h = call(tb, "hypothesis", {"hypothesis": "h", "rationale": "r", "layer": "kernels"}).split()[1]
     with pytest.raises(ValueError, match="expect.mechanism"):
         call(tb, "trace", {"hypothesis_id": h, "expect": {**EXPECT, "mechanism": bad}})
 
 
 def test_submit_takes_no_mechanism(tb):
-    h = call(tb, "hypothesis", {"hypothesis": "h", "rationale": "r"}).split()[1]
+    h = call(tb, "hypothesis", {"hypothesis": "h", "rationale": "r", "layer": "kernels"}).split()[1]
     with pytest.raises(ValueError, match="not taken by submit"):
         experiments.check(tb.s.ledger_root, tb.s.run_id, "submit",
                           {"hypothesis_id": h, "expect": {**EXPECT, "mechanism": [MECH]}})
@@ -160,3 +160,57 @@ def test_mechanism_change_pct_is_against_the_baseline_record():
     drop, nobase = experiments.outcome("bench", args, result, base_result=base)["mechanism"]
     assert drop["actual"] == pytest.approx(-60) and drop["gap"] == pytest.approx(-10)
     assert nobase["actual"] is None and "no baseline value" in nobase["actual_missing"]
+
+
+def hyp(tb, text="h", layer="kernels"):
+    return call(tb, "hypothesis", {"hypothesis": text, "rationale": "r", "layer": layer}).split()[1]
+
+
+def test_a_hypothesis_names_its_layer(tb):
+    for bad in ({"hypothesis": "h", "rationale": "r"}, {"hypothesis": "h", "rationale": "r", "layer": "gpu"}):
+        with pytest.raises(ValueError, match="layer"):
+            call(tb, "hypothesis", bad)
+    hyp(tb, layer="runtime")
+    assert next(ledger.records(tb.s.ledger_root, kind="hypothesis"))["layer"] == "runtime"
+    assert experiments.summary(tb.s.ledger_root, tb.s.run_id)[0]["layer"] == "runtime"
+
+
+def test_a_batch_is_measured_in_any_order_and_reflected_on_before_the_next(tb):
+    h1, h2 = hyp(tb, "a"), hyp(tb, "b", "runtime")
+    call(tb, "trace", {"hypothesis_id": h1, "expect": EXPECT})
+    call(tb, "trace", {"hypothesis_id": h2, "expect": EXPECT})                 # another open hypothesis: allowed
+    r1, r2 = [r["id"] for r in ledger.records(tb.s.ledger_root, tool="trace")]
+    with pytest.raises(ValueError, match=f"record {r1}"):
+        call(tb, "trace", {"hypothesis_id": h1, "expect": EXPECT})             # its own last one is unreflected
+    with pytest.raises(ValueError, match="before a new hypothesis"):
+        hyp(tb, "c")
+    call(tb, "reflect", {"record": r1, "reflection": "x"})
+    call(tb, "trace", {"hypothesis_id": h1, "expect": EXPECT})
+    r3 = list(ledger.records(tb.s.ledger_root, tool="trace"))[-1]["id"]
+    with pytest.raises(ValueError, match=f"{r2}, {r3}"):
+        hyp(tb, "c")
+    call(tb, "reflect", {"record": r2, "reflection": "y"})
+    call(tb, "reflect", {"record": r3, "reflection": "z"})
+    hyp(tb, "c")
+
+
+def test_a_bundle_names_its_hypotheses_and_why_they_are_independent(tb):
+    h1, h2, h3 = hyp(tb, "a"), hyp(tb, "b", "runtime"), hyp(tb, "c")
+    for bundle, why in (([h2], None), ([], "x"), ([h1], "x"), ([h2, h2], "x"), (["nope"], "x")):
+        with pytest.raises(ValueError, match="bundle|independence"):
+            call(tb, "trace", {"hypothesis_id": h1, "bundle": bundle, "independence": why, "expect": EXPECT})
+    with pytest.raises(ValueError, match="must be one of this call's hypotheses"):
+        call(tb, "trace", {"hypothesis_id": h1, "bundle": [h2], "independence": "x",
+                           "expect": {**EXPECT, "mechanism": [{**MECH, "hypothesis": h3}]}})
+    call(tb, "trace", {"hypothesis_id": h1, "bundle": [h2], "independence": "different layers",
+                       "expect": {**EXPECT, "mechanism": [{**MECH, "hypothesis": h2}]}})
+    rec = list(ledger.records(tb.s.ledger_root, tool="trace"))[-1]
+    x = rec["experiment"]
+    assert x["hypothesis"] == h1 and x["bundle"] == [h2] and x["independence"] == "different layers"
+    assert x["mechanism"][0]["hypothesis"] == h2
+    with pytest.raises(ValueError, match=f"record {rec['id']}"):
+        call(tb, "trace", {"hypothesis_id": h2, "expect": EXPECT})             # h2 was measured in the bundle
+    call(tb, "trace", {"hypothesis_id": h3, "expect": EXPECT})
+    s = {h["id"]: h for h in experiments.summary(tb.s.ledger_root, tb.s.run_id)}
+    assert [m["record"] for m in s[h1]["measurements"]] == [m["record"] for m in s[h2]["measurements"]] == [rec["id"]]
+    assert s[h2]["measurements"][0]["bundle"] == [h2] and len(s[h3]["measurements"]) == 1

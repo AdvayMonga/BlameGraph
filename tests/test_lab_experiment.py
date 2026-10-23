@@ -48,7 +48,7 @@ def test_a_researcher_measurement_follows_the_agents_rules(tb, tmp_path, run):
     rb = experiment.toolbox(run, tb.s.ledger_root, tmp_path / "runs")
     with pytest.raises(ValueError, match="hypothesis_id"):
         experiment.call(rb, "trace", {"expect": EXPECT})
-    h = experiment.call(rb, "hypothesis", {"hypothesis": "launch-bound decode", "rationale": "4 launches per step"}).split()[1]
+    h = experiment.call(rb, "hypothesis", {"hypothesis": "launch-bound decode", "rationale": "4 launches per step", "layer": "model_execution"}).split()[1]
     out = experiment.call(rb, "trace", {"hypothesis_id": h, "expect": EXPECT})
     rec = list(ledger.records(tb.s.ledger_root, run=run, tool="trace"))[-1]
     assert rec["experiment"]["hypothesis"] == h and f"Experiment record {rec['id']}" in out
@@ -62,7 +62,7 @@ def test_a_researcher_measurement_follows_the_agents_rules(tb, tmp_path, run):
 def test_no_agent_view_shows_a_researcher_run(tb, tmp_path, run):
     from store import index
     rb = experiment.toolbox(run, tb.s.ledger_root, tmp_path / "runs")
-    experiment.call(rb, "hypothesis", {"hypothesis": "a person's belief", "rationale": "r"})
+    experiment.call(rb, "hypothesis", {"hypothesis": "a person's belief", "rationale": "r", "layer": "kernels"})
     tb.note({"text": "the agent's own"})
     seen = experiment.call(tb, "ledger", {"last": 100})
     assert "the agent's own" in seen and run not in seen and "a person's belief" not in seen
@@ -81,7 +81,7 @@ def test_the_cli_runs_and_prints_refusals(tb, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(experiment, "RUNS", tmp_path / "runs")
     assert experiment.main(["start", "--repo", str(repo), "--base", "HEAD", "--change", "other", "--budget", "5"]) == 0
     run = capsys.readouterr().out.strip()
-    assert experiment.main(["hypothesis", "--run", run, "--hypothesis", "h", "--rationale", "r"]) == 0
+    assert experiment.main(["hypothesis", "--run", run, "--hypothesis", "h", "--rationale", "r", "--layer", "runtime"]) == 0
     h = capsys.readouterr().out.split()[1]
     assert experiment.main(["call", "trace", "--run", run, "--metric", "kernel_ms"]) == 1
     assert "refused" in capsys.readouterr().err

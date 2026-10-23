@@ -54,7 +54,7 @@ def test_a_session_edits_tests_notes_and_stops(cfg):
         yield ("call", "test")
         yield ("call", "budget")
         yield ("call", "note", {"text": "hello human"})
-        yield ("call", "hypothesis", {"hypothesis": "h", "rationale": "r"})
+        yield ("call", "hypothesis", {"hypothesis": "h", "rationale": "r", "layer": "kernels"})
         hid = next(ledger.records(cfg.ledger_root, kind="hypothesis"))["id"]
         yield ("call", "submit", {"hypothesis_id": hid, "expect": {"metric": "saturated", "value": 1.0, "unit": "change_pct", "why": "w"}})
         yield ("call", "ledger", {"last": 5})
@@ -175,7 +175,7 @@ def test_restore_and_profile_tools(cfg, monkeypatch):
         first["snap"] = next(ledger.records(cfg.ledger_root, kind="test"))["snapshot"]
         (ws / "src/inference_server/engine.py").write_text("def speed():\n    return 6\n")
         yield ("call", "restore", {"snapshot": first["snap"]})
-        yield ("call", "hypothesis", {"hypothesis": "h", "rationale": "r"})
+        yield ("call", "hypothesis", {"hypothesis": "h", "rationale": "r", "layer": "kernels"})
         hid = next(ledger.records(cfg.ledger_root, kind="hypothesis"))["id"]
         yield ("call", "profile", {"requests": 2, "hypothesis_id": hid, "expect": {"metric": "saturated", "value": 1.0, "unit": "change_pct", "why": "w"}})
         yield ("reply", AgentReply({"status": "stop", "note": None}, 0.1, 1, None))
@@ -297,7 +297,7 @@ def test_a_session_left_unreflected_gets_one_reflection_only_call(cfg):
 
     def script(n, ws: Path):
         if n == 1:
-            yield ("call", "hypothesis", {"hypothesis": "h", "rationale": "r"})
+            yield ("call", "hypothesis", {"hypothesis": "h", "rationale": "r", "layer": "kernels"})
             _unreflected(cfg, n)
             yield ("reply", AgentReply({"status": "stop", "note": None}, 0.5, 5, None))
         else:
@@ -327,7 +327,7 @@ def test_no_closing_call_when_nothing_is_pending_or_no_budget_is_left(cfg):
     assert len(p.specs) == 1 and "closing" not in next(ledger.records(cfg.ledger_root, kind="session"))
 
     def spent(n, ws: Path):
-        yield ("call", "hypothesis", {"hypothesis": "h", "rationale": "r"})
+        yield ("call", "hypothesis", {"hypothesis": "h", "rationale": "r", "layer": "kernels"})
         _unreflected(cfg, n)
         yield ("reply", AgentReply({"status": "stop", "note": None}, 2.0, 1, None))
     p = ScriptedProvider(spent)

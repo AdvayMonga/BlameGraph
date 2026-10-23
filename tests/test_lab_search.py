@@ -146,3 +146,14 @@ def test_the_real_model_finds_a_paraphrase(tmp_path):
     top = out["results"][0]
     assert top["hypothesis"].startswith("per-token decode latency") and top["embedding_rank"] == 1
     assert search.MODEL in out["ranking"]
+
+
+def test_a_bundled_measurement_is_in_each_hypothesis_document(tmp_path):
+    r = tmp_path / "ledger"
+    h1, h2 = hyp(r, "run-a", "fuse the norm"), hyp(r, "run-a", "admit earlier")
+    m = measure(r, "run-a", h1, 0.03)
+    ledger.append({**{k: v for k, v in m.items() if k not in ("id", "at", "schema")},
+                   "experiment": {**m["experiment"], "bundle": [h2["id"]], "independence": "different layers"}}, r)
+    docs = {d["hypothesis_id"]: d for d in search.documents(r)}
+    assert len(docs[h1["id"]]["measurements"]) == 2 and len(docs[h2["id"]]["measurements"]) == 1
+    assert docs[h2["id"]]["measurements"][0]["independence"] == "different layers"

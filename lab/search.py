@@ -60,23 +60,25 @@ def documents(root: Path, researcher: bool = False) -> list[dict]:
     recs = [r for r in ledger.records(root) if researcher or not experiments.researcher(r.get("run"))]
     refl = {r["record"]: r for r in recs if r["kind"] == "reflection"}
     docs = {r["id"]: {"hypothesis_id": r["id"], "run": r.get("run"), "session": r.get("session"), "at": r.get("at"),
-                      **{k: r[k] for k in ("hypothesis", "rationale", "abandon_if", "from_record") if k in r},
+                      **{k: r[k] for k in ("hypothesis", "rationale", "layer", "abandon_if", "from_record") if k in r},
                       "measurements": []}
             for r in recs if r["kind"] == "hypothesis"}
     for r in recs:
         x = r.get("experiment")
-        if not isinstance(x, dict) or x.get("hypothesis") not in docs:
+        if not isinstance(x, dict) or not experiments.involved(r) & docs.keys():
             continue
         res = r.get("result") if isinstance(r.get("result"), dict) else {}
         m = {"record": r["id"], "tool": r.get("tool"), "at": r.get("at"), "snapshot": r.get("snapshot"),
              "config": r.get("config"), "gpu": (res.get("gpu") or {}).get("name") if isinstance(res.get("gpu"), dict)
              else res.get("gpu"), **{k: x[k] for k in ("expect", "actual", "actual_missing", "gap",
-                                                        "gap_pct_of_expected", "noise_band_pct", "mechanism") if k in x}}
+                                                        "gap_pct_of_expected", "noise_band_pct", "mechanism", "bundle",
+                                                        "independence") if k in x}}
         if r["id"] in refl:
             m["reflection"] = refl[r["id"]]["reflection"]
             if refl[r["id"]].get("alternative"):
                 m["alternative"] = refl[r["id"]]["alternative"]
-        docs[x["hypothesis"]]["measurements"].append(m)
+        for h in experiments.involved(r) & docs.keys():
+            docs[h]["measurements"].append(m)
     return list(docs.values())
 
 
