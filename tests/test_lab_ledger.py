@@ -143,3 +143,16 @@ def test_ids_use_utc_date_and_long_suffix(tmp_path):
     r = ledger.append({"kind": "test"}, tmp_path)
     date, suffix = r["id"].split("-")[1:]
     assert r["at"].startswith(f"{date[:4]}-{date[4:6]}-{date[6:]}") and len(suffix) == 12
+
+
+@pytest.mark.parametrize("bundle,ok", [(["h2"], True), ({"rows": [1, 2]}, False), ([{"row": 1}], False)])
+def test_a_heldout_experiment_bundle_is_a_list_of_ids(tmp_path, bundle, ok):
+    m = {"saturated": {"base": 6, "new": 7, "delta_pct": 16.7, "band_pct": 3, "verdict": "improved"}}
+    exp = {"hypothesis": "h1", "bundle": bundle, "independence": "x",
+           "expect": {"metric": "saturated", "value": 10, "unit": "change_pct", "why": "w"}}
+    rec = {"kind": "submit", "config": {"split": "heldout"}, "metrics": m, "experiment": exp}
+    if ok:
+        ledger.append(rec, tmp_path)
+    else:
+        with pytest.raises(ledger.LedgerError):
+            ledger.append(rec, tmp_path)

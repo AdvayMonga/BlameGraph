@@ -41,5 +41,5 @@ Win
 
 Sessions
 - Each session starts with a fresh context and a brief: the task, the budget, the referee's verdict on this run so far with the facts it measures against (limits, noise bands, ceilings, each layer's latest share of time and distance from its ceiling), the baseline (the base commit measured by the default `bench`), the last session record of this run, and this run's hypotheses. Every other record is readable with `ledger`, `query` and `search`.
-- A session that ends while its last measured record has no `reflection` is followed by one call capped at ${closing_usd:.2f} and {closing_turns} turns, whose only tools are {closing_tools}; it starts from that record's facts, and its cost is charged to the run.
+- A session that ends with measured records that have no `reflection` is followed by one call capped at ${closing_usd:.2f} and {closing_turns} turns plus one per further record, whose only tools are {closing_tools}; it starts from those records' facts, and its cost is charged to the run.
 - A session ends with a reply of `status` and `note`. `status` is `continue` (another session starts if budget remains) or `stop` (the run ends). `note` is free text for the human; it is recorded and decides nothing.

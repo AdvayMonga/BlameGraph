@@ -214,3 +214,19 @@ def test_a_bundle_names_its_hypotheses_and_why_they_are_independent(tb):
     s = {h["id"]: h for h in experiments.summary(tb.s.ledger_root, tb.s.run_id)}
     assert [m["record"] for m in s[h1]["measurements"]] == [m["record"] for m in s[h2]["measurements"]] == [rec["id"]]
     assert s[h2]["measurements"][0]["bundle"] == [h2] and len(s[h3]["measurements"]) == 1
+
+
+def test_a_call_that_measured_nothing_does_not_report_another_records_result(tb, monkeypatch):
+    h1, h2 = hyp(tb, "a"), hyp(tb, "b")
+    call(tb, "trace", {"hypothesis_id": h1, "expect": EXPECT})              # left unreflected
+    monkeypatch.setattr(type(tb), "trace", lambda self, args: "trace refused: busy")
+    assert call(tb, "trace", {"hypothesis_id": h2, "expect": EXPECT}) == "trace refused: busy"
+
+
+@pytest.mark.parametrize("expect", [{**EXPECT, "gap": 0.0}, {**EXPECT, "actual": 1},
+                                    {**EXPECT, "mechanism": [{**MECH, "actual_missing": "lie"}]},
+                                    {**EXPECT, "mechanism": [{**MECH, "gap": 0}]}])
+def test_a_prediction_cannot_carry_measured_fields(tb, expect):
+    h = hyp(tb)
+    with pytest.raises(ValueError, match="takes only"):
+        call(tb, "trace", {"hypothesis_id": h, "expect": expect})

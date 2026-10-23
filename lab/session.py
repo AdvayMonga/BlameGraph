@@ -148,9 +148,11 @@ def closing_prompt(s: Session, recs: list[dict]) -> str:
     parts = [f"Session {s.session_id} of run {s.run_id} ended with no reflection on measured records "
              f"{', '.join(r['id'] for r in recs)}. This call records those reflections with `reflect`; its tools are "
              f"{' and '.join(f'`{t}`' for t in CLOSING_TOOLS)}."]
+    shown = set()
     for rec in recs:
         x = rec["experiment"]
-        for h in sorted(experiments.involved(rec)):
+        for h in sorted(experiments.involved(rec) - shown):
+            shown.add(h)
             parts.append(f"Hypothesis {h}:\n{json.dumps({k: hs.get(h, {})[k] for k in ('hypothesis', 'rationale', 'layer', 'abandon_if') if k in hs.get(h, {})})}")
         parts.append(f"Record {rec['id']} ({rec.get('tool')}):\n"
                      f"{json.dumps({k: x[k] for k in ('expect', 'actual', 'actual_missing', 'gap', 'gap_pct_of_expected', 'noise_band_pct', 'mechanism', 'bundle', 'independence') if k in x})}")
@@ -167,7 +169,7 @@ def closing(provider: agent.Provider, spec: agent.AgentSpec, tools: Toolbox, s: 
     usd = min(CLOSING_USD, s.budget.remaining_usd)
     if usd <= 0:
         return {"records": ids, "skipped": "budget"}
-    c = dataclasses.replace(spec, prompt=closing_prompt(s, recs), builtin=[], max_turns=CLOSING_TURNS,
+    c = dataclasses.replace(spec, prompt=closing_prompt(s, recs), builtin=[], max_turns=CLOSING_TURNS + len(recs) - 1,
                             max_budget_usd=usd, tools=[t for t in tools.specs() if t.name in CLOSING_TOOLS])
     c.system = system_prompt(target.load(), c)
     try:
