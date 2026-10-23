@@ -164,6 +164,7 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
         "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,
         "ceilings": _ceiling_facts(t, ledger_root),
         "layers": _layer_facts(ledger_root),
+        "kernel_tasks": _layer_facts(ledger_root, "kernel_tasks"),
     }
     try:
         facts["heldout_queries_left"] = holdout_guard(t).state()["budget_left"]
@@ -196,15 +197,20 @@ def _ceiling_facts(t: target.Target, ledger_root: Path | None) -> dict:
         return {"missing": f"ceilings not computed: {type(e).__name__}: {e}"}
 
 
-def _layer_facts(ledger_root: Path | None) -> dict:
-    """The latest profile's per-layer shares and distances (lab/layers.py), with the record they come from."""
+def _layer_facts(ledger_root: Path | None, key: str = "layers") -> dict:
+    """The latest profile's per-layer shares and distances (lab/layers.py), or with `key="kernel_tasks"` each kernel
+    task's share of its window, with the record they come from: a `profile` record or a bench's or baseline's
+    after-measurement profile (`profiled`)."""
     if not ledger_root or not (Path(ledger_root) / "ledger.jsonl").exists():
         return {"missing": "no profile in this ledger yet"}
-    for r in reversed(list(ledger.records(ledger_root, kind="profile"))):
-        cal = (r.get("result") or {}).get("calibrated") or {}
-        if cal.get("layers"):
-            return {"record": r["id"], "run": r.get("run"), "args": r.get("args"), **cal["layers"]}
-    return {"missing": "no profile with a per-layer breakdown in this ledger yet (the `profile` tool writes one)"}
+    for r in reversed(list(ledger.records(ledger_root))):
+        res = r.get("result") or {}
+        cal = (res.get("calibrated") if r.get("kind") == "profile" else
+               (res.get("profiled") or {}).get("calibrated") if r.get("kind") in ("bench", "baseline") else None) or {}
+        if isinstance(cal, dict) and isinstance(cal.get(key), dict) and "missing" not in cal[key]:
+            return {"record": r["id"], "run": r.get("run"), "args": r.get("args"), **cal[key]}
+    what = "a per-layer breakdown" if key == "layers" else "kernel task shares"
+    return {"missing": f"no profile with {what} in this ledger yet (`profile`, and every bench, writes one)"}
 
 
 def _last_gpu(ledger_root: Path | None) -> dict | None:
@@ -235,7 +241,8 @@ def _profiled_reply(prof: dict) -> dict:
     out = {k: v for k, v in prof.items() if k != "calibrated"}
     cal = prof.get("calibrated")
     if isinstance(cal, dict):
-        out["calibrated"] = {"error": cal["error"]} if "error" in cal else {"layers": cal.get("layers")}
+        out["calibrated"] = ({"error": cal["error"]} if "error" in cal else
+                             {k: cal.get(k) for k in ("layers", "kernel_tasks") if k == "layers" or k in cal})
     return out
 
 

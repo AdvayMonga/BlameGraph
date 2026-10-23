@@ -313,8 +313,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   runtime = admit + evict phases, with the GPU idle share, batch fill and admissions blocked; serving = window time
   outside scheduler steps. Distance: the mean decode step against `validity.ceiling`'s step floor at the window's
   batch and context; kernels' % of roofline from gate results when given; layers 3 and 4 say they have no single
-  ceiling. Every `profile` record carries it under `calibrated.layers`; the brief's harness facts show the latest
-  (`layers`). `python -m lab.layers BUNDLE`. The timeline covers the whole run, so only events inside the window
+  ceiling. Every `profile` record (and every bench's and baseline's `profiled`) carries it under
+  `calibrated.layers`, and each kernel task's share of the window under `calibrated.kernel_tasks`
+  (`lab.tools.task_shares`, `kernels/share.py`; why it is missing where the tasks don't import); the brief's harness
+  facts show the latest of each (`layers`, `kernel_tasks`). `python -m lab.layers BUNDLE`. The timeline covers the whole run, so only events inside the window
   count; nested phases (prefill_mixed inside prefill_chunk) are counted once.
 - `sim/` — the scheduler simulator (layer 3, 2026-10-18): `sim/scheduler.py` drives the engine's real
   `ContinuousBatchScheduler` one `step()` at a time (inference-server #120) on a fake clock (`Clock`, installed as the

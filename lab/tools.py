@@ -175,6 +175,7 @@ class Toolbox(EvalTools, ProfTools):
             cal = calibrate.calibrate_kernels(self.s.ledger_root / blob, r.get("gpu")) if blob else None
             if cal is not None:                  # each layer's share of the window and its distance from a ceiling
                 cal["layers"] = layers.from_bundle(self.s.ledger_root / blob, target.load(), r.get("gpu"))
+                cal["kernel_tasks"] = task_shares(self.s.ledger_root / blob)
         except Exception as e:                   # noqa: BLE001  never costs the measurement it describes
             cal = {"error": f"calibration failed: {type(e).__name__}: {e}"}
         return r, blob, visible, cal
@@ -471,6 +472,18 @@ def workload_flags(args: dict, harness: Path, n: int) -> list[str]:
     w = corpus.sample(args.get("corpus_class") or DEFAULT_CORPUS_CLASS, "seen", int(args.get("seed", 0)), n, t.corpus_dir)
     (harness / "workload.json").write_text(json.dumps(w))
     return ["--workload", str(harness / "workload.json")] + (["--enable-thinking"] if t.chat_kwargs.get("enable_thinking") else [])
+
+
+def task_shares(bundle: Path) -> dict:
+    """Each kernel task's share of the profiled window, the kernels it launches and the speedup bound if they took no
+    time (kernels/share.py), plus the kernels no task covers; or why there is none."""
+    try:
+        from kernels import share
+        from kernels.tasks import TASKS, load
+        tasks = [load(n) for n in TASKS]
+    except ImportError as e:                    # the kernel tasks import torch, which the controller may lack
+        return {"missing": f"the kernel tasks do not import here: {e}"}
+    return share.shares(bundle, tasks) or {"missing": "no kernel table in the bundle"}
 
 
 def default_profile_runner(tree: Path, argv: list[str], read: list[Path] = (), env: dict | None = None,
