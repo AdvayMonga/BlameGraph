@@ -293,6 +293,12 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `verify.py`; the baseline is bound before the candidate loads and its modules (`Task.watch`) are watched for
   patches. The engine's stations, swap-in point and capture hooks are not built yet (handoff in data/notes); until then
   regions are tested on fake stations.
+- `kernels/archive.py` — the idea archive (decided 2026-10-22): every distinct kernel idea from the `kernels` records'
+  hypothesis logs and traces, with each outcome (run, parent and its score, child and its score, improved, stage
+  reached, error); an idea within cosine 0.92 of an earlier one on the same task is folded into it (identical texts only
+  without fastembed); `matches` (similarity, else BM25), `retry` (never beat its parent, tried only on parents other
+  than the task's current best), `facts` (what the judge sees). `python -m kernels.archive export --out F` on the
+  controller (the GPU host reads the file), `query --archive F TEXT`. Measurements only.
 - `lab/layers.py` — each layer's share of a profiled window and its distance from a ceiling, as facts (2026-10-18):
   kernels = CUDA kernel time / window; model execution = prefill + decode phase wall time beyond kernel time;
   runtime = admit + evict phases, with the GPU idle share, batch fill and admissions blocked; serving = window time
