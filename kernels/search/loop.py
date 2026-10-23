@@ -40,7 +40,9 @@ JUDGE = """You are the judge in a search over GPU kernel programs. You are shown
 MODES = {
     "optimization": 'The program is correct. Name {n} distinct changes a coder could make, as one JSON array of {n} '
                     'objects and nothing else, each {{"bottleneck": "<max 30 words>", "optimisation_method": "<max 35 '
-                    'words>", "modification_plan": "<max 35 words>"}}. Every one is written and measured.',
+                    'words>", "modification_plan": "<max 35 words>", "mechanism": [{{"counter": "<an ncu metric name '
+                    'from the measurements>", "change_pct": <predicted % change, summed over the program\'s kernels>}}]}}. '
+                    '"mechanism" may be empty. Every one is written and measured.',
     "correction": 'The program failed (see its measurements). Name one fix, as one JSON object and nothing else: '
                   '{{"critical_issue": "<max 20 words>", "why_it_matters": "<max 35 words>", "minimal_fix_hint": '
                   '"<max 20 words>"}}.',
@@ -160,7 +162,7 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
            judge: Callable[[str], dict], out: Path, evals: int, usd: float, seed: int = 0,
            review: Callable[[str, str], tuple[str, float]] | None = None,
            stop_pct: float | None = None, patience: int | None = None, beam: int = 4, max_repairs: int = 3,
-           uct_c: float = UCT_C) -> tuple[Tree, dict]:
+           uct_c: float = UCT_C, funnel=None) -> tuple[Tree, dict]:
     """Search until `evals` programs are judged, `usd` is spent on model calls, nothing is left to try, or the best
     program reaches `stop_pct`% of its roofline bound, or `patience` programs have been judged since the best last
     improved (MANTIS, Hari et al.: within 25% of speed-of-light or 16 attempts without progress kept 96% of the geomean
@@ -230,6 +232,15 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
             parent = tree.select()
             if parent is None:
                 break
+            if funnel is not None:               # one funnel round (kernels/search/funnel.py) instead of the beam
+                from kernels.search.funnel import expand
+                before = funnel.spent
+                kids = expand(funnel, tree, parent, system, it, keep,
+                              lambda row: (hyplog.write(json.dumps(row, default=str) + "\n"), hyplog.flush()))
+                spent, calls, judged = spent + funnel.spent - before, funnel.calls, judged + len(kids)
+                if not kids:                         # a round that examined nothing counts as one failure
+                    parent.failures += 1
+                continue
             if not review:
                 for _ in range(beam):
                     attempt(parent, "", "optimization", 0.0)

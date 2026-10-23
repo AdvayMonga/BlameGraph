@@ -293,6 +293,15 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `verify.py`; the baseline is bound before the candidate loads and its modules (`Task.watch`) are watched for
   patches. The engine's stations, swap-in point and capture hooks are not built yet (handoff in data/notes); until then
   regions are tested on fake stations.
+- `kernels/search/funnel.py` — one funnel round (decided 2026-10-22; `kernels.search --funnel`, A/B arm
+  `search-funnel`): judge calls per slice of facts (measurements, archive matches, winners elsewhere in the tree,
+  compiler report, PTX comparison; a slice with no facts is skipped) x `--per-call` hypotheses, same-idea clusters
+  merged by `--cheap-model`, ideas like archived ones that never beat their parent kept only when the judge names what
+  differs, `--wide-model` writes each, stage 1 in `--parallel` jails, failures repaired once and survivors rewritten by
+  the strong coder, a quick timing on the most-called shape (`jailed.QUICK_STAGE`), the fastest `--keep` to stage 2
+  (+ncu); only those join the tree (a round that examined nothing is one failure of its parent). Each hypothesis may
+  predict ncu counter changes (`mechanism`), measured against the parent's. Every idea's fate goes to
+  `hypotheses.jsonl`, which the archive reads.
 - `kernels/archive.py` — the idea archive (decided 2026-10-22): every distinct kernel idea from the `kernels` records'
   hypothesis logs and traces, with each outcome (run, parent and its score, child and its score, improved, stage
   reached, error); an idea within cosine 0.92 of an earlier one on the same task is folded into it (identical texts only

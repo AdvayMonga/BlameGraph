@@ -66,7 +66,7 @@ def _variant(*extra: str):
 # Each arm differs from `kernels.search` (judge tools on) in one thing, so a difference in the summary is that
 # thing's: the judge's web search and ledger SQL, KernelPro's literal UCT constant, or the whole generator.
 ARMS = {"openevolve": _openevolve, "kernels.search": _search, "search-no-tools": _variant("--no-judge-tools"),
-        "search-c1.41": _variant("--uct-c", "1.4142")}
+        "search-c1.41": _variant("--uct-c", "1.4142"), "search-funnel": _variant("--funnel")}
 
 
 def _gate(a, program: Path) -> dict:

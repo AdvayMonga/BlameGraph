@@ -10,7 +10,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 from pathlib import Path
+from typing import Callable
 
 import torch
 
@@ -90,6 +92,31 @@ def _blob(path: Path) -> str | None:
     return ledger.put_blob(path, ledger.ROOT, ".jsonl") if path.exists() and path.stat().st_size else None
 
 
+def staged(judge_stage) -> Callable[[str, int], dict]:
+    """(code, stage) -> the evaluator's result for that stage, the program written to a temp file."""
+    def stage(code: str, n: int) -> dict:
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+            f.write(code)
+        try:
+            return judge_stage(f.name, n)
+        finally:
+            Path(f.name).unlink()
+    return stage
+
+
+def _funnel(a, task, review):
+    from kernels import archive
+    from kernels.search.funnel import Funnel, Models
+    from lab import ledger
+    if review is None:
+        raise SystemExit("--funnel needs a judge (--judge-model)")
+    entries = [e for e in archive.load(Path(a.archive)) if e.task == task.name] if a.archive else []
+    return Funnel(Models(review, Claude(a.cheap_model, "low"), Claude(a.wide_model, a.effort), Claude(a.model, a.effort)),
+                  staged(evaluator.judge_stage), entries, task.name, archive._embedder(ledger.ROOT) if entries else None,
+                  Path(a.ptx).read_text() if a.ptx else None, a.per_call, a.keep, a.parallel, a.max_repairs,
+                  a.ncu)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="kernels.search")
     ap.add_argument("--task", required=True, choices=TASKS)
@@ -121,6 +148,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--patience", type=int, default=16, help="stop after this many judged programs with no new best")
     ap.add_argument("--beam", type=int, default=4, help="changes the judge names per expansion, each written and judged")
     ap.add_argument("--max-repairs", type=int, default=3, help="repairs of a failed child, chained")
+    ap.add_argument("--funnel", action="store_true", help="each expansion is one funnel round (kernels/search/funnel.py)")
+    ap.add_argument("--wide-model", default="claude-sonnet-5-5", help="the funnel's wide coder")
+    ap.add_argument("--cheap-model", default="claude-haiku-5-5", help="merges duplicate hypotheses")
+    ap.add_argument("--per-call", type=int, default=20, help="hypotheses per generator call (one call per slice)")
+    ap.add_argument("--keep", type=int, default=6, help="programs past the quick speed test to the full exam")
+    ap.add_argument("--parallel", type=int, default=4, help="correctness checks run at once")
+    ap.add_argument("--archive", help="an exported idea archive (python -m kernels.archive export)")
+    ap.add_argument("--ptx", help="the PTX comparison's feature cards (text)")
     a = ap.parse_args(argv)
     a.ncu = a.device.startswith("cuda") if a.ncu is None else a.ncu
     task = load(a.task)
@@ -131,9 +166,10 @@ def main(argv: list[str] | None = None) -> int:
     judge = cascade(evaluator.judge_stage, counters=a.ncu)
     system = (system_message(task) + "\n\n" + setting(task, sets, a.device, tol)
               + ("\n\n" + TUNE_FACT.format(points=a.tune_points) if a.tune_points else ""))
+    fun = _funnel(a, task, review) if a.funnel else None
     tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.usd, a.seed,
                         review=review, stop_pct=a.stop_pct or None, patience=a.patience or None,
-                        beam=a.beam, max_repairs=a.max_repairs, uct_c=a.uct_c)
+                        beam=a.beam, max_repairs=a.max_repairs, uct_c=a.uct_c, funnel=fun)
     spent: list = []
     exclude = detect.detector(Claude(a.detector_model, a.effort), spent) if a.detector_model != "none" else None
     code, metrics, retimed = (retime(out / "trace.jsonl", a.retime, exclude=exclude) if a.retime

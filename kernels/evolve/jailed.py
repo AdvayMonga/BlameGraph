@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[2]
 HARNESS = {"kernels": None, "validity": ("__init__.py", "peaks.py"), "lab": ("__init__.py", "target.py")}
 TIMEOUT_S = float(os.environ.get("KERNEL_EVAL_TIMEOUT_S", "600"))
 NCU_STAGE = 3                    # not a judging stage: ncu counters for a program that passed stage 2 (kernels/evolve/ncu.py)
+QUICK_STAGE = 4                  # stage 2 on the most-called seen shape only: the funnel's quick speed test
 EVAL_DIRS = Path(os.environ.get("KERNEL_EVAL_DIRS") or Path(tempfile.gettempdir()) / "kernel-eval")
 CUDA = Path("/usr/local/cuda")
 MEMORY = os.environ.get("KERNEL_EVAL_MEMORY", "32g")   # host RAM a judgment may use: a program cannot starve the host
@@ -136,6 +137,11 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
             out.append({"shape": shape, **(json.loads(a["ncu"]) if "ncu" in a else
                                            {"error": a.get("ncu_error", "")[-500:]})})
         return {"metrics": {"stage": stage}, "artifacts": {"ncu": json.dumps({"shapes": out})}}
+    if stage == QUICK_STAGE:                     # selection orders seen shapes by calls: the first is the most called
+        one = json.dumps(list(cfg["seen"][0]))
+        r = judge_jailed({**cfg, "seen": cfg["seen"][:1], "weights": {one: (cfg.get("weights") or {}).get(one, 1)},
+                          "ints": {k: v for k, v in (cfg.get("ints") or {}).items() if k == one}}, source, 2, timeout_s)
+        return {**r, "metrics": {**r["metrics"], "stage": QUICK_STAGE}}
     fail = {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage}}
     home = cuda_home()
     d, tree = _eval_dir(source, home, "gate" if cfg.get("heldout") else "")   # the gate never shares selection's dir
