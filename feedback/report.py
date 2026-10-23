@@ -18,6 +18,7 @@ from diagnostics.assertions import evaluate
 from diagnostics.claims_audit import claims_audit
 from diagnostics.blame import blame
 from feedback.claim_facts import claim_facts
+from diagnostics.lab_process import process
 from logs.reconstruct import ExperimentLog, build_log
 from diagnostics.noise import clean_observations
 from logs.session import Ledger
@@ -144,10 +145,13 @@ def lab_feedback(recs: list[dict], run_id: str | None, source: str, harness: dic
     integrity = lab_verdict.integrity(recs)
     activity = lab_verdict.facts(recs)
     activity["claims"] = claim_facts(recs)   # facts only: claims never decide the verdict (lab/README.md)
-    from diagnostics.lab_process import process
+    try:                                     # researcher-only: never stops the session start that also calls this
+        proc = process(recs)
+    except Exception as e:                   # noqa: BLE001
+        proc = {"error": f"{type(e).__name__}: {e}"}
     return {"session": source, "run": run_id, "scenario": None,
             "for_agent": {"integrity": integrity, "facts": {"harness": harness or {}}},
-            "for_researcher": {"activity": activity, "process": process(recs), "assertions": None, "blame": None}}
+            "for_researcher": {"activity": activity, "process": proc, "assertions": None, "blame": None}}
 
 
 def render_for_agent(fb: dict) -> str:
