@@ -2,6 +2,11 @@
 lookup, the retry list, export and load. A fake embedder: no model download."""
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import json
 from pathlib import Path
 
@@ -71,3 +76,11 @@ def test_without_an_embedder_only_identical_ideas_fold_and_lookup_is_by_words(tm
     es = archive.build(root)
     assert len(es) == 2 and len(es[0].outcomes) == 2
     assert archive.matches(es, "tile the rows")[0][1].text.startswith("tile")
+
+
+if __name__ == "__main__":
+    import inspect
+    import tempfile
+    for name, fn in list(globals().items()):
+        if name.startswith("test_"):
+            fn(*[Path(tempfile.mkdtemp()) for _ in inspect.signature(fn).parameters]); print("ok", name)
