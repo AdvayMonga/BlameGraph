@@ -74,8 +74,12 @@ def precheck(source: str, program: Path, build_dir: Path) -> dict:
 
 def main() -> int:
     cfg, program = json.loads(Path(sys.argv[1]).read_text()), Path(sys.argv[2])
+    key = None
+    if cfg.get("result_key"):                    # read and removed before the candidate loads, as core does
+        key = Path(cfg["result_key"]).read_text()
+        Path(cfg["result_key"]).unlink()
     r = precheck(program.read_text(), program, Path(os.environ.get("TORCH_EXTENSIONS_DIR", program.parent)))
-    sys.stdout.write("\n" + json.dumps({**r, "task": cfg.get("task")}) + "\n")
+    sys.stdout.write("\n" + json.dumps({**r, "task": cfg.get("task"), **({"result_key": key} if key else {})}) + "\n")
     return 0
 
 

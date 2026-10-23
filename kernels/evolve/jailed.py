@@ -177,14 +177,16 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
                     str(tree / "candidate.py"), str(stage)]
         env = {"PYTHONPATH": path, "TORCH_EXTENSIONS_DIR": str(tree / "torch_extensions"),
                **({"CUDA_HOME": str(home)} if home else {})}
+        if cfg.get("arch"):                      # every stage builds for the same architecture: one build serves all
+            env["TORCH_CUDA_ARCH_LIST"] = cfg["arch"]
         if stage == PRECHECK_STAGE:
-            env.update(CUDA_VISIBLE_DEVICES="", **({"TORCH_CUDA_ARCH_LIST": cfg["arch"]} if cfg.get("arch") else {}))
+            env["CUDA_VISIBLE_DEVICES"] = ""
         read += [home] if home else []
         p = grader.jailed(tree, argv, timeout_s=timeout_s, env_extra=env, read=read, memory=MEMORY,
                           **({"gpu": gpu} if gpu is not None else {}))
         _keep_builds_only(tree)                  # the precheck's build is what stage 1 then imports
         if stage == PRECHECK_STAGE:
-            return _precheck_result(p, stage)
+            return _precheck_result(p, stage, key)
         r, why = _result(p.stdout, key) if stage != NCU_STAGE else (None, "")
         if stage == 2 and p.returncode == 0 and r is not None:
             if r["metrics"].get("correct") == 1.0:
@@ -208,14 +210,13 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
     return r
 
 
-def _precheck_result(p, stage: int) -> dict:
-    """The precheck's line as a stage result: passed (correct 1.0), failed (0.0) or inconclusive (no `correct`),
-    with the compiler's report as `compile_report`."""
-    lines = [x for x in p.stdout.splitlines() if x.startswith("{")]
-    if p.returncode != 0 or not lines:
-        return {"metrics": {"stage": stage}, "artifacts": {"precheck": f"exited {p.returncode}: "
-                                                          f"{(p.stderr or p.stdout)[-1500:]}"}}
-    d = json.loads(lines[-1])
+def _precheck_result(p, stage: int, key: str) -> dict:
+    """The precheck's keyed line as a stage result: passed (correct 1.0), failed (0.0) or inconclusive (no `correct`),
+    with the compiler's report as `compile_report`. A line without the key (printed by the candidate) is ignored."""
+    d, why = _result(p.stdout, key) if p.returncode == 0 else (None, "")
+    if d is None:
+        return {"metrics": {"stage": stage}, "artifacts": {"precheck": f"exited {p.returncode}{'; ' + why if why else ''}"
+                                                          f": {(p.stderr or p.stdout)[-1500:]}"}}
     a = {"precheck": d.get("reason", "")}
     if d.get("compile_report") is not None:
         a["compile_report"] = json.dumps(d["compile_report"])

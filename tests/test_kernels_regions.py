@@ -51,22 +51,41 @@ def test_fusing_moves_fewer_bytes_than_the_stations_one_by_one():
     assert m["fused_bytes"] == (8 * 64 + 64 * 64 + 8 * 64) * 4 and m["unfused_bytes"] > m["fused_bytes"]
 
 
-def test_the_error_budget_passes_twice_the_baselines_error_and_fails_beyond_it():
+def test_the_error_budget_is_per_element_twice_the_baselines_own_error_there():
     t = task("toy_region", STATIONS, "norm", "add", ctx, lambda call: None, live=("x",),
              seen_default=((4, 64),))
-    base = t.baseline()
-    xs = t.make_inputs((4, 64), torch.bfloat16, "cpu", torch.Generator().manual_seed(0))
-    err = (base(*xs)[0].float() - t.reference(*xs)[0].float()).abs().max().item()
+    base, ref = t.baseline(), t.reference
 
-    def off_by(k):                                          # the baseline's output moved by k times its own error
-        return lambda *a: (base(*a)[0] + k * err,)
+    def toward(k):                                          # each element moved k times the baseline's error there
+        return lambda *a: ((ref(*a)[0].float() + k * (base(*a)[0].float() - ref(*a)[0].float())).to(torch.bfloat16),)
     tol = {torch.bfloat16: (1e-6, 0.0)}                       # tiny dtype tolerance: the budget decides
-    common = dict(dtypes=(torch.bfloat16,), tolerances=tol, edge_shapes=[], layouts=(), seeds=(0,), repeats=1,
+    common = dict(dtypes=(torch.bfloat16,), tolerances=tol, edge_shapes=[], layouts=(), seeds=(0, 1), repeats=1,
                   baseline=base, budget=t.error_budget)
-    assert check_kernel(t.reference, off_by(0.5), t.make_inputs, [(4, 64)], [], **common)["passed"]
-    assert not check_kernel(t.reference, off_by(4.0), t.make_inputs, [(4, 64)], [], **common)["passed"]
-    assert not check_kernel(t.reference, off_by(0.5), t.make_inputs, [(4, 64)], [],
+    assert check_kernel(ref, toward(1.5), t.make_inputs, [(4, 64)], [], **common)["passed"]
+    assert not check_kernel(ref, toward(3.0), t.make_inputs, [(4, 64)], [], **common)["passed"]
+    assert not check_kernel(ref, toward(1.5), t.make_inputs, [(4, 64)], [],
                             **{**common, "budget": None})["passed"]       # without the budget the dtype's rule holds
+
+
+def test_one_large_value_loosens_nothing_else():
+    """Outlier channels (x1000) make the baseline's largest error large; a candidate that zeroes the rest must fail."""
+    def outliers(shape, dtype, device, g):
+        c = ctx(shape, dtype, device, g)
+        c["x"] = c["x"].float()
+        c["x"][:, :8] *= 1000
+        c["x"] = c["x"].to(dtype)
+        return c
+    t = task("toy_region", STATIONS, "norm", "add", outliers, lambda call: None, live=("x",))
+    base, ref = t.baseline(), t.reference
+
+    def zero_most(*a):
+        o = ref(*a)[0].clone()
+        o[:, 8:] = 0
+        return (o,)
+    r = check_kernel(ref, zero_most, t.make_inputs, [(256, 1024)], [], dtypes=(torch.bfloat16,),
+                     tolerances={torch.bfloat16: (1e-6, 0.0)}, edge_shapes=[], layouts=(), seeds=(0, 1, 2), repeats=1,
+                     baseline=base, budget=t.error_budget)
+    assert not r["passed"]
 
 
 def test_a_region_is_judged_end_to_end_by_the_evaluator(tmp_path):
