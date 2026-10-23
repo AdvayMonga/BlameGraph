@@ -2,6 +2,11 @@
 and the error budget in the checker (a candidate may be at most 2x as wrong as the baseline). CPU, fake stations."""
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import torch
 
 from kernels import check_kernel
@@ -78,3 +83,11 @@ def test_a_region_is_judged_end_to_end_by_the_evaluator(tmp_path):
     r = core.judge(t, good, [(4, 64)], [], None, "cpu", None, 2, iters=3)
     assert r["metrics"]["correct"] == 1.0, r["artifacts"]
     assert core.judge(t, bad, [(4, 64)], [], None, "cpu", None, 2, iters=3)["metrics"]["correct"] == 0.0
+
+
+if __name__ == "__main__":
+    import inspect
+    import tempfile
+    for name, fn in list(globals().items()):
+        if name.startswith("test_"):
+            fn(*[Path(tempfile.mkdtemp()) for _ in inspect.signature(fn).parameters]); print("ok", name)
