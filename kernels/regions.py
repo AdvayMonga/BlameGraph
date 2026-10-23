@@ -105,5 +105,6 @@ def task(name: str, stations: tuple[Station, ...], first: str, last: str,
     def cost(shape, dtype, inputs=None):
         inputs = inputs or make_inputs(shape, dtype, "cpu", torch.Generator().manual_seed(0))
         return 0.0, bytes_moved(stations, first, last, dict(zip(ins, inputs)), live)["fused_bytes"]
+    watched = tuple(sorted({*watch, __name__, *(s.fn.__module__ for s in span(stations, first, last))}))
     return Task(name=name, entry=None, reference=ref, make_inputs=make_inputs, shape_of=shape_of, cost=cost,
-                dtypes=dtypes, layouts=(), error_budget=ERROR_BUDGET, baseline_fn=base, watch=watch, **kw)
+                dtypes=dtypes, layouts=(), error_budget=ERROR_BUDGET, baseline_fn=base, watch=watched, **kw)

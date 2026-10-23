@@ -256,7 +256,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `torch.utils.cpp_extension.load_inline` (nvcc from the host's toolkit, mounted read-only into the jail; the build is
   cached per program source and toolkit across its stages, in one fixed dir per program, `jailed._eval_dir`; C++ only as
   literals, `core._cpp_built_at_run_time`); a candidate is
-  refused if its source, its C++ included, reaches for an exploit route or writes into anything it imported, under any alias
+  refused if its source, its C++ included, reaches for an exploit route (the operator registry among them:
+  `torch.library`, `TORCH_LIBRARY`, dispatch modes, which could change what the baseline's own ops do) or writes into anything it imported, under any alias
   (`core.screen`), and scores 0 if any function the checker or timer uses is patched, checked after loading and
   after every call the checker makes (`core._watched`; the timer binds its own at import); the exploit canaries in
   `tests/test_kernels_evolve.py` must all score 0; selection never sees held-out shapes, `gate` judges them (correctness, and their speedup as a fact); `validate_gpu.sh` = the GPU validation (shapes captured under real corpus traffic at several concurrencies, `CAPTURE_SPECS`; never synthetic prompts, whose batches have uniform lengths); tolerances from the target's
@@ -297,9 +298,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
 - `kernels/regions.py` — regions (decided 2026-10-22/23): any run of consecutive decode stations of the engine as a
   kernel task with a generated harness: `Station(name, reads, writes, fn)`; `interface` (inputs read before written,
   outputs read after the region or `live`), the stations as the baseline (`Task.baseline_fn`), an fp32 run as the
-  reference, `bytes_moved` (fused vs one-by-one), and the error budget: `Task.error_budget` (2) makes each case's atol
-  at least that times the baseline's own max abs error against the reference, in the checker, the timed outputs and
-  `verify.py`; the baseline is bound before the candidate loads and its modules (`Task.watch`) are watched for
+  reference, `bytes_moved` (fused vs one-by-one), and the error budget: `Task.error_budget` (2) lets each element differ from the reference by
+  that many times the baseline's own error there, on top of the dtype's tolerance (`check._compare(base=, k=)`), in the
+  checker, the timed outputs and `verify.py`; the baseline is bound before the candidate loads and its modules (`Task.watch`) are watched for
   patches. The engine's stations, swap-in point and capture hooks are not built yet (handoff in data/notes); until then
   regions are tested on fake stations.
 - `kernels/ptx.py` — the PTX comparison's cards (decided 2026-10-22, after Standard Kernel): each implementation's

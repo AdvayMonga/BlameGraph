@@ -48,13 +48,16 @@ def _edge_shapes(shape):
     return ones + [tuple(d + 1 if d > 1 and d & (d - 1) == 0 else d for d in shape)]
 
 
-def _compare(ref, out, atol, rtol) -> dict:
-    """Max abs/rel error over finite positions; non-finite positions (and Inf signs) must match exactly."""
+def _compare(ref, out, atol, rtol, base=None, k: float = 0.0) -> dict:
+    """Max abs/rel error over finite positions; non-finite positions (and Inf signs) must match exactly. With `base`
+    (the baseline's outputs on the same inputs), each element may also differ by `k` times the baseline's own error
+    there: a region's error budget, element by element, so one large value's rounding loosens nothing else."""
     refs, outs = _flat(ref), _flat(out)
+    bases = _flat(base) if base is not None else [None] * len(refs)
     if len(refs) != len(outs):
         return {"ok": False, "error": f"{len(outs)} outputs, expected {len(refs)}"}
     ok, max_abs, max_rel, nonfinite = True, 0.0, 0.0, 0
-    for r, o in zip(refs, outs):
+    for r, o, b in zip(refs, outs, bases):
         if not isinstance(o, torch.Tensor) or o.shape != r.shape or o.dtype != r.dtype:
             got = (tuple(o.shape), str(o.dtype)) if isinstance(o, torch.Tensor) else type(o).__name__
             return {"ok": False, "error": f"output {got}, expected {(tuple(r.shape), str(r.dtype))}"}
@@ -63,18 +66,15 @@ def _compare(ref, out, atol, rtol) -> dict:
         both = r.isfinite() & o.isfinite()
         nonfinite += int((~both & ~((r.isnan() & o.isnan()) | (r == o))).sum())
         d, mag = (r - o).abs()[both], r.abs()[both]
+        slack = 0.0
+        if isinstance(b, torch.Tensor) and k and b.shape == r.shape:
+            bd = (b.to(dt) - r).abs()
+            slack = k * torch.where(bd.isfinite(), bd, torch.zeros_like(bd))[both]
         if d.numel():
             max_abs = max(max_abs, d.max().item())
             max_rel = max(max_rel, (d / mag.clamp_min(atol)).max().item())
-        ok = ok and bool((d <= atol + rtol * mag).all())
+        ok = ok and bool((d <= atol + rtol * mag + slack).all())
     return {"ok": ok and nonfinite == 0, "max_abs": max_abs, "max_rel": max_rel, "nonfinite_mismatch": nonfinite}
-
-
-def budget_atol(ref, base, atol: float, k: float) -> float:
-    """The absolute tolerance under an error budget: `k` times the baseline's max abs error against the reference,
-    never below `atol` (the dtype's)."""
-    d = _compare(ref, _flat(base), float("inf"), 0.0)
-    return max(atol, k * d.get("max_abs", 0.0)) if d.get("ok") else atol
 
 
 def _describe(c) -> str:
@@ -103,8 +103,8 @@ def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes,
     `layouts`: the non-contiguous input variants to test, for a kernel whose callers pass such inputs.
     `record(case, outputs)` is called with each plain case's outputs (inputs straight from make_inputs and the seed),
     so they can be checked again outside this process (kernels/evolve/verify.py).
-    `budget` (with `baseline`): each case's absolute tolerance is at least `budget` times the baseline's own max abs
-    error against the reference on the same inputs (a region's error budget; never stricter than `tolerances`)."""
+    `budget` (with `baseline`): each element may also differ from the reference by `budget` times the baseline's own
+    error there, on the same inputs (a region's error budget, never stricter than `tolerances`)."""
     tol = {**TOLERANCES, **(tolerances or {})}
     mutated, aliased, nondet = [], [], []
 
@@ -115,9 +115,9 @@ def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes,
         if variant:
             case["variant"] = variant
         ref = reference(*[t.clone() for t in inputs])
-        if budget and baseline is not None:
-            atol = budget_atol(ref, baseline(*[t.clone() for t in inputs]), atol, budget)
-            case["atol"] = atol
+        base = baseline(*[t.clone() for t in inputs]) if budget and baseline is not None else None
+        if base is not None:
+            case["budget"] = budget
         before = [t.clone() for t in inputs]
         try:
             out = candidate(*inputs)
@@ -135,7 +135,7 @@ def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes,
             nondet.append(case)
         if record is not None and variant is None:
             record(case, first)
-        return {**case, **_compare(ref, first, atol, rtol)}
+        return {**case, **_compare(ref, first, atol, rtol, base=base, k=budget or 0.0)}
 
     def cases(shapes, seeds_, reps=1):
         return [run(s, dt, sd, make_inputs(s, dt, device, _gen(sd)), reps=reps)

@@ -14,7 +14,7 @@ from pathlib import Path
 import torch
 
 from kernels import check_kernel, time_pair
-from kernels.check import TOLERANCES, _compare, budget_atol    # bound here, before any candidate loads
+from kernels.check import TOLERANCES, _compare, _flat    # bound here, before any candidate loads
 from kernels.tasks import Task, from_config
 
 
@@ -38,6 +38,9 @@ FORBIDDEN = {
     r"(?m)^\s*(import|from)\s[^\n]*\bsys\b|\.sys\b|\batexit\b|\bweakref\b": "patching modules",
     r"\btorch\.profiler\b|\bautograd\.profiler\b|\bkineto\b|\bcupti\w*|\b(py)?nvml\w*|\bcuProfiler\w*": "the clock",
     r"\btorch\.cuda\.graph\b|\bmake_graphed_callables\b": "streams or timer events",
+    r"\btorch\.library\b|\bLibrary\s*\(|\bTORCH_LIBRARY\w*|__torch_dispatch__|__torch_function__|\bTorchDispatchMode\b"
+    r"|\btorch\.overrides\b|\bpy_impl\b|\bregister_(fake|kernel|autograd|torch_dispatch)\b":
+        "the operator registry (what torch's own ops do, the baseline's included)",
     r"\btorch\.from_file\b|\bio\.(FileIO|open)\b|\bshutil\b|\btempfile\b": "files, processes or the network",
     r"\bopen\s*\(|\bos\.(system|popen|fork|exec\w*|spawn\w*|kill|remove|unlink|open|write|dup2?)\b|\bsubprocess\b"
     r"|\bsocket\b|\burllib\b|\brequests\b|\btorch\.(save|load)\b|\b(np|numpy)\.(save\w*|load\w*|fromfile)\b|\.tofile\s*\("
@@ -157,7 +160,8 @@ def _watched(task: Task) -> dict:
             kernels.tasks, sys.modules[__name__], sys.modules[task.reference.__module__]]
     if task.error_budget:                        # the baseline sets the tolerance: its module and the stations' too
         base = task.baseline()
-        mods += [sys.modules[n] for n in sorted({*task.watch, getattr(base, "__module__", "")}) if n in sys.modules]
+        names = sorted({*task.watch, getattr(base, "__module__", "")} - {""})
+        mods += [importlib.import_module(n) for n in names]      # imported before the snapshot, never skipped
     out = {}
     for m in mods:
         own = m.__name__.startswith("kernels")
@@ -386,9 +390,8 @@ def _timed(task, cand, base, shapes, weights, dtype, device, iters, hw, toleranc
             _keep("time", s, str(dtype).removeprefix("torch."), i, out)     # time_pair's buffer i: seed i
         for inputs, out in zip(p["inputs"], p["outputs_a"]):
             ref = task.reference(*[t.clone() for t in inputs])
-            a = budget_atol(ref, base(*[t.clone() for t in inputs]), atol, task.error_budget) if task.error_budget \
-                else atol
-            d = _compare(ref, out, a, rtol)
+            b = _flat(base(*[t.clone() for t in inputs])) if task.error_budget else None
+            d = _compare(ref, out, atol, rtol, base=b, k=task.error_budget or 0.0)
             if not d["ok"]:
                 raise ValueError(f"the timed calls' output differs from the reference at shape {list(s)}: "
                                  f"{d.get('error') or ('max_abs %.3g, max_rel %.3g' % (d['max_abs'], d['max_rel']))}")
