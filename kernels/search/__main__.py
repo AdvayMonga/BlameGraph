@@ -86,10 +86,11 @@ def _top(trace: Path, retimed: list, code: str | None, metrics: dict | None, bes
                                                      if r["id"] in codes]
 
 
-def _blob(path: Path) -> str | None:
+def _blob(path: Path, root: str | None = None) -> str | None:
     """The run's hypothesis log as a ledger blob: every change the judge named and what became of it."""
     from lab import ledger
-    return ledger.put_blob(path, ledger.ROOT, ".jsonl") if path.exists() and path.stat().st_size else None
+    return ledger.put_blob(path, Path(root) if root else ledger.ROOT, ".jsonl") if path.exists() and path.stat().st_size \
+        else None
 
 
 def staged(judge_stage) -> Callable[[str, int], dict]:
@@ -123,6 +124,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--shapes")
     ap.add_argument("--captures", action="append")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--ledger", help="the ledger the run's `kernels` record goes to (default: this repo's)")
+    ap.add_argument("--equal-captures", action="store_true",
+                    help="each --captures dir (one traffic, e.g. a scored regime) weighs the same in the shape counts")
     ap.add_argument("--evals", type=int, default=30, help="programs judged, the root included")
     ap.add_argument("--usd", type=float, default=10.0, help="cap on model spend")
     ap.add_argument("--model", default="claude-opus-5-5", help="the coder")
@@ -194,8 +198,8 @@ def main(argv: list[str] | None = None) -> int:
         [{"name": a.judge_model, "role": "judge", "effort": a.effort}] if review else [])
     rec = record(task, sets, models, a.evals, a.device,
                  out / "trace.jsonl", out / "best_program.py", metrics or best.metrics, retimed=retimed,
-                 tool="kernels.search", cost=cost, extra={"tuned": tuned,
-                                                          "hypotheses": _blob(out / "hypotheses.jsonl")})
+                 tool="kernels.search", cost=cost, root=Path(a.ledger) if a.ledger else None,
+                 extra={"tuned": tuned, "hypotheses": _blob(out / "hypotheses.jsonl", a.ledger)})
     print(json.dumps({"best": metrics or best.metrics, "cost": cost, "nodes": len(tree.nodes), "out": str(out),
                       "ledger": rec["id"]}))
     return 0

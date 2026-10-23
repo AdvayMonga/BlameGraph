@@ -11,17 +11,26 @@ from kernels.tasks import Task
 from lab import capture
 
 
-def from_captures(task: Task, dirs: list[Path]) -> Counter:
-    """{shape: calls} over every capture dir, for calls to the task's entry point."""
-    c: Counter = Counter()
+def from_captures(task: Task, dirs: list[Path], equal: bool = False) -> Counter:
+    """{shape: calls} over every capture dir, for calls to the task's entry point. `equal`: each dir's calls are
+    scaled to the same total, so each capture's traffic (a scored regime) weighs the same (decided 2026-10-23)."""
+    per = []
     for d in dirs:
+        c: Counter = Counter()
         for call in capture.load(d):
             if task.entry and call["fn"] != task.entry:
                 continue
             s = task.shape_of(call)
             if s is not None:
                 c[tuple(s)] += 1
-    return c
+        per.append(c)
+    top = max((sum(c.values()) for c in per), default=0)
+    out: Counter = Counter()
+    for c in per:
+        total = sum(c.values())
+        for s, n in c.items():
+            out[s] += max(1, round(n * top / total)) if equal and total else n
+    return out
 
 
 def source(d: Path) -> str:
