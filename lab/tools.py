@@ -148,8 +148,21 @@ class Toolbox(EvalTools, ProfTools):
         if why:
             self._record("note", "profile", args, {"verdict": "refused", "reason": why}, snap)
             return f"profile refused: {why}"
-        out = self._work("profile")
         t0 = time.monotonic()
+        r, blob, visible, cal = self._profile_job(tree, args)
+        result = {"returncode": r["returncode"], "bundle": blob, "workspace_copy": visible,
+                  "seconds": time.monotonic() - t0, "output": r["output"], "calibrated": cal, **_killed(r)}
+        self._record("profile", "profile", args, result, snap)
+        killed = f"\nkilled in your workbench (held the GPU): {json.dumps(r['killed'])}" if r.get("killed") else ""
+        if r["returncode"] != 0 or not blob:
+            return f"profile failed ({r['returncode']}):\n{result['output']}{killed}"
+        return f"bundle at {visible} (in your workspace; left out of your change)\n" + "\n".join(
+            f"  {p.name}" for p in sorted((self.s.workspace.path / visible).iterdir())) + killed
+
+    def _profile_job(self, tree: Path, args: dict) -> tuple[dict, str, str, dict | None]:
+        """One profile job on `tree`: the worker's reply, the bundle's blob and workspace copy, and its calibration
+        with each layer's facts."""
+        out = self._work("profile")
         try:
             r = self.worker.call("profile", {"tree": tree},
                                  {"kind": "profile", "args": args, "workbench": getattr(self.s, "workbench", None)}, out)
@@ -162,14 +175,17 @@ class Toolbox(EvalTools, ProfTools):
                 cal["layers"] = layers.from_bundle(self.s.ledger_root / blob, target.load(), r.get("gpu"))
         except Exception as e:                   # noqa: BLE001  never costs the measurement it describes
             cal = {"error": f"calibration failed: {type(e).__name__}: {e}"}
-        result = {"returncode": r["returncode"], "bundle": blob, "workspace_copy": visible,
-                  "seconds": time.monotonic() - t0, "output": r["output"], "calibrated": cal, **_killed(r)}
-        self._record("profile", "profile", args, result, snap)
-        killed = f"\nkilled in your workbench (held the GPU): {json.dumps(r['killed'])}" if r.get("killed") else ""
-        if r["returncode"] != 0 or not blob:
-            return f"profile failed ({r['returncode']}):\n{result['output']}{killed}"
-        return f"bundle at {visible} (in your workspace; left out of your change)\n" + "\n".join(
-            f"  {p.name}" for p in sorted((self.s.workspace.path / visible).iterdir())) + killed
+        return r, blob, visible, cal
+
+    def _after_bench(self, tree: Path) -> dict:
+        """The profile a completed bench takes of the same tree right after its measurement, in its own launch, with
+        the profile tool's defaults: the layer facts a mechanism is checked against. Never costs the bench."""
+        try:
+            r, blob, visible, cal = self._profile_job(tree, {})
+        except Exception as e:                   # noqa: BLE001
+            return {"error": f"{type(e).__name__}: {e}"}
+        out = {"returncode": r["returncode"], "bundle": blob, "workspace_copy": visible, "calibrated": cal}
+        return out if r["returncode"] == 0 and blob else {**out, "output": r["output"][-2000:]}
 
     def ledger_tool(self, args: dict) -> str:
         match = {k: v for k, v in args.items() if k in ("kind", "session", "snapshot", "tool") and v}
@@ -362,7 +378,10 @@ class Toolbox(EvalTools, ProfTools):
                      f"(default {self.seed}). Returns one headline per regime "
                      f"(objective, value, direction, validity), raw. Takes {windows}. At the default seed and tier short, each "
                      "search starts where the run's base measurement of that regime ended; every search stops once its "
-                     "bracket is within the regime's noise band (10% where none is measured)." + prof + gpu("5-25 min per regime"),
+                     "bracket is within the regime's noise band (10% where none is measured). Then profiles the same tree once "
+                     "with `profile`'s defaults, in its own launch, and keeps it under the result's `profiled` (bundle, "
+                     "calibrated layer facts); a failed profile is recorded there and never fails the bench."
+                     + prof + gpu("5-25 min per regime, plus the profile's 1-7 min"),
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}},
                                                        "tier": {"type": "string", "enum": ["short", "full"]},
                                                        "seed": {"type": "integer"}}}, self.bench),

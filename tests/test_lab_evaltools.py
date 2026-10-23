@@ -317,7 +317,7 @@ def test_the_workbench_is_quieted_for_a_measurement_and_what_was_killed_is_a_fac
         yield [{"pid": 4242, "used_mib": 9000, "name": "python"}]
     monkeypatch.setattr(container, "quiet", quiet)
     out = json.loads(tb.bench({"regimes": ["single_stream"]}))
-    assert asked == ["lab-workbench-r1-s1"] and out["workbench_killed"][0]["pid"] == 4242
+    assert asked == ["lab-workbench-r1-s1"] * 2 and out["workbench_killed"][0]["pid"] == 4242   # measure, then profile
     rec = list(ledger.records(s.ledger_root, kind="bench"))[-1]["result"]
     assert rec["verdict"] == "ok" and rec["workbench_killed"][0]["pid"] == 4242
 
@@ -587,3 +587,11 @@ def test_submit_says_which_heldout_profile_launch_failed_and_how_only(lab, monke
     assert out["metrics"]["single_stream"]["verdict"] == "unknown"
     rec = next(r for r in ledger.records(s.ledger_root, kind="submit") if r.get("config", {}).get("split") == "heldout")
     assert rec["config"]["profiles_failed"] == {"single_stream": "engine did not start"}
+
+
+def test_bench_profiles_the_tree_after_measuring_and_a_failed_profile_is_only_a_fact(lab):
+    tb, s = lab                                 # no corpus to sample here, so the profile job fails
+    out = json.loads(tb.bench({"regimes": ["single_stream"]}))
+    rec = next(ledger.records(s.ledger_root, kind="bench"))
+    assert rec["result"]["verdict"] == "ok" and out["metrics"]["single_stream"]["valid"]
+    assert "manifest.json" in rec["result"]["profiled"]["error"] and "error" in out["profiled"]
