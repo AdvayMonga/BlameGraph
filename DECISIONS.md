@@ -5,6 +5,17 @@ a reversed decision gets a new entry that names the old one. Change any of these
 
 
 
+## 2026-10-23 — The funnel: volume through measured tiers; an idea archive; facts in slices
+Each expansion becomes one round of a funnel: several judge calls, each shown one slice of the facts (the
+measurements; similar archived ideas and their outcomes; measured winners elsewhere in the tree; the compiler's report;
+a PTX comparison of other implementations) naming ~20 hypotheses each; same-idea clusters merged; ideas like archived
+failures kept only when the judge names what differs now; a cheaper wide coder for all, correctness in parallel, the
+strong coder repairing failures and rewriting survivors, a one-shape quick timing, the fastest 6 to the full exam.
+Every distinct idea and its outcomes are kept in an archive (measurements only). Why (the user): generate far more and
+narrow in tiers, but every cheap tier a measurement (a model ranking idea text did no better than random, 2026-10-20);
+keep good ideas that lost in one context; one prompt carrying everything dilutes attention. Kernel ideas predict their
+mechanism (ncu counter changes). Multiple rounds stay. It replaces the beam only if it wins the A/B (arm
+`search-funnel`).
 ## 2026-10-23 — Regions replace hand-written kernel tasks; a region's error budget is measured
 The kernel layer's unit of work becomes a region: any run of consecutive decode operations (stations), from one kernel
 to the whole step, with its harness generated from the engine's declared stations (inputs, the stations as baseline,

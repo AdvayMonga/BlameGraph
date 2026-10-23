@@ -74,6 +74,15 @@ def ideas(root: Path) -> list[tuple[str, dict, Outcome]]:
                 row = json.loads(line)
             except ValueError:
                 continue
+            if "ideas" in row:                   # a funnel round: each idea with how far it got
+                for x in row["ideas"]:
+                    h = x.get("idea") or {}
+                    out.append((task, {k: v for k, v in h.items() if k in FIELDS} or h, Outcome(
+                        r["id"], row.get("parent_id"), row.get("parent_score"), x.get("child_id"),
+                        x.get("child_score"), x.get("improved"), None,
+                        None if x.get("child_id") else (x.get("fate", "") + (": " + x["error"] if x.get("error")
+                                                                             else ""))[:300])))
+                continue
             got = {m["index"]: m for m in row.get("measured") or []}
             for i, h in enumerate(row.get("hypotheses") or []):
                 m, idea = got.get(i), {k: v for k, v in h.items() if k in FIELDS} or h
