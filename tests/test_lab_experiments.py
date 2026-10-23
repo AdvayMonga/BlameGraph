@@ -117,3 +117,46 @@ def test_a_refused_call_needs_no_reflection(tb, monkeypatch):
     h = call(tb, "hypothesis", {"hypothesis": "h", "rationale": "r"}).split()[1]
     assert "refused" in call(tb, "trace", {"hypothesis_id": h, "expect": EXPECT})
     assert experiments.pending(tb.s.ledger_root, tb.s.run_id) is None
+
+
+MECH = {"metric": "returncode", "value": 0, "unit": "absolute", "why": "the instrument exits cleanly"}
+
+
+def test_mechanism_predictions_are_measured_at_their_paths(tb):
+    h = call(tb, "hypothesis", {"hypothesis": "h", "rationale": "r"}).split()[1]
+    out = call(tb, "trace", {"hypothesis_id": h, "expect": {**EXPECT, "mechanism": [
+        MECH, {**MECH, "metric": "calibrated.layers.runtime.gpu_idle_share"}]}})
+    x = list(ledger.records(tb.s.ledger_root, tool="trace"))[-1]["experiment"]
+    assert "mechanism" not in x["expect"]
+    hit, miss = x["mechanism"]
+    assert hit["actual"] == 0 and hit["gap"] == 0 and hit["why"] == MECH["why"]
+    assert miss["actual"] is None and "not a number" in miss["actual_missing"]
+    assert "returncode expected 0 (absolute), measured 0, gap +0" in out
+    s = experiments.summary(tb.s.ledger_root, tb.s.run_id)
+    assert s[0]["measurements"][0]["mechanism"] == x["mechanism"]
+
+
+@pytest.mark.parametrize("bad", [[], {"metric": "m"}, [{**MECH, "value": "low"}], [{**MECH, "unit": "ms"}],
+                                 [{**MECH, "why": ""}]])
+def test_refused_with_a_malformed_mechanism(tb, bad):
+    h = call(tb, "hypothesis", {"hypothesis": "h", "rationale": "r"}).split()[1]
+    with pytest.raises(ValueError, match="expect.mechanism"):
+        call(tb, "trace", {"hypothesis_id": h, "expect": {**EXPECT, "mechanism": bad}})
+
+
+def test_submit_takes_no_mechanism(tb):
+    h = call(tb, "hypothesis", {"hypothesis": "h", "rationale": "r"}).split()[1]
+    with pytest.raises(ValueError, match="not taken by submit"):
+        experiments.check(tb.s.ledger_root, tb.s.run_id, "submit",
+                          {"hypothesis_id": h, "expect": {**EXPECT, "mechanism": [MECH]}})
+
+
+def test_mechanism_change_pct_is_against_the_baseline_record():
+    args = {"hypothesis_id": "h", "expect": {**EXPECT, "mechanism": [
+        {**MECH, "metric": "calibrated.layers.runtime.gpu_idle_share", "unit": "change_pct", "value": -50},
+        {**MECH, "metric": "calibrated.layers.serving.share", "unit": "change_pct", "value": 0}]}}
+    result = {"calibrated": {"layers": {"runtime": {"gpu_idle_share": 0.1}, "serving": {"share": 0.2}}}}
+    base = {"calibrated": {"layers": {"runtime": {"gpu_idle_share": 0.25}}}}
+    drop, nobase = experiments.outcome("bench", args, result, base_result=base)["mechanism"]
+    assert drop["actual"] == pytest.approx(-60) and drop["gap"] == pytest.approx(-10)
+    assert nobase["actual"] is None and "no baseline value" in nobase["actual_missing"]

@@ -5,6 +5,14 @@ a reversed decision gets a new entry that names the old one. Change any of these
 
 
 
+## 2026-10-22 — A hypothesis predicts its mechanism, not only its outcome
+`expect` may carry `mechanism`: predictions on other numbers of the same result (e.g. the GPU idle share in a
+profile's layer facts), each kept with its measured value and gap. Why (the user): an improvement should be checked
+against how it was meant to work, not taken blindly; outcome and mechanism together say whether a change worked as
+intended, improved for another reason, or moved its mechanism without moving the outcome. The records are measurements,
+so they fit the no-beliefs rule (2026-10-09), and they are the labels process evals and a later trained model need.
+Extends 2026-10-11.
+
 ## 2026-10-20 — The judge names 4 changes and all 4 are measured: no screener, no merge hypothesis
 Reverses part of "The layer-1 loop copies the frontier per component" (2026-10-18): the 16 hypotheses ranked by a
 screener (Haiku 4.5; MANTIS ROI and random as arms), the random slot for a learned screener's labels, and the merge

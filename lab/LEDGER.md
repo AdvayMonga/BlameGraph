@@ -27,7 +27,10 @@ on write. Every record: `id`, `at`, `schema` (set by the writer), `kind`, `run`,
 Every measured record (`bench`, `equiv`, `submit`, `profile`, including `trace`/`kernel`/`hostprof`) made by the
 agent carries `experiment: {hypothesis, expect: {metric, value, unit: absolute|change_pct, why}, actual, gap,
 gap_pct_of_expected, noise_band_pct}`, or `actual_missing` saying why the lab could not compute the measured
-counterpart (`lab/experiments.py`). The agent's measured tools refuse a call without an open hypothesis and an
+counterpart (`lab/experiments.py`). An `expect` may carry `mechanism`, a list of further predictions on other numbers
+in the same result (`metric` = a dotted path into `result`, e.g. `calibrated.layers.runtime.gpu_idle_share`;
+`change_pct` against the same path in the run's `baseline` record); the record keeps them as `experiment.mechanism`,
+each with its `actual` and `gap` or `actual_missing`. `submit` takes none: its held-out record is aggregates only. The agent's measured tools refuse a call without an open hypothesis and an
 `expect`, and while the run's latest measured record has no `reflection`. Runs whose id starts `researcher-` are
 experiments a person made outside the lab (`lab/experiment.py`), with the same records; the agent's `ledger` tool and
 SQL index leave them out.

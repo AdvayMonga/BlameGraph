@@ -63,7 +63,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   its model calls go through `apiproxy.py`, which injects the key, prices usage and enforces the session cap; the
   workbench is paused by `container.quiet` around measure/equiv/profile jobs, GPU holders killed and recorded),
   `experiments.py` (decided 2026-10-11: no measured number without the agent's reasoning and no reasoning without
-  the number; measured tools require an open `hypothesis` record and an `expect` {metric, value, unit, why}, the
+  the number; measured tools require an open `hypothesis` record and an `expect` {metric, value, unit, why, optional
+  `mechanism`: the same on other numbers of the result by dotted path, e.g. a profile's layer facts}, the
   record keeps both with the computed gap, and the next measured call is refused until a `reflection` on the last
   one is filed; the brief lists the run's hypotheses with their measurements and reflections; a session that ends
   with its last measurement unreflected is followed by one call (`session.closing`: $0.50, 4 turns, tools `reflect`
