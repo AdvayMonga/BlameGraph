@@ -293,6 +293,12 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `verify.py`; the baseline is bound before the candidate loads and its modules (`Task.watch`) are watched for
   patches. The engine's stations, swap-in point and capture hooks are not built yet (handoff in data/notes); until then
   regions are tested on fake stations.
+- `kernels/ptx.py` — the PTX comparison's cards (decided 2026-10-22, after Standard Kernel): each implementation's
+  kernels counted from its PTX (or `cuobjdump -sass` output, for libraries that ship no PTX): instruction classes,
+  widest vector access, declared registers, static shared memory, and the Hopper features in use (wgmma, TMA,
+  setmaxnreg, mbarrier, cp.async, mma, ldmatrix), with a measured time beside it when given; fastest first.
+  `python -m kernels.ptx card --name N PTX ... [--timing N=MS] --out F`, read by `kernels.search --ptx F`. Producing
+  competitors' PTX and timings on our shapes needs their libraries on the GPU host (not built yet).
 - `kernels/search/funnel.py` — one funnel round (decided 2026-10-22; `kernels.search --funnel`, A/B arm
   `search-funnel`): judge calls per slice of facts (measurements, archive matches, winners elsewhere in the tree,
   compiler report, PTX comparison; a slice with no facts is skipped) x `--per-call` hypotheses, same-idea clusters
