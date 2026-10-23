@@ -161,7 +161,7 @@ def _shapes(task, a) -> dict:
     if a.shapes:
         return shapes_mod.read(a.shapes)
     dirs = [Path(d) for d in a.captures or []]
-    sets = shapes_mod.split(task, shapes_mod.from_captures(task, dirs))
+    sets = shapes_mod.split(task, shapes_mod.from_captures(task, dirs, equal=getattr(a, "equal_captures", False)))
     return {**sets, "ints": shapes_mod.ints_from_captures(task, dirs),
             "sources": shapes_mod.sources_from_captures(task, dirs)} if dirs else sets
 

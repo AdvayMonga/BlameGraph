@@ -125,6 +125,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--captures", action="append")
     ap.add_argument("--out", required=True)
     ap.add_argument("--ledger", help="the ledger the run's `kernels` record goes to (default: this repo's)")
+    ap.add_argument("--equal-captures", action="store_true",
+                    help="each --captures dir (one traffic, e.g. a scored regime) weighs the same in the shape counts")
     ap.add_argument("--evals", type=int, default=30, help="programs judged, the root included")
     ap.add_argument("--usd", type=float, default=10.0, help="cap on model spend")
     ap.add_argument("--model", default="claude-opus-5-5", help="the coder")

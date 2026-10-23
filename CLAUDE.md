@@ -85,7 +85,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   from held-out requests; harness facts carry peaks and floors for the GPU the ledger last measured on),
   `import_runs.py` (a hand-made run dir → `bench`/`equiv` records under a `manual-` run, numbers only),
   `tools.py` (metered tools: test, profile, ledger, query, search, budget, restore, note, `kernel_search` (decided
-  2026-10-22; a blocking call: `kernels/pipeline.py` captures the task's calls under seen-split traffic, runs
+  2026-10-22; a blocking call: `kernels/pipeline.py` captures the task's calls under each scored regime's traffic
+  (`REGIME_CAPTURE`; each regime weighted equally, `shapes.from_captures(equal=True)`; reused while the engine outside
+  the task's module, the traffic and the spec are unchanged, `tree_key`), runs
   `kernels.search` on the controller with its evaluator on the worker over ssh, gates the winner on held-out shapes,
   and saves a patch of the engine module in the workspace for the agent to apply; kernels-layer hypotheses only;
   `budget_usd` split between model calls and GPU time); every record's `cost` has wall seconds, and

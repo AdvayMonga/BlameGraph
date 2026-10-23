@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from pathlib import Path
 
 import pytest
 
@@ -64,7 +65,7 @@ def test_one_call_records_the_search_and_saves_a_patch_when_the_gate_passes(tb, 
     monkeypatch.setattr(kernels.tasks, "load", lambda n: engine_task if n == "silu_mul" else real_load(n))
     caps = tmp_path / "captures"
     caps.mkdir()
-    monkeypatch.setattr(pipeline, "captures", lambda t, tree, profile: [caps])
+    monkeypatch.setattr(pipeline, "captures", lambda t, tree, profile, *a: [caps])
 
     def search(t, cs, start, out, usd, evals, root, env, funnel=False):
         out.mkdir(parents=True)
@@ -84,3 +85,31 @@ def test_one_call_records_the_search_and_saves_a_patch_when_the_gate_passes(tb, 
     assert "+    return 2" in patch and tb.s.budget.spent_usd >= spent + 2.5
     rec = list(ledger.records(tb.s.ledger_root, kind="kernels"))[-1]
     assert rec["tool"] == "kernel_search" and rec["experiment"]["actual"] == 1.3 and rec["result"]["search_record"]
+
+
+def test_captures_follow_the_scored_regimes_weigh_each_the_same_and_are_reused(tmp_path, monkeypatch):
+    from kernels import shapes
+    assert pipeline.specs(("saturated", "bursty", "nope")) == (("mixed_1", 256), ("mixed_3", 64))
+    assert pipeline.specs() == pipeline.CAPTURE_SPECS
+    tree = tmp_path / "tree"
+    (tree / "src" / "pkg").mkdir(parents=True)
+    (tree / "src" / "pkg" / "mod.py").write_text(MODULE)
+    (tree / "src" / "pkg" / "other.py").write_text("x = 1\n")
+    made = []
+
+    def profile(t, a):
+        made.append(a["corpus_class"])
+        b = tmp_path / f"bundle-{len(made)}"
+        (b / "captures").mkdir(parents=True)
+        return b
+    cache = tmp_path / "captures.json"
+    first = pipeline.captures(task(), tree, profile, ("saturated",), cache)
+    (tree / "src" / "pkg" / "mod.py").write_text(MODULE + "# the kernel itself changed\n")
+    assert pipeline.captures(task(), tree, profile, ("saturated",), cache) == first and made == ["mixed_1"]
+    (tree / "src" / "pkg" / "other.py").write_text("x = 2\n")                       # upstream code changed
+    assert pipeline.captures(task(), tree, profile, ("saturated",), cache) != first and len(made) == 2
+    calls = {"a": [(8,)] * 9, "b": [(64,)] * 1}
+    monkeypatch.setattr(shapes.capture, "load", lambda d: [{"fn": "pkg.mod:fn", "s": s} for s in calls[Path(d).name]])
+    t = dataclasses.replace(task(), shape_of=lambda call: call["s"])
+    assert shapes.from_captures(t, [Path("a"), Path("b")]) == {(8,): 9, (64,): 1}
+    assert shapes.from_captures(t, [Path("a"), Path("b")], equal=True) == {(8,): 9, (64,): 9}

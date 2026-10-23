@@ -229,7 +229,9 @@ class Toolbox(EvalTools, ProfTools):
         w = self.worker
         env = pipeline.remote_env(w.prefix, w.env_dir, w.python, w.env) if isinstance(w, worker.Remote) else {}
         try:
-            caps = pipeline.captures(task, tree, profile)
+            scored = (*getattr(self.s.task, "regimes", ()), *getattr(self.s.task, "constraints", ())) \
+                if getattr(self.s, "task", None) else ()
+            caps = pipeline.captures(task, tree, profile, scored, self.s.run_dir / "kernel_search" / "captures.json")
             if not caps:
                 raise RuntimeError("no capture traffic produced calls to the task's entry point")
             start = out / "start.py"
