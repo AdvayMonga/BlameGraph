@@ -84,7 +84,11 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   submit's held-out aggregates carry the ceiling from the base's seen-split shape and % of it, never anything computed
   from held-out requests; harness facts carry peaks and floors for the GPU the ledger last measured on),
   `import_runs.py` (a hand-made run dir → `bench`/`equiv` records under a `manual-` run, numbers only),
-  `tools.py` (metered tools: test, profile, ledger, query, search, budget, restore, note; every record's `cost` has wall seconds, and
+  `tools.py` (metered tools: test, profile, ledger, query, search, budget, restore, note, `kernel_search` (decided
+  2026-10-22; a blocking call: `kernels/pipeline.py` captures the task's calls under seen-split traffic, runs
+  `kernels.search` on the controller with its evaluator on the worker over ssh, gates the winner on held-out shapes,
+  and saves a patch of the engine module in the workspace for the agent to apply; kernels-layer hypotheses only;
+  `budget_usd` split between model calls and GPU time); every record's `cost` has wall seconds, and
   GPU tools charge them at `LAB_GPU_USD_PER_HOUR` / the target's `[cost] gpu_usd_per_hour` to the run's budget) +
   `proftools.py` (trace = nsys, kernel = ncu, hostprof = py-spy, each wrapping lab.profile's workload in the jail
   with validated args) + `evaltools.py` (bench → `regimes` on

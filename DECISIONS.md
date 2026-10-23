@@ -5,6 +5,14 @@ a reversed decision gets a new entry that names the old one. Change any of these
 
 
 
+## 2026-10-23 — The agent calls the kernel layer as a tool, blocking for now, and gets a patch
+`kernel_search` (task, budget_usd, with a kernels-layer hypothesis and its expect) runs the kernel layer end to end:
+capture under real traffic, search from the agent's own version of the kernel, the held-out gate, and a patch of the
+engine module saved in the workspace for the agent to apply and judge with its own bench/equiv/submit. Why (the user):
+the agent decides which kernel to work on, given each task's share of time as a fact; the agent applying the patch
+keeps it in charge and avoids clashing with its own edits. A blocking call on the run's GPU for now; a parallel job on
+its own host later. The search runs on the controller (the model's key stays there) with its evaluator on the worker.
+
 ## 2026-10-23 — The funnel: volume through measured tiers; an idea archive; facts in slices
 Each expansion becomes one round of a funnel: several judge calls, each shown one slice of the facts (the
 measurements; similar archived ideas and their outcomes; measured winners elsewhere in the tree; the compiler's report;

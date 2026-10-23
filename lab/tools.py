@@ -19,7 +19,9 @@ from lab.safety import grader
 # Tools that occupy the GPU: their wall time is charged at the venue's rate. The rest cost $0.
 QUERY_MAX_BYTES = 64_000           # a query's reply: whole rows up to this, so one call cannot flood the context
 AFTER_BENCH_TIMEOUT_S = 900          # the after-bench profile: 1-7 min measured; a hang costs at most this
-GPU_TOOLS = frozenset({"profile", "trace", "kernel", "hostprof", "bench", "equiv", "submit", "baseline"})
+GPU_TOOLS = frozenset({"profile", "trace", "kernel", "hostprof", "bench", "equiv", "submit", "baseline",
+                       "kernel_search"})
+KERNEL_SEARCH_GPU_MIN = 3.0          # GPU minutes per judged program, for sizing a search to its budget (an estimate)
 
 
 def _drop_links(root: Path) -> None:
@@ -197,6 +199,69 @@ class Toolbox(EvalTools, ProfTools):
             out.update(contaminated=True, gpu_others=r["gpu_others"])
         return out if r["returncode"] == 0 and blob else {**out, "output": r["output"][-2000:]}
 
+
+    def kernel_search(self, args: dict) -> str:
+        """The kernel layer in one blocking call (kernels/pipeline.py): capture the task's calls under real traffic,
+        search, gate the winner on the held-out shapes; the winner comes back as a patch of the engine module, saved
+        in the workspace (left out of your change) for you to apply."""
+        from kernels import pipeline
+        from kernels.tasks import TASKS, load
+        if args.get("task") not in TASKS:
+            raise ValueError(f"`task` must be one of {list(TASKS)}")
+        usd = args.get("budget_usd")
+        if isinstance(usd, bool) or not isinstance(usd, (int, float)) or usd <= 0:
+            raise ValueError("`budget_usd` must be a positive number")
+        if usd > self.s.budget.remaining_usd:
+            raise ValueError(f"`budget_usd` {usd} is more than the run has left (${self.s.budget.remaining_usd:.2f})")
+        task = load(args["task"])
+        snap = self._audited("kernel_search", args)
+        tree = self._pristine()
+        out = self.s.run_dir / "kernel_search" / f"{snap.id}-{task.name}-{int(time.time())}"
+        out.mkdir(parents=True, exist_ok=True)
+        rate = gpu_rate()[0]
+        model_usd = usd / 2 if rate else usd
+        evals = max(8, min(60, int((usd - model_usd) / (rate * KERNEL_SEARCH_GPU_MIN / 60)))) if rate else 30
+
+        def profile(t, a):
+            r, blob, _, _ = self._profile_job(t, a)
+            return self.s.ledger_root / blob if r["returncode"] == 0 and blob else None
+        from lab import worker
+        w = self.worker
+        env = pipeline.remote_env(w.prefix, w.env_dir, w.python, w.env) if isinstance(w, worker.Remote) else {}
+        try:
+            caps = pipeline.captures(task, tree, profile)
+            if not caps:
+                raise RuntimeError("no capture traffic produced calls to the task's entry point")
+            start = out / "start.py"
+            start.write_text(pipeline.start_program(task, tree))
+            found = pipeline.search(task, caps, start, out / "search", model_usd, evals, self.s.ledger_root, env)
+            best = out / "search" / "best_program.py"
+            g = pipeline.gate(task, caps, best, out, env)
+        except Exception as e:                   # noqa: BLE001  a tool never crashes the session
+            result = {"verdict": "error", "reason": f"{type(e).__name__}: {e}"[-2000:]}
+            self._record("kernels", "kernel_search", args, result, snap)
+            return f"kernel_search failed: {result['reason']}"
+        from kernels.evolve.ship import gate_passed
+        passed = gate_passed(g)
+        rel = None
+        if passed:
+            text = pipeline.patch(task, tree, best.read_text())
+            dest = self.s.workspace.path / "lab" / "runs" / "kernel_search" / f"{task.name}-{snap.id}.patch"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(text)
+            rel = dest.relative_to(self.s.workspace.path).as_posix()
+        model_cost = float((found.get("cost") or {}).get("usd") or 0.0)
+        self.s.budget.charge(model_cost, "kernel_search models")
+        gm = g.get("metrics") or {}
+        result = {"verdict": "ok", "metrics": {"speedup": (found.get("best") or {}).get("combined_score"),
+                                               "heldout_speedup": gm.get("heldout_speedup")},
+                  "best": found.get("best"), "search_record": found.get("ledger"), "evals": evals,
+                  "model_usd": model_cost, "gate": {"passed": passed, "metrics": gm,
+                                                    "gates": json.loads((g.get("artifacts") or {}).get("gates") or "{}")},
+                  "patch": rel, "captures": len(caps)}
+        self._record("kernels", "kernel_search", args, result, snap)
+        return json.dumps({k: result[k] for k in ("metrics", "gate", "patch", "search_record", "model_usd")}, indent=1,
+                          default=str)
 
     def ledger_tool(self, args: dict) -> str:
         match = {k: v for k, v in args.items() if k in ("kind", "session", "snapshot", "tool") and v}
@@ -422,6 +487,17 @@ class Toolbox(EvalTools, ProfTools):
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}}}},
                      self.submit),
             *self.prof_specs(gpu),
+            ToolSpec("kernel_search", "Search for a faster version of one engine kernel: `task` (one of the kernel "
+                     "tasks, the engine entry point it replaces), `budget_usd` (model calls plus GPU time, charged to "
+                     "the run). Captures the task's calls under real seen-split traffic at several concurrencies, splits "
+                     "the shapes seen / held-out, searches from your workspace's version of the kernel (kernels.search), "
+                     "and gates the winner on the held-out shapes. Returns the winner's seen-shape speedup, the gate's "
+                     "verdict and held-out speedup, the `kernels` ledger record of the search, and, if the gate passed, "
+                     "the path of a patch of the engine module in your workspace (not applied). Blocks until done."
+                     + gpu("hours, sized to `budget_usd`"),
+                     {"type": "object", "required": ["task", "budget_usd"],
+                      "properties": {"task": {"type": "string"}, "budget_usd": {"type": "number"}}},
+                     self.kernel_search),
             ToolSpec("hypothesis", "Record a hypothesis: `hypothesis` (the bottleneck and the proposed change), "
                      f"`rationale` (why), `layer` (where the change is: {', '.join(experiments.LAYERS)}), optional "
                      "`abandon_if` (the result that would end it) and `from_record` (the measured record whose "

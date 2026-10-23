@@ -11,7 +11,7 @@ from pathlib import Path
 
 from lab import ledger
 
-MEASURED = ("bench", "equiv", "submit", "profile", "trace", "kernel", "hostprof")
+MEASURED = ("bench", "equiv", "submit", "profile", "trace", "kernel", "hostprof", "kernel_search")
 UNITS = ("absolute", "change_pct")
 LAYERS = ("kernels", "model_execution", "runtime", "serving")      # lab/layers.py's four layers
 # Runs made outside the lab by a researcher (`python -m lab.experiment`): their text is a person's, so no agent view
@@ -118,6 +118,8 @@ def check(root: Path, run: str, tool: str, args: dict) -> None:
             raise ValueError(f"record {r['id']} ({r.get('tool')}) measured {', '.join(sorted(ids & involved(r)))} and "
                              f"has no reflection; `reflect` with record={r['id']} comes before the next measurement "
                              "of that hypothesis")
+    if tool == "kernel_search" and any(hs[h].get("layer") not in (None, "kernels") for h in ids):
+        raise ValueError("`kernel_search` measures hypotheses of the kernels layer only")
     e = args.get("expect")
     _prediction(e, "expect", ("mechanism",))
     m = e.get("mechanism")
