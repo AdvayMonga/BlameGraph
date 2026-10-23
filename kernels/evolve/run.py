@@ -144,6 +144,14 @@ def _hardware(device: str) -> str:
     return f"The GPU and toolchain: {json.dumps(facts)}"
 
 
+def _arch(device: str) -> str | None:
+    """The GPU's architecture as TORCH_CUDA_ARCH_LIST spells it (9.0a on Hopper), for builds made without a device."""
+    if not str(device).startswith("cuda") or not torch.cuda.is_available():
+        return None
+    major, minor = torch.cuda.get_device_capability(device)
+    return f"{major}.{minor}" + ("a" if major in (9, 10) else "")
+
+
 def tolerances(target_tol: dict | None) -> dict:
     """The target spec's [kernels] tolerances ({dtype: [atol, rtol]}), as the checker's override."""
     return {k: list(v) for k, v in (target_tol or {}).items()}
@@ -276,6 +284,7 @@ def prepare(task, sets: dict, out: Path, device: str, tol: dict, timing_shapes: 
     cfg_path.write_text(json.dumps({"task": task.name, "seen": [list(s) for s in sets["seen"]],
                                     "weights": {k: v for k, v in (sets.get("calls") or {}).items() if k in seen},
                                     "device": device, "tolerances": tol, "ints": _ints(sets, ("seen",)),
+                                    "arch": _arch(device),
                                     "options": options_from_target(task)}))
     (out / "shapes.json").write_text(json.dumps({k: [list(s) for s in v] if k in ("seen", "heldout") else v
                                                  for k, v in sets.items()}, indent=1))
