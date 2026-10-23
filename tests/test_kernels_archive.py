@@ -62,6 +62,7 @@ def test_ideas_fold_near_duplicates_keep_every_outcome_and_answer_lookups(tmp_pa
     top = archive.matches(es, "fuse combine split", "paged_decode", k=1, embedder=FakeEmbed())
     assert top[0][1] is es[0] and not archive.matches(es, "fuse", "moe_gemm", embedder=FakeEmbed())
     assert archive.retry(es, {"paged_decode": "a"}) == [es[1]]    # failed on r only; the best is now a
+    assert es[1].ever_failed() and not es[2].ever_failed()            # never measured: not a failure
     path = archive.export(es, tmp_path / "archive.jsonl")
     back = archive.load(path)
     assert [e.text for e in back] == [e.text for e in es] and back[1].outcomes[0].error == "max_abs 3.1"

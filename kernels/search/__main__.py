@@ -153,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--beam", type=int, default=4, help="changes the judge names per expansion, each written and judged")
     ap.add_argument("--max-repairs", type=int, default=3, help="repairs of a failed child, chained")
     ap.add_argument("--funnel", action="store_true", help="each expansion is one funnel round (kernels/search/funnel.py)")
+    ap.add_argument("--gpu-s", type=float, help="stop once judging has taken this many seconds (the GPU host's time)")
     ap.add_argument("--wide-model", default="claude-sonnet-5-5", help="the funnel's wide coder")
     ap.add_argument("--cheap-model", default="claude-haiku-5-5", help="merges duplicate hypotheses")
     ap.add_argument("--per-call", type=int, default=20, help="hypotheses per generator call (one call per slice)")
@@ -175,7 +176,8 @@ def main(argv: list[str] | None = None) -> int:
     fun = _funnel(a, task, review) if a.funnel else None
     tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.usd, a.seed,
                         review=review, stop_pct=a.stop_pct or None, patience=a.patience or None,
-                        beam=a.beam, max_repairs=a.max_repairs, uct_c=a.uct_c, funnel=fun)
+                        beam=a.beam, max_repairs=a.max_repairs, uct_c=a.uct_c, funnel=fun, gpu_s=a.gpu_s,
+                        gpu_used=lambda: evaluator.seconds(out / "eval_seconds.log"))
     spent: list = []
     exclude = detect.detector(Claude(a.detector_model, a.effort), spent) if a.detector_model != "none" else None
     code, metrics, retimed = (retime(out / "trace.jsonl", a.retime, exclude=exclude) if a.retime

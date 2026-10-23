@@ -79,7 +79,7 @@ def test_an_idea_like_an_archived_failure_is_dropped_unless_a_difference_is_name
     expand(f, t, root, "SYS", 1, lambda n, c: t.add(n), rows.append)
     fates = {x["idea"]["modification_plan"]: x["fate"] for x in rows[0]["ideas"]}
     assert fates["set a = 5"].startswith("like archived ideas") and rows[0]["after_archive"] == rows[0]["distinct"] - 1
-    assert any("Similar ideas in the archive" in u for u in f.models.judge.calls)      # the archive slice ran
+    assert any("ideas in the archive" in u for u in f.models.judge.calls)              # the archive slice ran
 
 
 def test_the_search_runs_funnel_rounds_and_the_archive_reads_them_back(tmp_path):
@@ -126,6 +126,59 @@ def test_the_precheck_drops_what_does_not_build_and_feeds_the_compiler_slice():
     assert fates["set a = 12"].startswith("precheck: the CUDA C++ build failed")
     assert root.artifacts["compile_report"] == report and all(k.artifacts["compile_report"] == report for k in kids)
     assert any("The compiler's report for this program" in u for u in f.models.judge.calls)
+
+
+def test_a_round_stops_mid_way_when_a_budget_runs_out_and_says_so():
+    f, t, rows = funnel(ptx="cards"), Tree(), []
+    f.usd_cap = 0.05                                      # the first judge call costs 0.1: the second is refused
+    root = t.add(Node("r", None, START, {"correct": 1.0, "combined_score": 0.1, "stage": 2}, {}, 0))
+    assert expand(f, t, root, "SYS", 1, lambda n, c: t.add(n), rows.append) == []
+    assert rows[0]["stopped"] == "model budget" and rows[0]["named"] == 0
+    used = [0.0]
+    g = funnel(ptx="cards")
+    g.gpu_s_cap, g.gpu_used = 2.0, lambda: used[0]
+
+    def staged(code, n):
+        used[0] += 1.0
+        return stage(code, n)
+    g.stage = staged
+    rows2, t2 = [], Tree()
+    expand(g, t2, t2.add(Node("r", None, START, {"correct": 1.0, "combined_score": 0.1, "stage": 2}, {}, 0)),
+           "SYS", 1, lambda n, c: None, rows2.append)
+    assert rows2[0]["stopped"] == "GPU budget" and used[0] == 2.0
+
+
+def test_ncu_is_not_asked_for_again_once_the_host_refuses_and_programs_are_never_written_twice():
+    from kernels.search.loop import REFUSED
+    calls = []
+
+    def staged(code, n):
+        calls.append(n)
+        return {"metrics": {"stage": 3}, "artifacts": {"ncu_error": REFUSED}} if n == 3 else stage(code, n)
+    f = Funnel(Models(Judge(), merge, coder, coder), staged, per_call=3, keep=2, parallel=1, ptx="cards", ncu=True)
+    t = Tree()
+    root = t.add(Node("r", None, START, {"correct": 1.0, "combined_score": 0.1, "stage": 2}, {}, 0))
+    kids = expand(f, t, root, "SYS", 1, lambda n, c: t.add(n), [].append)
+    assert calls.count(3) == 1 and not f.ncu and "ncu_missing" in kids[0].artifacts
+    rows = []
+    expand(f, t, root, "SYS", 2, lambda n, c: t.add(n), rows.append)       # the same ideas again, on the same parent
+    again = {x["idea"]["modification_plan"]: x["fate"] for x in rows[0]["ideas"]}
+    assert again["set a = 5"].startswith("not applied: identical")      # written in round 1, never written again
+
+
+def test_a_malformed_verdict_never_crashes_and_unmeasured_archive_ideas_never_block():
+    from kernels.search.funnel import past_failures
+    measured = archive.Entry("i1", "toy", "b5\nm5\nset a = 5", h(5),
+                             outcomes=[archive.Outcome("k", "p", 1.0, "c", 0.5, False)])
+    unmeasured = archive.Entry("i2", "toy", "b6\nm6\nset a = 6", h(6), outcomes=[archive.Outcome("k", "p", 1.0, None)])
+
+    class Bad:
+        def __call__(self, system, user):
+            return json.dumps([{"keep": True, "differs": "x"}, {"index": "0", "keep": True, "differs": "parent changed"}]), 0
+    f = Funnel(Models(Bad(), merge, coder, coder), stage, archive=[measured, unmeasured], task="toy")
+    kept, dropped = past_failures(f, "S", "B", [h(5), h(6)])
+    assert [k["modification_plan"] for k in kept] == ["set a = 5", "set a = 6"] and not dropped
+    assert kept[0]["differs_from_archive"] == "parent changed"
 
 
 if __name__ == "__main__":

@@ -95,8 +95,8 @@ def setting(task, sets: dict, device: str, tol: dict) -> str:
     calls, src = sets.get("calls") or {}, sets.get("sources") or {}
     seen = [json.dumps(list(x)) for x in sets["seen"]]
     total = sum(calls.get(k, 1) for k in seen) or 1
-    out = ["# The setting (facts)", "Seen shapes, each with its calls in the captured traffic and its weight in the "
-           "score:"]
+    out = ["# The setting (facts)", "Seen shapes, each with the calls it stands for in the captured traffic (its own "
+           "and, when shapes were bucketed for selection, those of its bucket) and its weight in the score:"]
     for k in seen:
         by = ", ".join(f"{c} {n}" for c, n in sorted((src.get(k) or {}).items()))
         out.append(f"- {k}: {calls.get(k, 1)} calls, {100 * calls.get(k, 1) / total:.1f}% of the score"

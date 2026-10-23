@@ -162,7 +162,8 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
            judge: Callable[[str], dict], out: Path, evals: int, usd: float, seed: int = 0,
            review: Callable[[str, str], tuple[str, float]] | None = None,
            stop_pct: float | None = None, patience: int | None = None, beam: int = 4, max_repairs: int = 3,
-           uct_c: float = UCT_C, funnel=None) -> tuple[Tree, dict]:
+           uct_c: float = UCT_C, funnel=None, gpu_s: float | None = None,
+           gpu_used: Callable[[], float] | None = None) -> tuple[Tree, dict]:
     """Search until `evals` programs are judged, `usd` is spent on model calls, nothing is left to try, or the best
     program reaches `stop_pct`% of its roofline bound, or `patience` programs have been judged since the best last
     improved (MANTIS, Hari et al.: within 25% of speed-of-light or 16 attempts without progress kept 96% of the geomean
@@ -176,6 +177,12 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
     {usd, model_calls, evals, ...}."""
     out.mkdir(parents=True, exist_ok=True)
     tree, spent, calls, judged, it, repairs = Tree(seed, c=uct_c), 0.0, 0, 0, 0, []
+
+    def gpu_out() -> bool:
+        return bool(gpu_s is not None and gpu_used and gpu_used() >= gpu_s)
+    if funnel is not None:                       # its rounds stop mid-way at the same caps
+        funnel.usd_cap = usd if funnel.usd_cap is None else funnel.usd_cap
+        funnel.gpu_s_cap, funnel.gpu_used = gpu_s, gpu_used
     with open(out / "trace.jsonl", "w") as trace, open(out / "hypotheses.jsonl", "w") as hyplog:
         def keep(node: Node, cost: float) -> None:
             tree.add(node)
@@ -188,7 +195,7 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
         def attempt(parent: Node, plan: str, mode: str, cost: float) -> Node | None:
             """One coder call on `plan`, applied and judged; the child (None when the budget ran out first)."""
             nonlocal spent, calls, judged
-            if judged >= evals or spent >= usd:
+            if judged >= evals or spent >= usd or gpu_out():
                 return None
             text, c = propose(system + "\n\n" + FORMAT, prompt(tree, parent, plan))
             spent, calls, cost = spent + c, calls + 1, cost + c
@@ -214,7 +221,7 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
         judged += 1
         keep(Node(uuid.uuid4().hex[:8], None, initial, r["metrics"], r["artifacts"], 0), 0.0)
         best_at, best_score = judged, tree.best().score
-        while judged < evals and spent < usd:
+        while judged < evals and spent < usd and not gpu_out():
             if stop_pct and (tree.best().pct_of_roofline or 0) >= stop_pct:
                 break
             if tree.best().score > best_score:
