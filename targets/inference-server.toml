@@ -22,9 +22,10 @@ hub = ["gpt2"]                               # Hub repos whose tokenizer the eng
 deps = ["pyproject.toml", "uv.lock"]        # the agent may change these (pyproject: its dependency tables only)
 profiles = "src/inference_server/profiles.toml"   # launch profiles in the engine's tree (lab/profiles.py)
 profile_env = "ENGINE_PROFILE"                    # names a launch's profile
-# Installs a changed `deps` into $UV_PROJECT_ENVIRONMENT (lab/build.py): vm-setup.sh's recipe, the lock with the
-# CUDA torch wheel at the locked version (the lock pins the CPU index on Linux).
-build = '''uv sync --locked --extra dev --no-install-project && uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" --reinstall "torch==$(awk '/^name = "torch"$/{getline; sub(/version = "/,""); sub(/"/,""); print; exit}' uv.lock)" --index-url https://download.pytorch.org/whl/cu130'''
+# Installs a changed `deps` into $UV_PROJECT_ENVIRONMENT (lab/build.py), and the VM's venv (lab/vm-setup.sh): the lock
+# with the CUDA torch wheel at the locked version (the lock pins the CPU index on Linux) and the flashinfer extra
+# (the paged prefill attention; without it prefill fell back to the SDPA gather: bursty 256x -> 80x, 2026-10-24).
+build = '''uv sync --locked --extra dev --extra flashinfer --no-install-project && uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" --reinstall "torch==$(awk '/^name = "torch"$/{getline; sub(/version = "/,""); sub(/"/,""); print; exit}' uv.lock)" --index-url https://download.pytorch.org/whl/cu130'''
 
 [engine.telemetry]                           # optional: engine-native files serve collects after teardown
 env = { TELEMETRY_DIR = "{dir}", TIMELINE_DIR = "{dir}/timeline" }   # request rows (lab/TRACE.md); events.jsonl apart
