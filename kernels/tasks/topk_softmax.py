@@ -11,8 +11,14 @@ from kernels.tasks._fused import EXPERTS, START_EDITS, TOP_K
 
 
 def reference(logits):
-    w, ids = torch.topk(F.softmax(logits, dim=-1, dtype=torch.float), TOP_K, dim=-1)
-    return w / w.sum(dim=-1, keepdim=True), ids
+    """Ties to the lowest expert index, as the engine's kernel breaks them (bf16 logits tie often; torch.topk's order
+    among equal values is unspecified, which made the engine's own kernel fail this task on the H200, 2026-10-24)."""
+    p = F.softmax(logits, dim=-1, dtype=torch.float)
+    w, ids = torch.sort(p, dim=-1, descending=True, stable=True)
+    w, ids = w[..., :TOP_K], ids[..., :TOP_K]
+    w = w / w.sum(dim=-1, keepdim=True)
+    bad = p.isnan().any(dim=-1, keepdim=True)        # a NaN row (NaN or +Inf logits): the engine's kernel gives NaN
+    return torch.where(bad, float("nan"), w), torch.where(bad, logits.shape[-1] - 1, ids)    # weights, expert E - 1
 
 
 def make_inputs(shape, dtype, device, g):
