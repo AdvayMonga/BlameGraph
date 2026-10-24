@@ -249,3 +249,58 @@ def test_rsync_quotes_a_keyfile_path_with_spaces(fake, monkeypatch):
     labvm.run(labvm.VM(name="t5"), "true")
     e = next(c for c in calls(fake) if c[0] == "rsync")[3]
     assert shlex.split(e)[1:3] == ["-i", "/Users/A B/.ssh/lab key"]
+
+
+def test_run_reports_a_vm_stopped_under_the_command(fake, monkeypatch, capsys):
+    vm = labvm.VM(name="t9")
+    real_ssh = labvm.ssh
+
+    def preempting_ssh(vm_, record, command, **kw):
+        if command.startswith("cd "):                  # the provider takes the VM back mid-command
+            vm_.provider.stop(vm_.name)
+            return labvm.subprocess.CompletedProcess([], 255)
+        return real_ssh(vm_, record, command, **kw)
+    monkeypatch.setattr(labvm, "ssh", preempting_ssh)
+    assert labvm.run(vm, "true", fetch_dir="lab/runs", local=fake / "out") == 255
+    assert "was stopped under the command" in capsys.readouterr().err
+    assert not any(c[0] == "rsync" and c[-2].endswith("lab/runs/") for c in calls(fake))    # no fetch from a stopped VM
+    assert not labvm._watchdog_file(vm).exists()
+
+
+def _nebius(monkeypatch, instances, spot):
+    from lab.providers import nebius
+    monkeypatch.setenv("LAB_VM_SPOT", "1" if spot else "0")
+    seen = []
+
+    def cli(self, *args):
+        seen.append(args)
+        if args[:3] == ("compute", "instance", "list"):
+            return json.dumps({"items": instances})
+        if args[:3] == ("vpc", "subnet", "list"):
+            return json.dumps({"items": [{"metadata": {"id": "sub1"}}]})
+        return "{}"
+    monkeypatch.setattr(nebius.Nebius, "_cli", cli)
+    return nebius.Nebius(), seen
+
+
+def test_nebius_spot_creates_a_preemptible_vm_that_stops(tmp_path, monkeypatch):
+    key = tmp_path / "k.pub"
+    key.write_text("ssh-ed25519 AAA")
+    for spot in (True, False):
+        p, seen = _nebius(monkeypatch, [], spot)
+        p.create("n1", str(key))
+        create = next(a for a in seen if a[:3] == ("compute", "instance", "create"))
+        flags = ("--follows-spot-price", "--preemptible-on-preemption", "stop")
+        assert (create[-3:] == flags) is spot and ("--follows-spot-price" in create) is spot
+
+
+def test_nebius_start_refuses_the_other_pricing(monkeypatch):
+    vm = {"metadata": {"name": "n2", "id": "i2"}, "spec": {"preemptible": {"on_preemption": "stop"}},
+          "status": {"state": "STOPPED"}}
+    p, _ = _nebius(monkeypatch, [vm], spot=False)
+    assert p.get("n2").detail == "stopped spot"
+    with pytest.raises(ProviderError, match="created spot"):
+        p.start("n2")
+    p, seen = _nebius(monkeypatch, [vm], spot=True)
+    p.start("n2")
+    assert ("compute", "instance", "start", "i2") in seen

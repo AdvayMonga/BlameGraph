@@ -225,6 +225,12 @@ created with a `lab` user from cloud-init (Nebius refuses root). Platform `gpu-h
 `1gpu-16vcpu-200gb` (`LAB_VM_PLATFORM`, `LAB_VM_TYPE`), image family `ubuntu24.04-cuda13.0`
 (`LAB_VM_IMAGE`), the project's first subnet unless `LAB_VM_SUBNET` is set, `LAB_VM_PROJECT` for a
 project other than the profile's.
+`LAB_VM_SPOT=1` creates the VM preemptible at the current spot price (H200 from $0.79/h vs $5.40 on-demand,
+Oct 2026; the price moves every few minutes), set to stop, not delete, when Nebius takes it back. Pricing is fixed
+at create: `start` refuses a VM created the other way, so a spot VM needs its own `LAB_VM` name (and its own disk,
+weights re-downloaded once). `status` shows `spot` or `on-demand`. A preempted `run` says so and returns without
+fetching; `run --env --no-push true` restarts it and brings an `--env` run's ledger home. Set
+`LAB_GPU_USD_PER_HOUR` to the spot price so run budgets are charged what it costs.
 
 Verda's `stop` deletes the instance and its OS volume: Verda's hibernate hides the instance from
 its own API so it cannot be restored, and its shutdown keeps billing the GPU. Each session therefore

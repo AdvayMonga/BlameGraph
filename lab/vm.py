@@ -260,6 +260,12 @@ def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | Non
         code = 124
     print(f"[lab.vm] exit {code} after {time.monotonic() - t0:.0f}s on {vm.name}"
           + (" (hit the wall-clock cap)" if code == 124 else ""), file=sys.stderr)
+    after = vm.provider.get(vm.name) if code != 0 else None
+    if after is not None and after.state in ("stopped", "stopping"):     # a spot VM taken back, or stopped from outside
+        disarm(vm)
+        print(f"[lab.vm] {vm.name} was stopped under the command ({after.detail}); its disk is kept: "
+              "`run --env --no-push true` restarts it and brings an --env run's ledger home", file=sys.stderr)
+        return code
     if fetch_dir:
         try:
             fetch(vm, record, fetch_dir, local or engine.ENV_ROOT / "lab" / "runs", base=cwd)
