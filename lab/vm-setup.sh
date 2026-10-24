@@ -20,7 +20,7 @@ export PATH="$HOME/.local/bin:$PATH"
 # never run `uv sync` on this box afterwards, it would put CPU torch back. Proper fix: a cuda
 # extra with its own index in pyproject (tracked as a follow-up).
 if ! .venv/bin/python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
-  uv sync --locked --extra dev
+  uv sync --locked --extra dev --extra flashinfer   # the paged prefill attention; without it prefill falls back to the SDPA gather (bursty 256x -> 80x, 2026-10-24)
   torch_version=$(awk '/^name = "torch"$/{getline; sub(/version = "/,""); sub(/"/,""); print; exit}' uv.lock)
   uv pip install --reinstall "torch==${torch_version}" --index-url https://download.pytorch.org/whl/cu130
 fi
