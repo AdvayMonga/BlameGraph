@@ -56,18 +56,24 @@ def run(region: tuple[Station, ...], ctx: dict, outputs: tuple[str, ...]) -> tup
     return tuple(ctx[o] for o in outputs)
 
 
-def functions(stations, first, last, live=()) -> tuple[Callable, Callable, tuple[str, ...], tuple[str, ...]]:
-    """(baseline, reference, inputs, outputs): both take the inputs as tensors in `inputs` order and return the outputs
-    in `outputs` order; the reference computes in fp32 and returns each output in the baseline's dtype."""
+def functions(stations, first, last, live=(), constants: dict | None = None,
+              reference_stations=None) -> tuple[Callable, Callable, tuple[str, ...], tuple[str, ...]]:
+    """(baseline, reference, inputs, outputs): both take the inputs as tensors in `inputs` order (the `constants`, e.g.
+    a layer config, bound instead) and return the outputs in `outputs` order. The reference computes in fp32 on
+    `reference_stations` (the same stations in a form that runs in fp32: an engine's torch versions of its kernels),
+    returning each output in the baseline's dtype; without them, on the stations themselves."""
+    consts = dict(constants or {})
     region = span(stations, first, last)
+    ref_region = span(reference_stations, first, last) if reference_stations is not None else region
     ins, outs = interface(stations, first, last, live)
+    ins = tuple(i for i in ins if i not in consts)
 
     def baseline(*xs):
-        return run(region, dict(zip(ins, xs)), outs)
+        return run(region, {**consts, **dict(zip(ins, xs))}, outs)
 
     def reference(*xs):
         up = [x.float() if isinstance(x, torch.Tensor) and x.is_floating_point() else x for x in xs]
-        exact = run(region, dict(zip(ins, up)), outs)
+        exact = run(ref_region, {**consts, **dict(zip(ins, up))}, outs)
         dtypes = [o.dtype for o in baseline(*[x.clone() if isinstance(x, torch.Tensor) else x for x in xs])]
         return tuple(e.to(d) for e, d in zip(exact, dtypes))
     return baseline, reference, ins, outs
@@ -83,7 +89,7 @@ def bytes_moved(stations, first, last, ctx: dict, live=()) -> dict:
         got = s.fn(seen)
         unfused += sum(_n(seen.get(r)) for r in s.reads) + sum(_n(v) for v in got.values())
         seen.update(got)
-    return {"fused_bytes": sum(_n(ctx.get(i)) for i in ins) + sum(_n(seen[o]) for o in outs),
+    return {"fused_bytes": sum(_n(ctx.get(i)) for i in ins) + sum(_n(seen.get(o)) for o in outs),
             "unfused_bytes": unfused}
 
 
@@ -93,11 +99,12 @@ def _n(x) -> int:
 
 def task(name: str, stations: tuple[Station, ...], first: str, last: str,
          make_ctx: Callable[[tuple, torch.dtype, str, torch.Generator], dict], shape_of: Callable,
-         dtypes: tuple = (torch.bfloat16,), live: tuple[str, ...] = (), watch: tuple[str, ...] = (), **kw) -> Task:
+         dtypes: tuple = (torch.bfloat16,), live: tuple[str, ...] = (), watch: tuple[str, ...] = (),
+         constants: dict | None = None, reference_stations=None, **kw) -> Task:
     """The region as a kernel task: inputs from `make_ctx(shape, dtype, device, generator)` (a context of named
     tensors: captured activations, the layer's weights), the stations as the baseline, fp32 as the reference, the
     error budget on, and the fused bytes as the roofline's bytes (no FLOP count: the bound is memory's)."""
-    base, ref, ins, _ = functions(stations, first, last, live)
+    base, ref, ins, _ = functions(stations, first, last, live, constants, reference_stations)
 
     def make_inputs(shape, dtype, device, g):
         ctx = make_ctx(shape, dtype, device, g)
@@ -111,17 +118,32 @@ def task(name: str, stations: tuple[Station, ...], first: str, last: str,
                 cost=cost, dtypes=dtypes, layouts=(), error_budget=ERROR_BUDGET, baseline_fn=base, watch=watched, **kw)
 
 
-# -- the engine's stations (data/notes/handoff-engine-stations.md) ----------------------------------------------------
-LIVE = ("h", "kv_pool")                  # what outlives a layer: the residual stream and the KV cache
+# -- the engine's stations (inference-server models/stations.py; data/notes/handoff-engine-stations.md) ---------------
 ENGINE = "inference_server.models.stations"
 
 
-def engine_stations() -> tuple[Station, ...]:
-    """The engine's decode stations (`DECODE`), each made functional (`functional(station)` where the engine has it)."""
+def _engine():
     import importlib
-    st = importlib.import_module(ENGINE)
-    wrap = getattr(st, "functional", None)
-    return tuple(Station(s.name, tuple(s.reads), tuple(s.writes), wrap(s) if wrap else s.fn) for s in st.DECODE)
+    return importlib.import_module(ENGINE)
+
+
+def engine_stations() -> tuple[Station, ...]:
+    """The engine's decode stations (`DECODE`), made pure (`functional(DECODE)`: what writes in place gets a copy)."""
+    st = _engine()
+    pure = st.functional(st.DECODE) if hasattr(st, "functional") else st.DECODE
+    return tuple(Station(s.name, tuple(s.reads), tuple(s.writes), s.fn) for s in pure)
+
+
+def reference_stations() -> tuple[Station, ...] | None:
+    """The engine's stations in a form that runs in fp32 (`reference()`: torch versions of its kernels), or None."""
+    st = _engine()
+    if not hasattr(st, "reference"):
+        return None
+    return tuple(Station(s.name, tuple(s.reads), tuple(s.writes), s.fn) for s in st.reference())
+
+
+def live() -> tuple[str, ...]:
+    return tuple(getattr(_engine(), "LIVE", ("h", "k_cache", "v_cache")))
 
 
 def _signature(reads: dict) -> tuple:
@@ -130,12 +152,15 @@ def _signature(reads: dict) -> tuple:
 
 
 def from_engine(first: str, last: str, samples: str | None = None, weights: str | None = None,
-                dtypes: tuple = (torch.bfloat16,)) -> Task:
+                dtypes: tuple = (torch.bfloat16,), constants: dict | None = None) -> Task:
     """The region first..last of the engine's decode stations as a task: inputs from captured samples (`samples`: a
-    CAPTURE_REGION dir, its first call per shape kept whole) and the layer's weights attached from a holder
-    (`weights`: a kernels.shared_weights file); seeds after 0 perturb the activations, never the weights."""
+    CAPTURE_REGION dir, its first call per shape kept whole) and the layer's weights and config attached from a
+    holder (`weights`: a kernels.shared_weights file whose non-tensor entries, e.g. `cfg`, are constants); seeds
+    after 0 perturb the activations, never the weights."""
+    from kernels.shared_weights import attach
     stations = engine_stations()
-    ins, _ = interface(stations, first, last, LIVE)
+    held = attach(Path(weights)) if weights else {}
+    consts = {**{k: v for k, v in held.items() if not isinstance(v, torch.Tensor)}, **(constants or {})}
     by_shape: dict[tuple, Path] = {}
     if samples:
         from lab import capture
@@ -144,33 +169,39 @@ def from_engine(first: str, last: str, samples: str | None = None, weights: str 
                 by_shape.setdefault(_signature(call.get("reads") or {}), Path(samples) / "samples" / call["sample"])
 
     def make_ctx(shape, dtype, device, g):
-        from kernels.shared_weights import attach
         got = by_shape.get(tuple(tuple(s) for s in shape))
         if got is None:
             raise ValueError(f"no captured sample of region {first}..{last} at shape {shape}")
-        reads = {k: v.to(device) for k, v in torch.load(got, weights_only=True)["reads"].items()}
+        reads = {k: v.to(device) for k, v in torch.load(got, weights_only=True)["reads"].items()
+                 if isinstance(v, torch.Tensor)}
         seed = int(torch.randint(0, 2**31, (1,), generator=g))
         if seed % 3:                                # perturb the floating activations a little, per seed
             for k, v in reads.items():
-                if v.is_floating_point() and k not in ("cos", "sin"):
+                if v.is_floating_point() and k not in ("cos", "sin", "k_cache", "v_cache"):
                     reads[k] = (v.float() * (1 + 1e-2 * torch.randn(v.shape, generator=g).to(device))).to(v.dtype)
-        return {**reads, **(attach(Path(weights)) if weights else {})}
+        return {**reads, **{k: v for k, v in held.items() if isinstance(v, torch.Tensor) or v is None}}
 
     def shape_of(call):
         return _signature(call.get("reads") or {}) if call.get("fn") == f"region:{first}:{last}" else None
-    return task(f"region:{first}:{last}", stations, first, last, make_ctx, shape_of, dtypes=dtypes, live=LIVE,
-                watch=(ENGINE,), entry=f"{ENGINE}:DECODE", seen_default=tuple(by_shape),
+    return task(f"region:{first}:{last}", stations, first, last, make_ctx, shape_of, dtypes=dtypes, live=live(),
+                watch=(ENGINE,), entry=f"{ENGINE}:DECODE", seen_default=tuple(by_shape), constants=consts,
+                reference_stations=reference_stations(),
                 edge_shapes=lambda shape: [])     # inputs come from captures only: no synthetic edge shapes
 
 
-def start_program(first: str, last: str) -> str:
-    """The starting program of a region: the engine's own stations, called in order."""
+def start_program(first: str, last: str, constants: dict | None = None) -> str:
+    """The starting program of a region: the engine's own stations, called in order, its constants (the layer
+    config) written in as values."""
     stations = engine_stations()
-    ins, outs = interface(stations, first, last, LIVE)
+    consts = dict(constants or {})
+    ins, outs = interface(stations, first, last, live())
+    ins = tuple(i for i in ins if i not in consts)
     names = [s.name for s in span(stations, first, last)]
+    bound = "".join(f"_CONST[{k!r}] = _st.{type(v).__name__}(**{vars(v)!r})\n" if hasattr(v, "__dataclass_fields__")
+                    else f"_CONST[{k!r}] = {v!r}\n" for k, v in consts.items())
     return (f"# EVOLVE-BLOCK-START\nimport {ENGINE} as _st\n\n"
-            f"_NAMES = {names!r}\n_INPUTS = {list(ins)!r}\n_OUTPUTS = {list(outs)!r}\n"
-            "_FN = _st.functional if hasattr(_st, 'functional') else (lambda s: s.fn)\n"
-            "_STATIONS = [_FN(s) for s in _st.DECODE if s.name in _NAMES]\n\n\n"
-            "def kernel(*xs):\n    ctx = dict(zip(_INPUTS, xs))\n    for fn in _STATIONS:\n        ctx.update(fn(ctx))\n"
-            "    return tuple(ctx[o] for o in _OUTPUTS)\n# EVOLVE-BLOCK-END\n")
+            f"_NAMES = {names!r}\n_INPUTS = {list(ins)!r}\n_OUTPUTS = {list(outs)!r}\n_CONST = {{}}\n{bound}"
+            "_PURE = _st.functional(_st.DECODE) if hasattr(_st, 'functional') else _st.DECODE\n"
+            "_STATIONS = [s.fn for s in _PURE if s.name in _NAMES]\n\n\n"
+            "def kernel(*xs):\n    ctx = {**_CONST, **dict(zip(_INPUTS, xs))}\n    for fn in _STATIONS:\n"
+            "        ctx.update(fn(ctx))\n    return tuple(ctx[o] for o in _OUTPUTS)\n# EVOLVE-BLOCK-END\n")

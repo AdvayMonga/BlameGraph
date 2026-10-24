@@ -29,11 +29,13 @@ def checksum(t: torch.Tensor) -> int:
 class Holder:
     """Keeps `tensors` alive and shared; `path` holds what `attach` needs."""
 
-    def __init__(self, tensors: dict[str, torch.Tensor], path: Path):
-        self.tensors = {k: (v if v.is_cuda else v.share_memory_()) for k, v in tensors.items()}
+    def __init__(self, tensors: dict[str, torch.Tensor], path: Path, constants: dict | None = None):
+        """`constants`: small picklable values shared beside the weights (a region's layer config)."""
+        self.tensors = {k: (v if v.is_cuda else v.share_memory_()) for k, v in tensors.items() if v is not None}
         self.sums = {k: checksum(v) for k, v in self.tensors.items()}
         self.path = Path(path)
-        self.path.write_bytes(bytes(ForkingPickler.dumps(self.tensors)))
+        nones = {k: None for k, v in tensors.items() if v is None}            # e.g. bf16 experts carry no scale
+        self.path.write_bytes(bytes(ForkingPickler.dumps({**self.tensors, **nones, **(constants or {})})))
 
     def changed(self) -> list[str]:
         """The weights whose bytes differ from when they were shared (written by a judgment)."""

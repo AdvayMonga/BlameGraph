@@ -14,7 +14,7 @@ import torch  # noqa: E402
 
 FAKE = '''
 import torch
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 @dataclass(frozen=True)
 class Station:
@@ -23,16 +23,34 @@ class Station:
     writes: tuple
     fn: object
 
+@dataclass(frozen=True)
+class LayerConfig:
+    eps: float
+
+LIVE = ("h", "k_cache", "v_cache")
+
 def _norm(c):
     x = c["h"].float()
-    return {"n": (x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-6)).to(c["h"].dtype)}
+    return {"n": (x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + c["cfg"].eps)).to(c["h"].dtype)}
+
+def _add(c):
+    c["h"].add_(c["a"])                       # in place, as the engine's residual add is
+    return {"h": c["h"]}
 
 DECODE = (
-    Station("norm", ("h",), ("n",), _norm),
+    Station("norm", ("h", "cfg"), ("n",), _norm),
     Station("mm", ("n", "w.mm"), ("y",), lambda c: {"y": c["n"] @ c["w.mm"]}),
     Station("act", ("y",), ("a",), lambda c: {"a": torch.nn.functional.silu(c["y"])}),
-    Station("add", ("h", "a"), ("h",), lambda c: {"h": c["h"] + c["a"]}),
+    Station("add", ("h", "a"), ("h",), _add),
 )
+
+def functional(stations=DECODE):
+    def pure(fn):
+        return lambda c: fn({**c, "h": c["h"].clone()})
+    return tuple(replace(s, fn=pure(s.fn)) if s.name == "add" else s for s in stations)
+
+def reference():
+    return functional(DECODE)
 '''
 
 
@@ -62,14 +80,14 @@ def test_a_region_of_the_engines_stations_is_judged_end_to_end(tmp_path, monkeyp
     from kernels.shared_weights import Holder
     regions = engine(tmp_path, monkeypatch)
     torch.multiprocessing.set_sharing_strategy("file_system")
-    h = Holder({"w.mm": torch.randn(64, 64) / 8}, tmp_path / "w.pkl")
+    h = Holder({"w.mm": torch.randn(64, 64) / 8}, tmp_path / "w.pkl", {"cfg": regions._engine().LayerConfig(1e-6)})
     caps = captures(tmp_path, [(4, 64), (16, 64)])
     t = regions.from_engine("norm", "add", str(caps), str(h.path), dtypes=(torch.float32,))
     assert t.name == "region:norm:add" and set(t.seen_default) == {((4, 64),), ((16, 64),)}
     xs = t.make_inputs(((4, 64),), torch.float32, "cpu", torch.Generator().manual_seed(0))
     assert len(xs) == 2 and xs[1].shape == (64, 64)                  # h, then the weight
     start = tmp_path / "start.py"
-    start.write_text(regions.start_program("norm", "add"))
+    start.write_text(regions.start_program("norm", "add", {"cfg": regions._engine().LayerConfig(1e-6)}))
     assert core.screen(start.read_text()) == []
     r = core.judge(t, start, [((4, 64),), ((16, 64),)], [], None, "cpu", None, 2, iters=3)
     assert r["metrics"]["correct"] == 1.0, r["artifacts"]
