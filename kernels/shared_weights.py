@@ -43,3 +43,41 @@ class Holder:
 def attach(path: Path) -> dict[str, torch.Tensor]:
     """The holder's tensors, in this process, aliasing its memory (no copy)."""
     return pickle.loads(Path(path).read_bytes())
+
+
+CHILD = """
+import sys, torch
+sys.path.insert(0, {root!r})
+from kernels.shared_weights import attach
+w = attach({path!r})
+a = w["a"]
+print("attached", a.device, float(a.float().sum()), a.data_ptr())
+a[0] += 1
+torch.cuda.synchronize()
+"""
+
+
+def check(jailed: bool = True) -> dict:
+    """On a GPU host: a holder shares a weight, a child (in the container jail, host IPC namespace) attaches, reads it
+    and writes to it; the holder must see the same values and catch the write. `python -m kernels.shared_weights`."""
+    import subprocess
+    import sys
+    import tempfile
+    root = Path(__file__).resolve().parents[1]
+    d = Path(tempfile.mkdtemp(prefix="shared-weights-"))
+    h = Holder({"a": torch.arange(1024, dtype=torch.float32, device="cuda")}, d / "w.pkl")
+    code = CHILD.format(root=str(root), path=str(h.path))
+    (d / "child.py").write_text(code)
+    if jailed:
+        from lab.safety import grader
+        p = grader.jailed(d, [sys.executable, str(d / "child.py")], timeout_s=300, read=[root], ipc_host=True)
+    else:
+        p = subprocess.run([sys.executable, str(d / "child.py")], capture_output=True, text=True, timeout=300)
+    return {"returncode": p.returncode, "child": (p.stdout + p.stderr)[-1500:], "expected_sum": float(h.tensors["a"].sum()) - 1,
+            "changed": h.changed()}
+
+
+if __name__ == "__main__":
+    import json
+    import sys
+    print(json.dumps({"plain": check(False), "jailed": check("--plain" not in sys.argv)}, indent=1))
