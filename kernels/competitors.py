@@ -44,10 +44,18 @@ EPS = 1e-6
 
 
 def _vllm(*mods: str):
-    """vLLM's custom ops register when their extension modules are imported."""
-    import importlib
+    """vLLM's custom ops register when their extension modules are imported (`vllm._C`; from 0.32 on
+    `vllm._C_stable_libtorch`, the ops still under torch.ops._C)."""
     for m in mods:
-        importlib.import_module(m)
+        _module(m)
+
+
+def _module(m: str):
+    import importlib
+    try:
+        return importlib.import_module(m)
+    except ImportError:
+        return importlib.import_module(m + "_stable_libtorch")
 
 
 @adapter("rmsnorm", "vllm.rms_norm", r"rms_norm_kernel")
@@ -170,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
         rows["competitors"][name] = {"per_shape": per}
         mod = {"vllm": "vllm._moe_C" if "topk" in name else "vllm._C", "flashinfer": "flashinfer"}[name.split(".")[0]]
         try:
-            text = sass(sys.modules[mod].__file__ if mod in sys.modules else __import__(mod).__file__, SASS_NAMES[name])
+            text = sass(_module(mod).__file__, SASS_NAMES[name])
         except Exception as e:                   # noqa: BLE001
             text = ""
             rows["competitors"][name]["sass_missing"] = f"{type(e).__name__}: {e}"
