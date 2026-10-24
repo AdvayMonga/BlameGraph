@@ -675,3 +675,10 @@ def test_selection_carries_each_buckets_sources():
             "sources": {json.dumps(list(s)): {"mixed_1": 1} for s in seen}}
     out = select(task, sets, k=3)
     assert sum(sum(v.values()) for v in out["sources"].values()) == sum(out["calls"].values())
+
+
+def test_a_query_tool_that_cannot_run_answers_the_model_instead_of_crashing_the_search():
+    from kernels.search import llm
+    with mock.patch.dict(sys.modules, {"store.index": None, "store": None}):
+        out = llm.run_query("SELECT 1")
+    assert out.startswith("query failed: ") and "Error" in out
