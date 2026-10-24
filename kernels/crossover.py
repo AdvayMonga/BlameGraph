@@ -1,11 +1,11 @@
 """Where the decode megakernel stops beating the separate kernels (decided 2026-10-23: a measured routing table, by batch
-size and context length, instead of MEGAKERNEL_MAX_ROWS). One `lab.profile` run per path and prompt length, with every
-request of a batch decoding together: the engine's timeline records each scheduler step's wall time and its batch
-(`step` events), and a batch shrinks as its requests finish, so one run covers every batch size up to `--requests`.
+size and context length, instead of MEGAKERNEL_MAX_ROWS). One `lab.profile` run per path, prompt length and batch
+size, its requests decoding together: the engine's timeline records each scheduler step's wall time and its batch
+(`step` events); only steps at the run's own batch size count (a run's tail, as requests finish, has a few).
 The megakernel path is forced for every batch the megakernel takes (MEGAKERNEL_MAX_ROWS=16); the other run turns it off
 (MEGAKERNEL=0). Run on the GPU host from this repo with the engine's venv:
 
-  python -m kernels.crossover --out DIR [--requests 8] [--prompt-lens 512,4096,16384] [--max-tokens 256]
+  python -m kernels.crossover --out DIR [--batches 1,2,4,8] [--prompt-lens 512,4096,16384] [--max-tokens 256]
 
 DIR gets each run's bundle and `crossover.json`: per prompt length and batch, each path's median step and the faster."""
 from __future__ import annotations
@@ -35,14 +35,16 @@ def steps(bundle: Path) -> dict[int, list[float]]:
     return out
 
 
-def table(runs: dict[tuple[str, int], dict[int, list[float]]]) -> dict:
-    """{prompt_len: {batch: {megakernel_ms, kernels_ms, steps, faster}}} from the step times of each run."""
+def table(runs: dict[tuple[str, int, int], dict[int, list[float]]]) -> dict:
+    """{prompt_len: {batch: {megakernel_ms, kernels_ms, steps, faster}}} from each run's steps at its own batch."""
     out: dict = {}
-    for (path, plen), by in runs.items():
-        for b, xs in by.items():
-            cell = out.setdefault(str(plen), {}).setdefault(str(b), {})
-            cell[f"{path}_ms"] = round(statistics.median(xs) * 1e3, 4)
-            cell[f"{path}_steps"] = len(xs)
+    for (path, plen, b), by in runs.items():
+        xs = by.get(b) or []
+        if not xs:
+            continue
+        cell = out.setdefault(str(plen), {}).setdefault(str(b), {})
+        cell[f"{path}_ms"] = round(statistics.median(xs) * 1e3, 4)
+        cell[f"{path}_steps"] = len(xs)
     for cells in out.values():
         for c in cells.values():
             if "megakernel_ms" in c and "kernels_ms" in c:
@@ -53,25 +55,26 @@ def table(runs: dict[tuple[str, int], dict[int, list[float]]]) -> dict:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="kernels.crossover")
     ap.add_argument("--out", required=True)
-    ap.add_argument("--requests", type=int, default=8)
+    ap.add_argument("--batches", default="1,2,4,8")
     ap.add_argument("--prompt-lens", default="512,4096,16384")
     ap.add_argument("--max-tokens", type=int, default=256)
     a = ap.parse_args(argv)
     out = Path(a.out)
     runs = {}
     for plen in (int(x) for x in a.prompt_lens.split(",")):
-        for path, env in PATHS.items():
-            d = out / f"{path}-{plen}"
-            if not list(d.rglob("events.jsonl")):
-                p = subprocess.run([sys.executable, "-m", "lab.profile", "--synthetic", "--prompt-len", str(plen),
-                                    "--requests", str(a.requests), "--max-tokens", str(a.max_tokens), "--warmup", "0",
-                                    "--profiler", "cuda-range", "--out", str(d)],
-                                   env={**os.environ, **env}, capture_output=True, text=True)
-                (out / f"{path}-{plen}.log").write_text(p.stdout + p.stderr)
-                if p.returncode != 0:
-                    print(f"{path} {plen}: exited {p.returncode}: {p.stderr[-500:]}", file=sys.stderr)
-                    continue
-            runs[(path, plen)] = steps(d)
+        for b in (int(x) for x in a.batches.split(",")):
+            for path, env in PATHS.items():
+                d = out / f"{path}-{plen}-b{b}"
+                if not list(d.rglob("events.jsonl")):
+                    p = subprocess.run([sys.executable, "-m", "lab.profile", "--synthetic", "--prompt-len", str(plen),
+                                        "--requests", str(b), "--max-tokens", str(a.max_tokens), "--warmup", "0",
+                                        "--profiler", "cuda-range", "--out", str(d)],
+                                       env={**os.environ, **env}, capture_output=True, text=True)
+                    (out / f"{path}-{plen}-b{b}.log").write_text(p.stdout + p.stderr)
+                    if p.returncode != 0:
+                        print(f"{path} {plen} b{b}: exited {p.returncode}: {p.stderr[-500:]}", file=sys.stderr)
+                        continue
+                runs[(path, plen, b)] = steps(d)
     t = table(runs)
     (out / "crossover.json").write_text(json.dumps(t, indent=1))
     print(json.dumps(t))

@@ -33,16 +33,19 @@ def test_sass_is_filtered_to_the_named_kernels(tmp_path, monkeypatch):
 
 
 def test_step_times_by_batch_and_the_faster_path(tmp_path):
+    runs = {}
     for path, ms in (("megakernel", {1: 4.1, 2: 5.4, 4: 7.0}), ("kernels", {1: 5.6, 2: 5.7, 4: 6.0})):
-        d = tmp_path / f"{path}-512" / "b"
-        d.mkdir(parents=True)
-        lines = [{"kind": "step", "active": b, "dur_s": v / 1e3} for b, v in ms.items() for _ in range(3)]
-        lines += [{"kind": "step", "active": 2, "prefilling": 1, "dur_s": 1.0}, {"kind": "phase", "dur_s": 9}]
-        (d / "events.jsonl").write_text("\n".join(json.dumps(x) for x in lines))
-    runs = {(p, 512): crossover.steps(tmp_path / f"{p}-512") for p in ("megakernel", "kernels")}
+        for b, v in ms.items():
+            d = tmp_path / f"{path}-512-b{b}" / "x"
+            d.mkdir(parents=True)
+            lines = [{"kind": "step", "active": b, "dur_s": v / 1e3} for _ in range(3)]
+            lines += [{"kind": "step", "active": 1, "dur_s": 9.0},                      # the run's tail
+                      {"kind": "step", "active": b, "prefilling": 1, "dur_s": 1.0}, {"kind": "phase", "dur_s": 9}]
+            (d / "events.jsonl").write_text("\n".join(json.dumps(x) for x in lines))
+            runs[(path, 512, b)] = crossover.steps(tmp_path / f"{path}-512-b{b}")
     t = crossover.table(runs)["512"]
     assert t["1"]["faster"] == "megakernel" and t["2"]["faster"] == "megakernel" and t["4"]["faster"] == "kernels"
-    assert t["2"]["megakernel_ms"] == 5.4 and t["2"]["megakernel_steps"] == 3          # the prefill step left out
+    assert t["2"]["megakernel_ms"] == 5.4 and t["2"]["megakernel_steps"] == 3        # tail and prefill left out
 
 
 if __name__ == "__main__":
