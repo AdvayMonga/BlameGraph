@@ -262,7 +262,7 @@ def test_run_reports_a_vm_stopped_under_the_command(fake, monkeypatch, capsys):
         return real_ssh(vm_, record, command, **kw)
     monkeypatch.setattr(labvm, "ssh", preempting_ssh)
     assert labvm.run(vm, "true", fetch_dir="lab/runs", local=fake / "out") == 255
-    assert "was stopped under the command" in capsys.readouterr().err
+    assert "stopped under the command" in capsys.readouterr().err
     assert not any(c[0] == "rsync" and c[-2].endswith("lab/runs/") for c in calls(fake))    # no fetch from a stopped VM
     assert not labvm._watchdog_file(vm).exists()
 
@@ -294,13 +294,42 @@ def test_nebius_spot_creates_a_preemptible_vm_that_stops(tmp_path, monkeypatch):
         assert (create[-3:] == flags) is spot and ("--follows-spot-price" in create) is spot
 
 
-def test_nebius_start_refuses_the_other_pricing(monkeypatch):
-    vm = {"metadata": {"name": "n2", "id": "i2"}, "spec": {"preemptible": {"on_preemption": "stop"}},
-          "status": {"state": "STOPPED"}}
-    p, _ = _nebius(monkeypatch, [vm], spot=False)
-    assert p.get("n2").detail == "stopped spot"
-    with pytest.raises(ProviderError, match="created spot"):
-        p.start("n2")
-    p, seen = _nebius(monkeypatch, [vm], spot=True)
-    p.start("n2")
-    assert ("compute", "instance", "start", "i2") in seen
+def test_start_refuses_the_other_pricing_running_or_not(monkeypatch):
+    for state in ("STOPPED", "RUNNING"):
+        inst = {"metadata": {"name": "n2", "id": "i2"}, "spec": {"preemptible": {"on_preemption": "stop"}},
+                "status": {"state": state}}
+        p, seen = _nebius(monkeypatch, [inst], spot=False)
+        assert p.get("n2").detail == f"{state.lower()} spot"
+        with pytest.raises(ProviderError, match="created spot"):
+            labvm.start(labvm.VM(name="n2", provider=p))
+        assert not any(a[:3] == ("compute", "instance", "start") for a in seen)
+
+
+def test_spot_flag_refuses_other_spellings(monkeypatch):
+    from lab.providers import nebius
+    monkeypatch.setenv("LAB_VM_SPOT", "true")
+    with pytest.raises(ProviderError, match="use 1 or 0"):
+        nebius.Nebius()
+
+
+def test_a_dropped_session_on_a_running_vm_still_fetches_and_stops(fake, monkeypatch):
+    monkeypatch.setenv("FAKE_EXIT", "255")              # ssh dropped, but the VM never stopped
+    monkeypatch.setattr(labvm, "LOST_WAIT_S", 0.0)
+    assert labvm.run(labvm.VM(name="t10"), "true", fetch_dir="lab/runs", local=fake / "out") == 255
+    assert any(c[0] == "rsync" and c[-2].endswith("lab/runs/") for c in calls(fake))
+    assert any(c[:3] == ["compute", "vms", "stop"] for c in calls(fake))
+
+
+def test_a_provider_error_after_a_dropped_session_still_stops(fake, monkeypatch):
+    vm = labvm.VM(name="t11")
+    real_get, n = type(vm.provider).get, {"calls": 0}
+
+    def flaky_get(self, name):
+        n["calls"] += 1
+        if n["calls"] == 3:                             # the one call _lost makes
+            raise ProviderError("api hiccup")
+        return real_get(self, name)
+    monkeypatch.setenv("FAKE_EXIT", "255")
+    monkeypatch.setattr(type(vm.provider), "get", flaky_get)
+    assert labvm.run(vm, "true") == 255
+    assert real_get(vm.provider, "t11").state == "stopped"

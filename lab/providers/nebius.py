@@ -8,7 +8,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lab.providers import ProviderError, Record, env_field
+from lab.providers import ProviderError, Record, env_field, pricing
 
 USER = "lab"   # created by cloud-init; Nebius refuses root and admin as login names
 
@@ -22,7 +22,7 @@ class Nebius:
     disk_gb: str = env_field("LAB_VM_DISK_GB", "400")
     project: str = env_field("LAB_VM_PROJECT", "")                      # --parent-id; empty uses the profile's
     subnet: str = env_field("LAB_VM_SUBNET", "")                        # empty: the project's first subnet
-    spot: bool = field(default_factory=lambda: os.environ.get("LAB_VM_SPOT") == "1")   # preemptible at the spot price; fixed at create
+    spot: bool = field(default_factory=lambda: _flag("LAB_VM_SPOT"))   # preemptible at the spot price; fixed at create
     default_user: str = USER
     stop_word: str = "stop"
 
@@ -63,7 +63,8 @@ class Nebius:
                 break
         res = (raw.get("spec") or {}).get("resources") or {}
         kind = f"{res.get('platform', '')}/{res.get('preset', '')}".strip("/")
-        return Record(name=name, state=state, ip=ip, type=kind, detail=f"{state} {'spot' if _spot(raw) else 'on-demand'}")
+        spot = bool((raw.get("spec") or {}).get("preemptible"))
+        return Record(name=name, state=state, ip=ip, type=kind, detail=f"{state} {pricing(spot)}", spot=spot)
 
     def _subnet(self) -> str:
         if self.subnet:
@@ -99,14 +100,7 @@ class Nebius:
         return raw["metadata"]["id"]
 
     def start(self, name: str) -> None:
-        raw = self._raw(name)
-        if raw is None:
-            raise ProviderError(f"{name}: no instance")
-        if _spot(raw) != self.spot:
-            raise ProviderError(f"{name} was created {'spot' if _spot(raw) else 'on-demand'}, LAB_VM_SPOT asks for "
-                                f"{'spot' if self.spot else 'on-demand'}; Nebius fixes this at create: set LAB_VM to "
-                                "another name, or delete this VM")
-        self._cli("compute", "instance", "start", raw["metadata"]["id"])
+        self._cli("compute", "instance", "start", self._id(name))
 
     def stop(self, name: str) -> None:
         self._cli("compute", "instance", "stop", self._id(name))
@@ -124,5 +118,8 @@ class Nebius:
         return "\n".join(lines) + "\n"
 
 
-def _spot(raw: dict) -> bool:
-    return bool((raw.get("spec") or {}).get("preemptible"))
+def _flag(name: str) -> bool:
+    value = os.environ.get(name, "")
+    if value not in ("", "0", "1"):
+        raise ProviderError(f"{name}={value!r}: use 1 or 0")
+    return value == "1"

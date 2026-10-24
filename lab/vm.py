@@ -16,10 +16,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from lab import engine, providers
-from lab.providers import ProviderError, Record, env_field
+from lab.providers import ProviderError, Record, env_field, pricing
 
 KNOWN_HOSTS_DIR = Path.home() / ".cache" / "inference-server-lab"
 POLL_S = 5.0             # between state and ssh probes
+LOST_WAIT_S = 60.0       # after ssh drops (exit 255): how long the provider may take to report the VM stopped
 START_TIMEOUT_S = 900.0
 STOP_TIMEOUT_S = 600.0
 SSH_TIMEOUT_S = 300.0
@@ -69,12 +70,19 @@ def _wait(vm: VM, wanted: str, timeout_s: float) -> Record:
 
 def start(vm: VM) -> Record:
     record = vm.provider.get(vm.name)
+    wanted = getattr(vm.provider, "spot", None)
+    if record is not None and record.spot is not None and record.spot != wanted:
+        raise ProviderError(f"{vm.name} was created {pricing(record.spot)}, LAB_VM_SPOT asks for "
+                            f"{pricing(wanted)}; pricing is fixed at create: set LAB_VM_SPOT to "
+                            "match, LAB_VM to another name, or delete this VM")
     if record is None:
         vm.known_hosts.unlink(missing_ok=True)
         vm.provider.create(vm.name, vm.keyfile)
     elif record.state == "running" and record.ip:
         return record
-    elif record.state in ("stopped", "offline"):
+    elif record.state == "stopping":
+        record = _wait(vm, "stopped", STOP_TIMEOUT_S)
+    if record is not None and record.state in ("stopped", "offline"):
         vm.provider.start(vm.name)
     return _wait(vm, "running", START_TIMEOUT_S)
 
@@ -139,7 +147,8 @@ def stop(vm: VM) -> None:
     record = vm.provider.get(vm.name)
     if record is None or record.state == "stopped":
         return
-    vm.provider.stop(vm.name)
+    if record.state != "stopping":
+        vm.provider.stop(vm.name)
     if getattr(vm.provider, "stop_deletes", False):
         if vm.provider.get(vm.name) is not None:
             raise ProviderError(f"{vm.name} still exists after delete")
@@ -234,6 +243,22 @@ def local_sha() -> str | None:
     return out.stdout.strip() or None
 
 
+def _lost(vm: VM) -> bool:
+    """The VM stopped under an ssh session that dropped; False when it is still running or the provider cannot say."""
+    deadline = time.monotonic() + LOST_WAIT_S
+    while True:
+        try:
+            record = vm.provider.get(vm.name)
+        except ProviderError as e:
+            print(f"[lab.vm] state after the dropped session unknown: {e}", file=sys.stderr)
+            return False
+        if record is None or record.state in ("stopped", "stopping"):
+            return True
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(POLL_S)
+
+
 def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | None = None,
         push_tree: bool = True, where: str = "engine", keep: bool | None = None, minutes: int = MAX_MINUTES) -> int:
     """Start the VM if needed, push both trees, run `command` in the engine dir (or `where="env"`: this environment's)
@@ -260,23 +285,23 @@ def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | Non
         code = 124
     print(f"[lab.vm] exit {code} after {time.monotonic() - t0:.0f}s on {vm.name}"
           + (" (hit the wall-clock cap)" if code == 124 else ""), file=sys.stderr)
-    after = vm.provider.get(vm.name) if code != 0 else None
-    if after is not None and after.state in ("stopped", "stopping"):     # a spot VM taken back, or stopped from outside
-        disarm(vm)
-        print(f"[lab.vm] {vm.name} was stopped under the command ({after.detail}); its disk is kept: "
-              "`run --env --no-push true` restarts it and brings an --env run's ledger home", file=sys.stderr)
-        return code
-    if fetch_dir:
+    lost = code == 255 and _lost(vm)
+    if lost:
+        spot = "LAB_VM_SPOT=1 " if getattr(vm.provider, "spot", False) else ""
+        again = f"run --no-push --fetch {fetch_dir} true" if fetch_dir and where != "env" else "run --env --no-push true"
+        print(f"[lab.vm] {vm.name} stopped under the command (preempted, or stopped from outside); its disk is kept: "
+              f"`{spot}python -m lab.vm {again}` restarts it and brings the results home", file=sys.stderr)
+    if fetch_dir and not lost:
         try:
             fetch(vm, record, fetch_dir, local or engine.ENV_ROOT / "lab" / "runs", base=cwd)
         except ProviderError as e:
             print(f"[lab.vm] fetch failed: {e}", file=sys.stderr)
-    if where == "env":
+    if where == "env" and not lost:
         try:
             collect(vm, record)
         except Exception as e:                  # never skip the stop below over a failed copy
             print(f"[lab.vm] collect failed: {e}", file=sys.stderr)
-    if keep:
+    if keep and not lost:
         arm(vm, record, minutes)
     else:
         stop(vm)
