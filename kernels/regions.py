@@ -11,6 +11,7 @@ beside the bytes its stations move one by one."""
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 import torch
@@ -106,5 +107,70 @@ def task(name: str, stations: tuple[Station, ...], first: str, last: str,
         inputs = inputs or make_inputs(shape, dtype, "cpu", torch.Generator().manual_seed(0))
         return 0.0, bytes_moved(stations, first, last, dict(zip(ins, inputs)), live)["fused_bytes"]
     watched = tuple(sorted({*watch, __name__, *(s.fn.__module__ for s in span(stations, first, last))}))
-    return Task(name=name, entry=None, reference=ref, make_inputs=make_inputs, shape_of=shape_of, cost=cost,
-                dtypes=dtypes, layouts=(), error_budget=ERROR_BUDGET, baseline_fn=base, watch=watched, **kw)
+    return Task(name=name, entry=kw.pop("entry", None), reference=ref, make_inputs=make_inputs, shape_of=shape_of,
+                cost=cost, dtypes=dtypes, layouts=(), error_budget=ERROR_BUDGET, baseline_fn=base, watch=watched, **kw)
+
+
+# -- the engine's stations (data/notes/handoff-engine-stations.md) ----------------------------------------------------
+LIVE = ("h", "kv_pool")                  # what outlives a layer: the residual stream and the KV cache
+ENGINE = "inference_server.models.stations"
+
+
+def engine_stations() -> tuple[Station, ...]:
+    """The engine's decode stations (`DECODE`), each made functional (`functional(station)` where the engine has it)."""
+    import importlib
+    st = importlib.import_module(ENGINE)
+    wrap = getattr(st, "functional", None)
+    return tuple(Station(s.name, tuple(s.reads), tuple(s.writes), wrap(s) if wrap else s.fn) for s in st.DECODE)
+
+
+def _signature(reads: dict) -> tuple:
+    """A captured call's shape: its activations' shapes in name order (weights are the same for every call)."""
+    return tuple(tuple(reads[k]["shape"]) for k in sorted(reads) if not k.startswith("w.") and "shape" in reads[k])
+
+
+def from_engine(first: str, last: str, samples: str | None = None, weights: str | None = None,
+                dtypes: tuple = (torch.bfloat16,)) -> Task:
+    """The region first..last of the engine's decode stations as a task: inputs from captured samples (`samples`: a
+    CAPTURE_REGION dir, its first call per shape kept whole) and the layer's weights attached from a holder
+    (`weights`: a kernels.shared_weights file); seeds after 0 perturb the activations, never the weights."""
+    stations = engine_stations()
+    ins, _ = interface(stations, first, last, LIVE)
+    by_shape: dict[tuple, Path] = {}
+    if samples:
+        from lab import capture
+        for call in capture.load(Path(samples)):
+            if call.get("sample") and call.get("fn") == f"region:{first}:{last}":
+                by_shape.setdefault(_signature(call.get("reads") or {}), Path(samples) / "samples" / call["sample"])
+
+    def make_ctx(shape, dtype, device, g):
+        from kernels.shared_weights import attach
+        got = by_shape.get(tuple(tuple(s) for s in shape))
+        if got is None:
+            raise ValueError(f"no captured sample of region {first}..{last} at shape {shape}")
+        reads = {k: v.to(device) for k, v in torch.load(got, weights_only=True)["reads"].items()}
+        seed = int(torch.randint(0, 2**31, (1,), generator=g))
+        if seed % 3:                                # perturb the floating activations a little, per seed
+            for k, v in reads.items():
+                if v.is_floating_point() and k not in ("cos", "sin"):
+                    reads[k] = (v.float() * (1 + 1e-2 * torch.randn(v.shape, generator=g).to(device))).to(v.dtype)
+        return {**reads, **(attach(Path(weights)) if weights else {})}
+
+    def shape_of(call):
+        return _signature(call.get("reads") or {}) if call.get("fn") == f"region:{first}:{last}" else None
+    return task(f"region:{first}:{last}", stations, first, last, make_ctx, shape_of, dtypes=dtypes, live=LIVE,
+                watch=(ENGINE,), entry=f"{ENGINE}:DECODE", seen_default=tuple(by_shape),
+                edge_shapes=lambda shape: [])     # inputs come from captures only: no synthetic edge shapes
+
+
+def start_program(first: str, last: str) -> str:
+    """The starting program of a region: the engine's own stations, called in order."""
+    stations = engine_stations()
+    ins, outs = interface(stations, first, last, LIVE)
+    names = [s.name for s in span(stations, first, last)]
+    return (f"# EVOLVE-BLOCK-START\nimport {ENGINE} as _st\n\n"
+            f"_NAMES = {names!r}\n_INPUTS = {list(ins)!r}\n_OUTPUTS = {list(outs)!r}\n"
+            "_FN = _st.functional if hasattr(_st, 'functional') else (lambda s: s.fn)\n"
+            "_STATIONS = [_FN(s) for s in _st.DECODE if s.name in _NAMES]\n\n\n"
+            "def kernel(*xs):\n    ctx = dict(zip(_INPUTS, xs))\n    for fn in _STATIONS:\n        ctx.update(fn(ctx))\n"
+            "    return tuple(ctx[o] for o in _OUTPUTS)\n# EVOLVE-BLOCK-END\n")

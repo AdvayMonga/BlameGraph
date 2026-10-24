@@ -90,7 +90,13 @@ def randn(size, g, device, dtype, scale: float = 1.0) -> torch.Tensor:
     return (torch.randn(size, generator=d, device=device) * scale).to(dtype)
 
 
-def load(name: str) -> Task:
+def load(name: str, **region) -> Task:
+    """A named task, or a region of the engine's decode stations (`region:FIRST:LAST`; `region` may give its
+    captured `samples` dir and its shared `weights` file)."""
+    if name.startswith("region:"):
+        from kernels.regions import from_engine
+        _, first, last = name.split(":")
+        return from_engine(first, last, **region)
     return importlib.import_module(f"kernels.tasks.{name}").TASK
 
 
@@ -100,7 +106,8 @@ TASKS = ("toy_rmsnorm", "paged_decode", "moe_gemm", "moe_gemm_fp8", "moe_gemm_sc
 
 def from_config(cfg: dict) -> Task:
     """The task an evaluation config names, with its deployment options and captured ints: what every judge uses."""
-    return load(cfg["task"]).with_options(cfg.get("options")).with_ints(cfg.get("ints"))
+    region = {k: cfg[k] for k in ("samples", "weights") if cfg.get(k)} if cfg["task"].startswith("region:") else {}
+    return load(cfg["task"], **region).with_options(cfg.get("options")).with_ints(cfg.get("ints"))
 
 
 def options_from_target(task: Task) -> dict:

@@ -302,7 +302,13 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   that many times the baseline's own error there, on top of the dtype's tolerance (`check._compare(base=, k=)`), in the
   checker, the timed outputs and `verify.py`; the baseline is bound before the candidate loads and its modules (`Task.watch`) are watched for
   patches. The engine's stations, swap-in point and capture hooks are not built yet (handoff in data/notes); until then
-  regions are tested on fake stations.
+  regions are tested on fake stations. `from_engine(first, last, samples, weights)` binds a region to the
+  engine's `inference_server.models.stations.DECODE` (the handoff's interface; `functional(station)` where given): inputs
+  from a CAPTURE_REGION dir's samples, the layer's weights attached from a shared holder, `load("region:FIRST:LAST")`
+  and `from_config` take it; `start_program` is the stations called in order; the jail mounts the samples and weights
+  and shares the host's IPC namespace for them. `kernels/shared_weights.py`: a holder shares tensors by reference
+  (CUDA IPC, or shared memory on the CPU), a judgment attaches without copying, checksums before and after catch a
+  write (`Holder.changed`).
 - `kernels/ptx.py` — the PTX comparison's cards (decided 2026-10-22, after Standard Kernel): each implementation's
   kernels counted from its PTX (or `cuobjdump -sass` output, for libraries that ship no PTX): instruction classes,
   widest vector access, declared registers, static shared memory, and the Hopper features in use (wgmma, TMA,

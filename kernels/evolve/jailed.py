@@ -182,8 +182,10 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
         if stage == PRECHECK_STAGE:
             env["CUDA_VISIBLE_DEVICES"] = ""
         read += [home] if home else []
+        read += [Path(cfg[k]) for k in ("samples", "weights") if cfg.get(k)]      # a region's captures and weights
         p = grader.jailed(tree, argv, timeout_s=timeout_s, env_extra=env, read=read, memory=MEMORY,
-                          **({"gpu": gpu} if gpu is not None else {}))
+                          **({"gpu": gpu} if gpu is not None else {}),
+                          **({"ipc_host": True} if cfg.get("weights") else {}))
         _keep_builds_only(tree)                  # the precheck's build is what stage 1 then imports
         if stage == PRECHECK_STAGE:
             return _precheck_result(p, stage, key)

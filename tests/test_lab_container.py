@@ -222,3 +222,9 @@ def test_the_workbench_is_root_with_writable_system_dirs_and_reaches_the_host_ga
     srv.close()
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == ("0" if os.getuid() == 0 else str(os.getuid()))
+
+
+def test_the_host_ipc_namespace_only_when_asked(docker_named, tmp_path, monkeypatch):
+    a = container.argv("n", tmp_path, ["true"], {}, [tmp_path], [], sys.executable)
+    b = container.argv("n", tmp_path, ["true"], {}, [tmp_path], [], sys.executable, ipc_host=True)
+    assert "--ipc" not in a and b[b.index("--ipc") + 1] == "host"
