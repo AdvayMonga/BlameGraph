@@ -90,11 +90,14 @@ def _vllm_topk_softmax(logits):
     w = torch.empty((m, TOP_K), dtype=torch.float32, device=logits.device)
     ids = torch.empty((m, TOP_K), dtype=torch.int32, device=logits.device)
     tok = torch.empty((m, TOP_K), dtype=torch.int32, device=logits.device)
-    try:
-        torch.ops._moe_C.topk_softmax(w, ids, tok, logits, True)            # renormalize in the kernel (newer vLLM)
+    try:                                         # vLLM 0.32: renormalize, bias, is_padding
+        torch.ops._moe_C.topk_softmax(w, ids, tok, logits, True, None, None)
     except (RuntimeError, TypeError):
-        torch.ops._moe_C.topk_softmax(w, ids, tok, logits)
-        w = w / w.sum(dim=-1, keepdim=True)
+        try:
+            torch.ops._moe_C.topk_softmax(w, ids, tok, logits, True)
+        except (RuntimeError, TypeError):
+            torch.ops._moe_C.topk_softmax(w, ids, tok, logits)
+            w = w / w.sum(dim=-1, keepdim=True)
     return w, ids.long()
 
 
@@ -124,8 +127,10 @@ _FI: dict = {}
 def check(task, fn, shapes, device) -> str | None:
     """Why `fn` is not a correct implementation of the task on these shapes, or None."""
     from kernels.check import _gen
+    from kernels.evolve.run import _target_tolerances, tolerances
     dt = task.dtypes[0]
-    atol, rtol = TOLERANCES[dt]
+    tol = tolerances(_target_tolerances())                      # what the gate judges by: the target's, else the checker's
+    atol, rtol = tuple(tol.get(str(dt).removeprefix("torch."), TOLERANCES[dt]))
     for s in shapes:
         xs = task.make_inputs(tuple(s), dt, device, _gen(0))
         try:
@@ -133,7 +138,9 @@ def check(task, fn, shapes, device) -> str | None:
         except Exception as e:                   # noqa: BLE001  a signature that differs in this library version
             return f"raised {type(e).__name__}: {str(e)[:300]}"
         if not d["ok"]:
-            return f"differs from the reference at shape {list(s)}: {d.get('error') or d}"
+            why = d.get("error") or (f"max_abs {d['max_abs']:.3g}, max_rel {d['max_rel']:.3g}, "
+                                     f"non-finite mismatches {d['nonfinite_mismatch']} (atol {atol}, rtol {rtol})")
+            return f"differs from the reference at shape {list(s)}: {why}"
     return None
 
 
