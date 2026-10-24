@@ -2,7 +2,8 @@
 code kept for the PTX comparison's cards (kernels/ptx.py). Run on the GPU host in a venv that has the competitors'
 libraries (vLLM, FlashInfer) beside this repo and the engine's source:
 
-  uv venv ~/comp && uv pip install --python ~/comp/bin/python vllm flashinfer-python
+  uv venv ~/comp && uv pip install --python ~/comp/bin/python vllm flashinfer-python ninja   (FlashInfer JIT-builds;
+  ~/comp/bin on PATH)
   PYTHONPATH=~/BlameGraph:~/inference-server/src ~/comp/bin/python -m kernels.competitors \\
       --task rmsnorm --shapes shapes-rmsnorm.json --out DIR
 
@@ -42,8 +43,16 @@ def adapter(task: str, name: str, sass: str):
 EPS = 1e-6
 
 
+def _vllm(*mods: str):
+    """vLLM's custom ops register when their extension modules are imported."""
+    import importlib
+    for m in mods:
+        importlib.import_module(m)
+
+
 @adapter("rmsnorm", "vllm.rms_norm", r"rms_norm_kernel")
 def _vllm_rms_norm(x, w):
+    _vllm("vllm._C")
     out = torch.empty_like(x)
     torch.ops._C.rms_norm(out, x, w, EPS)
     return out
@@ -51,6 +60,7 @@ def _vllm_rms_norm(x, w):
 
 @adapter("add_rmsnorm", "vllm.fused_add_rms_norm", r"fused_add_rms_norm_kernel")
 def _vllm_fused_add_rms_norm(h, a, w):
+    _vllm("vllm._C")
     res, x = h.clone(), a.clone()                   # in place: res becomes h + a, x its norm
     torch.ops._C.fused_add_rms_norm(x, res, w, EPS)
     return res, x
@@ -58,6 +68,7 @@ def _vllm_fused_add_rms_norm(h, a, w):
 
 @adapter("silu_mul", "vllm.silu_and_mul", r"act_and_mul_kernel")
 def _vllm_silu_and_mul(x):
+    _vllm("vllm._C")
     out = torch.empty((*x.shape[:-1], x.shape[-1] // 2), dtype=x.dtype, device=x.device)
     torch.ops._C.silu_and_mul(out, x)
     return out
@@ -66,6 +77,7 @@ def _vllm_silu_and_mul(x):
 @adapter("topk_softmax", "vllm.topk_softmax", r"topkGating|moeSoftmax|topk")
 def _vllm_topk_softmax(logits):
     from kernels.tasks._fused import TOP_K
+    _vllm("vllm._moe_C")
     m = logits.shape[0]
     w = torch.empty((m, TOP_K), dtype=torch.float32, device=logits.device)
     ids = torch.empty((m, TOP_K), dtype=torch.int32, device=logits.device)
@@ -156,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
             per.append({"shape": list(s), "competitor_ms": p["a"]["median_ms"], "ours_ms": p["b"]["median_ms"],
                         "ours_over_competitor": p["ratio"]["median"]})
         rows["competitors"][name] = {"per_shape": per}
-        mod = {"vllm": "vllm._C", "flashinfer": "flashinfer"}[name.split(".")[0]]
+        mod = {"vllm": "vllm._moe_C" if "topk" in name else "vllm._C", "flashinfer": "flashinfer"}[name.split(".")[0]]
         try:
             text = sass(sys.modules[mod].__file__ if mod in sys.modules else __import__(mod).__file__, SASS_NAMES[name])
         except Exception as e:                   # noqa: BLE001
