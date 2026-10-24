@@ -144,12 +144,32 @@ def check(task, fn, shapes, device) -> str | None:
     return None
 
 
-def sass(module_file: str, pattern: str) -> str:
-    """The SASS of the functions in a library's extension whose names match `pattern`."""
-    exe = shutil.which("cuobjdump") or str(Path(os.environ.get("CUDA_HOME", "/usr/local/cuda")) / "bin" / "cuobjdump")
-    p = subprocess.run([exe, "-sass", module_file], capture_output=True, text=True)
-    blocks = re.split(r"(?=\n\s+Function : )", p.stdout)
-    return "".join(b for b in blocks if re.search(r"Function : \S*(" + pattern + r")", b))
+def _tool(name: str) -> str:
+    return shutil.which(name) or str(Path(os.environ.get("CUDA_HOME", "/usr/local/cuda")) / "bin" / name)
+
+
+def launched(fn, inputs) -> set[str]:
+    """The device kernels one call of `fn` launches, by the names the profiler gives (demangled)."""
+    from torch.profiler import ProfilerActivity, profile
+    fn(*[x.clone() for x in inputs])                          # built and warm before the profiled call
+    with profile(activities=[ProfilerActivity.CUDA]) as prof:
+        fn(*[x.clone() for x in inputs])
+        torch.cuda.synchronize()
+    return {e.key for e in prof.key_averages() if e.device_type.name == "CUDA" and not e.key.startswith("Memcpy")}
+
+
+def sass(module_file: str, pattern: str, names: set[str] | None = None) -> str:
+    """The SASS of the functions in a library's extension whose names match `pattern`; with `names` (from `launched`)
+    only the instantiations that ran, matched on their demangled names (a library holds every template's copy)."""
+    p = subprocess.run([_tool("cuobjdump"), "-sass", module_file], capture_output=True, text=True)
+    blocks = [b for b in re.split(r"(?=\n\s+Function : )", p.stdout) if re.search(r"Function : \S*(" + pattern + r")", b)]
+    if not names or not blocks:
+        return "".join(blocks)
+    mangled = [re.search(r"Function : (\S+)", b).group(1) for b in blocks]
+    d = subprocess.run([_tool("cu++filt")], input="\n".join(mangled), capture_output=True, text=True).stdout.splitlines()
+    keys = {re.sub(r"\s+", "", n) for n in names}
+    return "".join(b for b, n in zip(blocks, d) if re.sub(r"\s+", "", n) in keys
+                   or any(re.sub(r"\s+", "", n).startswith(k.split("(")[0]) for k in keys))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -185,7 +205,9 @@ def main(argv: list[str] | None = None) -> int:
         rows["competitors"][name] = {"per_shape": per}
         mod = {"vllm": "vllm._moe_C" if "topk" in name else "vllm._C", "flashinfer": "flashinfer"}[name.split(".")[0]]
         try:
-            text = sass(_module(mod).__file__, SASS_NAMES[name])
+            from kernels.check import _gen
+            xs = task.make_inputs(seen[0], task.dtypes[0], "cuda", _gen(0))
+            text = sass(_module(mod).__file__, SASS_NAMES[name], launched(fn, xs))
         except Exception as e:                   # noqa: BLE001
             text = ""
             rows["competitors"][name]["sass_missing"] = f"{type(e).__name__}: {e}"

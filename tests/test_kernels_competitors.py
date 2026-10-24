@@ -30,6 +30,15 @@ def test_sass_is_filtered_to_the_named_kernels(tmp_path, monkeypatch):
     monkeypatch.setattr(competitors.subprocess, "run", lambda *a, **k: type("P", (), {"stdout": dump})())
     got = competitors.sass("lib.so", r"rms_norm_kernel")
     assert "rms_norm_kernel" in got and "otherKern" not in got
+    dump2 = dump + "\n\t\tFunction : _Z15rms_norm_kernelIdEvv\n\t/*0000*/ NOP ;\n"
+
+    def run(argv, *a, **k):
+        if "cu++filt" in argv[0]:
+            return type("P", (), {"stdout": "void rms_norm_kernel<float>()\nvoid rms_norm_kernel<double>()\n"})()
+        return type("P", (), {"stdout": dump2})()
+    monkeypatch.setattr(competitors.subprocess, "run", run)
+    only = competitors.sass("lib.so", r"rms_norm_kernel", {"void rms_norm_kernel<float>()"})
+    assert "IfEvv" in only and "IdEvv" not in only                   # only the instantiation that ran
 
 
 def test_step_times_by_batch_and_the_faster_path(tmp_path):
