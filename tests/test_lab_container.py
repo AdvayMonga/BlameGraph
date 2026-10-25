@@ -222,3 +222,19 @@ def test_the_workbench_is_root_with_writable_system_dirs_and_reaches_the_host_ga
     srv.close()
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == ("0" if os.getuid() == 0 else str(os.getuid()))
+
+
+def test_the_toolkit_is_also_mounted_at_usr_local_cuda_and_cuda_home_is_set(tmp_path, monkeypatch):
+    """A toolkit that /usr/local/cuda links to is mounted at both paths, and jails get CUDA_HOME, so JIT builds
+    (the engine's megakernel, flashinfer) find nvcc inside."""
+    real = tmp_path / "cuda-13.0"
+    (real / "bin").mkdir(parents=True)
+    link = tmp_path / "cuda"
+    link.symlink_to(real)
+    monkeypatch.setattr(container, "CUDA", link)
+    m = " ".join(container.mounts([tmp_path / "w"], [], "/usr/bin/python3"))
+    assert f"src={real},dst={real},readonly" in m and f"src={real},dst={link},readonly" in m
+    a = container.argv("n", tmp_path, ["true"], {}, [tmp_path], [], "/usr/bin/python3", gpu=False)
+    assert f"CUDA_HOME={link}" in a
+    a2 = container.argv("n", tmp_path, ["true"], {"CUDA_HOME": "/x"}, [tmp_path], [], "/usr/bin/python3", gpu=False)
+    assert "CUDA_HOME=/x" in a2 and f"CUDA_HOME={link}" not in a2

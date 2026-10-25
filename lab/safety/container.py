@@ -59,18 +59,31 @@ def cpuset() -> str | None:
     return f"{CLIENT_CORES}-{n - 1}" if n > 2 * CLIENT_CORES else None
 
 
+CUDA = Path("/usr/local/cuda")
+
+
 def mounts(writable: list[Path], readonly: list[Path], python: str) -> list[str]:
     """Bind mounts at the same absolute paths, so argv and env mean the same inside; interpreter dirs read-only."""
     interpreter = {Path(sys.base_prefix).resolve(), Path(python).resolve().parent.parent}
     ro = [p for p in [*readonly, *sorted(interpreter)] if p.exists() and p.resolve() not in SYSTEM_PREFIXES]
-    if Path("/usr/local/cuda").exists():
-        ro.append(Path("/usr/local/cuda").resolve())     # nvcc for JIT-compiling libraries
+    if CUDA.exists():
+        ro.append(CUDA.resolve())                       # nvcc for JIT-compiling libraries
     args = []
     for p in writable:
         args += ["--mount", f"type=bind,src={p.resolve()},dst={p.resolve()}"]
     for p in dict.fromkeys(q.resolve() for q in ro):
         args += ["--mount", f"type=bind,src={p},dst={p},readonly"]
+    if CUDA.exists() and CUDA.resolve() != CUDA:
+        # also at /usr/local/cuda, where torch's cpp_extension and flashinfer look by default: mounted only at its
+        # resolved path (/usr/local/cuda-13.0), the engine's megakernel did not build and every flashinfer JIT raised
+        # "Could not find nvcc" inside the serve jail (a bench of 488 requests, 477 errors, 2026-10-25)
+        args += ["--mount", f"type=bind,src={CUDA.resolve()},dst={CUDA},readonly"]
     return args
+
+
+def cuda_env() -> dict[str, str]:
+    """CUDA_HOME for JIT builds inside a jail (torch extensions, flashinfer), when the host has the toolkit."""
+    return {"CUDA_HOME": str(CUDA)} if CUDA.exists() else {}
 
 
 def argv(name: str, workdir: Path, command: list[str], env: dict[str, str], writable: list[Path],
@@ -89,7 +102,7 @@ def argv(name: str, workdir: Path, command: list[str], env: dict[str, str], writ
         out += ["--cpuset-cpus", cpus]
     if memory:                                   # host RAM for the container, swap included (its /tmp and shm too)
         out += ["--memory", memory, "--memory-swap", memory]
-    for k, v in env.items():
+    for k, v in {**cuda_env(), **env}.items():
         out += ["--env", f"{k}={v}"]
     out += mounts(writable, readonly, python)
     out.append(IMAGE)
@@ -112,7 +125,7 @@ def workbench_argv(name: str, workdir: Path, command: list[str], env: dict[str, 
         out += ["--gpus", "all"]
     if (cpus := cpuset()):
         out += ["--cpuset-cpus", cpus]
-    for k, v in env.items():
+    for k, v in {**cuda_env(), **env}.items():
         out += ["--env", f"{k}={v}"]
     return out + mounts(writable, readonly, python) + [IMAGE, *command]
 
