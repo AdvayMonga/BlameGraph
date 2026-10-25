@@ -61,7 +61,8 @@ def captures(task, tree: Path, profile: Callable[[Path, dict], Path | None], reg
     for cls, n in specs(regimes):
         key = tree_key(task, tree, (task.name, cls, n))
         bundle = Path(known[key]) if key in known and Path(known[key]).is_dir() else \
-            profile(tree, {"capture": [task.entry], "corpus_class": cls, "requests": n})
+            profile(tree, {"capture": [task.entry], "corpus_class": cls, "requests": n,
+                           **({"capture_task": task.name} if task.capture_env else {})})
         if bundle is not None and (Path(bundle) / "captures").is_dir():
             out.append(Path(bundle) / "captures")
             known[key] = str(bundle)

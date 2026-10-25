@@ -163,3 +163,6 @@ def test_a_capture_profile_runs_with_the_targets_capture_env(tmp_path, monkeypat
         worker._profile({"tree": tmp_path}, tmp_path / f"out{len(capture)}", {"kind": "profile", "args": {"capture": capture}},
                         {"profile_runner": runner})
         assert (seen["env"] or None) == want
+    worker._profile({"tree": tmp_path}, tmp_path / "out-fp8", {"kind": "profile", "args": {
+        "capture": ["m:f"], "capture_task": "paged_decode_fp8"}}, {"profile_runner": runner})
+    assert seen["env"] == {"CUSTOM_BACKEND_CUDA_GRAPH": "0", "KV_CACHE_DTYPE": "fp8"}      # the task's own env too

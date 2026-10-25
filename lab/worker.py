@@ -164,6 +164,9 @@ def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     prof = {"env": profiles.env(target.load(), a["profile"])} if a.get("profile") else {}
     if a.get("capture"):                         # calls replayed from CUDA graphs never reach the capture's wrappers
         prof["env"] = {**prof.get("env", {}), **((target.load().raw.get("kernels") or {}).get("capture_env") or {})}
+    if a.get("capture_task"):                    # what the task's calls need to occur at all (e.g. fp8 KV pools)
+        from kernels.tasks import load as load_task
+        prof["env"] = {**prof.get("env", {}), **dict(load_task(a["capture_task"]).capture_env)}
     files = out / "files"
     harness = T.stage_harness(tree)
     if kind == "profile":

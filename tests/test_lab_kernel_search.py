@@ -130,6 +130,10 @@ def test_captures_follow_the_scored_regimes_weigh_each_the_same_and_are_reused(t
     t = dataclasses.replace(task(), shape_of=lambda call: call["s"])
     assert shapes.from_captures(t, [Path("a"), Path("b")]) == {(8,): 9, (64,): 1}
     assert shapes.from_captures(t, [Path("a"), Path("b")], equal=True) == {(8,): 9, (64,): 9}
+    asked = []
+    pipeline.captures(dataclasses.replace(task(), name="t8", capture_env=(("KV", "fp8"),)), tree,
+                      lambda t, a: asked.append(a), ("saturated",))
+    assert asked[0]["capture_task"] == "t8"                       # the worker applies the task's capture env
 
 
 def test_a_search_that_dies_still_charges_what_it_spent(tb, monkeypatch, tmp_path):
