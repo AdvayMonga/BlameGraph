@@ -5,7 +5,10 @@ memory without copying (CUDA IPC through torch's tensor sharing; on the CPU, sha
 memory read-only, so the holder also writes a pristine CPU copy beside the handles file (never mounted in a jail);
 before and after each judgment the evaluator compares every tensor with it on the device (`restore`): a judgment that
 changed any weight is void and the weight is copied back. Judgments on one holder run one at a time (`exclusive`). A
-jail attaching over CUDA IPC needs the holder's IPC namespace (docker --ipc). Residual risk: a write undone before
+jail attaching over CUDA IPC needs the holder's IPC namespace (docker --ipc). Not working yet: on the H200
+(2026-10-25) a process outside a jail attaches, writes and is restored, but the jailed child's attach fails in
+cuIpcOpenEventHandle (CUDA_ERROR_MAP_FAILED), also with --pid host and the holder's IPC pool file opened to it; `python
+-m kernels.shared_weights` reports both. Residual risk: a write undone before
 the judgment ends is unseen here (the timer fingerprints inputs between calls, kernels/timing.py, and stage 2's
 outputs are recomputed outside the jail on the restored weights, verify.py)."""
 from __future__ import annotations

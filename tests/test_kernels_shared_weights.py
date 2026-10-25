@@ -190,18 +190,22 @@ def test_a_dir_a_program_made_unwritable_is_still_removed(tmp_path):
     jailed._keep_builds_only(tmp_path)
     assert list(d.iterdir()) == []
 
-
-if __name__ == "__main__":
-    import inspect
-    import tempfile
-    for name, fn in list(globals().items()):
-        if name.startswith("test_") and "monkeypatch" not in inspect.signature(fn).parameters:
-            fn(*[Path(tempfile.mkdtemp()) for _ in inspect.signature(fn).parameters]); print("ok", name)
-
-
 def test_the_holders_own_process_restores_without_reopening_its_handles(tmp_path, monkeypatch):
     from kernels import shared_weights as sw
     h = sw.Holder({"w": torch.ones(4)}, tmp_path / "w.pkl")
     monkeypatch.setattr(sw.pickle, "loads", lambda b: (_ for _ in ()).throw(AssertionError("reopened its own handles")))
     h.tensors["w"].add_(1)
     assert sw.restore(h.path) == ["w"] and torch.equal(h.tensors["w"], torch.ones(4))
+
+
+if __name__ == "__main__":
+    import importlib.util
+    import inspect
+    import tempfile
+    have_pytest = importlib.util.find_spec("pytest") is not None
+    for name, fn in list(globals().items()):
+        if name.startswith("test_") and "monkeypatch" not in inspect.signature(fn).parameters:
+            if not have_pytest and "pytest." in inspect.getsource(fn):
+                print("skip", name, "(needs pytest)")
+                continue
+            fn(*[Path(tempfile.mkdtemp()) for _ in inspect.signature(fn).parameters]); print("ok", name)
