@@ -299,7 +299,7 @@ def port_fused_moe(program: str, kernel_src: str, zeros_src: str, configs: dict,
             raise ValueError(f"vLLM's fused_moe_kernel changed: an edit no longer applies once: {old[:60]!r}")
         kernel_src = kernel_src.replace(old, new)
     block = (f"\n\n# vLLM {version} fused_moe_kernel (Apache-2.0), ported: rows through tok, our block layout.\n"
-             f"_VLLM_CONFIGS = {json.dumps({int(k): v for k, v in configs.items()})}\n\n\n"
+             f"_VLLM_CONFIGS = {repr({int(k): v for k, v in configs.items()})}\n\n\n"
              f"{zeros_src}\n\n{kernel_src}{FUSED_MOE_WRAPPER}")
     end = "\n# EVOLVE-BLOCK-END\n"
     if program.count(end) != 1:

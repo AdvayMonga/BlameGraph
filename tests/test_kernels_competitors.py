@@ -253,6 +253,9 @@ def test_the_fused_moe_port_applies_every_edit_once_or_refuses():
     assert "tok_ptr" in out and "offs_row[:, None]" in out and "_moe_gemm_engine = moe_gemm" in out
     assert out.index("def fused_moe_kernel") < out.index("# EVOLVE-BLOCK-END") < out.index("kernel = moe_gemm")
     compile(out.replace("@triton.jit", ""), "port", "exec")
+    configs = {}
+    exec(out[out.index("_VLLM_CONFIGS = "):].split("\n", 1)[0], {}, configs)              # the table's keys are ints
+    assert all(isinstance(k, int) for k in configs["_VLLM_CONFIGS"])
     assert "EM = expert_ids.numel() * block_m" in out and "sorted_ids.numel()" not in out    # whole blocks only
     try:
         competitors.port_fused_moe(prog, kernel.replace("    b_ptr,", "    bb_ptr,"), "", {}, "x")
