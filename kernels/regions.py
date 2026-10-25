@@ -127,11 +127,17 @@ def task(name: str, stations: tuple[Station, ...], first: str, last: str,
 
 # -- the engine's stations (inference-server models/stations.py; data/notes/handoff-engine-stations.md) ---------------
 ENGINE = "inference_server.models.stations"
+POOL = ("k_cache", "v_cache")           # the K/V pool's names when the engine declares no IN_PLACE
 
 
 def _engine():
     import importlib
     return importlib.import_module(ENGINE)
+
+
+def _pool() -> tuple[str, ...]:
+    """The K/V pool's entries: the whole pool, whose block count is the launch's memory budget, not a call's shape."""
+    return tuple(getattr(_engine(), "IN_PLACE", POOL))
 
 
 def engine_stations() -> tuple[Station, ...]:
@@ -153,18 +159,24 @@ def live() -> tuple[str, ...]:
     return tuple(getattr(_engine(), "LIVE", ("h", "k_cache", "v_cache")))
 
 
+def _shaped(reads: dict) -> list[str]:
+    """The reads that give a call its shape: activations with a shape, not weights (the same for every call) and not
+    the K/V pool (sized by the launch, not the call)."""
+    pool = _pool()
+    return [k for k in sorted(reads) if not k.startswith("w.") and k not in pool and "shape" in reads[k]]
+
+
 def _signature(reads: dict) -> tuple[int, ...]:
-    """A captured call's shape: its activations' shapes in name order, flattened (weights are the same for every call)."""
-    return tuple(d for k in sorted(reads) if not k.startswith("w.") and "shape" in reads[k] for d in reads[k]["shape"])
+    """A captured call's shape: its activations' shapes in name order, flattened."""
+    return tuple(d for k in _shaped(reads) for d in reads[k]["shape"])
 
 
 def _heldout_axes(reads: dict, ins: tuple[str, ...]) -> tuple[int, ...]:
     """Where in the flat signature the held-out axes are: the rows of the region's first activation, and the attention
     block tables' width (the context, in blocks) when the region reads them."""
     at, pos = {}, 0
-    for k in sorted(reads):
-        if not k.startswith("w.") and "shape" in reads[k]:
-            at[k], pos = pos, pos + len(reads[k]["shape"])
+    for k in _shaped(reads):
+        at[k], pos = pos, pos + len(reads[k]["shape"])
     first = next((i for i in ins if i in at and reads[i]["shape"]), None)
     ctx = "attn_block_tables" in ins and len(reads.get("attn_block_tables", {}).get("shape", ())) == 2
     return tuple(([at[first]] if first else []) + ([at["attn_block_tables"] + 1] if ctx else []))

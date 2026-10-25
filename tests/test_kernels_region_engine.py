@@ -161,3 +161,14 @@ def test_seed_zero_is_the_capture_and_later_seeds_perturb_it_differently(tmp_pat
     h0, h1, h2 = (t.make_inputs((4, 64), torch.float32, "cpu", _gen(s))[0] for s in (0, 1, 2))
     assert torch.equal(h0, saved) and not torch.equal(h1, saved) and not torch.equal(h2, saved)
     assert not torch.equal(h1, h2) and torch.equal(h1, t.make_inputs((4, 64), torch.float32, "cpu", _gen(1))[0])
+
+
+def test_the_pools_block_count_is_not_part_of_a_calls_shape(tmp_path, monkeypatch):
+    regions = engine(tmp_path, monkeypatch)                                 # the fake's IN_PLACE is ("kv",)
+    small = {"h": {"shape": [4, 64]}, "kv": {"shape": [100, 2, 16, 8]}, "attn_block_tables": {"shape": [4, 7]},
+             "w.mm": {"shape": [64, 64]}}
+    large = {**small, "kv": {"shape": [4000, 2, 16, 8]}}
+    assert regions._signature(small) == regions._signature(large) == (4, 7, 4, 64)
+    assert regions._heldout_axes(small, ("h", "kv", "attn_block_tables")) == (2, 1)
+    monkeypatch.delattr(regions._engine(), "IN_PLACE")                      # no IN_PLACE: the engine's pool names
+    assert regions._signature({"h": {"shape": [4, 64]}, "k_cache": {"shape": [9, 2, 16, 8]}}) == (4, 64)
