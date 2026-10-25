@@ -15,14 +15,14 @@ $SUDO apt-get update -qq >/dev/null   # a fresh image has no package lists
 $SUDO apt-get install -y -qq python3-dev >/dev/null
 command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
-# pyproject pins torch to the CPU index on linux (CI). Here we want the CUDA wheel at the SAME
-# locked version, so the rest of the lock still matches. Skipped when the venv already has it;
-# never run `uv sync` on this box afterwards, it would put CPU torch back. Proper fix: a cuda
-# extra with its own index in pyproject (tracked as a follow-up).
+# The engine's venv is built by the target spec's `[engine] build` command (the one recipe lab/build.py also runs for a
+# changed dependency set), with the project installed on top; nothing engine-specific lives in this script. Skipped
+# when the venv already has a CUDA torch; never run a bare `uv sync` on this box afterwards (the lock pins CPU torch).
+target="$here/../${LAB_TARGET:-targets/inference-server.toml}"
 if ! .venv/bin/python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
-  uv sync --locked --extra dev
-  torch_version=$(awk '/^name = "torch"$/{getline; sub(/version = "/,""); sub(/"/,""); print; exit}' uv.lock)
-  uv pip install --reinstall "torch==${torch_version}" --index-url https://download.pytorch.org/whl/cu130
+  build=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["engine"]["build"])' "$target")
+  UV_PROJECT_ENVIRONMENT="$PWD/.venv" bash -euo pipefail -c "$build"
+  uv pip install --python .venv/bin/python --no-deps -e .
 fi
 
 echo "== CUDA toolkit"

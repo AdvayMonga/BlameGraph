@@ -925,3 +925,14 @@ if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
             fn(); print("ok", name)
+
+
+def test_captures_with_no_call_of_the_task_are_refused_not_replaced_by_defaults(tmp_path):
+    from types import SimpleNamespace
+    from kernels.evolve.run import _shapes
+    (tmp_path / "calls.jsonl").write_text("")                   # every call replayed from a CUDA graph: none seen
+    try:
+        _shapes(load("toy_rmsnorm"), SimpleNamespace(shapes=None, captures=[str(tmp_path)], equal_captures=False))
+        raise AssertionError("empty captures fell back to the default shapes")
+    except SystemExit as e:
+        assert "no call" in str(e)

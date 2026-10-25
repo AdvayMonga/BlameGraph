@@ -245,3 +245,19 @@ def test_every_shm_entry_of_the_jails_user_is_removed_by_a_root_lab_only(tmp_pat
     monkeypatch.setattr(container, "JAIL_UID", os.stat(tmp_path / "dir").st_uid)
     container.clear_shm(tmp_path)
     assert list(tmp_path.iterdir()) == []
+
+
+def test_the_toolkit_is_also_mounted_at_usr_local_cuda_and_cuda_home_is_set(tmp_path, monkeypatch):
+    """A toolkit that /usr/local/cuda links to is mounted at both paths, and jails get CUDA_HOME, so JIT builds
+    (the engine's megakernel, flashinfer) find nvcc inside."""
+    real = tmp_path / "cuda-13.0"
+    (real / "bin").mkdir(parents=True)
+    link = tmp_path / "cuda"
+    link.symlink_to(real)
+    monkeypatch.setattr(container, "CUDA", link)
+    m = " ".join(container.mounts([tmp_path / "w"], [], "/usr/bin/python3"))
+    assert f"src={real},dst={real},readonly" in m and f"src={real},dst={link},readonly" in m
+    a = container.argv("n", tmp_path, ["true"], {}, [tmp_path], [], "/usr/bin/python3", gpu=False)
+    assert f"CUDA_HOME={link}" in a
+    a2 = container.argv("n", tmp_path, ["true"], {"CUDA_HOME": "/x"}, [tmp_path], [], "/usr/bin/python3", gpu=False)
+    assert "CUDA_HOME=/x" in a2 and f"CUDA_HOME={link}" not in a2
