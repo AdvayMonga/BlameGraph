@@ -568,6 +568,41 @@ def test_the_judge_can_query_the_ledger_and_search_the_web_across_turns():
     assert abs(usd - 3 * (1000 * 4 + 100 * 20) / 1e6 - 3 * 2 * llm.WEB_SEARCH_USD) < 1e-9
 
 
+def test_a_turn_whose_stream_dies_is_sent_again_and_a_real_error_is_not():
+    from types import SimpleNamespace
+    from kernels.search import llm
+
+    class ReadTimeout(Exception):
+        pass
+    calls = []
+
+    def stream(client, **kw):
+        calls.append(kw)
+        if len(calls) < 3:
+            raise ReadTimeout("The read operation timed out")
+        usage = SimpleNamespace(model_dump=lambda: {"input_tokens": 10, "output_tokens": 1})
+        return SimpleNamespace(model="claude-opus-5-5", usage=usage, stop_reason="end_turn",
+                               content=[SimpleNamespace(type="text", text="ok")])
+    c = llm.Claude.__new__(llm.Claude)
+    c.client, c.model, c.effort, c.max_tokens, c.tools, c.max_turns, c.ledger_root = None, "claude-opus-5-5", "high", \
+        100, False, 8, None
+    orig = llm._stream
+    llm._stream = stream
+    import time
+    real_sleep, time.sleep = time.sleep, lambda s: None
+    try:
+        assert c("S", "U")[0] == "ok" and len(calls) == 3
+        calls.clear()
+        llm._stream = lambda client, **kw: (_ for _ in ()).throw(ValueError("bad request"))
+        try:
+            c("S", "U")
+            raise AssertionError("a non-transient error was swallowed")
+        except ValueError:
+            pass
+    finally:
+        llm._stream, time.sleep = orig, real_sleep
+
+
 def test_inspirations_show_other_branches_to_the_judge_only():
     from kernels.search.loop import prompt
     t = Tree()
