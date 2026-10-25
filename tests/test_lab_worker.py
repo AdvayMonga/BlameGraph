@@ -163,6 +163,18 @@ def test_a_capture_profile_runs_with_the_targets_capture_env(tmp_path, monkeypat
         worker._profile({"tree": tmp_path}, tmp_path / f"out{len(capture)}", {"kind": "profile", "args": {"capture": capture}},
                         {"profile_runner": runner})
         assert (seen["env"] or None) == want
-    worker._profile({"tree": tmp_path}, tmp_path / "out-fp8", {"kind": "profile", "args": {
+
+
+def test_a_capture_for_a_task_adds_the_tasks_own_env(tmp_path, monkeypatch):
+    pytest.importorskip("torch")                  # the task module is read on the worker host, which has torch
+    from lab import tools as T
+    seen = {}
+    monkeypatch.setattr(T, "stage_harness", lambda tree: tmp_path / "h")
+    monkeypatch.setattr(T, "workload_flags", lambda a, h, n: [])
+
+    def runner(tree, argv, env=None, **kw):
+        seen["env"] = env
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    worker._profile({"tree": tmp_path}, tmp_path / "out", {"kind": "profile", "args": {
         "capture": ["m:f"], "capture_task": "paged_decode_fp8"}}, {"profile_runner": runner})
-    assert seen["env"] == {"CUSTOM_BACKEND_CUDA_GRAPH": "0", "KV_CACHE_DTYPE": "fp8"}      # the task's own env too
+    assert seen["env"] == {"CUSTOM_BACKEND_CUDA_GRAPH": "0", "KV_CACHE_DTYPE": "fp8"}
