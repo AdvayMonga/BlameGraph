@@ -198,6 +198,23 @@ def test_the_holders_own_process_restores_without_reopening_its_handles(tmp_path
     assert sw.restore(h.path) == ["w"] and torch.equal(h.tensors["w"], torch.ones(4))
 
 
+def test_a_refused_ipc_attach_falls_back_to_a_copy_of_the_pristine_weights(tmp_path, monkeypatch):
+    from kernels import shared_weights as sw
+    h = sw.Holder({"w": torch.arange(6.0)}, tmp_path / "w.pkl", {"cfg": 3})
+    sw._HELD.clear()                                        # as in another process
+    monkeypatch.setattr(sw, "_rebuild", lambda b: (_ for _ in ()).throw(RuntimeError("CUDA error: mapping failed")))
+    got = sw.attach(h.path)
+    assert torch.equal(got["w"], torch.arange(6.0)) and got["cfg"] == 3 and sw.attached_by_copy(h.path)
+    got["w"].zero_()                                        # a write reaches the copy only
+    assert torch.equal(h.tensors["w"], torch.arange(6.0)) and sw.is_shared_weight(got["w"])
+    monkeypatch.setattr(sw, "_rebuild", lambda b: (_ for _ in ()).throw(RuntimeError("other")))
+    try:
+        sw.attach(h.path)
+        raise AssertionError("a non-CUDA failure was swallowed")
+    except RuntimeError:
+        pass
+
+
 if __name__ == "__main__":
     import importlib.util
     import inspect

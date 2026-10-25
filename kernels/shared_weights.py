@@ -8,7 +8,9 @@ changed any weight is void and the weight is copied back. Judgments on one holde
 jail attaching over CUDA IPC needs the holder's IPC namespace (docker --ipc). Not working yet: on the H200
 (2026-10-25) a process outside a jail attaches, writes and is restored, but the jailed child's attach fails in
 cuIpcOpenEventHandle (CUDA_ERROR_MAP_FAILED), also with --pid host and the holder's IPC pool file opened to it; `python
--m kernels.shared_weights` reports both. Residual risk: a write undone before
+-m kernels.shared_weights` reports both. When the attach is refused, `attach` copies the pristine weights to the
+device instead (a layer's weights are ~0.6 GB, so a single-layer region is judged this way; a whole step is not), and
+`restore` has nothing to do for that process. Residual risk: a write undone before
 the judgment ends is unseen here (the timer fingerprints inputs between calls, kernels/timing.py, and stage 2's
 outputs are recomputed outside the jail on the restored weights, verify.py)."""
 from __future__ import annotations
@@ -27,6 +29,7 @@ reductions.init_reductions()                     # torch's tensor reducers: a re
 CHUNK = 1 << 28                                  # bytes compared per copy of the pristine copy to the device
 SHM = Path("/dev/shm")
 _HELD: dict = {}                                    # holder files made by this process -> their entries
+_COPIED: set[Path] = set()                      # holders attached by copying the pristine file
 _ATTACHED: set[int] = set()                      # data_ptr of every tensor attached in this process
 
 
@@ -78,9 +81,30 @@ def attach(path: Path) -> dict[str, torch.Tensor]:
     torch.multiprocessing.set_sharing_strategy("file_system")
     raw = _trusted(path).read_bytes()
     own = _HELD.get(Path(path).resolve())        # the holder's own process: CUDA IPC cannot reopen its own handles
-    held = dict(own) if own is not None else pickle.loads(raw)
+    try:
+        held = dict(own) if own is not None else _rebuild(raw)
+    except RuntimeError as e:                    # CUDA IPC refused (a jail, 2026-10-25): this process's own copy of the
+        if "CUDA" not in str(e) and "cuda" not in str(e):     # pristine weights on the device; a write cannot reach
+            raise                                              # the holder, so there is nothing to detect or restore
+        held = {**constants(path), **{k: v.to(_device(path)) for k, v in _pristine(path).items()}}
+        _COPIED.add(Path(path).resolve())
     _ATTACHED.update(v.data_ptr() for v in held.values() if isinstance(v, torch.Tensor))
     return held
+
+
+def _rebuild(raw: bytes) -> dict:
+    """The handles file's entries, the tensors mapped over IPC (torch's reducers)."""
+    return pickle.loads(raw)
+
+
+def attached_by_copy(path: Path) -> bool:
+    """Whether this process holds its own copy of `path`'s weights (the IPC attach was refused)."""
+    return Path(path).resolve() in _COPIED
+
+
+def _device(path: Path) -> str:
+    """The device the holder's tensors live on, from the handles file (a CUDA handle names its device)."""
+    return "cuda" if b"cuda" in _trusted(path).read_bytes() else "cpu"
 
 
 def is_shared_weight(t: torch.Tensor) -> bool:

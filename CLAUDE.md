@@ -317,7 +317,12 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   a pristine copy beside the file (files unpickled outside the jail must be the lab's, not group/other-writable, not
   under /dev/shm or a jail-writable dir); judgments on one holder hold its lock, `restore` runs before and (in a
   `finally`) after each one, and a judgment that wrote a weight is void and the weight copied back. `time_pair`
-  fingerprints every input between calls (outside the window): a call that changes an input fails the timing.
+  fingerprints every input between calls (outside the window): a call that changes an input fails the timing. On the
+  H200 (2026-10-25) the IPC attach works between host processes but is refused inside the jail; `attach` then copies
+  the pristine weights to the device (`attached_by_copy`; fine for one layer's ~0.6 GB, not for a whole step). A
+  region's winner ships as a module of the engine's overrides package (`OVERRIDES_PACKAGE`, `override_module`,
+  `ship._region_files`); the fp32 reference keeps the baseline's routing (`run(..., pinned)`); the modules the
+  stations call (`STATION_MODULES`) are watched; the K/V pool's shape is not part of a shape. Not yet run on a GPU.
 - `kernels/ptx.py` — the PTX comparison's cards (decided 2026-10-22, after Standard Kernel): each implementation's
   kernels counted from its PTX (or `cuobjdump -sass` output, for libraries that ship no PTX): instruction classes,
   widest vector access, declared registers, static shared memory, and the Hopper features in use (wgmma, TMA,
