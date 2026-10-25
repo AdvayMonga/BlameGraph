@@ -38,6 +38,7 @@ dir = "data/equiv/ref"                       # where `python -m correctness refe
 
 [kernels]                                    # layer-1 kernel equivalence, per dtype [atol, rtol]; lower-precision kernels
 tolerances = { bfloat16 = [1e-2, 1e-2], float16 = [1e-3, 1e-3], float32 = [1e-5, 1e-5] }   # are judged finally by equiv
+capture_env = { CUSTOM_BACKEND_CUDA_GRAPH = "0" }   # a capture (`profile` with `capture`) sees only calls that reach Python
 
 [limits]                                     # MLPerf Llama-3.1-8B latency limits, checked at p99
 interactive = { ttft_s = 0.5, tpot_s = 0.030 }

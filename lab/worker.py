@@ -162,6 +162,8 @@ def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     from lab import profiles, proftools, tools as T
     tree, kind, a = inputs["tree"], args["kind"], args["args"]
     prof = {"env": profiles.env(target.load(), a["profile"])} if a.get("profile") else {}
+    if a.get("capture"):                         # calls replayed from CUDA graphs never reach the capture's wrappers
+        prof["env"] = {**prof.get("env", {}), **((target.load().raw.get("kernels") or {}).get("capture_env") or {})}
     files = out / "files"
     harness = T.stage_harness(tree)
     if kind == "profile":
