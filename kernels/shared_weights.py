@@ -23,6 +23,7 @@ from torch.multiprocessing import reductions
 reductions.init_reductions()                     # torch's tensor reducers: a reference to shared memory, not its bytes
 CHUNK = 1 << 28                                  # bytes compared per copy of the pristine copy to the device
 SHM = Path("/dev/shm")
+_HELD: dict = {}                                    # holder files made by this process -> their entries
 _ATTACHED: set[int] = set()                      # data_ptr of every tensor attached in this process
 
 
@@ -61,6 +62,7 @@ class Holder:
         rest = {**{k: None for k, v in tensors.items() if v is None}, **(constants or {})}   # None: bf16 has no scale
         _write(_side(self.path, "constants"), pickle.dumps(rest))
         _write(self.path, bytes(ForkingPickler.dumps({**self.tensors, **rest})))
+        _HELD[self.path.resolve()] = {**self.tensors, **rest}
 
     def changed(self) -> list[str]:
         """The weights whose bytes differ from when they were shared (written by a judgment)."""
@@ -71,7 +73,9 @@ class Holder:
 def attach(path: Path) -> dict[str, torch.Tensor]:
     """The holder's tensors, in this process, aliasing its memory (no copy)."""
     torch.multiprocessing.set_sharing_strategy("file_system")
-    held = pickle.loads(_trusted(path).read_bytes())
+    raw = _trusted(path).read_bytes()
+    own = _HELD.get(Path(path).resolve())        # the holder's own process: CUDA IPC cannot reopen its own handles
+    held = dict(own) if own is not None else pickle.loads(raw)
     _ATTACHED.update(v.data_ptr() for v in held.values() if isinstance(v, torch.Tensor))
     return held
 

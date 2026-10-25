@@ -197,3 +197,11 @@ if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and "monkeypatch" not in inspect.signature(fn).parameters:
             fn(*[Path(tempfile.mkdtemp()) for _ in inspect.signature(fn).parameters]); print("ok", name)
+
+
+def test_the_holders_own_process_restores_without_reopening_its_handles(tmp_path, monkeypatch):
+    from kernels import shared_weights as sw
+    h = sw.Holder({"w": torch.ones(4)}, tmp_path / "w.pkl")
+    monkeypatch.setattr(sw.pickle, "loads", lambda b: (_ for _ in ()).throw(AssertionError("reopened its own handles")))
+    h.tensors["w"].add_(1)
+    assert sw.restore(h.path) == ["w"] and torch.equal(h.tensors["w"], torch.ones(4))
