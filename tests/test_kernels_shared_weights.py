@@ -14,7 +14,6 @@ import subprocess  # noqa: E402
 
 import torch  # noqa: E402
 
-import pytest  # noqa: E402
 
 from kernels.shared_weights import Holder, attach, constants, harness, restore  # noqa: E402
 
@@ -58,6 +57,7 @@ def test_a_one_bit_write_is_caught():
 
 
 def test_files_others_can_write_or_under_dev_shm_are_never_unpickled(tmp_path):
+    import pytest
     from kernels.shared_weights import _trusted
     h = holder(tmp_path)
     for f in (h.path, h.path.with_name("w.pkl.constants"), h.path.with_name("w.pkl.pristine")):
@@ -129,6 +129,7 @@ def test_a_judgment_that_writes_a_shared_weight_is_void_and_the_weight_restored(
 
 
 def test_a_judgment_that_dies_after_writing_still_restores_the_weight(tmp_path, monkeypatch):
+    import pytest
     h = holder(tmp_path)
     jailed = fake_jail(monkeypatch, [], None, write=h.path)
     with pytest.raises(RuntimeError, match="died"):
@@ -171,6 +172,7 @@ def test_judgments_on_one_holder_run_one_at_a_time(tmp_path, monkeypatch):
 
 
 def test_a_holder_under_a_dir_the_jail_writes_is_refused(tmp_path, monkeypatch):
+    import pytest
     from kernels.evolve import jailed
     monkeypatch.setattr(jailed, "EVAL_DIRS", tmp_path)
     h = holder(tmp_path)
