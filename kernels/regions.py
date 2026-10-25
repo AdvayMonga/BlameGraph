@@ -138,6 +138,7 @@ def task(name: str, stations: tuple[Station, ...], first: str, last: str,
 
 # -- the engine's stations (inference-server models/stations.py; data/notes/handoff-engine-stations.md) ---------------
 ENGINE = "inference_server.models.stations"
+OVERRIDES_PACKAGE = "inference_server.models.regions"    # where the engine's `overrides()` reads OVERRIDES from
 # The engine modules the stations call into at call time (watched for patches; the engine may export this later).
 STATION_MODULES = ("inference_server.models.fused", "inference_server.models.moe_kernel",
                    "inference_server.models.paged_attention_kernel", "inference_server.models.paged_kv_cache",
@@ -271,9 +272,11 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
             return None
         s = _signature(call.get("reads") or {})
         return s if s in by_shape else None          # a shape with no saved sample (over the engine's cap) is skipped
-    return task(fn, stations, first, last, make_ctx, shape_of, dtypes=dtypes, live=live(), watch=(ENGINE, *_importable(STATION_MODULES)),
-                entry=f"{ENGINE}:DECODE", capture_fn=fn, seen_default=tuple(by_shape), constants=consts,
-                reference_stations=reference_stations(), heldout_axes=_heldout_axes(reads, ins) if calls else (),
+    start = (lambda: start_program(first, last, constants, shared_weights)) if shared_weights else None
+    return task(fn, stations, first, last, make_ctx, shape_of, dtypes=dtypes, live=live(),
+                watch=(ENGINE, *_importable(STATION_MODULES)), entry=f"{ENGINE}:DECODE", capture_fn=fn,
+                seen_default=tuple(by_shape), constants=consts, reference_stations=reference_stations(),
+                heldout_axes=_heldout_axes(reads, ins) if calls else (), start_program=start,
                 edge_shapes=lambda shape: [])     # inputs come from captures only: no synthetic edge shapes
 
 
@@ -294,3 +297,14 @@ def start_program(first: str, last: str, constants: dict | None = None, shared_w
             "_STATIONS = [s.fn for s in _PURE if s.name in _NAMES]\n\n\n"
             "def kernel(*xs):\n    ctx = {**_CONST, **dict(zip(_INPUTS, xs))}\n    for fn in _STATIONS:\n"
             "        ctx.update(fn(ctx))\n    return tuple(ctx[o] for o in _OUTPUTS)\n# EVOLVE-BLOCK-END\n")
+
+
+def override_module(program: str, first: str, last: str) -> str:
+    """A winning program as a module of the engine's overrides package: the program (`kernel`, `_INPUTS`, `_OUTPUTS`,
+    `_CONST`) plus `OVERRIDES = {(first, last): _override}`, which the engine's `overrides()` reads and `resolve()`
+    checks against the stretch's interface."""
+    from kernels.evolve.ship import module_source
+    return (module_source(program, "kernel").rstrip("\n") + "\n\n\ndef _override(c):\n"
+            "    out = kernel(*(c[k] for k in _INPUTS))\n"
+            "    return dict(zip(_OUTPUTS, out if isinstance(out, (tuple, list)) else (out,)))\n\n\n"
+            f"OVERRIDES = {{({first!r}, {last!r}): _override}}\n")

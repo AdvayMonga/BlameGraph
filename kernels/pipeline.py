@@ -53,6 +53,9 @@ GATE_TIMEOUT_S = 3600        # as `kernels.evolve gate`: the held-out shapes on 
 
 def module_file(task, tree: Path) -> Path:
     """The engine module the task's entry point lives in, inside an engine tree."""
+    if task.name.startswith("region:"):              # its entry is the stations tuple; a winner ships as an override
+        raise ValueError(f"{task.name}: regions have no engine module to start from or patch (`kernels.evolve ship` "
+                         "writes a winner into the engine's overrides package)")
     mod = task.entry.partition(":")[0]
     return Path(tree) / "src" / (mod.replace(".", "/") + ".py")
 

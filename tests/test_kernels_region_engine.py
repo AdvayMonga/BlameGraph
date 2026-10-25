@@ -180,3 +180,62 @@ def test_the_stations_callees_are_watched_when_they_import(tmp_path, monkeypatch
     monkeypatch.setattr(regions, "STATION_MODULES", ("fake_fused_mod", "no_such_pkg.models.fused"))
     t = regions.from_engine("norm", "add", shared_weights=str(held(tmp_path, regions).path))
     assert "fake_fused_mod" in t.watch and "fake_stations_mod" in t.watch and "no_such_pkg.models.fused" not in t.watch
+
+
+def _engine_repo(tmp, monkeypatch):
+    """A git repo of a fake engine package holding the fake stations at models/stations.py, with no regions package."""
+    import subprocess
+    from kernels import regions
+    repo = tmp / "engine"
+    pkg = repo / "src" / "fake_engine" / "models"
+    pkg.mkdir(parents=True)
+    (pkg.parent / "__init__.py").write_text("")
+    (pkg / "__init__.py").write_text("")
+    (pkg / "stations.py").write_text(FAKE)
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True, check=True).stdout
+    git("init", "-q")
+    git("add", ".")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "engine")
+    monkeypatch.syspath_prepend(str(repo / "src"))
+    monkeypatch.setattr(regions, "ENGINE", "fake_engine.models.stations")
+    monkeypatch.setattr(regions, "OVERRIDES_PACKAGE", "fake_engine.models.regions")
+    for k in ("GIT_COMMITTER_NAME", "GIT_AUTHOR_NAME"):
+        monkeypatch.setenv(k, "t")
+    for k in ("GIT_COMMITTER_EMAIL", "GIT_AUTHOR_EMAIL"):
+        monkeypatch.setenv(k, "t@t")
+    return regions, repo, git
+
+
+def test_a_region_ships_as_an_override_module_never_through_the_entry_path(tmp_path, monkeypatch):
+    import pytest
+    from kernels import pipeline
+    from kernels.evolve import ship as ship_mod
+    from kernels.evolve.run import initial_program
+    regions, repo, git = _engine_repo(tmp_path, monkeypatch)
+    h = held(tmp_path, regions)
+    t = regions.from_engine("norm", "add", shared_weights=str(h.path))
+    program = initial_program(t)
+    assert program == regions.start_program("norm", "add", shared_weights=str(h.path))
+    with pytest.raises(ValueError, match="holder"):
+        initial_program(regions.from_engine("norm", "add"))
+    for f in (pipeline.module_file, lambda t, d: pipeline.start_program(t, d), lambda t, d: pipeline.patch(t, d, "")):
+        with pytest.raises(ValueError, match="region"):
+            f(t, tmp_path)
+    monkeypatch.setattr(ship_mod, "unstart", lambda *a: pytest.fail("the entry path was used for a region"))
+    ok = {"metrics": {"correct": 1.0}, "artifacts": {"gates": json.dumps(
+        {"correctness_heldout": {"passed": True, "cases": 6}, "physics": {"passed": True}})}}
+    out = ship_mod.ship(t, program, ok, repo, branch="kernels/region")
+    path = "src/fake_engine/models/regions/norm_add.py"
+    assert out["path"] == path
+    assert sorted(git("diff", "--name-only", out["base"], "kernels/region").split()) == \
+        ["src/fake_engine/models/regions/__init__.py", path]                # stations.py untouched
+    src = git("show", f"kernels/region:{path}")
+    assert "OVERRIDES = {('norm', 'add'): _override}" in src and "EVOLVE" not in src
+    ns: dict = {}
+    exec(compile(src, path, "exec"), ns)
+    hh = torch.randn(4, 64)
+    st = regions._engine()
+    c = {"h": hh.clone(), "cfg": st.LayerConfig(1e-6), "w.mm": h.tensors["w.mm"], "w.mm_scale": None, "kv": torch.zeros(2)}
+    got = ns["OVERRIDES"][("norm", "add")](c)
+    want = t.baseline()(hh.clone(), h.tensors["w.mm"])
+    assert list(got) == ["h"] and torch.equal(got["h"], want[0]) and torch.equal(c["h"], hh)   # h not written in place

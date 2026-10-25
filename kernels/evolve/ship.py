@@ -58,18 +58,38 @@ def _module_path(repo: Path, base: str, module: str) -> str:
     raise FileNotFoundError(f"{module} is not in {repo} at {base}")
 
 
+def _region_files(task, program: str, repo: Path, base: str) -> dict[str, str]:
+    """A region's winner as a module of the engine's overrides package (`regions.override_module`), beside the
+    stations module; the package's `__init__.py` added when the engine lacks it."""
+    from kernels import regions
+    _, first, last = task.name.split(":")
+    root = _module_path(repo, base, regions.ENGINE).removesuffix(regions.ENGINE.replace(".", "/") + ".py")
+    pkg = root + regions.OVERRIDES_PACKAGE.replace(".", "/")
+    files = {f"{pkg}/{first}_{last}.py": regions.override_module(program, first, last)}
+    init = f"{pkg}/__init__.py"
+    if subprocess.run(["git", "-C", str(repo), "cat-file", "-e", f"{base}:{init}"], capture_output=True).returncode:
+        files[init] = '"""Region overrides from the layer-1 loop (models/stations.py: `overrides`)."""\n'
+    return files
+
+
 def ship(task, program: str, gate: dict, repo: Path, base: str = "HEAD", branch: str | None = None) -> dict:
     """The engine branch: {branch, base, commit, path}. Refuses a program without a passing held-out gate."""
     if not gate_passed(gate):
         raise ValueError("the program has no fully passing gate on held-out shapes (`python -m kernels.evolve gate`)")
-    module, _, attr = task.entry.partition(":")
     base = _git(repo, "rev-parse", base)
-    path = _module_path(repo, base, module)
-    blob = _git(repo, "hash-object", "-w", "--stdin", data=unstart(task, module_source(program, attr)))
+    if task.name.startswith("region:"):
+        files = _region_files(task, program, repo, base)
+        path = next(p for p in files if not p.endswith("__init__.py"))
+    else:
+        module, _, attr = task.entry.partition(":")
+        path = _module_path(repo, base, module)
+        files = {path: unstart(task, module_source(program, attr))}
     with tempfile.TemporaryDirectory() as d:
         env = {"GIT_INDEX_FILE": str(Path(d) / "index")}
         _git(repo, "read-tree", base, env=env)
-        _git(repo, "update-index", "--cacheinfo", f"100644,{blob},{path}", env=env)
+        for p, src in files.items():
+            blob = _git(repo, "hash-object", "-w", "--stdin", data=src)
+            _git(repo, "update-index", "--add", "--cacheinfo", f"100644,{blob},{p}", env=env)
         tree = _git(repo, "write-tree", env=env)
     msg = f"{task.name}: kernel from the layer-1 loop ({task.entry}), passed the held-out gate"
     commit = _git(repo, "commit-tree", tree, "-p", base, "-m", msg)

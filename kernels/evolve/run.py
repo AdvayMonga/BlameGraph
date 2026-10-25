@@ -32,6 +32,11 @@ def initial_program(task) -> str:
     """The engine's module source with `kernel` bound to the entry point, all of it open to evolution."""
     if task.entry is None:
         return (HERE / "seeds" / f"{task.name}.py").read_text()
+    if task.start_program is not None:
+        return task.start_program()
+    if task.name.startswith("region:"):              # its entry is the stations tuple, not a function
+        raise ValueError(f"{task.name}: a region's starting program needs its holder (`shared_weights`: the layer "
+                         "config and the weights' constants are written into it)")
     mod, _, attr = task.entry.partition(":")
     return _start(task, inspect.getsource(importlib.import_module(mod)), attr)
 
