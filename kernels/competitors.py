@@ -392,13 +392,17 @@ def launched(fn, inputs) -> set[str]:
 
 
 def _signature(name: str) -> str:
-    """A demangled name without whitespace and without its parameter list (the first "(" outside template args)."""
-    s, depth = re.sub(r"\s+", "", name).replace("(anonymousnamespace)", "{anon}"), 0
+    """A demangled name's qualified function name with its template args, whitespace removed: the parameter list (the
+    first "(" outside template args) and any return type before it (cu++filt keeps `std::enable_if<...>::type`, the
+    profiler does not) dropped."""
+    s, depth, start = name.replace("(anonymous namespace)", "{anon}"), 0, 0
     for i, c in enumerate(s):
         depth += (c == "<") - (c == ">")
+        if c == " " and depth == 0:
+            start = i + 1                        # a top-level space ends the return type
         if c == "(" and depth == 0:
-            return s[:i]
-    return s
+            return re.sub(r"\s+", "", s[start:i])
+    return re.sub(r"\s+", "", s[start:])
 
 
 def sass(module_file: str, pattern: str, names: set[str] | None = None, arch: str | None = None) -> str:
@@ -418,7 +422,8 @@ def sass(module_file: str, pattern: str, names: set[str] | None = None, arch: st
     d = subprocess.run([_tool("cu++filt")], input="\n".join(mangled), capture_output=True, text=True).stdout.splitlines()
     keys = {re.sub(r"\s+", "", n) for n in names}
     sigs = {_signature(n) for n in names}
-    return "".join(b for b, n in zip(blocks, d) if re.sub(r"\s+", "", n) in keys or _signature(n) in sigs)
+    ran = "".join(b for b, n in zip(blocks, d) if re.sub(r"\s+", "", n) in keys or _signature(n) in sigs)
+    return ran or ("// the instantiations that ran were not told apart: every match of the pattern\n" + "".join(blocks))
 
 
 def _flashinfer_jit_dir() -> Path:

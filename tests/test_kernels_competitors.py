@@ -319,3 +319,10 @@ if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and "monkeypatch" not in inspect.signature(fn).parameters:
             fn(*[Path(tempfile.mkdtemp()) for _ in inspect.signature(fn).parameters]); print("ok", name)
+
+
+def test_a_demangled_name_matches_the_profilers_without_its_return_type():
+    cxx = ("std::enable_if<(((int)0)==(0))&&vllm::_typeConvert<c10::BFloat16>::exists, void>::type "
+           "vllm::fused_add_rms_norm_kernel<c10::BFloat16, 0, false>(c10::BFloat16*, long, float, int)")
+    prof = "void vllm::fused_add_rms_norm_kernel<c10::BFloat16, 0, false>(c10::BFloat16*, long, float, int)"
+    assert competitors._signature(cxx) == competitors._signature(prof) == "vllm::fused_add_rms_norm_kernel<c10::BFloat16,0,false>"
