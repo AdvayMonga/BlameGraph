@@ -172,3 +172,11 @@ def test_the_pools_block_count_is_not_part_of_a_calls_shape(tmp_path, monkeypatc
     assert regions._heldout_axes(small, ("h", "kv", "attn_block_tables")) == (2, 1)
     monkeypatch.delattr(regions._engine(), "IN_PLACE")                      # no IN_PLACE: the engine's pool names
     assert regions._signature({"h": {"shape": [4, 64]}, "k_cache": {"shape": [9, 2, 16, 8]}}) == (4, 64)
+
+
+def test_the_stations_callees_are_watched_when_they_import(tmp_path, monkeypatch):
+    regions = engine(tmp_path, monkeypatch)
+    (tmp_path / "fake_fused_mod.py").write_text("def f(x):\n    return x\n")
+    monkeypatch.setattr(regions, "STATION_MODULES", ("fake_fused_mod", "no_such_pkg.models.fused"))
+    t = regions.from_engine("norm", "add", shared_weights=str(held(tmp_path, regions).path))
+    assert "fake_fused_mod" in t.watch and "fake_stations_mod" in t.watch and "no_such_pkg.models.fused" not in t.watch

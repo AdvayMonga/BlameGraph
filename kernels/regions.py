@@ -138,12 +138,28 @@ def task(name: str, stations: tuple[Station, ...], first: str, last: str,
 
 # -- the engine's stations (inference-server models/stations.py; data/notes/handoff-engine-stations.md) ---------------
 ENGINE = "inference_server.models.stations"
+# The engine modules the stations call into at call time (watched for patches; the engine may export this later).
+STATION_MODULES = ("inference_server.models.fused", "inference_server.models.moe_kernel",
+                   "inference_server.models.paged_attention_kernel", "inference_server.models.paged_kv_cache",
+                   "inference_server.models.qwen3_moe")
 POOL = ("k_cache", "v_cache")           # the K/V pool's names when the engine declares no IN_PLACE
 
 
 def _engine():
     import importlib
     return importlib.import_module(ENGINE)
+
+
+def _importable(names: tuple[str, ...]) -> tuple[str, ...]:
+    """The modules of `names` that exist (core._watched imports every watched module)."""
+    import importlib.util
+    out = []
+    for n in names:
+        try:
+            out += [n] if importlib.util.find_spec(n) else []
+        except (ImportError, ValueError):
+            pass
+    return tuple(out)
 
 
 def _pool() -> tuple[str, ...]:
@@ -255,7 +271,7 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
             return None
         s = _signature(call.get("reads") or {})
         return s if s in by_shape else None          # a shape with no saved sample (over the engine's cap) is skipped
-    return task(fn, stations, first, last, make_ctx, shape_of, dtypes=dtypes, live=live(), watch=(ENGINE,),
+    return task(fn, stations, first, last, make_ctx, shape_of, dtypes=dtypes, live=live(), watch=(ENGINE, *_importable(STATION_MODULES)),
                 entry=f"{ENGINE}:DECODE", capture_fn=fn, seen_default=tuple(by_shape), constants=consts,
                 reference_stations=reference_stations(), heldout_axes=_heldout_axes(reads, ins) if calls else (),
                 edge_shapes=lambda shape: [])     # inputs come from captures only: no synthetic edge shapes
