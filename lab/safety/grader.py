@@ -208,7 +208,7 @@ def run_lint(tree: Path) -> Run:
 
 def _jail_argv(tree: Path, argv: list[str], env_extra: dict | None, domains, local_binding: bool = False,
                tag: str = "", read: list[Path] = (), port: int | None = None, memory: str | None = None,
-               gpu: bool | None = None) -> tuple[list[str], dict, Path, str | None]:
+               gpu: bool | None = None, ipc_host: bool = False) -> tuple[list[str], dict, Path, str | None]:
     """The wrapped argv, env and private tmp for running `argv` in `tree` as agent code: wiped env, jail around the
     tree and the tmp, weights read-only. The last item names the container when the container jail is used."""
     tmp = Path(tempfile.mkdtemp(prefix="jail-")).resolve()   # short: srt's sockets live here
@@ -230,7 +230,7 @@ def _jail_argv(tree: Path, argv: list[str], env_extra: dict | None, domains, loc
         container.give([tree.resolve(), tmp])
         wrapped = container.argv(name, tree, argv, {**env, "HOME": str(tmp)}, [tree.resolve(), tmp],
                                  [engine.venv(), *readonly], engine.python(), bridge_port=port, memory=memory,
-                                 gpu=gpu)
+                                 gpu=gpu, ipc_host=ipc_host)
         cli_env = {k: os.environ[k] for k in ("PATH", "HOME", "DOCKER_HOST", "DOCKER_CONFIG") if k in os.environ}
         return wrapped, cli_env, tmp, name
     config = jail.settings([tree.resolve(), tmp], engine.venv(), list(domains), readonly=readonly,
@@ -259,11 +259,12 @@ def jailed_popen(tree: Path, argv: list[str], *, env_extra: dict | None = None, 
 
 def jailed(tree: Path, argv: list[str], *, timeout_s: float, env_extra: dict | None = None,
            domains: list[str] = (), read: list[Path] = (), memory: str | None = None,
-           gpu: bool | None = None) -> subprocess.CompletedProcess:
+           gpu: bool | None = None, ipc_host: bool = False) -> subprocess.CompletedProcess:
     """Run `argv` in `tree` as agent code: wiped env, jail around the tree and a private tmp, weights and `read`
     read-only; `memory` caps the container jail's host RAM (docker's syntax, e.g. "32g"); `gpu=False` attaches no
     GPU to the container jail."""
-    wrapped, env, tmp, name = _jail_argv(tree, argv, env_extra, domains, read=read, memory=memory, gpu=gpu)
+    wrapped, env, tmp, name = _jail_argv(tree, argv, env_extra, domains, read=read, memory=memory, gpu=gpu,
+                                         ipc_host=ipc_host)
     try:
         return subprocess.run(wrapped, cwd=tree, env=env, capture_output=True, text=True, timeout=timeout_s)
     except subprocess.TimeoutExpired as e:     # a hung suite is a failed run, recorded like any other
