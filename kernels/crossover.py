@@ -1,0 +1,115 @@
+"""Where the decode megakernel stops beating the separate kernels (decided 2026-10-23: a measured routing table, by batch
+size and context length, instead of MEGAKERNEL_MAX_ROWS). One `lab.profile` run per path, prompt length and batch
+size, its requests decoding together: the engine's timeline records each scheduler step's wall time and its batch
+(`step` events); only steps at the run's own batch size count (a run's tail, as requests finish, has a few).
+Each run has the target's launch env (as served: its CONTEXT_WINDOW sizes the decode graphs, and a row past it decodes
+eagerly), then the path's: the megakernel forced for every batch it takes (MEGAKERNEL_MAX_ROWS=16), or off
+(MEGAKERNEL=0); a megakernel run whose log lacks the engine's "megakernel on" line is marked `megakernel_not_on`. A
+run's bundle is reused only when its env and max tokens match (`crossover-meta.json` in it). Run on the GPU host from
+this repo with the engine's venv:
+
+  python -m kernels.crossover --out DIR [--batches 1,2,4,8] [--prompt-lens 512,4096,16384] [--max-tokens 256]
+
+DIR gets each run's bundle and `crossover.json`: per prompt length and batch, each path's median step and the faster."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import statistics
+import subprocess
+import sys
+from pathlib import Path
+
+PATHS = {"megakernel": {"MEGAKERNEL": "1", "MEGAKERNEL_MAX_ROWS": "16"}, "kernels": {"MEGAKERNEL": "0"}}
+MAX_ROWS = int(PATHS["megakernel"]["MEGAKERNEL_MAX_ROWS"])     # the most rows the megakernel path takes
+MEGA_ON = "decode-step megakernel on"                         # the engine's log line when it decodes with the megakernel
+META = "crossover-meta.json"
+PROFILE = ("import logging, runpy; logging.basicConfig(level=logging.INFO); "     # lab.profile, its INFO lines logged
+           "runpy.run_module('lab.profile', run_name='__main__', alter_sys=True)")
+
+
+def steps(bundle: Path) -> dict[int, list[float]]:
+    """Decode step seconds by batch size, from a bundle's timeline: steps with no prefill and some rows decoding."""
+    out: dict[int, list[float]] = {}
+    for f in Path(bundle).rglob("events.jsonl"):
+        for line in f.read_text().splitlines():
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if e.get("kind") == "step" and (e.get("active") or 0) > 0 and not e.get("prefilling"):
+                out.setdefault(int(e["active"]), []).append(float(e.get("dur_s") or 0.0))
+    return out
+
+
+def reusable(d: Path, meta: dict) -> bool:
+    """Whether d holds a bundle from a run with this env and max tokens."""
+    f = Path(d) / META
+    return f.exists() and json.loads(f.read_text()) == meta and bool(list(Path(d).rglob("events.jsonl")))
+
+
+def table(runs: dict[tuple[str, int, int], dict[int, list[float]]], not_on=frozenset()) -> dict:
+    """{prompt_len: {batch: {megakernel_ms, kernels_ms, steps, faster}}} from each run's steps at its own batch; a
+    (prompt_len, batch) in `not_on` (its megakernel run never turned it on) is marked and has no faster."""
+    out: dict = {}
+    for (path, plen, b), by in runs.items():
+        xs = by.get(b) or []
+        if not xs:
+            continue
+        cell = out.setdefault(str(plen), {}).setdefault(str(b), {})
+        cell[f"{path}_ms"] = round(statistics.median(xs) * 1e3, 4)
+        cell[f"{path}_steps"] = len(xs)
+    for plen, b in not_on:
+        out.setdefault(str(plen), {}).setdefault(str(b), {})["megakernel_not_on"] = True
+    for cells in out.values():
+        for c in cells.values():
+            if "megakernel_ms" in c and "kernels_ms" in c and not c.get("megakernel_not_on"):
+                c["faster"] = "megakernel" if c["megakernel_ms"] < c["kernels_ms"] else "kernels"
+    return out
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="kernels.crossover")
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--batches", default="1,2,4,8")
+    ap.add_argument("--prompt-lens", default="512,4096,16384")
+    ap.add_argument("--max-tokens", type=int, default=256)
+    a = ap.parse_args(argv)
+    batches = [int(x) for x in a.batches.split(",")]
+    if max(batches) > MAX_ROWS:
+        ap.error(f"--batches above {MAX_ROWS}: the megakernel path takes at most {MAX_ROWS} rows")
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    from lab import target
+    served = target.load().engine.env
+    runs, not_on = {}, set()
+    for plen in (int(x) for x in a.prompt_lens.split(",")):
+        for b in batches:
+            for path, env in PATHS.items():
+                d, log = out / f"{path}-{plen}-b{b}", out / f"{path}-{plen}-b{b}.log"
+                meta = {"env": {**served, **env}, "max_tokens": a.max_tokens}
+                if not reusable(d, meta):
+                    shutil.rmtree(d, ignore_errors=True)
+                    p = subprocess.run([sys.executable, "-c", PROFILE, "--synthetic", "--prompt-len", str(plen),
+                                        "--requests", str(b), "--max-tokens", str(a.max_tokens), "--warmup", "0",
+                                        "--profiler", "cuda-range", "--out", str(d)],
+                                       env={**os.environ, **meta["env"]}, capture_output=True, text=True)
+                    log.write_text(p.stdout + p.stderr)
+                    if p.returncode != 0:
+                        print(f"{path} {plen} b{b}: exited {p.returncode}: {p.stderr[-500:]}", file=sys.stderr)
+                        continue
+                    d.mkdir(parents=True, exist_ok=True)
+                    (d / META).write_text(json.dumps(meta))
+                if path == "megakernel" and MEGA_ON not in (log.read_text() if log.exists() else ""):
+                    not_on.add((plen, b))
+                runs[(path, plen, b)] = steps(d)
+    t = table(runs, not_on)
+    (out / "crossover.json").write_text(json.dumps(t, indent=1))
+    print(json.dumps(t))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
