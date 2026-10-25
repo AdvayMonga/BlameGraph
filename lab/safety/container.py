@@ -1,7 +1,10 @@
 """The Linux jails (lab/RUNTIME.md). A measurement room: one container per jailed command (NVIDIA runtime for the
 GPU), no network at all, read-only root, non-root user, no capabilities; a served engine's port reaches the host
 through a socket bridge. The agent's workbench: one container per session with the GPU, the internet and root
-inside it (writable system dirs, Docker's default capabilities), paused by `quiet` while anything is measured."""
+inside it (writable system dirs, Docker's default capabilities), paused by `quiet` while anything is measured.
+`ipc_host` (a judgment attaching shared weights) gives the jail the host's IPC namespace: its /dev/shm and SysV shared
+memory, semaphores and queues; `shm_cleared` removes the /dev/shm files the jail made, so they cannot carry anything
+to a later judgment (SysV objects and judgments running at the same time are not covered)."""
 
 from __future__ import annotations
 
@@ -21,6 +24,7 @@ JAIL_UID = 10001             # the jail's user when the lab runs as root; otherw
 CLIENT_CORES = 4             # kept out of every jail's cpuset so the measurement clients cannot be starved
 SYSTEM_PREFIXES = {Path("/"), Path("/usr"), Path("/usr/local")}   # the image has its own; never mounted over it
 BRIDGE = "bridge.sock"
+SHM = Path("/dev/shm")
 
 
 def _docker() -> str | None:
@@ -52,6 +56,22 @@ def give(paths: list[Path]) -> None:
     for root in paths:
         for p in [root, *root.rglob("*")]:
             os.lchown(p, JAIL_UID, JAIL_UID)
+
+
+@contextmanager
+def shm_cleared(shm: Path = SHM):
+    """Around a jail run with `ipc_host`: afterwards, remove the files in `shm` made meanwhile by the jail's user."""
+    before = set(os.listdir(shm)) if shm.is_dir() else set()
+    try:
+        yield
+    finally:
+        uid = user()[0]
+        for f in (shm.iterdir() if shm.is_dir() else ()):
+            try:
+                if f.name not in before and f.lstat().st_uid == uid:
+                    shutil.rmtree(f) if f.is_dir() and not f.is_symlink() else f.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def cpuset() -> str | None:

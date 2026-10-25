@@ -6,6 +6,7 @@ the harness core needs (kernels/, validity.peaks, lab.target, the measured peaks
 when the task's baseline lives there; never this repo, which holds the held-out shapes, the ledger and .env."""
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
 import json
@@ -16,11 +17,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+from kernels import shared_weights
 from kernels.evolve import ncu
 from kernels.evolve.verify import verify
 from kernels.tasks import load
 from lab import engine
-from lab.safety import grader
+from lab.safety import container, grader
 
 ROOT = Path(__file__).resolve().parents[2]
 HARNESS = {"kernels": None, "validity": ("__init__.py", "peaks.py"), "lab": ("__init__.py", "target.py")}
@@ -182,11 +184,15 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
         if stage == PRECHECK_STAGE:
             env["CUDA_VISIBLE_DEVICES"] = ""
         read += [home] if home else []
-        read += [Path(cfg[k]) for k in ("samples", "weights") if cfg.get(k)]      # a region's captures and weights
-        p = grader.jailed(tree, argv, timeout_s=timeout_s, env_extra=env, read=read, memory=MEMORY,
-                          **({"gpu": gpu} if gpu is not None else {}),
-                          **({"ipc_host": True} if cfg.get("weights") else {}))
+        read += [Path(cfg[k]) for k in ("samples", "shared_weights") if cfg.get(k)]   # a region's captures, weights
+        ipc = bool(cfg.get("shared_weights")) and stage != PRECHECK_STAGE     # CUDA IPC to the holder; no GPU there
+        with container.shm_cleared() if ipc else contextlib.nullcontext():
+            p = grader.jailed(tree, argv, timeout_s=timeout_s, env_extra=env, read=read, memory=MEMORY,
+                              **({"gpu": gpu} if gpu is not None else {}), **({"ipc_host": True} if ipc else {}))
         _keep_builds_only(tree)                  # the precheck's build is what stage 1 then imports
+        if ipc and (changed := shared_weights.restore(cfg["shared_weights"])):     # before verify reads them
+            return {**fail, "artifacts": {"shared_weights_changed": f"the judgment wrote shared weights {changed}; "
+                                                                    "void, and they were restored"}}
         if stage == PRECHECK_STAGE:
             return _precheck_result(p, stage, key)
         r, why = _result(p.stdout, key) if stage != NCU_STAGE else (None, "")

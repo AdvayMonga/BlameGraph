@@ -302,14 +302,18 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   reference, `bytes_moved` (fused vs one-by-one), and the error budget: `Task.error_budget` (2) lets each element differ from the reference by
   that many times the baseline's own error there, on top of the dtype's tolerance (`check._compare(base=, k=)`), in the
   checker, the timed outputs and `verify.py`; the baseline is bound before the candidate loads and its modules (`Task.watch`) are watched for
-  patches. The engine's stations, swap-in point and capture hooks are not built yet (handoff in data/notes); until then
-  regions are tested on fake stations. `from_engine(first, last, samples, weights)` binds a region to the
-  engine's `inference_server.models.stations.DECODE` (the handoff's interface; `functional(station)` where given): inputs
-  from a CAPTURE_REGION dir's samples, the layer's weights attached from a shared holder, `load("region:FIRST:LAST")`
-  and `from_config` take it; `start_program` is the stations called in order; the jail mounts the samples and weights
-  and shares the host's IPC namespace for them. `kernels/shared_weights.py`: a holder shares tensors by reference
-  (CUDA IPC, or shared memory on the CPU), a judgment attaches without copying, checksums before and after catch a
-  write (`Holder.changed`).
+  patches. The engine's stations (`models/stations.py`) and region capture are on engine branches, not merged; the
+  tests use fake stations. `from_engine(first, last, samples, shared_weights)` binds a region to the engine's
+  `inference_server.models.stations.DECODE` (as `functional(DECODE)`, which copies what kv_append writes in place, so a
+  region including an `IN_PLACE` writer is refused): inputs from a CAPTURE_REGION dir's samples of the holder's `layer`
+  (seed 0 exact, later seeds perturbed), the layer's weights attached from a shared holder, its non-tensor entries
+  (`cfg`, None weights) the constants that `start_program` writes in too; the flat shape signature holds out the first
+  activation's rows (and the attention block tables' width); `load("region:FIRST:LAST")` and `from_config` (key
+  `shared_weights`) take it; kernel_search refuses regions until the pipeline takes them. The jail mounts the samples
+  and the holder file and shares the host's IPC namespace (never at the precheck); afterwards the jail's new /dev/shm
+  files are removed. `kernels/shared_weights.py`: a holder shares tensors by reference (CUDA IPC, or shared memory on
+  the CPU) and writes blake2b hashes and a pristine copy beside the file; after each judgment `restore` re-hashes, and
+  a judgment that wrote a weight is void and the weight copied back.
 - `kernels/ptx.py` — the PTX comparison's cards (decided 2026-10-22, after Standard Kernel): each implementation's
   kernels counted from its PTX (or `cuobjdump -sass` output, for libraries that ship no PTX): instruction classes,
   widest vector access, declared registers, static shared memory, and the Hopper features in use (wgmma, TMA,

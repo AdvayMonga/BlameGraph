@@ -45,6 +45,15 @@ def test_the_reference_is_fp32_returned_in_the_baselines_dtype():
     assert (b[0].float() - r[0].float()).abs().max() < 0.1
 
 
+def test_the_reference_runs_the_baseline_once_per_input_shapes_for_its_dtypes():
+    runs = []
+    counted = (*STATIONS[:-1], Station("add", ("x", "a"), ("x",), lambda c: runs.append(1) or {"x": c["x"] + c["a"]}))
+    _, ref, ins, _ = functions(counted, "norm", "add", live=("x",), reference_stations=STATIONS)
+    for shape in ((4, 64), (4, 64), (8, 64)):
+        ref(*(ctx(shape, torch.bfloat16, "cpu", torch.Generator().manual_seed(0))[i] for i in ins))
+    assert len(runs) == 2
+
+
 def test_fusing_moves_fewer_bytes_than_the_stations_one_by_one():
     c = ctx((8, 64), torch.float32, "cpu", torch.Generator().manual_seed(0))
     m = bytes_moved(STATIONS, "norm", "act", c)

@@ -66,7 +66,9 @@ def test_refused_off_the_kernels_layer_and_beyond_the_budget(tb, monkeypatch):
     with pytest.raises(ValueError, match="kernels layer only"):
         spec(tb).fn({"hypothesis_id": rt, "expect": EXPECT, "task": "silu_mul", "budget_usd": 1})
     k = h({"hypothesis": "k", "rationale": "r", "layer": "kernels"}).split()[1]
-    for bad, why in (({"task": "nope", "budget_usd": 1}, "task"), ({"task": "silu_mul", "budget_usd": 0}, "budget_usd"),
+    for bad, why in (({"task": "nope", "budget_usd": 1}, "task"),
+                     ({"task": "region:norm:add", "budget_usd": 1}, "regions .* are not wired"),
+                     ({"task": "silu_mul", "budget_usd": 0}, "budget_usd"),
                      ({"task": "silu_mul", "budget_usd": 10_000}, "more than the run has left"),
                      ({"task": "silu_mul", "budget_usd": 0.5}, "a search needs at least")):
         with pytest.raises(ValueError, match=why):

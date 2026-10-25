@@ -207,6 +207,8 @@ class Toolbox(EvalTools, ProfTools):
         in the workspace (left out of your change) for you to apply."""
         from kernels import pipeline
         from kernels.tasks import TASKS, load
+        if str(args.get("task")).startswith("region:"):    # a region's entry is the stations tuple, not a function
+            raise ValueError("`task`: regions (region:FIRST:LAST) are not wired into kernel_search yet")
         if args.get("task") not in TASKS:
             raise ValueError(f"`task` must be one of {list(TASKS)}")
         usd = args.get("budget_usd")

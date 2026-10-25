@@ -7,7 +7,9 @@ its outputs are what it writes that a later station reads or that outlives the s
 KV cache). The baseline runs the stations in order in the engine's dtypes; the reference runs them on fp32 copies of
 the floating inputs, the truth a region's error budget is measured against (2x the baseline's own error). The fusion
 bound is the bytes the region must move (its inputs and outputs; intermediates can stay on chip) at peak bandwidth,
-beside the bytes its stations move one by one."""
+beside the bytes its stations move one by one. `functional()` gives an in-place writer (kv_append) a copy of the K/V
+pool, a copy the engine never makes, so its winner could not install as is: a region must end before kv_append or
+start after it (refused otherwise, for now)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -71,11 +73,15 @@ def functions(stations, first, last, live=(), constants: dict | None = None,
     def baseline(*xs):
         return run(region, {**consts, **dict(zip(ins, xs))}, outs)
 
+    dtypes: dict = {}                    # the baseline's output dtypes, per input shapes and dtypes
+
     def reference(*xs):
         up = [x.float() if isinstance(x, torch.Tensor) and x.is_floating_point() else x for x in xs]
         exact = run(ref_region, {**consts, **dict(zip(ins, up))}, outs)
-        dtypes = [o.dtype for o in baseline(*[x.clone() if isinstance(x, torch.Tensor) else x for x in xs])]
-        return tuple(e.to(d) for e, d in zip(exact, dtypes))
+        key = tuple((tuple(x.shape), x.dtype) if isinstance(x, torch.Tensor) else x for x in xs)
+        if key not in dtypes:
+            dtypes[key] = [o.dtype for o in baseline(*[x.clone() if isinstance(x, torch.Tensor) else x for x in xs])]
+        return tuple(e.to(d) for e, d in zip(exact, dtypes[key]))
     return baseline, reference, ins, outs
 
 
@@ -146,54 +152,97 @@ def live() -> tuple[str, ...]:
     return tuple(getattr(_engine(), "LIVE", ("h", "k_cache", "v_cache")))
 
 
-def _signature(reads: dict) -> tuple:
-    """A captured call's shape: its activations' shapes in name order (weights are the same for every call)."""
-    return tuple(tuple(reads[k]["shape"]) for k in sorted(reads) if not k.startswith("w.") and "shape" in reads[k])
+def _signature(reads: dict) -> tuple[int, ...]:
+    """A captured call's shape: its activations' shapes in name order, flattened (weights are the same for every call)."""
+    return tuple(d for k in sorted(reads) if not k.startswith("w.") and "shape" in reads[k] for d in reads[k]["shape"])
 
 
-def from_engine(first: str, last: str, samples: str | None = None, weights: str | None = None,
+def _heldout_axes(reads: dict, ins: tuple[str, ...]) -> tuple[int, ...]:
+    """Where in the flat signature the held-out axes are: the rows of the region's first activation, and the attention
+    block tables' width (the context, in blocks) when the region reads them."""
+    at, pos = {}, 0
+    for k in sorted(reads):
+        if not k.startswith("w.") and "shape" in reads[k]:
+            at[k], pos = pos, pos + len(reads[k]["shape"])
+    first = next((i for i in ins if i in at and reads[i]["shape"]), None)
+    ctx = "attn_block_tables" in ins and len(reads.get("attn_block_tables", {}).get("shape", ())) == 2
+    return tuple(([at[first]] if first else []) + ([at["attn_block_tables"] + 1] if ctx else []))
+
+
+def _consts(entries: dict, constants: dict | None) -> dict:
+    """A region's constants, the one source for its task and its start program: a holder's non-tensor entries (`cfg`,
+    `layer`, weights that are None, e.g. bf16 experts' scales) and `constants`."""
+    return {**{k: v for k, v in entries.items() if not isinstance(v, torch.Tensor)}, **(constants or {})}
+
+
+def _region(first: str, last: str) -> tuple[Station, ...]:
+    """The engine's stations, refusing a region that writes the K/V pool in place (see the module docstring)."""
+    stations = engine_stations()
+    inplace = {w for s in span(stations, first, last) for w in s.writes} & set(getattr(_engine(), "IN_PLACE", ()))
+    if inplace:
+        raise ValueError(f"region {first}..{last} writes {sorted(inplace)} in place (kv_append): a region must end "
+                         "before kv_append or start after it, for now")
+    return stations
+
+
+def from_engine(first: str, last: str, samples: str | None = None, shared_weights: str | None = None,
                 dtypes: tuple = (torch.bfloat16,), constants: dict | None = None) -> Task:
     """The region first..last of the engine's decode stations as a task: inputs from captured samples (`samples`: a
-    CAPTURE_REGION dir, its first call per shape kept whole) and the layer's weights and config attached from a
-    holder (`weights`: a kernels.shared_weights file whose non-tensor entries, e.g. `cfg`, are constants); seeds
-    after 0 perturb the activations, never the weights."""
+    CAPTURE_REGION dir, its first call per shape kept whole; only the holder's `layer` when it names one) and the
+    layer's weights and config attached from a holder (`shared_weights`: a kernels.shared_weights file whose
+    non-tensor entries, e.g. `cfg`, are constants); seed 0 is the captured inputs exactly, later seeds perturb the
+    activations, never the weights."""
     from kernels.shared_weights import attach
-    stations = engine_stations()
-    held = attach(Path(weights)) if weights else {}
-    consts = {**{k: v for k, v in held.items() if not isinstance(v, torch.Tensor)}, **(constants or {})}
-    by_shape: dict[tuple, Path] = {}
+    stations = _region(first, last)
+    held = attach(Path(shared_weights)) if shared_weights else {}
+    consts = _consts(held, constants)
+    ins = tuple(i for i in interface(stations, first, last, live())[0] if i not in consts)
+    fn, layer = f"region:{first}:{last}", consts.get("layer")
+    calls = []
     if samples:
         from lab import capture
-        for call in capture.load(Path(samples)):
-            if call.get("sample") and call.get("fn") == f"region:{first}:{last}":
-                by_shape.setdefault(_signature(call.get("reads") or {}), Path(samples) / "samples" / call["sample"])
+        calls = [c for c in capture.load(Path(samples))
+                 if c.get("fn") == fn and (layer is None or c.get("layer") == layer)]
+    by_shape: dict[tuple, Path] = {}
+    for call in calls:
+        if call.get("sample"):
+            by_shape.setdefault(_signature(call.get("reads") or {}), Path(samples) / "samples" / call["sample"])
+    reads = (calls[0].get("reads") or {}) if calls else {}
+    missing = [i for i in ins if "shape" not in reads.get(i, {}) or (i.startswith("w.") and i not in held)] \
+        if calls else []
+    if missing:
+        raise ValueError(f"region {first}..{last} reads {missing}, which are neither captured tensors nor constants: "
+                         "the layer config `cfg` and the weights come from a holder (`shared_weights`) or `constants`")
 
     def make_ctx(shape, dtype, device, g):
-        got = by_shape.get(tuple(tuple(s) for s in shape))
+        got = by_shape.get(tuple(shape))
         if got is None:
             raise ValueError(f"no captured sample of region {first}..{last} at shape {shape}")
-        reads = {k: v.to(device) for k, v in torch.load(got, weights_only=True)["reads"].items()
-                 if isinstance(v, torch.Tensor)}
-        seed = int(torch.randint(0, 2**31, (1,), generator=g))
-        if seed % 3:                                # perturb the floating activations a little, per seed
-            for k, v in reads.items():
+        xs = {k: v.to(device) for k, v in torch.load(got, weights_only=True)["reads"].items()
+              if isinstance(v, torch.Tensor)}
+        if g.initial_seed():                         # seed 0: the captured inputs; others perturbed, per seed
+            for k, v in xs.items():
                 if v.is_floating_point() and k not in ("cos", "sin", "k_cache", "v_cache"):
-                    reads[k] = (v.float() * (1 + 1e-2 * torch.randn(v.shape, generator=g).to(device))).to(v.dtype)
-        return {**reads, **{k: v for k, v in held.items() if isinstance(v, torch.Tensor) or v is None}}
+                    xs[k] = (v.float() * (1 + 1e-2 * torch.randn(v.shape, generator=g).to(device))).to(v.dtype)
+        return {**xs, **{k: v for k, v in held.items() if isinstance(v, torch.Tensor)}}
 
     def shape_of(call):
-        return _signature(call.get("reads") or {}) if call.get("fn") == f"region:{first}:{last}" else None
-    return task(f"region:{first}:{last}", stations, first, last, make_ctx, shape_of, dtypes=dtypes, live=live(),
-                watch=(ENGINE,), entry=f"{ENGINE}:DECODE", seen_default=tuple(by_shape), constants=consts,
-                reference_stations=reference_stations(),
+        if call.get("fn") != fn or (layer is not None and call.get("layer") != layer):
+            return None
+        s = _signature(call.get("reads") or {})
+        return s if s in by_shape else None          # a shape with no saved sample (over the engine's cap) is skipped
+    return task(fn, stations, first, last, make_ctx, shape_of, dtypes=dtypes, live=live(), watch=(ENGINE,),
+                entry=f"{ENGINE}:DECODE", seen_default=tuple(by_shape), constants=consts,
+                reference_stations=reference_stations(), heldout_axes=_heldout_axes(reads, ins) if calls else (),
                 edge_shapes=lambda shape: [])     # inputs come from captures only: no synthetic edge shapes
 
 
-def start_program(first: str, last: str, constants: dict | None = None) -> str:
-    """The starting program of a region: the engine's own stations, called in order, its constants (the layer
-    config) written in as values."""
-    stations = engine_stations()
-    consts = dict(constants or {})
+def start_program(first: str, last: str, constants: dict | None = None, shared_weights: str | None = None) -> str:
+    """The starting program of a region: the engine's own stations, called in order, its constants (the holder's,
+    as `from_engine` binds them, and `constants`) written in as values."""
+    from kernels import shared_weights as sw
+    stations = _region(first, last)
+    consts = _consts(sw.constants(Path(shared_weights)) if shared_weights else {}, constants)
     ins, outs = interface(stations, first, last, live())
     ins = tuple(i for i in ins if i not in consts)
     names = [s.name for s in span(stations, first, last)]

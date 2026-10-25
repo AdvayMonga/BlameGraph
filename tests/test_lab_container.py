@@ -228,3 +228,11 @@ def test_the_host_ipc_namespace_only_when_asked(docker_named, tmp_path, monkeypa
     a = container.argv("n", tmp_path, ["true"], {}, [tmp_path], [], sys.executable)
     b = container.argv("n", tmp_path, ["true"], {}, [tmp_path], [], sys.executable, ipc_host=True)
     assert "--ipc" not in a and b[b.index("--ipc") + 1] == "host"
+
+
+def test_shm_files_the_jail_made_are_removed_and_older_ones_kept(tmp_path):
+    (tmp_path / "holder").write_text("weights")
+    with container.shm_cleared(tmp_path):
+        (tmp_path / "torch_123_answers").write_text("cached outputs")
+        (tmp_path / "dir").mkdir()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["holder"]
