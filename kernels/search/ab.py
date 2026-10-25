@@ -65,10 +65,11 @@ def _variant(*extra: str):
     return lambda a, out, seed: _search(a, out, seed, extra)
 
 
-# Each arm differs from `kernels.search` (judge tools on) in one thing, so a difference in the summary is that
-# thing's: the judge's web search and ledger SQL, KernelPro's literal UCT constant, or the whole generator.
+# Each arm differs from `kernels.search` (the funnel, judge tools on) in one thing, so a difference in the summary is
+# that thing's: the judge's web search and ledger SQL, KernelPro's literal UCT constant, the beam in place of the
+# funnel (the 2026-10-24 A/B's `kernels.search` arm), or the whole generator.
 ARMS = {"openevolve": _openevolve, "kernels.search": _search, "search-no-tools": _variant("--no-judge-tools"),
-        "search-c1.41": _variant("--uct-c", "1.4142"), "search-funnel": _variant("--funnel")}
+        "search-c1.41": _variant("--uct-c", "1.4142"), "search-beam": _variant("--no-funnel")}
 
 
 def _gate(a, program: Path) -> dict:

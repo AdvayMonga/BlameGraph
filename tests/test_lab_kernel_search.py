@@ -84,7 +84,7 @@ def test_one_call_records_the_search_and_saves_a_patch_when_the_gate_passes(tb, 
     caps.mkdir()
     monkeypatch.setattr(pipeline, "captures", lambda t, tree, profile, *a: [caps])
 
-    def search(t, cs, start, out, usd, evals, root, env, funnel=False, device="cuda"):
+    def search(t, cs, start, out, usd, evals, root, env, funnel=True, device="cuda"):
         out.mkdir(parents=True)
         (out / "best_program.py").write_text(start.read_text().replace("return 1", "return 2"))
         return {"best": {"combined_score": 1.3, "correct": 1.0}, "cost": {"usd": 2.5}, "ledger": "ev-search"}

@@ -16,6 +16,7 @@ from lab.apiproxy import cost_usd, price
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 WEB_SEARCH_USD = 0.01
 QUERY_MAX_BYTES = 20_000
+RETRIES = 3                                      # a turn whose stream dies (a read timeout, a dropped connection) is re-sent
 TOOLS = [
     {"type": "web_search_20260209", "name": "web_search", "max_uses": 5},
     {"name": "query", "strict": True,
@@ -31,8 +32,8 @@ TOOLS = [
 
 def run_query(sql: str, root: Path | None = None) -> str:
     from lab import ledger
-    from store import index
     try:
+        from store import index                  # duckdb: missing on a host without the store extra
         out = index.query(index.agent_db(root or ledger.ROOT), sql)
     except Exception as e:                       # noqa: BLE001  a bad query is the model's to read
         return f"query failed: {type(e).__name__}: {e}"[:2000]
@@ -41,6 +42,16 @@ def run_query(sql: str, root: Path | None = None) -> str:
         out["rows"], out["truncated"] = out["rows"][: len(out["rows"]) // 2], True
         text = json.dumps(out, default=str)
     return text
+
+
+TRANSIENT = {"APIConnectionError", "APITimeoutError", "InternalServerError", "RateLimitError", "OverloadedError",
+             "ReadTimeout", "ReadError", "RemoteProtocolError", "WriteTimeout", "PoolTimeout"}
+
+
+def _transient(e: Exception) -> bool:
+    """A failure a resend can cure: the connection or the stream died, or the API was overloaded (by class name, the
+    SDK's and its HTTP client's alike). The SDK retries these when a request starts, not once a stream is under way."""
+    return isinstance(e, (TimeoutError, ConnectionError)) or any(c.__name__ in TRANSIENT for c in type(e).__mro__)
 
 
 class Claude:
@@ -55,6 +66,19 @@ class Claude:
         web = ((u.get("server_tool_use") or {}).get("web_search_requests") or 0) * WEB_SEARCH_USD
         return cost_usd(m.model if price(m.model) else self.model, u) + web      # a dated id prices as its model
 
+    def _turn(self, system, messages, kw):
+        """One turn, re-sent up to RETRIES times when it dies in transit (a dead stream's partial usage is not priced:
+        the API reports usage only with the final message)."""
+        for attempt in range(RETRIES + 1):
+            try:
+                return _stream(self.client, model=self.model, max_tokens=self.max_tokens, system=system,
+                               messages=messages, **kw)
+            except Exception as e:               # noqa: BLE001
+                if attempt == RETRIES or not _transient(e):
+                    raise
+                import time
+                time.sleep(5 * 2 ** attempt)
+
     def __call__(self, system: str, user: str) -> tuple[str, float]:
         """(the final response's text, the cost of every turn in $); a refused request returns no text."""
         kw = {} if self.model.startswith("claude-haiku") else {
@@ -63,9 +87,7 @@ class Claude:
             kw["tools"] = TOOLS
         messages, usd = [{"role": "user", "content": user}], 0.0
         for _ in range(self.max_turns):
-            with self.client.beta.messages.stream(model=self.model, max_tokens=self.max_tokens, system=system,
-                                                  messages=messages, **kw) as s:
-                m = s.get_final_message()
+            m = self._turn(system, messages, kw)
             usd += self._usd(m)
             if m.stop_reason == "refusal":
                 return "", usd
@@ -78,3 +100,8 @@ class Claude:
                            for b in m.content if b.type == "tool_use" and b.name == "query"]
                 messages.append({"role": "user", "content": results or [{"type": "text", "text": "no tool ran"}]})
         return "".join(b.text for b in m.content if b.type == "text"), usd
+
+
+def _stream(client, **kw):
+    with client.beta.messages.stream(**kw) as s:
+        return s.get_final_message()

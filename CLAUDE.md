@@ -266,7 +266,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   KernelPro's progressive widening and virtual-child rule), a node closed after 3 judged failed children or 3 edits
   that never reached the GPU, the model shown only the
   parent program, its measurements and its lineage, SEARCH/REPLACE answers, duplicates refused before any GPU time,
-  with a judge (default) each step is two calls,
+  each expansion one funnel round by default (`kernels/search/funnel.py`, since it won the 2026-10-24 A/B); with
+  `--no-funnel` the beam: with a judge (default) each step is two calls,
   the judge (Opus 5.5) naming as many changes as the beam is wide (`--beam`, 4) as JSON, every one written and judged
   (each and its fate in `hypotheses.jsonl`), from the facts (and, its choice when, Anthropic's web search
   and read-only SQL over the agent's view of the ledger index, `--judge-tools`; the harness pastes no research), with
@@ -285,7 +286,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   passed over, recorded with its evidence (`kernels/search/detect.py`, MANTIS; never changes a score);
   every call priced (OpenEvolve's too, via a usage log);
   `python -m kernels.search.ab --arms ...` runs OpenEvolve and kernels.search (and variants differing in one flag:
-  `search-no-tools`, `search-c1.41`) on one task with the same shapes, start, evaluator,
+  `search-no-tools`, `search-c1.41`, `search-beam`) on one task with the same shapes, start, evaluator,
   the same post-search promotion for every arm (`ab.SAME_PROMOTION`: top 3 re-timed, no tuning, no detector), single model
   and judged-program budget, gates each winner on held-out shapes, and writes `ab.json`; `kernels/METHOD.md` maps
   every component to its published source and number, or says why ours; same evaluator, run dir, re-timed promotion and `kernels` record as `kernels.evolve run`). `kernels/evolve/ship.py` (`python -m kernels.evolve ship`: a program with a passing held-out gate becomes a
@@ -315,8 +316,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   setmaxnreg, mbarrier, cp.async, mma, ldmatrix), with a measured time beside it when given; fastest first.
   `python -m kernels.ptx card --name N PTX ... [--timing N=MS] --out F`, read by `kernels.search --ptx F`. Producing
   competitors' PTX and timings on our shapes needs their libraries on the GPU host (not built yet).
-- `kernels/search/funnel.py` — one funnel round (decided 2026-10-22; `kernels.search --funnel`, A/B arm
-  `search-funnel`): judge calls per slice of facts (measurements, archive matches, winners elsewhere in the tree,
+- `kernels/search/funnel.py` — one funnel round (decided 2026-10-22; `kernels.search`'s default since 2026-10-25, when
+  it beat the beam on moe_gemm_fp8 1.161x to 1.026x seen, 1.284x to 1.096x held-out; the beam is `--no-funnel`, A/B arm
+  `search-beam`): judge calls per slice of facts (measurements, archive matches, winners elsewhere in the tree,
   compiler report, PTX comparison; a slice with no facts is skipped) x `--per-call` hypotheses, same-idea clusters
   merged by `--cheap-model`, ideas like archived ones that never beat their parent kept only when the judge names what
   differs, `--wide-model` writes each, the no-GPU precheck (`--precheck`, default on) drops what fails to build and keeps
