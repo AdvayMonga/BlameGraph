@@ -10,7 +10,10 @@ from kernels.tasks._fused import EPS, HEAD_DIM, ROPE_THETA, START_EDITS, rms, we
 
 
 def reference(x, w, cos, sin):
-    n = rms(x, w).to(x.dtype).float()
+    """In fp32 throughout, the truth the error budget is measured against: the engine's fused kernel rounds where its
+    eager path does not, and rope's cancellation near zero turned one rounding into 0.03 (5 of 552 seen cases on the
+    H200, 2026-10-24); a candidate may be at most 2x as wrong as the engine's kernel, element by element."""
+    n = rms(x, w).float()
     half = n.shape[-1] // 2
     rot = torch.cat((-n[..., half:], n[..., :half]), dim=-1)
     return (n * cos.float().unsqueeze(2) + rot * sin.float().unsqueeze(2)).to(x.dtype)
@@ -50,5 +53,6 @@ def edge_shapes(shape):
 TASK = Task("rmsnorm_rope", "inference_server.models.fused:rmsnorm_rope", reference, make_inputs, shape_of, cost,
             call=lambda fn, x, w, c, s: fn(x, w, c, s, EPS), start_edits=START_EDITS, graphs=True, kernel_names=(r"^_rmsnorm_rope_kernel",),
             size_expr="args[0].shape[0]", heldout_axes=(0, 1), edge_shapes=edge_shapes, dtypes=(torch.bfloat16,), layouts=(),
+            error_budget=2.0,
             seen_default=((4, 1, 32, HEAD_DIM), (8, 1, 4, HEAD_DIM), (1, 16, 32, HEAD_DIM)),
             heldout_default=((64, 1, 32, HEAD_DIM), (1, 256, 4, HEAD_DIM)))

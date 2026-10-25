@@ -31,8 +31,8 @@ TOOLS = [
 
 def run_query(sql: str, root: Path | None = None) -> str:
     from lab import ledger
-    from store import index
     try:
+        from store import index                  # duckdb: missing on a host without the store extra
         out = index.query(index.agent_db(root or ledger.ROOT), sql)
     except Exception as e:                       # noqa: BLE001  a bad query is the model's to read
         return f"query failed: {type(e).__name__}: {e}"[:2000]
