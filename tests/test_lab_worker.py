@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -145,3 +146,20 @@ def test_remote_pause_thaws_only_what_it_froze(said, unpaused):
     with r.paused("lab-workbench-r1-s1"):
         assert calls == ["pause lab-workbench-r1-s1"]
     assert (calls[-1] == "unpause lab-workbench-r1-s1") is unpaused
+
+
+def test_a_capture_profile_runs_with_the_targets_capture_env(tmp_path, monkeypatch):
+    from lab import tools as T
+    from lab import worker
+    seen = {}
+    monkeypatch.setattr(T, "stage_harness", lambda tree: tmp_path / "h")
+    monkeypatch.setattr(T, "workload_flags", lambda a, h, n: [])
+
+    def runner(tree, argv, env=None, **kw):
+        seen["env"] = env
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    for capture, want in ((["m:f"], {"CUSTOM_BACKEND_CUDA_GRAPH": "0"}), ([], None)):
+        seen.clear()
+        worker._profile({"tree": tmp_path}, tmp_path / f"out{len(capture)}", {"kind": "profile", "args": {"capture": capture}},
+                        {"profile_runner": runner})
+        assert (seen["env"] or None) == want

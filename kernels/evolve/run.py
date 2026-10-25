@@ -161,7 +161,11 @@ def _shapes(task, a) -> dict:
     if a.shapes:
         return shapes_mod.read(a.shapes)
     dirs = [Path(d) for d in a.captures or []]
-    sets = shapes_mod.split(task, shapes_mod.from_captures(task, dirs, equal=getattr(a, "equal_captures", False)))
+    counts = shapes_mod.from_captures(task, dirs, equal=getattr(a, "equal_captures", False))
+    if dirs and not counts:                      # never the task's default shapes in place of real ones
+        raise SystemExit(f"the captures hold no call of {task.entry} (calls replayed from a CUDA graph never reach "
+                         "Python: capture with the engine's graphs off, the target's [kernels] capture_env)")
+    sets = shapes_mod.split(task, counts)
     return {**sets, "ints": shapes_mod.ints_from_captures(task, dirs),
             "sources": shapes_mod.sources_from_captures(task, dirs)} if dirs else sets
 
