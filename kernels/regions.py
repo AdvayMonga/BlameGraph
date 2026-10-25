@@ -52,11 +52,15 @@ def interface(stations: tuple[Station, ...], first: str, last: str,
     return tuple(inputs), tuple(w for w in written if w in needed)
 
 
-def run(region: tuple[Station, ...], ctx: dict, outputs: tuple[str, ...]) -> tuple:
-    ctx = dict(ctx)
+def run(region: tuple[Station, ...], ctx: dict, outputs: tuple[str, ...], pinned: dict | None = None) -> tuple:
+    """The stations in order; a station named in `pinned` writes those values instead of running."""
+    ctx, pinned = dict(ctx), pinned or {}
     for s in region:
-        ctx.update(s.fn(ctx))
+        ctx.update(pinned[s.name] if s.name in pinned else s.fn(ctx))
     return tuple(ctx[o] for o in outputs)
+
+
+ROUTE_WRITES = ("sorted_ids", "expert_ids")     # what marks the engine's `route` station: a discrete choice
 
 
 def functions(stations, first, last, live=(), constants: dict | None = None,
@@ -64,12 +68,14 @@ def functions(stations, first, last, live=(), constants: dict | None = None,
     """(baseline, reference, inputs, outputs): both take the inputs as tensors in `inputs` order (the `constants`, e.g.
     a layer config, bound instead) and return the outputs in `outputs` order. The reference computes in fp32 on
     `reference_stations` (the same stations in a form that runs in fp32: an engine's torch versions of its kernels),
-    returning each output in the baseline's dtype; without them, on the stations themselves."""
+    returning each output in the baseline's dtype; without them, on the stations themselves. A region holding the
+    `route` station keeps the baseline's routing: fp32 logits may send a near-tied token to another expert."""
     consts = dict(constants or {})
     region = span(stations, first, last)
     ref_region = span(reference_stations, first, last) if reference_stations is not None else region
     ins, outs = interface(stations, first, last, live)
     ins = tuple(i for i in ins if i not in consts)
+    route = next((s for s in region if set(ROUTE_WRITES) <= set(s.writes)), None)
 
     def baseline(*xs):
         return run(region, {**consts, **dict(zip(ins, xs))}, outs)
@@ -78,7 +84,12 @@ def functions(stations, first, last, live=(), constants: dict | None = None,
 
     def reference(*xs):
         up = [x.float() if isinstance(x, torch.Tensor) and x.is_floating_point() else x for x in xs]
-        exact = run(ref_region, {**consts, **dict(zip(ins, up))}, outs)
+        pinned = None
+        if route is not None:            # the baseline's discrete routing, from the un-upcast inputs
+            clones = [x.clone() if isinstance(x, torch.Tensor) else x for x in xs]
+            picks = run(region[:region.index(route) + 1], {**consts, **dict(zip(ins, clones))}, route.writes)
+            pinned = {route.name: dict(zip(route.writes, picks))}
+        exact = run(ref_region, {**consts, **dict(zip(ins, up))}, outs, pinned)
         key = tuple((tuple(x.shape), x.dtype) if isinstance(x, torch.Tensor) else x for x in xs)
         if key not in dtypes:
             dtypes[key] = [o.dtype for o in baseline(*[x.clone() if isinstance(x, torch.Tensor) else x for x in xs])]

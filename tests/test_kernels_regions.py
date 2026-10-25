@@ -54,6 +54,27 @@ def test_the_reference_runs_the_baseline_once_per_input_shapes_for_its_dtypes():
     assert len(runs) == 2
 
 
+def test_the_reference_keeps_the_baselines_routing_where_fp32_would_route_a_near_tie_elsewhere():
+    def route(c):                                    # top-1 by a stable sort: a tie goes to the lower expert
+        top = torch.argsort(c["logits"], dim=-1, descending=True, stable=True)[:, 0]
+        return {"sorted_ids": torch.arange(top.numel()), "expert_ids": top, "tok": torch.arange(top.numel()),
+                "pair_w": c["logits"].gather(1, top[:, None])[:, 0].float()}
+    stations = (Station("router", ("x", "w"), ("logits",), lambda c: {"logits": c["x"] @ c["w"]}),
+                Station("route", ("logits",), ("sorted_ids", "expert_ids", "tok", "pair_w"), route),
+                Station("down", ("e", "expert_ids", "pair_w"), ("y",),
+                        lambda c: {"y": (c["e"][c["expert_ids"]].float() * c["pair_w"][:, None]).to(c["e"].dtype)}))
+    bf = torch.bfloat16
+    x, w = torch.tensor([[1.0, 2 ** -9]], dtype=bf), torch.tensor([[1.0, 1.0], [0.0, 1.0]], dtype=bf)
+    e = torch.tensor([[10.0, 20.0], [30.0, 40.0]], dtype=bf)
+    assert torch.equal((x @ w)[0], torch.tensor([1.0, 1.0], dtype=bf))                  # bf16: a tie, expert 0
+    assert (x.float() @ w.float())[0, 1] > 1.0                                           # fp32: expert 1 would win
+    base, ref, ins, outs = functions(stations, "router", "down", live=("y",))
+    assert ins == ("x", "w", "e") and outs == ("y",)
+    b, r = base(x, w, e), ref(x, w, e)
+    assert torch.equal(b[0], e[:1]) and torch.equal(r[0], e[:1])                         # the baseline's expert, weight 1.0
+    assert not torch.equal(r[0], (e[1:].float() * (x.float() @ w.float())[0, 1]).to(bf))   # not fp32's routing
+
+
 def test_fusing_moves_fewer_bytes_than_the_stations_one_by_one():
     c = ctx((8, 64), torch.float32, "cpu", torch.Generator().manual_seed(0))
     m = bytes_moved(STATIONS, "norm", "act", c)
