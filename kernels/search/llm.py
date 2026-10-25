@@ -44,14 +44,14 @@ def run_query(sql: str, root: Path | None = None) -> str:
     return text
 
 
+TRANSIENT = {"APIConnectionError", "APITimeoutError", "InternalServerError", "RateLimitError", "OverloadedError",
+             "ReadTimeout", "ReadError", "RemoteProtocolError", "WriteTimeout", "PoolTimeout"}
+
+
 def _transient(e: Exception) -> bool:
-    """A failure a resend can cure: the connection or the stream died, or the API was overloaded. The SDK retries these
-    when a request starts, not once a stream is under way."""
-    import anthropic
-    if isinstance(e, (anthropic.APIConnectionError, anthropic.InternalServerError, anthropic.RateLimitError,
-                      TimeoutError, ConnectionError)):
-        return True
-    return type(e).__name__ in ("ReadTimeout", "ReadError", "RemoteProtocolError", "WriteTimeout", "PoolTimeout")
+    """A failure a resend can cure: the connection or the stream died, or the API was overloaded (by class name, the
+    SDK's and its HTTP client's alike). The SDK retries these when a request starts, not once a stream is under way."""
+    return isinstance(e, (TimeoutError, ConnectionError)) or any(c.__name__ in TRANSIENT for c in type(e).__mro__)
 
 
 class Claude:
