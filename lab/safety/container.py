@@ -3,8 +3,9 @@ GPU), no network at all, read-only root, non-root user, no capabilities; a serve
 through a socket bridge. The agent's workbench: one container per session with the GPU, the internet and root
 inside it (writable system dirs, Docker's default capabilities), paused by `quiet` while anything is measured.
 `ipc_host` (a judgment attaching shared weights) gives the jail the host's IPC namespace: its /dev/shm and SysV shared
-memory, semaphores and queues; `shm_cleared` removes the /dev/shm files the jail made, so they cannot carry anything
-to a later judgment (SysV objects and judgments running at the same time are not covered)."""
+memory, semaphores and queues. Only a root lab may grant it (the jail then runs as JAIL_UID), and `clear_shm` removes
+every /dev/shm entry the jail's user owns, so nothing carries over to a later judgment (SysV objects are not
+covered)."""
 
 from __future__ import annotations
 
@@ -58,20 +59,16 @@ def give(paths: list[Path]) -> None:
             os.lchown(p, JAIL_UID, JAIL_UID)
 
 
-@contextmanager
-def shm_cleared(shm: Path = SHM):
-    """Around a jail run with `ipc_host`: afterwards, remove the files in `shm` made meanwhile by the jail's user."""
-    before = set(os.listdir(shm)) if shm.is_dir() else set()
-    try:
-        yield
-    finally:
-        uid = user()[0]
-        for f in (shm.iterdir() if shm.is_dir() else ()):
-            try:
-                if f.name not in before and f.lstat().st_uid == uid:
-                    shutil.rmtree(f) if f.is_dir() and not f.is_symlink() else f.unlink()
-            except FileNotFoundError:
-                pass
+def clear_shm(shm: Path = SHM) -> None:
+    """After a jail run with `ipc_host`: remove every entry in `shm` owned by the jail's user (root lab only)."""
+    if os.getuid() != 0 or not shm.is_dir():
+        return
+    for f in shm.iterdir():
+        try:
+            if f.lstat().st_uid == JAIL_UID:
+                shutil.rmtree(f) if f.is_dir() and not f.is_symlink() else f.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def cpuset() -> str | None:
@@ -98,6 +95,9 @@ def argv(name: str, workdir: Path, command: list[str], env: dict[str, str], writ
          memory: str | None = None, ipc_host: bool = False) -> list[str]:
     """`docker run` for `command`. With `bridge_port`, the engine's 127.0.0.1:port is also served on the unix socket
     `<first writable tmp>/bridge.sock`, which the host side of `Bridge` forwards to the host's 127.0.0.1:port."""
+    if ipc_host and os.getuid() != 0:
+        raise ValueError("ipc_host needs the lab to run as root: otherwise the jail shares its uid and what it leaves "
+                         "in the host's /dev/shm cannot be told apart and removed")
     uid, gid = user()
     out = [_docker(), "run", "--rm", "--init", "--name", name, "--network", "none", "--read-only",
            "--tmpfs", "/tmp:exec", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",

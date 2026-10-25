@@ -148,6 +148,23 @@ def test_content_memoization_flagged_by_timing():
     assert not g["passed"], g["reason"]
 
 
+def test_a_call_that_writes_an_input_after_computing_fails_the_timing():
+    from kernels import time_pair
+
+    def bumps(x, w):                             # right answer, then an input changed to slow the other call down
+        out = reference(x, w)
+        w.add_(1)
+        return out
+    for a, b in ((bumps, reference), (reference, bumps)):
+        try:
+            time_pair(a, b, make_inputs, (8, 64), torch.float32, iters=3, warmup=1)
+        except ValueError as e:
+            assert "changed during" in str(e)
+        else:
+            raise AssertionError("a write into an input passed the timing")
+    assert time_pair(reference, correct, make_inputs, (8, 64), torch.float32, iters=3, warmup=1)["ratio"]["median"] > 0
+
+
 DEVICE_TESTS = [test_correct_passes, test_wrong_fails, test_shape_specialized_fails_heldout, test_mutation_fails,
                 test_aliasing_fails, test_dropped_nan_fails, test_ptr_memoization_fails]
 

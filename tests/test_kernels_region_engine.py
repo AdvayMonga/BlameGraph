@@ -139,17 +139,15 @@ def test_a_region_writing_in_place_is_refused(tmp_path, monkeypatch):
 
 
 def test_captured_shapes_split_with_a_heldout_region_from_the_holders_layer_only(tmp_path, monkeypatch):
-    from collections import Counter
     from kernels import shapes
-    from lab import capture
     regions = engine(tmp_path, monkeypatch)
     calls = [(4, 64, 0, True)] + [(4, 64, 0, False)] * 4 + [(16, 64, 0, True)] * 3 + [(64, 64, 0, True)]
     calls += [(32, 64, 1, True), (8, 64, 0, False)]          # another layer's; a shape whose sample was over the cap
     caps = captures(tmp_path, calls)
     t = regions.from_engine("norm", "add", str(caps), str(held(tmp_path, regions).path), dtypes=(torch.float32,))
     assert t.heldout_axes == (0,) and set(t.seen_default) == {(4, 64), (16, 64), (64, 64)}
-    counts = Counter(s for s in map(t.shape_of, capture.load(caps)) if s is not None)
-    assert counts == {(4, 64): 5, (16, 64): 3, (64, 64): 1}
+    counts = shapes.from_captures(t, [caps])                 # read by the task's capture fn, not its entry
+    assert counts == {(4, 64): 5, (16, 64): 3, (64, 64): 1} and shapes.ints_from_captures(t, [caps]) == {}
     sets = shapes.split(t, counts)
     assert sets["heldout"] == [(64, 64)] and sets["seen"] == [(4, 64), (16, 64)]
 

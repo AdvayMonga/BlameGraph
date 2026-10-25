@@ -2,17 +2,18 @@
 (~30 GB), and each candidate is judged in a fresh process, so reloading per judgment would take minutes. A holder
 process keeps the weights on the device and writes handles to a file; each candidate's process attaches to the same
 memory without copying (CUDA IPC through torch's tensor sharing; on the CPU, shared memory). CUDA cannot map shared
-memory read-only, so the holder also writes each tensor's blake2b hash and a pristine CPU copy beside the handles
-file (never mounted in a jail); after each judgment the evaluator hashes every tensor again (`restore`): a judgment
-that changed any weight is void and the weight is copied back. A jail attaching over CUDA IPC needs the holder's IPC
-namespace (docker --ipc). Residual risk: a write undone before the judgment ends is unseen by the hashes (stage 2's
-outputs are still recomputed outside the jail on the restored weights, verify.py), and judgments sharing a holder at
-the same time can affect each other."""
+memory read-only, so the holder also writes a pristine CPU copy beside the handles file (never mounted in a jail);
+before and after each judgment the evaluator compares every tensor with it on the device (`restore`): a judgment that
+changed any weight is void and the weight is copied back. Judgments on one holder run one at a time (`exclusive`). A
+jail attaching over CUDA IPC needs the holder's IPC namespace (docker --ipc). Residual risk: a write undone before
+the judgment ends is unseen here (the timer fingerprints inputs between calls, kernels/timing.py, and stage 2's
+outputs are recomputed outside the jail on the restored weights, verify.py)."""
 from __future__ import annotations
 
-import hashlib
-import json
+import fcntl
+import os
 import pickle
+from contextlib import contextmanager
 from multiprocessing.reduction import ForkingPickler
 from pathlib import Path
 
@@ -20,20 +21,31 @@ import torch
 from torch.multiprocessing import reductions
 
 reductions.init_reductions()                     # torch's tensor reducers: a reference to shared memory, not its bytes
-CHUNK = 1 << 26                                  # bytes hashed per copy to the host
-
-
-def digest(t: torch.Tensor) -> str:
-    """blake2b of a tensor's bytes, copied to the host a chunk at a time."""
-    b = t.detach().reshape(-1).contiguous().view(torch.uint8)
-    h = hashlib.blake2b(digest_size=32)
-    for i in range(0, b.numel(), CHUNK):
-        h.update(b[i:i + CHUNK].cpu().numpy())
-    return h.hexdigest()
+CHUNK = 1 << 28                                  # bytes compared per copy of the pristine copy to the device
+SHM = Path("/dev/shm")
+_ATTACHED: set[int] = set()                      # data_ptr of every tensor attached in this process
 
 
 def _side(path: Path, kind: str) -> Path:
     return Path(path).with_name(f"{Path(path).name}.{kind}")
+
+
+def _trusted(path: Path) -> Path:
+    """`path`, refused under /dev/shm (a jail with the host's IPC namespace writes there) and unless it is owned by
+    this user (or root) and writable by no one else: it is unpickled outside the jail."""
+    p = Path(path).resolve()
+    if p.is_relative_to(SHM.resolve()) or p.is_relative_to(SHM):
+        raise ValueError(f"shared weights file {p} is under {SHM}, which a jail can write")
+    st = p.stat()
+    if st.st_uid not in (os.getuid(), 0) or st.st_mode & 0o022:
+        raise ValueError(f"shared weights file {p} is owned by uid {st.st_uid} with mode {oct(st.st_mode & 0o777)}: "
+                         "it must be this user's (or root's) and writable by no one else")
+    return p
+
+
+def _write(path: Path, data: bytes) -> None:
+    path.write_bytes(data)
+    path.chmod(0o644)
 
 
 class Holder:
@@ -44,41 +56,65 @@ class Holder:
         torch.multiprocessing.set_sharing_strategy("file_system")
         self.tensors = {k: (v if v.is_cuda else v.share_memory_()) for k, v in tensors.items() if v is not None}
         self.path = Path(path)
-        self.hashes = {k: digest(v) for k, v in self.tensors.items()}
-        _side(self.path, "hashes").write_text(json.dumps(self.hashes))
         torch.save({k: v.detach().cpu() for k, v in self.tensors.items()}, _side(self.path, "pristine"))
+        _side(self.path, "pristine").chmod(0o644)
         rest = {**{k: None for k, v in tensors.items() if v is None}, **(constants or {})}   # None: bf16 has no scale
-        _side(self.path, "constants").write_bytes(pickle.dumps(rest))
-        self.path.write_bytes(bytes(ForkingPickler.dumps({**self.tensors, **rest})))
+        _write(_side(self.path, "constants"), pickle.dumps(rest))
+        _write(self.path, bytes(ForkingPickler.dumps({**self.tensors, **rest})))
 
     def changed(self) -> list[str]:
         """The weights whose bytes differ from when they were shared (written by a judgment)."""
-        return [k for k, v in self.tensors.items() if digest(v) != self.hashes[k]]
+        clean = _pristine(self.path)
+        return [k for k, v in self.tensors.items() if not _equal(v, clean[k])]
 
 
 def attach(path: Path) -> dict[str, torch.Tensor]:
     """The holder's tensors, in this process, aliasing its memory (no copy)."""
     torch.multiprocessing.set_sharing_strategy("file_system")
-    return pickle.loads(Path(path).read_bytes())
+    held = pickle.loads(_trusted(path).read_bytes())
+    _ATTACHED.update(v.data_ptr() for v in held.values() if isinstance(v, torch.Tensor))
+    return held
+
+
+def is_shared_weight(t: torch.Tensor) -> bool:
+    """Whether `t` is a tensor attached from a holder in this process."""
+    return t.data_ptr() in _ATTACHED
 
 
 def constants(path: Path) -> dict:
     """The holder's non-tensor entries (its constants and None weights), read without attaching any tensor."""
-    return pickle.loads(_side(path, "constants").read_bytes())
+    return pickle.loads(_trusted(_side(path, "constants")).read_bytes())
+
+
+def _pristine(path: Path) -> dict:
+    return torch.load(_trusted(_side(path, "pristine")), weights_only=True, mmap=True)
+
+
+def _equal(t: torch.Tensor, clean: torch.Tensor) -> bool:
+    """`t`'s bytes against the pristine copy's, compared on t's device a chunk at a time."""
+    a, b = (x.detach().reshape(-1).contiguous().view(torch.uint8) for x in (t, clean))
+    return a.numel() == b.numel() and all(torch.equal(a[i:i + CHUNK], b[i:i + CHUNK].to(a.device))
+                                          for i in range(0, a.numel(), CHUNK))
 
 
 def restore(path: Path) -> list[str]:
-    """The held tensors whose hash changed since the holder shared them, each copied back from the pristine copy."""
-    want = json.loads(_side(path, "hashes").read_text())
-    held = attach(path)
-    bad = [k for k, h in want.items() if digest(held[k]) != h]
-    if bad:
-        clean = torch.load(_side(path, "pristine"), weights_only=True, mmap=True)
-        for k in bad:
-            held[k].copy_(clean[k])              # into the shared memory: the holder's tensor too
-        if any(held[k].is_cuda for k in bad):
-            torch.cuda.synchronize()
+    """The held tensors whose bytes differ from the pristine copy, each copied back from it."""
+    held, clean = attach(path), _pristine(path)
+    bad = [k for k, v in held.items() if isinstance(v, torch.Tensor) and not _equal(v, clean[k])]
+    for k in bad:
+        held[k].copy_(clean[k])                  # into the shared memory: the holder's tensor too
+    if any(held[k].is_cuda for k in bad):
+        torch.cuda.synchronize()
     return bad
+
+
+@contextmanager
+def exclusive(path: Path):
+    """Held around a judgment that attaches the holder: such judgments run one at a time, so a write is blamed on the
+    judgment that made it."""
+    with open(_side(path, "lock"), "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
 
 
 CHILD = """
@@ -112,12 +148,13 @@ def check(jailed: bool = True) -> dict:
     import tempfile
     d = Path(tempfile.mkdtemp(prefix="shared-weights-"))
     root = harness(Path(tempfile.mkdtemp(prefix="shared-weights-harness-")))
-    h = Holder({"a": torch.arange(1024, dtype=torch.float32, device="cuda")}, d / "w.pkl")
+    hd = Path(tempfile.mkdtemp(prefix="shared-weights-holder-"))       # outside the jail's writable tree
+    h = Holder({"a": torch.arange(1024, dtype=torch.float32, device="cuda")}, hd / "w.pkl")
     code = CHILD.format(root=str(root), path=str(h.path))
     (d / "child.py").write_text(code)
     if jailed:
         from lab.safety import grader
-        p = grader.jailed(d, [sys.executable, str(d / "child.py")], timeout_s=300, read=[root], ipc_host=True)
+        p = grader.jailed(d, [sys.executable, str(d / "child.py")], timeout_s=300, read=[root, hd], ipc_host=True)
     else:
         p = subprocess.run([sys.executable, str(d / "child.py")], capture_output=True, text=True, timeout=300)
     shutil.rmtree(root, ignore_errors=True)
@@ -126,5 +163,6 @@ def check(jailed: bool = True) -> dict:
 
 
 if __name__ == "__main__":
+    import json
     import sys
     print(json.dumps({"plain": check(False), "jailed": check("--plain" not in sys.argv)}, indent=1))

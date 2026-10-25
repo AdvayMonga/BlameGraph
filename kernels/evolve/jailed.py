@@ -49,21 +49,41 @@ def cuda_home() -> Path | None:
 BUILD_FILES = ("build.ninja", ".ninja_deps", ".ninja_log", "main.cpp", "cuda.cu", "lock")
 
 
+def _open(p: Path) -> None:
+    """Give the owner full access to dir `p` again (a program may have taken it away to keep its files)."""
+    if p.is_dir() and not p.is_symlink():
+        p.chmod(0o700)
+
+
+def _rm(p: Path) -> None:
+    """Remove `p` (a link is unlinked, never followed), every dir under it opened first."""
+    if p.is_symlink() or not p.is_dir():
+        p.unlink()
+        return
+    _open(p)
+    for root, dirs, _ in os.walk(p):             # top-down: a dir is listed after its parent opened it
+        for x in dirs:
+            _open(Path(root) / x)
+    shutil.rmtree(p)
+
+
 def _keep_builds_only(tree: Path) -> None:
     """After a judgment: in each extension's build dir keep torch's build files and its .so, nothing else, so no other
     file a program wrote outlives its judgment (e.g. answers kept for the next one)."""
     ext = tree / "torch_extensions"
     if not ext.is_dir() or ext.is_symlink():
         return
+    _open(ext)
     for d in ext.iterdir():
         if not d.is_dir() or d.is_symlink():
             d.unlink()
             continue
+        _open(d)
         for f in d.iterdir():
             keep = not f.is_symlink() and f.is_file() and (f.name in BUILD_FILES or f.suffix == ".o"
                                                             or f.name == f"{d.name}.so")
             if not keep:
-                shutil.rmtree(f) if f.is_dir() and not f.is_symlink() else f.unlink()
+                _rm(f)
 
 
 def _result(stdout: str, key: str) -> tuple[dict | None, str]:
@@ -92,13 +112,11 @@ def _eval_dir(source: str, toolkit: Path | None, purpose: str = "") -> tuple[Pat
     d = EVAL_DIRS / hashlib.sha256(f"{toolkit}\0{purpose}\0{source}".encode()).hexdigest()[:24]
     tree = d / "tree"
     tree.mkdir(parents=True, exist_ok=True)
+    _open(tree)
     for x in tree.iterdir():
         if x.name == "torch_extensions" and x.is_dir() and not x.is_symlink():
             continue
-        if x.is_dir() and not x.is_symlink():
-            shutil.rmtree(x)
-        else:
-            x.unlink()
+        _rm(x)
     shutil.rmtree(d / "harness", ignore_errors=True)
     return d, tree
 
@@ -126,6 +144,14 @@ def _engine_src(task) -> Path | None:
     return Path(next(iter(spec.submodule_search_locations))).parent if spec and spec.submodule_search_locations else None
 
 
+def _refuse_writable(holder: Path) -> None:
+    """A holder file is unpickled outside the jail: never one under a dir a jail writes (eval trees, jail tmp dirs)."""
+    p = holder.resolve()
+    for d in [EVAL_DIRS.resolve(), *Path(tempfile.gettempdir()).resolve().glob("jail-*")]:
+        if p.is_relative_to(d):
+            raise ValueError(f"shared weights file {p} is under {d}, which a jail writes")
+
+
 def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_S) -> dict:
     """core's result for `source` under `cfg`, from a jailed process; a crash or timeout scores 0 with its output.
     Stage 3 (ncu) profiles the smallest and the largest seen shape (by their first axis), each in its own jail:
@@ -137,8 +163,8 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
             a = judge_jailed({**cfg, "seen": [shape], "_ncu_one": True}, source, stage, timeout_s)["artifacts"]
             if "ncu_missing" in a:
                 return {"metrics": {"stage": stage}, "artifacts": a}
-            out.append({"shape": shape, **(json.loads(a["ncu"]) if "ncu" in a else
-                                           {"error": a.get("ncu_error", "")[-500:]})})
+            why = a.get("ncu_error") or a.get("shared_weights_changed") or a.get("error", "")    # a void's evidence too
+            out.append({"shape": shape, **(json.loads(a["ncu"]) if "ncu" in a else {"error": why[-500:]})})
         return {"metrics": {"stage": stage}, "artifacts": {"ncu": json.dumps({"shapes": out})}}
     if stage == QUICK_STAGE:                     # selection orders seen shapes by calls: the first is the most called
         one = json.dumps(list(cfg["seen"][0]))
@@ -146,6 +172,8 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
                           "ints": {k: v for k, v in (cfg.get("ints") or {}).items() if k == one}}, source, 2, timeout_s)
         return {**r, "metrics": {**r["metrics"], "stage": QUICK_STAGE}}
     fail = {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage}}
+    if cfg.get("shared_weights"):
+        _refuse_writable(Path(cfg["shared_weights"]))
     home = cuda_home()
     d, tree = _eval_dir(source, home, "gate" if cfg.get("heldout") else "")   # the gate never shares selection's dir
     key = secrets.token_hex(16)
@@ -186,11 +214,19 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
         read += [home] if home else []
         read += [Path(cfg[k]) for k in ("samples", "shared_weights") if cfg.get(k)]   # a region's captures, weights
         ipc = bool(cfg.get("shared_weights")) and stage != PRECHECK_STAGE     # CUDA IPC to the holder; no GPU there
-        with container.shm_cleared() if ipc else contextlib.nullcontext():
-            p = grader.jailed(tree, argv, timeout_s=timeout_s, env_extra=env, read=read, memory=MEMORY,
-                              **({"gpu": gpu} if gpu is not None else {}), **({"ipc_host": True} if ipc else {}))
+        sw, changed = cfg.get("shared_weights"), []
+        with shared_weights.exclusive(sw) if ipc else contextlib.nullcontext():   # one judgment per holder at a time
+            if ipc:
+                shared_weights.restore(sw)       # a write left by a judgment killed before its restore
+            try:
+                p = grader.jailed(tree, argv, timeout_s=timeout_s, env_extra=env, read=read, memory=MEMORY,
+                                  **({"gpu": gpu} if gpu is not None else {}), **({"ipc_host": True} if ipc else {}))
+            finally:
+                if ipc:
+                    container.clear_shm()
+                    changed = shared_weights.restore(sw)
         _keep_builds_only(tree)                  # the precheck's build is what stage 1 then imports
-        if ipc and (changed := shared_weights.restore(cfg["shared_weights"])):     # before verify reads them
+        if changed:                              # restored before verify reads them
             return {**fail, "artifacts": {"shared_weights_changed": f"the judgment wrote shared weights {changed}; "
                                                                     "void, and they were restored"}}
         if stage == PRECHECK_STAGE:

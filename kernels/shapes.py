@@ -11,6 +11,12 @@ from kernels.tasks import Task
 from lab import capture
 
 
+def _ours(task: Task, call: dict) -> bool:
+    """A captured call to the task's entry point (or its `capture_fn`: a region's calls)."""
+    fn = task.capture_fn or task.entry
+    return not fn or call["fn"] == fn
+
+
 def from_captures(task: Task, dirs: list[Path], equal: bool = False) -> Counter:
     """{shape: calls} over every capture dir, for calls to the task's entry point. `equal`: each dir's calls are
     scaled to the same total, so each capture's traffic (a scored regime) weighs the same (decided 2026-10-23)."""
@@ -18,7 +24,7 @@ def from_captures(task: Task, dirs: list[Path], equal: bool = False) -> Counter:
     for d in dirs:
         c: Counter = Counter()
         for call in capture.load(d):
-            if task.entry and call["fn"] != task.entry:
+            if not _ours(task, call):
                 continue
             s = task.shape_of(call)
             if s is not None:
@@ -46,7 +52,7 @@ def sources_from_captures(task: Task, dirs: list[Path]) -> dict:
     out: dict = {}
     for d in dirs:
         for call in capture.load(d):
-            if task.entry and call["fn"] != task.entry:
+            if not _ours(task, call):
                 continue
             s = task.shape_of(call)
             if s is not None:
@@ -61,10 +67,10 @@ def ints_from_captures(task: Task, dirs: list[Path]) -> dict:
     out: dict = {}
     for d in dirs:
         for call in capture.load(d):
-            if task.entry and call["fn"] != task.entry:
+            if not _ours(task, call):
                 continue
             s = task.shape_of(call)
-            vals = [a["values"] for a in call["args"] if "values" in a]
+            vals = [a["values"] for a in call.get("args") or () if "values" in a]   # region calls have none
             if s is not None and vals and json.dumps(list(s)) not in out:
                 out[json.dumps(list(s))] = vals
     return out

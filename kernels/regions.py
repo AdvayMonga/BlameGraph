@@ -9,7 +9,8 @@ the floating inputs, the truth a region's error budget is measured against (2x t
 bound is the bytes the region must move (its inputs and outputs; intermediates can stay on chip) at peak bandwidth,
 beside the bytes its stations move one by one. `functional()` gives an in-place writer (kv_append) a copy of the K/V
 pool, a copy the engine never makes, so its winner could not install as is: a region must end before kv_append or
-start after it (refused otherwise, for now)."""
+start after it (refused otherwise, for now). The checker clones every input, shared weights included, several times
+(the reference's fp32 copy, the baseline's, the before-copies), so a whole-step region does not fit in memory yet."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -232,7 +233,7 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
         s = _signature(call.get("reads") or {})
         return s if s in by_shape else None          # a shape with no saved sample (over the engine's cap) is skipped
     return task(fn, stations, first, last, make_ctx, shape_of, dtypes=dtypes, live=live(), watch=(ENGINE,),
-                entry=f"{ENGINE}:DECODE", seen_default=tuple(by_shape), constants=consts,
+                entry=f"{ENGINE}:DECODE", capture_fn=fn, seen_default=tuple(by_shape), constants=consts,
                 reference_stations=reference_stations(), heldout_axes=_heldout_axes(reads, ins) if calls else (),
                 edge_shapes=lambda shape: [])     # inputs come from captures only: no synthetic edge shapes
 

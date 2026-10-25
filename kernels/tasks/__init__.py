@@ -46,6 +46,8 @@ class Task:
     error_budget: float | None = None       # regions: a case's atol is at least this times the baseline's own error
     baseline_fn: Callable | None = None     # the baseline when it is not an engine entry point (a region's stations)
     watch: tuple[str, ...] = ()             # further modules the evaluator watches for patches (a region's stations)
+    capture_fn: str | None = None           # the captured calls' `fn` to read shapes from; None: `entry` (a region's
+                                            # calls are "region:FIRST:LAST")
     seen_default: tuple = field(default_factory=tuple)      # shapes to use with no capture (tests, toys)
     heldout_default: tuple = field(default_factory=tuple)
 

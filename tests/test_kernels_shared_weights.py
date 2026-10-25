@@ -1,6 +1,7 @@
 """Shared read-only weights (kernels/shared_weights.py), on the CPU's shared memory: another process attaches to the
-holder's tensors without copying, reads the same values, and a write it makes is caught by the hash; the jailed
-evaluator (kernels/evolve/jailed.py) voids a judgment that wrote one and restores it."""
+holder's tensors without copying, reads the same values, and a write it makes is caught against the pristine copy;
+the jailed evaluator (kernels/evolve/jailed.py) voids a judgment that wrote one, restores it on every exit path, and
+runs judgments on one holder one at a time."""
 from __future__ import annotations
 
 import sys
@@ -13,7 +14,9 @@ import subprocess  # noqa: E402
 
 import torch  # noqa: E402
 
-from kernels.shared_weights import Holder, attach, digest, harness, restore  # noqa: E402
+import pytest  # noqa: E402
+
+from kernels.shared_weights import Holder, attach, constants, harness, restore  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CHILD = """
@@ -46,13 +49,32 @@ def test_a_child_reads_the_holders_weights_and_a_write_is_caught_and_restored(tm
     assert restore(h.path) == ["b"] and h.changed() == [] and float(h.tensors["b"][0, 0]) == 1.0
 
 
-def test_the_digest_sees_order_tail_bytes_and_one_bit():
-    a = torch.tensor([1, 2, 3, 4, 5, 6, 7, 8, 9], dtype=torch.uint8)
-    b, c, d = a.clone(), a.clone(), a.clone()
-    b[[0, 1]] = b[[1, 0]]
-    c[-1] += 1
-    d[4] ^= 1
-    assert len({digest(a), digest(b), digest(c), digest(d)}) == 4 and digest(a) == digest(a.clone())
+def test_a_one_bit_write_is_caught():
+    from kernels.shared_weights import _equal
+    a = torch.arange(9, dtype=torch.uint8)
+    b = a.clone()
+    b[4] ^= 1
+    assert _equal(a, a.clone()) and not _equal(a, b)
+
+
+def test_files_others_can_write_or_under_dev_shm_are_never_unpickled(tmp_path):
+    from kernels.shared_weights import _trusted
+    h = holder(tmp_path)
+    for f in (h.path, h.path.with_name("w.pkl.constants"), h.path.with_name("w.pkl.pristine")):
+        f.chmod(0o666)
+        with pytest.raises(ValueError, match="writable by no one else"):
+            attach(h.path) if f == h.path else constants(h.path) if f.name.endswith("constants") else restore(h.path)
+        f.chmod(0o644)
+    assert constants(h.path) == {} and restore(h.path) == []
+    with pytest.raises(ValueError, match="/dev/shm"):
+        _trusted(Path("/dev/shm/w.pkl"))
+
+
+def test_poison_never_writes_a_shared_weight(tmp_path):
+    from kernels.check import _poison
+    w, x = attach(holder(tmp_path).path)["a"], torch.ones(3)
+    _poison((w, x))
+    assert torch.equal(w, torch.arange(12, dtype=torch.float32).view(3, 4)) and x.isnan().any()
 
 
 def test_the_check_mounts_only_this_module(tmp_path):
@@ -71,6 +93,8 @@ def fake_jail(monkeypatch, calls, result, write=None):
         calls.append({**kw, "cfg": json.loads((tree / "eval_config.json").read_text())})
         if write:
             attach(write)["a"][0, 0] += 1
+        if result is None:
+            raise RuntimeError("the jail died")
         key = (tree / ".result_key").read_text()
         return subprocess.CompletedProcess(argv, 0, json.dumps({**result, "result_key": key}) + "\n", "")
     monkeypatch.setattr(jailed.grader, "jailed", fake)
@@ -102,6 +126,67 @@ def test_a_judgment_that_writes_a_shared_weight_is_void_and_the_weight_restored(
     assert r["metrics"]["combined_score"] == 0.0 and r["metrics"]["correct"] == 0.0
     assert "['a']" in r["artifacts"]["shared_weights_changed"]
     assert h.changed() == [] and float(h.tensors["a"][0, 0]) == 0.0
+
+
+def test_a_judgment_that_dies_after_writing_still_restores_the_weight(tmp_path, monkeypatch):
+    h = holder(tmp_path)
+    jailed = fake_jail(monkeypatch, [], None, write=h.path)
+    with pytest.raises(RuntimeError, match="died"):
+        jailed.judge_jailed({"task": "toy_rmsnorm", "seen": [[4, 64]], "shared_weights": str(h.path)}, "x = 1\n", 1)
+    assert h.changed() == []
+
+
+def test_an_ncu_run_that_writes_a_weight_keeps_the_evidence(tmp_path, monkeypatch):
+    h = holder(tmp_path)
+    jailed = fake_jail(monkeypatch, [], {"metrics": {"stage": 3}, "artifacts": {}}, write=h.path)
+    monkeypatch.setattr(jailed.shutil, "which", lambda name: "/bin/sh")
+    r = jailed.judge_jailed({"task": "toy_rmsnorm", "seen": [[4, 64]], "shared_weights": str(h.path)}, "x = 1\n",
+                            jailed.NCU_STAGE)
+    assert "wrote shared weights ['a']" in json.loads(r["artifacts"]["ncu"])["shapes"][0]["error"]
+
+
+def test_judgments_on_one_holder_run_one_at_a_time(tmp_path, monkeypatch):
+    import threading
+    import time
+    h = holder(tmp_path)
+    spans = []
+    jailed = fake_jail(monkeypatch, [], {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": 1},
+                                         "artifacts": {}})
+    inner = jailed.grader.jailed
+
+    def slow(tree, argv, **kw):
+        t0 = time.monotonic()
+        time.sleep(0.3)
+        spans.append((t0, time.monotonic()))
+        return inner(tree, argv, **kw)
+    monkeypatch.setattr(jailed.grader, "jailed", slow)
+    cfg = {"task": "toy_rmsnorm", "seen": [[4, 64]], "shared_weights": str(h.path)}
+    ts = [threading.Thread(target=jailed.judge_jailed, args=(cfg, f"x = {i}\n", 1)) for i in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    (a0, a1), (b0, b1) = sorted(spans)
+    assert len(spans) == 2 and b0 >= a1
+
+
+def test_a_holder_under_a_dir_the_jail_writes_is_refused(tmp_path, monkeypatch):
+    from kernels.evolve import jailed
+    monkeypatch.setattr(jailed, "EVAL_DIRS", tmp_path)
+    h = holder(tmp_path)
+    with pytest.raises(ValueError, match="which a jail writes"):
+        jailed.judge_jailed({"task": "toy_rmsnorm", "seen": [[4, 64]], "shared_weights": str(h.path)}, "x = 1\n", 1)
+
+
+def test_a_dir_a_program_made_unwritable_is_still_removed(tmp_path):
+    from kernels.evolve import jailed
+    d = tmp_path / "torch_extensions" / "ext"
+    (d / "keep").mkdir(parents=True)
+    (d / "keep" / "answers").write_text("42")
+    (d / "keep").chmod(0o500)
+    d.chmod(0o500)
+    jailed._keep_builds_only(tmp_path)
+    assert list(d.iterdir()) == []
 
 
 if __name__ == "__main__":
