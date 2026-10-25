@@ -152,7 +152,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--patience", type=int, default=16, help="stop after this many judged programs with no new best")
     ap.add_argument("--beam", type=int, default=4, help="changes the judge names per expansion, each written and judged")
     ap.add_argument("--max-repairs", type=int, default=3, help="repairs of a failed child, chained")
-    ap.add_argument("--funnel", action="store_true", help="each expansion is one funnel round (kernels/search/funnel.py)")
+    ap.add_argument("--funnel", action=argparse.BooleanOptionalAction, default=True,
+                    help="each expansion is one funnel round (kernels/search/funnel.py; the default since it won the "
+                         "2026-10-24 A/B); --no-funnel: the beam (--beam changes per expansion). Off without a judge")
     ap.add_argument("--gpu-s", type=float, help="stop once judging has taken this many seconds (the GPU host's time)")
     ap.add_argument("--wide-model", default="claude-sonnet-5-5", help="the funnel's wide coder")
     ap.add_argument("--cheap-model", default="claude-haiku-5-5", help="merges duplicate hypotheses")
@@ -173,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
     judge = cascade(evaluator.judge_stage, counters=a.ncu)
     system = (system_message(task) + "\n\n" + setting(task, sets, a.device, tol)
               + ("\n\n" + TUNE_FACT.format(points=a.tune_points) if a.tune_points else ""))
-    fun = _funnel(a, task, review) if a.funnel else None
+    fun = _funnel(a, task, review) if a.funnel and review is not None else None
     tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.usd, a.seed,
                         review=review, stop_pct=a.stop_pct or None, patience=a.patience or None,
                         beam=a.beam, max_repairs=a.max_repairs, uct_c=a.uct_c, funnel=fun, gpu_s=a.gpu_s,
