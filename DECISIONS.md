@@ -5,6 +5,14 @@ a reversed decision gets a new entry that names the old one. Change any of these
 
 
 
+## 2026-10-25 — The funnel is kernels.search's default; the beam becomes an arm
+`kernels.search` runs one funnel round per expansion by default (`--no-funnel`: the beam, A/B arm `search-beam`);
+the `kernel_search` tool gets it through `kernels/pipeline.py`. Why: it won the A/B the 2026-10-23 decision set as
+its bar. On moe_gemm_fp8 (same shapes, start, evaluator and 2,700 GPU-s cap, one run per arm) it reached 1.161x on
+seen shapes and 1.284x held-out against the beam's 1.026x and 1.096x, using 1,188 GPU-s against 1,701 and $14.25
+against $12.32; both passed the held-out gate. The user called it the clear winner; a second task or seed has not been
+run. Replaces the beam as the default (2026-10-20).
+
 ## 2026-10-23 — The agent calls the kernel layer as a tool, blocking for now, and gets a patch
 `kernel_search` (task, budget_usd, with a kernels-layer hypothesis and its expect) runs the kernel layer end to end:
 capture under real traffic, search from the agent's own version of the kernel, the held-out gate, and a patch of the
