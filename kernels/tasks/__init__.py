@@ -46,6 +46,7 @@ class Task:
     error_budget: float | None = None       # regions: a case's atol is at least this times the baseline's own error
     baseline_fn: Callable | None = None     # the baseline when it is not an engine entry point (a region's stations)
     watch: tuple[str, ...] = ()             # further modules the evaluator watches for patches (a region's stations)
+    capture_env: tuple = ()                 # (name, value) launch env its calls need to occur (e.g. fp8 KV pools)
     capture_fn: str | None = None           # the captured calls' `fn` to read shapes from; None: `entry` (a region's
                                             # calls are "region:FIRST:LAST")
     seen_default: tuple = field(default_factory=tuple)      # shapes to use with no capture (tests, toys)
@@ -102,7 +103,7 @@ def load(name: str, **region) -> Task:
     return importlib.import_module(f"kernels.tasks.{name}").TASK
 
 
-TASKS = ("toy_rmsnorm", "paged_decode", "moe_gemm", "moe_gemm_fp8", "moe_gemm_scatter_fp8", "rmsnorm", "add_rmsnorm",
+TASKS = ("toy_rmsnorm", "paged_decode", "paged_decode_fp8", "moe_gemm", "moe_gemm_fp8", "moe_gemm_scatter_fp8", "rmsnorm", "add_rmsnorm",
          "rmsnorm_rope", "silu_mul", "topk_softmax")
 
 

@@ -56,8 +56,9 @@ def make_real(shape, dtype, device, g, ints, context_window=None):
 
 
 def shape_of(call):
+    """Calls on pools in the model's dtype (fp8 pools are `paged_decode_fp8`'s)."""
     a = call["args"]
-    if len(a) < 5 or "shape" not in a[0] or "values" not in a[4]:
+    if len(a) < 5 or "shape" not in a[0] or "values" not in a[4] or a[1].get("dtype") == "float8_e4m3fn":
         return None
     N, Hq, D = a[0]["shape"]
     _, Hkv, bs, _ = a[1]["shape"]

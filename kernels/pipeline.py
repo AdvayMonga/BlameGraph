@@ -28,6 +28,17 @@ def specs(regimes: tuple[str, ...] = ()) -> tuple[tuple[str, int], ...]:
     return got or CAPTURE_SPECS
 
 
+def capture_env(task) -> dict:
+    """The launch env a capture of `task` runs under (the target's [kernels] capture_env, then the task's own): part
+    of what a capture depends on."""
+    try:
+        from lab import target
+        env = dict((target.load().raw.get("kernels") or {}).get("capture_env") or {})
+    except Exception:                            # noqa: BLE001  no target: the task's own only
+        env = {}
+    return {**env, **dict(task.capture_env)}
+
+
 def tree_key(task, tree: Path, spec: tuple) -> str:
     """What a capture depends on: every engine file but the task's own module, and the traffic. Equal keys reuse."""
     import hashlib
@@ -58,10 +69,12 @@ def captures(task, tree: Path, profile: Callable[[Path, dict], Path | None], reg
     already made for the same engine outside the task's module and the same traffic is reused (`cache`: a JSON map)."""
     known = json.loads(cache.read_text()) if cache and cache.exists() else {}
     out = []
+    env = capture_env(task)
     for cls, n in specs(regimes):
-        key = tree_key(task, tree, (task.name, cls, n))
+        key = tree_key(task, tree, (task.name, cls, n, sorted(env.items())))
         bundle = Path(known[key]) if key in known and Path(known[key]).is_dir() else \
-            profile(tree, {"capture": [task.entry], "corpus_class": cls, "requests": n})
+            profile(tree, {"capture": [task.entry], "corpus_class": cls, "requests": n,
+                           **({"capture_task": task.name} if task.capture_env else {})})
         if bundle is not None and (Path(bundle) / "captures").is_dir():
             out.append(Path(bundle) / "captures")
             known[key] = str(bundle)

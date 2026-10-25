@@ -221,7 +221,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
 (`kernels.tasks.randn`: generating them on the CPU took seconds per check case at real shapes).
   `kernels/tasks/` (a kernel task: the engine entry point it replaces = the baseline, a reference, an input builder,
   how to read a shape from a captured call, the held-out axes, the layouts its callers pass, bytes and FLOPs per call
-  for the roofline; `toy_rmsnorm` for CPU, `paged_decode` = the example engine's `paged_decode_attention` (block tables as wide as its graphed decode passes them, from the target's CONTEXT_WINDOW: `Task.options`, `tasks.from_config`), `moe_gemm` = its MoE grouped
+  for the roofline; `toy_rmsnorm` for CPU, `paged_decode` = the example engine's `paged_decode_attention` (block tables as wide as its graphed decode passes them, from the target's CONTEXT_WINDOW: `Task.options`, `tasks.from_config`), `paged_decode_fp8` = the same on fp8 KV pools (KV_CACHE_DTYPE=fp8, unit scale;
+  its captures run with that env, `Task.capture_env`), `moe_gemm` = its MoE grouped
   GEMM `moe_kernel.moe_gemm`, both projections, real routing from captures, bf16 weights; `moe_gemm_fp8` = the same with fp8 e4m3 weights and per-channel
   scales, as the engine runs it by default since inference-server #122; `moe_gemm_scatter_fp8` = its down projection
   `moe_kernel.moe_gemm_scatter` (weighted rows added into an fp32 output); each reads only its own calls by weight dtype; `rmsnorm`, `add_rmsnorm`, `rmsnorm_rope`,
