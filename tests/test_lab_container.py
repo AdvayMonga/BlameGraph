@@ -224,6 +224,29 @@ def test_the_workbench_is_root_with_writable_system_dirs_and_reaches_the_host_ga
     assert out.stdout.strip() == ("0" if os.getuid() == 0 else str(os.getuid()))
 
 
+def test_the_host_ipc_namespace_only_when_asked_and_only_for_a_root_lab(docker_named, tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match="root"):
+        container.argv("n", tmp_path, ["true"], {}, [tmp_path], [], sys.executable, ipc_host=True)
+    monkeypatch.setattr(container.os, "getuid", lambda: 0)
+    a = container.argv("n", tmp_path, ["true"], {}, [tmp_path], [], sys.executable)
+    b = container.argv("n", tmp_path, ["true"], {}, [tmp_path], [], sys.executable, ipc_host=True)
+    assert "--ipc" not in a and b[b.index("--ipc") + 1] == "host"
+
+
+def test_every_shm_entry_of_the_jails_user_is_removed_by_a_root_lab_only(tmp_path, monkeypatch):
+    (tmp_path / "torch_123_answers").write_text("cached outputs")
+    (tmp_path / "dir").mkdir()
+    container.clear_shm(tmp_path)                            # not root: the jail would share the lab's uid
+    assert len(list(tmp_path.iterdir())) == 2
+    monkeypatch.setattr(container.os, "getuid", lambda: 0)
+    monkeypatch.setattr(container, "JAIL_UID", os.getuid() + 1)
+    container.clear_shm(tmp_path)                            # entries of another user stay
+    assert len(list(tmp_path.iterdir())) == 2
+    monkeypatch.setattr(container, "JAIL_UID", os.stat(tmp_path / "dir").st_uid)
+    container.clear_shm(tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_the_toolkit_is_also_mounted_at_usr_local_cuda_and_cuda_home_is_set(tmp_path, monkeypatch):
     """A toolkit that /usr/local/cuda links to is mounted at both paths, and jails get CUDA_HOME, so JIT builds
     (the engine's megakernel, flashinfer) find nvcc inside."""

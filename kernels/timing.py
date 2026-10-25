@@ -50,6 +50,27 @@ def _one(fn, inputs, device, flush, spin=False) -> tuple[float, object]:
     return (_perf_counter() - t0) * 1e3, out
 
 
+def _fingerprint(inputs) -> torch.Tensor:
+    """Every input tensor's bytes as order-sensitive sums of int words, computed on its device (cheap, no copy to the
+    host): taken between calls, never inside the timed window."""
+    out = []
+    for t in inputs:
+        if not isinstance(t, torch.Tensor):
+            continue
+        b = t.detach().reshape(-1).contiguous().view(torch.uint8)
+        n = b.numel() - b.numel() % 8
+        w = b[:n].view(torch.int64)
+        pos = torch.arange(1, w.numel() + 1, device=t.device, dtype=torch.int64)
+        out.append(torch.stack([w.sum(), (w * pos).sum(), b[n:].to(torch.int64).sum()]))     # overflow wraps
+    return torch.stack(out).cpu() if out else torch.zeros(0, 3, dtype=torch.int64)
+
+
+def _unchanged(inputs, before: torch.Tensor, who: str, buffer: int) -> None:
+    if not torch.equal(_fingerprint(inputs), before):
+        raise ValueError(f"an input of timed buffer {buffer} changed during {who}'s call: a call must leave its inputs "
+                         "as they were")
+
+
 def _stats(times: list[float]) -> dict:
     p25, med, p75 = _quantiles(times, n=4)
     return {"median_ms": med, "iqr_ms": p75 - p25, "p25_ms": p25, "p75_ms": p75}
@@ -99,7 +120,8 @@ def graphed(fn, bufs: list, device) -> list:
 def time_pair(a, b, make_inputs, shape, dtype, device="cpu", iters=50, warmup=5, n_buffers=4, seed=0,
               graphs=False) -> dict:
     """a and b timed in pairs on the same inputs, in a seeded random order per pair, so drift (clocks, heat, other
-    load) lands on both: each one's stats plus the per-pair ratio b/a (above 1: a is faster). graphs=True (CUDA):
+    load) lands on both: each one's stats plus the per-pair ratio b/a (above 1: a is faster). Raises if a call changes
+    any input (fingerprinted between calls). graphs=True (CUDA):
     each is captured once per input set and timed as a graph replay, so host launch overhead is not counted. Returns a's
     outputs of its timed calls too: the caller checks them, since a kernel may behave differently when timed."""
     bufs = [make_inputs(shape, dtype, device, _gen(seed + i)) for i in range(n_buffers)]
@@ -110,8 +132,11 @@ def time_pair(a, b, make_inputs, shape, dtype, device="cpu", iters=50, warmup=5,
         inputs = bufs[i % n_buffers]
         fa, fb = (ga[i % n_buffers], gb[i % n_buffers]) if graphs else (a, b)
         first_a = order.random() < 0.5
+        before = _fingerprint(inputs)            # outside the window: a write meant to slow the other call is caught
         x, ox = _one(fa if first_a else fb, inputs, device, flush, spin=graphs)
+        _unchanged(inputs, before, "the candidate" if first_a else "the baseline", i % n_buffers)
         y, oy = _one(fb if first_a else fa, inputs, device, flush, spin=graphs)
+        _unchanged(inputs, before, "the baseline" if first_a else "the candidate", i % n_buffers)
         outs[i % n_buffers] = ox if first_a else oy
         if i >= warmup:
             ta.append(x if first_a else y)

@@ -47,6 +47,8 @@ class Task:
     baseline_fn: Callable | None = None     # the baseline when it is not an engine entry point (a region's stations)
     watch: tuple[str, ...] = ()             # further modules the evaluator watches for patches (a region's stations)
     capture_env: tuple = ()                 # (name, value) launch env its calls need to occur (e.g. fp8 KV pools)
+    capture_fn: str | None = None           # the captured calls' `fn` to read shapes from; None: `entry` (a region's
+                                            # calls are "region:FIRST:LAST")
     seen_default: tuple = field(default_factory=tuple)      # shapes to use with no capture (tests, toys)
     heldout_default: tuple = field(default_factory=tuple)
 
@@ -91,7 +93,13 @@ def randn(size, g, device, dtype, scale: float = 1.0) -> torch.Tensor:
     return (torch.randn(size, generator=d, device=device) * scale).to(dtype)
 
 
-def load(name: str) -> Task:
+def load(name: str, **region) -> Task:
+    """A named task, or a region of the engine's decode stations (`region:FIRST:LAST`; `region` may give its
+    captured `samples` dir and its `shared_weights` holder file)."""
+    if name.startswith("region:"):
+        from kernels.regions import from_engine
+        _, first, last = name.split(":")
+        return from_engine(first, last, **region)
     return importlib.import_module(f"kernels.tasks.{name}").TASK
 
 
@@ -101,7 +109,9 @@ TASKS = ("toy_rmsnorm", "paged_decode", "paged_decode_fp8", "moe_gemm", "moe_gem
 
 def from_config(cfg: dict) -> Task:
     """The task an evaluation config names, with its deployment options and captured ints: what every judge uses."""
-    return load(cfg["task"]).with_options(cfg.get("options")).with_ints(cfg.get("ints"))
+    region = {k: cfg[k] for k in ("samples", "shared_weights") if cfg.get(k)} \
+        if cfg["task"].startswith("region:") else {}
+    return load(cfg["task"], **region).with_options(cfg.get("options")).with_ints(cfg.get("ints"))
 
 
 def options_from_target(task: Task) -> dict:
