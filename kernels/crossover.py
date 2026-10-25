@@ -2,7 +2,8 @@
 size and context length, instead of MEGAKERNEL_MAX_ROWS). One `lab.profile` run per path, prompt length and batch
 size, its requests decoding together: the engine's timeline records each scheduler step's wall time and its batch
 (`step` events); only steps at the run's own batch size count (a run's tail, as requests finish, has a few).
-The megakernel path is forced for every batch the megakernel takes (MEGAKERNEL_MAX_ROWS=16); the other run turns it off
+Each run has the target's launch env (as served: its CONTEXT_WINDOW sizes the decode graphs, and a row past it decodes
+eagerly), then the path's: the megakernel forced for every batch it takes (MEGAKERNEL_MAX_ROWS=16), or off
 (MEGAKERNEL=0). Run on the GPU host from this repo with the engine's venv:
 
   python -m kernels.crossover --out DIR [--batches 1,2,4,8] [--prompt-lens 512,4096,16384] [--max-tokens 256]
@@ -60,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-tokens", type=int, default=256)
     a = ap.parse_args(argv)
     out = Path(a.out)
+    from lab import target
+    served = target.load().engine.env
     runs = {}
     for plen in (int(x) for x in a.prompt_lens.split(",")):
         for b in (int(x) for x in a.batches.split(",")):
@@ -69,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
                     p = subprocess.run([sys.executable, "-m", "lab.profile", "--synthetic", "--prompt-len", str(plen),
                                         "--requests", str(b), "--max-tokens", str(a.max_tokens), "--warmup", "0",
                                         "--profiler", "cuda-range", "--out", str(d)],
-                                       env={**os.environ, **env}, capture_output=True, text=True)
+                                       env={**os.environ, **served, **env}, capture_output=True, text=True)
                     (out / f"{path}-{plen}-b{b}.log").write_text(p.stdout + p.stderr)
                     if p.returncode != 0:
                         print(f"{path} {plen} b{b}: exited {p.returncode}: {p.stderr[-500:]}", file=sys.stderr)
