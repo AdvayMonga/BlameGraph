@@ -23,6 +23,8 @@ GPU_TOOLS = frozenset({"profile", "trace", "kernel", "hostprof", "bench", "equiv
                        "kernel_search"})
 KERNEL_SEARCH_GPU_MIN = 3.0          # GPU minutes per judged program, for sizing a search to its budget (an estimate)
 KERNEL_SEARCH_MIN_EVALS = 8          # fewer judged programs than this is not a search
+KERNEL_SEARCH_ROUND_USD = 15.0       # model spend of one funnel round (measured $14.25 on 2026-10-24; a $6 share on
+                                     # 2026-10-25 ended the round before any program was timed)
 
 
 def _drop_links(root: Path) -> None:
@@ -219,11 +221,13 @@ class Toolbox(EvalTools, ProfTools):
         if not os.environ.get("ANTHROPIC_API_KEY"):
             raise ValueError("kernel_search needs ANTHROPIC_API_KEY on this host (its search calls the models)")
         rate = gpu_rate()[0]
-        model_usd = usd / 2 if rate else usd
+        model_usd = max(usd / 2, KERNEL_SEARCH_ROUND_USD) if rate else usd    # the models get one round at least
         evals = int((usd - model_usd) / (rate * KERNEL_SEARCH_GPU_MIN / 60)) if rate else 30
         if evals < KERNEL_SEARCH_MIN_EVALS:
-            raise ValueError(f"`budget_usd` {usd} covers {evals} judged programs at ${rate:g}/GPU-hour; a search needs at "
-                             f"least {KERNEL_SEARCH_MIN_EVALS} (~${KERNEL_SEARCH_MIN_EVALS * rate * KERNEL_SEARCH_GPU_MIN / 30:.2f})")
+            least = KERNEL_SEARCH_ROUND_USD + KERNEL_SEARCH_MIN_EVALS * rate * KERNEL_SEARCH_GPU_MIN / 60
+            raise ValueError(f"`budget_usd` {usd} leaves ${usd - model_usd:.2f} of GPU time after one round of model calls "
+                             f"(${KERNEL_SEARCH_ROUND_USD:g}): {evals} judged programs at ${rate:g}/GPU-hour; a search needs "
+                             f"at least {KERNEL_SEARCH_MIN_EVALS} (~${least:.2f} in all)")
         evals = min(60, evals)
         task = load(args["task"])
         snap = self._audited("kernel_search", args)
@@ -518,7 +522,9 @@ class Toolbox(EvalTools, ProfTools):
                      "the shapes seen / held-out, searches from your workspace's version of the kernel (kernels.search), "
                      "and gates the winner on the held-out shapes. Returns the winner's seen-shape speedup, the gate's "
                      "verdict and held-out speedup, the `kernels` ledger record of the search, and, if the gate passed, "
-                     "the path of a patch of the engine module in your workspace (not applied). Blocks until done."
+                     "the path of a patch of the engine module in your workspace (not applied). Blocks until done. "
+                     f"`budget_usd` covers one round of the search's model calls (${KERNEL_SEARCH_ROUND_USD:g}) plus GPU "
+                     f"time at {KERNEL_SEARCH_GPU_MIN:g} min per judged program, {KERNEL_SEARCH_MIN_EVALS} programs at least."
                      + gpu("hours, sized to `budget_usd`"),
                      {"type": "object", "required": ["task", "budget_usd"],
                       "properties": {"task": {"type": "string"}, "budget_usd": {"type": "number"}}},
