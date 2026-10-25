@@ -11,7 +11,8 @@
 
 Everything except single_stream and cold_start is checked against the conversational limits (TTFT 2 s, TPOT 100 ms
 at p99); goodput is the highest load at which >= 99% of requests meet both. Loads are found with short probes, then
-confirmed for the tier's full duration.
+confirmed for the tier's full duration. With measured reference lengths in the corpus every answer has a fixed
+length (`regimes.workload.to_request`).
 """
 from __future__ import annotations
 
@@ -385,7 +386,10 @@ FACTS = {
 MEASUREMENT = ("TTFT runs from a request's scheduled send to its initial real token; TPOT = (E2E - TTFT) / (n - 1), "
                "tokens recounted with the reference tokenizer. A request is good when it meets both the TTFT and the TPOT "
                "limit; goodput is the highest load at which at least 99% of requests are good. A run is invalid on any "
-               "silent drop, truncation or crash, or when the client's own send lag p99 exceeds 10 ms.")
+               "silent drop, truncation or crash, or when the client's own send lag p99 exceeds 10 ms. When the corpus "
+               "carries the reference's answer lengths, every request is sent with ignore_eos at a fixed length (the "
+               "regime's max_tokens where it names one, else the reference's own answer to that request) and special "
+               "tokens kept in the text; an answer that ends before that length is a truncation.")
 
 REGIMES = {"single_stream": single_stream, "saturated": saturated, "bursty": bursty,
            "long_prompt_short_output": long_prompt_short_output, "short_prompt_long_output": short_prompt_long_output,

@@ -100,6 +100,7 @@ def synthesize(reqs: list[TraceRequest], n_sessions: int, seed, tag: str) -> lis
             out.append(TraceRequest(arrival_s=round(t + r.arrival_s - src[0].arrival_s, 6), session_id=f"{tag}-{k}",
                                     turn_index=r.turn_index, prompt="\n\n".join(m["content"] for m in msgs),
                                     max_tokens=r.max_tokens, sampling=dict(r.sampling),
+                                    expected_output_tokens=r.expected_output_tokens,
                                     messages=msgs if r.messages else None, build_prompt_tokens=tokens, regime=r.regime))
     return sorted(out, key=lambda r: (r.arrival_s, r.session_id, r.turn_index))
 

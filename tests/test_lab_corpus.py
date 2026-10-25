@@ -30,6 +30,7 @@ from lab.corpus import (
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "corpus"))
 import build_corpus as bc  # noqa: E402
+import lengths  # noqa: E402
 
 REGIMES = ("cold_start", "steady_interactive", "long_context", "spike")
 MIXED_CLASSES = ("mixed_1", "mixed_2", "mixed_3")
@@ -88,10 +89,14 @@ def test_committed_corpus_verifies_and_every_class_is_non_empty():
 @pytest.mark.needs_host
 def test_committed_corpus_is_what_the_builder_produces(tmp_path):
     """Provenance: the data on disk came from build_corpus.py at the secret seed (corpus/.seed) from the
-    pinned raw inputs, byte for byte. A changed input or class table is a new version."""
+    pinned raw inputs, byte for byte, plus the measured reference lengths (corpus/lengths.py) when they are set.
+    A changed input or class table is a new version."""
     if not (CORPUS_DIR / ".seed").exists():
         pytest.skip("no corpus/.seed: pull it with `python -m store pull --corpus`")
     rebuilt = bc.build_corpus(tmp_path, int((CORPUS_DIR / ".seed").read_text()))
+    measured = lengths.read(CORPUS_DIR)
+    if any(n is not None for ns in measured.values() for n in ns):
+        rebuilt = lengths.apply(tmp_path, measured)
     committed = load_manifest(CORPUS_DIR)
     assert rebuilt.files == committed.files
     assert rebuilt.corpus_version == committed.corpus_version
@@ -162,11 +167,13 @@ def test_no_committed_corpus_file_contains_a_credential():
 
 @pytest.mark.needs_host
 @needs_heldout
-def test_no_oracle_is_set():
-    for name in CLASSES:
-        for r in _all(name):
-            assert r.sampling["temperature"] == 0.0, "temperature 0 for equivalence"
-            assert r.expected_output_hash is None and r.expected_output_tokens is None
+def test_no_oracle_is_set_and_lengths_are_all_or_nothing():
+    every = [r for name in CLASSES for r in _all(name)]
+    for r in every:
+        assert r.sampling["temperature"] == 0.0, "temperature 0 for equivalence"
+        assert r.expected_output_hash is None
+        assert r.expected_output_tokens is None or 1 <= r.expected_output_tokens <= r.max_tokens
+    assert len({r.expected_output_tokens is None for r in every}) == 1, "corpus/lengths.py measures every record"
 
 
 @pytest.mark.needs_host
@@ -194,6 +201,34 @@ def test_multi_turn_requests_carry_real_assistant_turns():
 
 
 # ---------------------------------------------------------------- the rules
+
+def test_lengths_are_written_into_every_trace_as_a_new_version(tmp_path):
+    m = _mini_corpus(tmp_path)
+    got = lengths.read(tmp_path)
+    assert got and all(n is None for ns in got.values() for n in ns)
+    want = {rel: [7 + i for i in range(len(ns))] for rel, ns in got.items()}
+    new = lengths.apply(tmp_path, want)
+    assert new.corpus_version != m.corpus_version
+    assert load_manifest(tmp_path).corpus_version == new.corpus_version and lengths.read(tmp_path) == want
+    assert lengths.apply(tmp_path, want).notes == new.notes          # the note is added once
+    with pytest.raises(ValueError, match="0 lengths for 1 records"):
+        lengths.apply(tmp_path, {rel: [] for rel in got})
+
+
+def test_lengths_are_the_references_completion_tokens(tmp_path, monkeypatch):
+    from regimes import client
+    _mini_corpus(tmp_path)
+    sent = []
+
+    def fake_send(url, model, req, scheduled, clock, chat_kwargs=None, **k):
+        sent.append((url, model, req, chat_kwargs))
+        return client.Row(req.id, "ok", 0.0, 0.0, n_tokens=len(req.messages[-1]["content"]))
+
+    monkeypatch.setattr(client, "send", fake_send)
+    out = lengths.measure("http://ref", "m", {"enable_thinking": False}, tmp_path, concurrency=2)
+    assert out == {rel: [len(r.prompt) for r in read_trace(tmp_path / rel)] for rel in out}
+    assert len(sent) == 4 and all(u == "http://ref" and kw == {"enable_thinking": False} and not r.ignore_eos
+                                  and r.max_tokens == 64 for u, _, r, kw in sent)
 
 def test_tampered_trace_is_refused(tmp_path):
     _mini_corpus(tmp_path)

@@ -1,6 +1,7 @@
 """Workloads: the corpus (`corpus/`, real BurstGPT timing + WildChat text; built by corpus/build_corpus.py) and seeded
 schedules built from it. Trace format (corpus/README.md): one request per line with `arrival_s`, `session_id`,
-`turn_index`, `prompt`, `max_tokens`, `build_prompt_tokens`, and `messages` on multi-turn requests.
+`turn_index`, `prompt`, `max_tokens`, `build_prompt_tokens`, `messages` on multi-turn requests, and
+`expected_output_tokens` (the reference's answer length) once measured.
 """
 from __future__ import annotations
 
@@ -52,13 +53,16 @@ def messages(rec: dict) -> list[dict]:
 
 def to_request(rec: dict, at_s: float = 0.0, max_tokens: int | None = None, suffix: str = "", system: str | None = None,
                rid: str | None = None) -> Request:
+    """A record with a measured reference length is sent at a fixed length: the regime's `max_tokens` when it sets
+    one, else that length, with ignore_eos."""
     msgs = [dict(m) for m in messages(rec)]
     if suffix:
         msgs[-1]["content"] = msgs[-1]["content"] + suffix
     if system:
         msgs = [{"role": "system", "content": system}] + msgs
-    return Request(rid or rec["id"], msgs, max_tokens or rec.get("max_tokens") or 2048, at_s,
-                   rec.get("session_id"), rec.get("turn_index"))
+    fixed = rec.get("expected_output_tokens")
+    return Request(rid or rec["id"], msgs, max_tokens or fixed or rec.get("max_tokens") or 2048, at_s,
+                   rec.get("session_id"), rec.get("turn_index"), ignore_eos=fixed is not None)
 
 
 def synthetic(n: int, words: int = 60, seed: int = 0, prefix: str = "syn") -> list[dict]:
