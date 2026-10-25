@@ -10,7 +10,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import json  # noqa: E402
 
-import pytest  # noqa: E402
 import torch  # noqa: E402
 
 FAKE = """
@@ -127,12 +126,14 @@ def test_region_names_go_through_the_task_loader(tmp_path, monkeypatch):
 def test_a_config_read_with_no_holder_is_refused_clearly(tmp_path, monkeypatch):
     regions = engine(tmp_path, monkeypatch)
     caps = captures(tmp_path, [(4, 64, 0, True)])
+    import pytest
     with pytest.raises(ValueError, match=r"\['cfg', 'w.mm', 'w.mm_scale'\].*shared_weights"):
         regions.from_engine("norm", "add", str(caps))
 
 
 def test_a_region_writing_in_place_is_refused(tmp_path, monkeypatch):
     regions = engine(tmp_path, monkeypatch)
+    import pytest
     with pytest.raises(ValueError, match="in place"):
         regions.from_engine("add", "kv")
 
