@@ -130,6 +130,9 @@ def test_captures_follow_the_scored_regimes_weigh_each_the_same_and_are_reused(t
     t = dataclasses.replace(task(), shape_of=lambda call: call["s"])
     assert shapes.from_captures(t, [Path("a"), Path("b")]) == {(8,): 9, (64,): 1}
     assert shapes.from_captures(t, [Path("a"), Path("b")], equal=True) == {(8,): 9, (64,): 9}
+    k1 = pipeline.tree_key(task(), tree, ("t", "mixed_1", 256, sorted(pipeline.capture_env(task()).items())))
+    t8 = dataclasses.replace(task(), capture_env=(("KV", "fp8"),))
+    assert k1 != pipeline.tree_key(t8, tree, ("t", "mixed_1", 256, sorted(pipeline.capture_env(t8).items())))
     asked = []
     pipeline.captures(dataclasses.replace(task(), name="t8", capture_env=(("KV", "fp8"),)), tree,
                       lambda t, a: asked.append(a), ("saturated",))
