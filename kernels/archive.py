@@ -79,10 +79,12 @@ def ideas(root: Path) -> list[tuple[str, dict, Outcome]]:
             except ValueError:
                 continue
             if "ideas" in row:                   # a funnel round: each idea with how far it got
+                scores = {p["id"]: p["score"] for p in row.get("parents") or [] if isinstance(p, dict)}
                 for x in row["ideas"]:
                     h, c = x.get("idea") or {}, children.get(x.get("child_id"), {})
+                    pid = h.get("parent_id") or row.get("parent_id")      # a generation: each idea's own parent
                     out.append((task, {k: v for k, v in h.items() if k in FIELDS} or h, Outcome(
-                        r["id"], row.get("parent_id"), row.get("parent_score"), x.get("child_id"),
+                        r["id"], pid, scores.get(pid, row.get("parent_score")), x.get("child_id"),
                         x.get("child_score"), x.get("improved"), c.get("stage"),
                         c.get("error") if x.get("child_id") else
                         (x.get("fate", "") + (": " + x["error"] if x.get("error") else ""))[:300])))

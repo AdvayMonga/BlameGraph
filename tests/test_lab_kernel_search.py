@@ -71,7 +71,7 @@ def test_refused_off_the_kernels_layer_and_beyond_the_budget(tb, monkeypatch):
                      ({"task": "silu_mul", "budget_usd": 0}, "budget_usd"),
                      ({"task": "silu_mul", "budget_usd": 10_000}, "more than the run has left"),
                      ({"task": "silu_mul", "budget_usd": 0.5}, "a search needs at least"),
-                     ({"task": "silu_mul", "budget_usd": 12}, "one round of model calls")):   # 2026-10-25: $6 timed nothing
+                     ({"task": "silu_mul", "budget_usd": 12}, "first two generations of model calls")):   # 2026-10-25: $6 timed nothing
         with pytest.raises(ValueError, match=why):
             spec(tb).fn({"hypothesis_id": k, "expect": EXPECT, **bad})
 
@@ -87,7 +87,8 @@ def test_one_call_records_the_search_and_saves_a_patch_when_the_gate_passes(tb, 
     caps.mkdir()
     monkeypatch.setattr(pipeline, "captures", lambda t, tree, profile, *a: [caps])
 
-    def search(t, cs, start, out, usd, evals, root, env, funnel=True, device="cuda"):
+    def search(t, cs, start, out, usd, evals, root, env, funnel=True, device="cuda", facts_text=None):
+        assert "No profile of the engine" in facts_text                 # the bigger picture, as facts, for every prompt
         out.mkdir(parents=True)
         (out / "best_program.py").write_text(start.read_text().replace("return 1", "return 2"))
         return {"best": {"combined_score": 1.3, "correct": 1.0}, "cost": {"usd": 2.5}, "ledger": "ev-search"}

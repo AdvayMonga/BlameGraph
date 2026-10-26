@@ -4,7 +4,27 @@ One entry per decision, newest first: what was decided, why (as recorded at the 
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
 
-
+## 2026-10-26 — The kernel search runs generations: funnel rounds from fitness-drawn parents
+`kernels.search` becomes a genetic search inside one call (`kernels/search/generations.py`): generation 0 is the funnel
+from the start program (40 ideas, the fastest 12 to the full exam); each later generation draws 4 parents from the
+population (the 32 best open programs; the best always, the rest by percentile reward + 0.05, without replacement),
+gives each 6 ideas (one judge call on one slice of facts, the slices rotated across the parents), and sends the
+fastest 8 of the 24 to the full exam, which join the tree under their own parent; up to 10 generations, stopping at the
+roofline or after 3 generations with no new best; a generation where under 1/5 of the examined beat their parent makes
+the next 2/3 as large. Hypothesis calls go 3 Opus : 1 Sonnet; the hypothesis stays free text (bottleneck, idea, how to
+implement it, predicted counter changes). The tiers are unchanged (precheck with one repair, dedup, two-shape
+correctness, one-shape quick timing, full exam); programs within 5% of the quick cutoff are timed once more and ranked
+by their mean, and every generation logs the Spearman between the quick timing and the full exam. Every prompt also
+gets the bigger picture as facts: the regimes the engine is scored under and the kernel's share of the latest profiled
+window. Why (the user, after the 2026-10-26 research): the funnel had become one wide round per expansion, and every
+tree of the 2026-10-24/25 runs stayed one level deep (root + 6 children; round 2 always ran out of model budget before
+timing anything); the research says many small generations beat one wide one (Kevin's 16 x 8 at 1.10x against 128 x 1
+at 0.65x; ShinkaEvolve's archive of 40 under 150 evaluations), soft fitness-weighted parents keep diversity, dedup
+before GPU time is the largest diversity gain, and a cheap tier that is not a measurement does not help. The MCTS round
+stays as arm `search-mcts`, the beam as `search-beam`; `search-gen20` (20 x 12 kept) and `search-crossover` (10% of a
+generation's ideas from a judge call shown another parent's diff) are the arms to run. ~$50 of model calls and ~2 GPU
+hours per 10-generation call, about twice the 2026-10-25 round. Replaces one funnel round per MCTS expansion
+(2026-10-25) as the default.
 ## 2026-10-25 — Fixed answer lengths: each request runs to the reference's own answer length
 Once the corpus carries each record's `expected_output_tokens` (the reference's greedy answer length, measured by
 `python -m corpus.lengths` on both splits: a new corpus version), every load request is sent with `ignore_eos` at that

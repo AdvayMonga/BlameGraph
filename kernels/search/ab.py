@@ -55,7 +55,7 @@ def _search(a, out: Path, seed: int, extra: tuple = ()) -> dict:
     with contextlib.redirect_stdout(buf):
         main(["--task", a.task, "--shapes", a.shapes, "--out", str(out), "--evals", str(a.evals), "--usd", str(a.usd),
               "--model", a.model, "--judge-model", a.model, "--wide-model", a.model, "--cheap-model", a.model,
-              "--device", a.device, "--seed", str(seed),
+              "--second-judge-model", a.model, "--device", a.device, "--seed", str(seed),
               *(["--gpu-s", str(a.gpu_s)] if getattr(a, "gpu_s", None) else []),
               *(["--initial", a.initial] if a.initial else []), *SAME_PROMOTION, *extra])
     return _last_json(buf.getvalue())
@@ -65,11 +65,14 @@ def _variant(*extra: str):
     return lambda a, out, seed: _search(a, out, seed, extra)
 
 
-# Each arm differs from `kernels.search` (the funnel, judge tools on) in one thing, so a difference in the summary is
-# that thing's: the judge's web search and ledger SQL, KernelPro's literal UCT constant, the beam in place of the
-# funnel (the 2026-10-24 A/B's `kernels.search` arm), or the whole generator.
+# Each arm differs from `kernels.search` (the genetic search over funnel rounds, judge tools on) in one thing, so a
+# difference in the summary is that thing's: the judge's web search and ledger SQL, one MCTS-chosen parent per round
+# (the 2026-10-25 default), KernelPro's literal UCT constant under it, the beam in place of the funnel (the 2026-10-24
+# A/B's `kernels.search` arm), fewer and larger generations, a share of explicit crossover, or the whole generator.
 ARMS = {"openevolve": _openevolve, "kernels.search": _search, "search-no-tools": _variant("--no-judge-tools"),
-        "search-c1.41": _variant("--uct-c", "1.4142"), "search-beam": _variant("--no-funnel")}
+        "search-mcts": _variant("--mcts"), "search-c1.41": _variant("--mcts", "--uct-c", "1.4142"),
+        "search-beam": _variant("--mcts", "--no-funnel"), "search-gen20": _variant("--gen-size", "20", "--keep", "12"),
+        "search-crossover": _variant("--crossover", "0.1")}
 
 
 def _gate(a, program: Path) -> dict:
