@@ -291,3 +291,14 @@ def test_the_search_cli_takes_a_region_with_its_samples_and_holder(tmp_path, mon
     assert gates[0]["shared_weights"] == cfg["shared_weights"]
     with pytest.raises(argparse.ArgumentTypeError):
         run.task_name("region:norm")
+
+
+def test_a_region_task_with_a_remote_evaluator_is_refused(monkeypatch):
+    from types import SimpleNamespace
+    from kernels.evolve.run import region_args
+    monkeypatch.setenv("KERNEL_EVAL_SSH", '["ssh", "host"]')
+    try:
+        region_args(SimpleNamespace(task="region:norm:add", samples="s", shared_weights="w"))
+        raise AssertionError("a remote region search was not refused")
+    except SystemExit as e:
+        assert "GPU host" in str(e)

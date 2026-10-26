@@ -65,9 +65,14 @@ def _overrides_at(repo: Path, base: str, pkg: str) -> list[tuple[str, tuple[str,
     for path in _git(repo, "ls-tree", "--name-only", f"{base}:{pkg}").split() if _exists(repo, base, pkg) else []:
         if path.endswith(".py"):
             for node in ast.walk(ast.parse(_git(repo, "show", f"{base}:{pkg}/{path}"))):
-                if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict) and \
-                        any(isinstance(t, ast.Name) and t.id == "OVERRIDES" for t in node.targets):
-                    out += [(f"{pkg}/{path}", tuple(ast.literal_eval(k))) for k in node.value.keys]
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target] \
+                    if isinstance(node, ast.AnnAssign) else []
+                if any(isinstance(t, ast.Name) and t.id == "OVERRIDES" for t in targets):
+                    try:
+                        out += [(f"{pkg}/{path}", tuple(ast.literal_eval(k))) for k in node.value.keys]
+                    except (AttributeError, TypeError, ValueError):
+                        raise ValueError(f"{pkg}/{path} at {base}: OVERRIDES is not a dict of literal (first, last) "
+                                         "keys, so an overlap cannot be ruled out") from None
     return out
 
 
@@ -84,6 +89,8 @@ def _region_files(task, program: str, repo: Path, base: str) -> dict[str, str]:
     pkg = root + regions.OVERRIDES_PACKAGE.replace(".", "/")
     names = [s.name for s in regions.engine_stations()]
     for path, (a, b) in _overrides_at(repo, base, pkg):
+        if a not in names or b not in names:
+            raise ValueError(f"the override {a}..{b} in {path} at {base} names a station this engine lacks")
         if names.index(a) <= names.index(last) and names.index(first) <= names.index(b):
             raise ValueError(f"region {first}..{last} overlaps the override {a}..{b} already in {path} at {base}")
     files = {f"{pkg}/{first}_{last}.py": regions.override_module(program, first, last)}

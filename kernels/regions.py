@@ -326,7 +326,7 @@ def override_module(program: str, first: str, last: str) -> str:
     that constant (None stays None, `cfg` equal): per call but trivial next to the kernel (graph replays skip it)."""
     from kernels.evolve.ship import module_source
     return (module_source(program, "kernel").rstrip("\n") + "\n\n\ndef _override(c):\n"
-            "    bad = [k for k, v in _CONST.items() if k in c and not (c[k] is None if v is None else\n"
+            "    bad = [k for k, v in globals().get('_CONST', {}).items() if k in c and not (c[k] is None if v is None else\n"
             "                                                           type(c[k]) is type(v) and c[k] == v)]\n"
             "    if bad:\n"
             "        raise ValueError(f'region override {list(OVERRIDES)}: the engine passes {bad} unlike the values '\n"

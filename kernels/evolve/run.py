@@ -182,6 +182,9 @@ def region_args(a) -> dict:
     """A region task's `samples` and `shared_weights`, absolute: what `load` and the eval config take."""
     if not a.task.startswith("region:"):
         return {}
+    if os.environ.get("KERNEL_EVAL_SSH"):        # this process attaches the holder and reads the samples itself
+        raise SystemExit("a region task runs on the GPU host that holds its samples and holder: KERNEL_EVAL_SSH "
+                         "(the evaluator on a remote worker) does not take regions yet")
     return {k: str(Path(v).resolve()) for k, v in (("samples", getattr(a, "samples", None)),
                                                    ("shared_weights", getattr(a, "shared_weights", None))) if v}
 
