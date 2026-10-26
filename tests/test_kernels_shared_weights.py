@@ -114,6 +114,7 @@ def test_a_judgment_keeps_its_call_weights_and_mounts_the_holder(tmp_path, monke
     assert one["cfg"]["weights"] == cfg["weights"] and quick["cfg"]["weights"] == {"[4, 64]": 3}
     assert one["ipc_host"] and quick["ipc_host"] and "ipc_host" not in pre      # no GPU at the precheck
     assert h.path in one["read"]
+    assert {h.path.with_name("w.pkl.pristine"), h.path.with_name("w.pkl.constants")} <= set(one["read"])   # the fallback
 
 
 def test_a_judgment_that_writes_a_shared_weight_is_void_and_the_weight_restored(tmp_path, monkeypatch):
@@ -198,14 +199,31 @@ def test_the_holders_own_process_restores_without_reopening_its_handles(tmp_path
     assert sw.restore(h.path) == ["w"] and torch.equal(h.tensors["w"], torch.ones(4))
 
 
-if __name__ == "__main__":
-    import importlib.util
-    import inspect
-    import tempfile
-    have_pytest = importlib.util.find_spec("pytest") is not None
-    for name, fn in list(globals().items()):
-        if name.startswith("test_") and "monkeypatch" not in inspect.signature(fn).parameters:
-            if not have_pytest and "pytest." in inspect.getsource(fn):
-                print("skip", name, "(needs pytest)")
-                continue
-            fn(*[Path(tempfile.mkdtemp()) for _ in inspect.signature(fn).parameters]); print("ok", name)
+def test_a_refused_ipc_attach_falls_back_to_a_copy_only_where_asked_and_restore_refuses(tmp_path, monkeypatch):
+    import pytest
+    from kernels import shared_weights as sw
+    h = sw.Holder({"w": torch.arange(6.0)}, tmp_path / "w.pkl", {"cfg": 3})
+    assert sw.constants(h.path) == {"cfg": 3} and sw._device(h.path) == "cpu"     # the device kept, not a constant
+    sw._HELD.clear()                                        # as in another process
+    monkeypatch.setattr(sw, "_rebuild", lambda b: (_ for _ in ()).throw(RuntimeError("CUDA error: mapping failed")))
+    got = sw.attach(h.path, copy_ok=True)
+    assert torch.equal(got["w"], torch.arange(6.0)) and got["cfg"] == 3 and sw.attached_by_copy(h.path)
+    got["w"].zero_()                                        # a write reaches the copy only
+    assert torch.equal(h.tensors["w"], torch.arange(6.0)) and sw.is_shared_weight(got["w"])
+    assert not sw.is_shared_weight(got["w"].clone())
+    for f in (sw.attach, sw.restore):                       # never a copy unasked: restore would compare copy to copy
+        with pytest.raises(RuntimeError, match="holder's own memory"):
+            f(h.path)
+    monkeypatch.setattr(sw, "_rebuild", lambda b: (_ for _ in ()).throw(RuntimeError("other")))
+    with pytest.raises(RuntimeError, match="other"):
+        sw.attach(h.path, copy_ok=True)
+
+
+def test_an_attached_tensor_stops_counting_once_it_is_freed(tmp_path):
+    from kernels import shared_weights as sw
+    h = sw.Holder({"w": torch.ones(4)}, tmp_path / "w.pkl")
+    sw._HELD.clear()
+    got = sw.attach(h.path)
+    ptr = got["w"].data_ptr()
+    del got, h
+    assert not any(r() is not None and r().data_ptr() == ptr for r in sw._ATTACHED)

@@ -46,6 +46,8 @@ class Task:
     error_budget: float | None = None       # regions: a case's atol is at least this times the baseline's own error
     baseline_fn: Callable | None = None     # the baseline when it is not an engine entry point (a region's stations)
     watch: tuple[str, ...] = ()             # further modules the evaluator watches for patches (a region's stations)
+    start_program: Callable | None = None   # start_program() -> the starting program when the entry's module is not
+                                            # it (a region: its stations with the holder's constants bound)
     capture_env: tuple = ()                 # (name, value) launch env its calls need to occur (e.g. fp8 KV pools)
     capture_fn: str | None = None           # the captured calls' `fn` to read shapes from; None: `entry` (a region's
                                             # calls are "region:FIRST:LAST")

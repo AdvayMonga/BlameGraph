@@ -1,6 +1,7 @@
 """python -m kernels.evolve run --task T [--shapes SHAPES.json | --captures DIR ...] --out DIR [--iterations N]
                                [--config CONFIG.yaml] [--device cuda] [--initial PROGRAM.py]
 python -m kernels.evolve gate --task T --shapes SHAPES.json --program BEST.py [--device cuda]
+   (T may be region:FIRST:LAST with --samples DIR, a CAPTURE_REGION dir, and --shared-weights FILE, a holder file)
 python -m kernels.evolve share --profile BUNDLE [--profile ...] [--gate TASK=GATE.json ...]   (tasks ranked by headroom)
 python -m kernels.evolve initial --task T --engine REPO --ref REF --out P.py   (start from the kernel at an engine commit)
 python -m kernels.evolve ship --task T --program BEST.py --gate GATE.json --engine REPO [--base REF] [--budget USD]
@@ -16,6 +17,7 @@ import importlib
 import inspect
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -32,6 +34,11 @@ def initial_program(task) -> str:
     """The engine's module source with `kernel` bound to the entry point, all of it open to evolution."""
     if task.entry is None:
         return (HERE / "seeds" / f"{task.name}.py").read_text()
+    if task.start_program is not None:
+        return task.start_program()
+    if task.name.startswith("region:"):              # its entry is the stations tuple, not a function
+        raise ValueError(f"{task.name}: a region's starting program needs its holder (`shared_weights`: the layer "
+                         "config and the weights' constants are written into it)")
     mod, _, attr = task.entry.partition(":")
     return _start(task, inspect.getsource(importlib.import_module(mod)), attr)
 
@@ -157,10 +164,35 @@ def tolerances(target_tol: dict | None) -> dict:
     return {k: list(v) for k, v in (target_tol or {}).items()}
 
 
+def task_name(s: str) -> str:
+    """--task: a named task or `region:FIRST:LAST`."""
+    if s in TASKS or re.fullmatch(r"region:\w+:\w+", s):
+        return s
+    raise argparse.ArgumentTypeError(f"{s!r} is none of {', '.join(TASKS)}, nor region:FIRST:LAST")
+
+
+def task_args(p) -> None:
+    """--task, and a region's --samples and --shared-weights."""
+    p.add_argument("--task", required=True, type=task_name)
+    p.add_argument("--samples", help="a region's CAPTURE_REGION dir (also its --captures when none are given)")
+    p.add_argument("--shared-weights", help="a region's holder file (kernels.shared_weights)")
+
+
+def region_args(a) -> dict:
+    """A region task's `samples` and `shared_weights`, absolute: what `load` and the eval config take."""
+    if not a.task.startswith("region:"):
+        return {}
+    if os.environ.get("KERNEL_EVAL_SSH"):        # this process attaches the holder and reads the samples itself
+        raise SystemExit("a region task runs on the GPU host that holds its samples and holder: KERNEL_EVAL_SSH "
+                         "(the evaluator on a remote worker) does not take regions yet")
+    return {k: str(Path(v).resolve()) for k, v in (("samples", getattr(a, "samples", None)),
+                                                   ("shared_weights", getattr(a, "shared_weights", None))) if v}
+
+
 def _shapes(task, a) -> dict:
     if a.shapes:
         return shapes_mod.read(a.shapes)
-    dirs = [Path(d) for d in a.captures or []]
+    dirs = [Path(d) for d in (a.captures or [region_args(a).get("samples")]) if d]   # a region's: its samples
     counts = shapes_mod.from_captures(task, dirs, equal=getattr(a, "equal_captures", False))
     if dirs and not counts:                      # never the task's default shapes in place of real ones
         raise SystemExit(f"the captures hold no call of {task.entry} (calls replayed from a CUDA graph never reach "
@@ -181,7 +213,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("run", "gate", "split"):
         p = sub.add_parser(name)
-        p.add_argument("--task", required=True, choices=TASKS)
+        task_args(p)
         p.add_argument("--shapes")
         p.add_argument("--captures", action="append")
         p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -194,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
     ini.add_argument("--ref", required=True, help="the engine commit whose kernel to start from")
     ini.add_argument("--out", required=True)
     sh = sub.add_parser("ship")
-    sh.add_argument("--task", required=True, choices=TASKS)
+    task_args(sh)
     sh.add_argument("--program", required=True)
     sh.add_argument("--gate", required=True, help="`gate`'s JSON output for the program")
     sh.add_argument("--engine", required=True, help="the engine repo")
@@ -212,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     if a.cmd == "ship":
         from kernels.evolve.ship import ship
-        out = ship(load(a.task), Path(a.program).read_text(), json.loads(Path(a.gate).read_text()), Path(a.engine),
+        out = ship(load(a.task, **region_args(a)), Path(a.program).read_text(), json.loads(Path(a.gate).read_text()), Path(a.engine),
                    a.base)
         if a.budget is not None:
             from lab import experiment
@@ -229,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
         names = list(gates) or list(TASKS)       # with gates, only the gated tasks: two tasks can name one kernel
         print(json.dumps(rank([Path(p) for p in a.profile], [load(n) for n in names], gates), indent=1))
         return 0
-    task = load(a.task)
+    task = load(a.task, **region_args(a))
     sets = _shapes(task, a)
     tol = tolerances(_target_tolerances())
     if a.cmd == "split":
@@ -239,13 +271,13 @@ def main(argv: list[str] | None = None) -> int:
         out = judge_jailed({"task": task.name, "seen": [list(s) for s in sets["seen"]],
                             "heldout": [list(s) for s in sets["heldout"]], "weights": sets.get("calls"),
                             "device": a.device, "tolerances": tol, "ints": _ints(sets, ("seen", "heldout")),
-                            "options": options_from_target(task)},
+                            "options": options_from_target(task), **region_args(a)},
                            Path(a.program).read_text(), 2, timeout_s=3600)
         print(json.dumps(out, indent=1))
         from kernels.evolve.ship import gate_passed
         return 0 if gate_passed(out) else 1
     out = Path(a.out)
-    sets, program = prepare(task, sets, out, a.device, tol, a.timing_shapes, a.initial)
+    sets, program = prepare(task, sets, out, a.device, tol, a.timing_shapes, a.initial, region_args(a))
     if "OPENAI_API_KEY" not in os.environ and "ANTHROPIC_API_KEY" in os.environ:
         os.environ["OPENAI_API_KEY"] = os.environ["ANTHROPIC_API_KEY"]     # the config's endpoint is Anthropic's
     from kernels.evolve.evaluator import seconds
@@ -278,9 +310,11 @@ def usage(log: Path) -> dict:
     return {"usd": round(sum(r["usd"] for r in rows), 4), "model_calls": len(rows)}
 
 
-def prepare(task, sets: dict, out: Path, device: str, tol: dict, timing_shapes: int, initial: str | None):
+def prepare(task, sets: dict, out: Path, device: str, tol: dict, timing_shapes: int, initial: str | None,
+            region: dict | None = None):
     """The run dir: selection's config (seen shapes only, their weights and captured ints; the held-out shapes never
-    enter it) as $KERNEL_EVAL_CONFIG, the shape sets, and the starting program. Returns (sets, program path)."""
+    enter it; a region's `samples` and `shared_weights`) as $KERNEL_EVAL_CONFIG, the shape sets, and the starting
+    program. Returns (sets, program path)."""
     out.mkdir(parents=True, exist_ok=True)
     sets = shapes_mod.select(task, sets, timing_shapes)
     cfg_path = out / "eval_config.json"
@@ -289,7 +323,7 @@ def prepare(task, sets: dict, out: Path, device: str, tol: dict, timing_shapes: 
                                     "weights": {k: v for k, v in (sets.get("calls") or {}).items() if k in seen},
                                     "device": device, "tolerances": tol, "ints": _ints(sets, ("seen",)),
                                     "arch": _arch(device),
-                                    "options": options_from_target(task)}))
+                                    "options": options_from_target(task), **(region or {})}))
     (out / "shapes.json").write_text(json.dumps({k: [list(s) for s in v] if k in ("seen", "heldout") else v
                                                  for k, v in sets.items()}, indent=1))
     program = Path(initial) if initial else out / "initial_program.py"

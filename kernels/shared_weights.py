@@ -2,13 +2,17 @@
 (~30 GB), and each candidate is judged in a fresh process, so reloading per judgment would take minutes. A holder
 process keeps the weights on the device and writes handles to a file; each candidate's process attaches to the same
 memory without copying (CUDA IPC through torch's tensor sharing; on the CPU, shared memory). CUDA cannot map shared
-memory read-only, so the holder also writes a pristine CPU copy beside the handles file (never mounted in a jail);
-before and after each judgment the evaluator compares every tensor with it on the device (`restore`): a judgment that
-changed any weight is void and the weight is copied back. Judgments on one holder run one at a time (`exclusive`). A
+memory read-only, so the holder also writes a pristine CPU copy beside the handles file (mounted read-only in a jail
+for the copy fallback: weights leak nothing, and integrity comes from `restore` comparing the holder's real memory with
+it outside the jail); before and after each judgment the evaluator compares every tensor with it on the device
+(`restore`): a judgment that changed any weight is void and the weight is copied back. Judgments on one holder run one at a time (`exclusive`). A
 jail attaching over CUDA IPC needs the holder's IPC namespace (docker --ipc). Not working yet: on the H200
 (2026-10-25) a process outside a jail attaches, writes and is restored, but the jailed child's attach fails in
 cuIpcOpenEventHandle (CUDA_ERROR_MAP_FAILED), also with --pid host and the holder's IPC pool file opened to it; `python
--m kernels.shared_weights` reports both. Residual risk: a write undone before
+-m kernels.shared_weights` reports both. When the attach is refused, `attach(copy_ok=True)` (the evaluator's task
+inside the jail) copies the pristine weights to the device instead (a layer's weights are ~0.6 GB, so a single-layer
+region is judged this way; a whole step is not): its writes reach only its copy. `restore` never copies: it raises when
+it cannot alias the holder's memory. Residual risk: a write undone before
 the judgment ends is unseen here (the timer fingerprints inputs between calls, kernels/timing.py, and stage 2's
 outputs are recomputed outside the jail on the restored weights, verify.py)."""
 from __future__ import annotations
@@ -16,6 +20,7 @@ from __future__ import annotations
 import fcntl
 import os
 import pickle
+import weakref
 from contextlib import contextmanager
 from multiprocessing.reduction import ForkingPickler
 from pathlib import Path
@@ -26,8 +31,10 @@ from torch.multiprocessing import reductions
 reductions.init_reductions()                     # torch's tensor reducers: a reference to shared memory, not its bytes
 CHUNK = 1 << 28                                  # bytes compared per copy of the pristine copy to the device
 SHM = Path("/dev/shm")
+DEVICE = "_device"                               # the holder's device, kept in the constants file, never a constant
 _HELD: dict = {}                                    # holder files made by this process -> their entries
-_ATTACHED: set[int] = set()                      # data_ptr of every tensor attached in this process
+_COPIED: set[Path] = set()                      # holders attached by copying the pristine file
+_ATTACHED: list[weakref.ref] = []               # every tensor attached in this process, while it lives
 
 
 def _side(path: Path, kind: str) -> Path:
@@ -63,7 +70,8 @@ class Holder:
         torch.save({k: v.detach().cpu() for k, v in self.tensors.items()}, _side(self.path, "pristine"))
         _side(self.path, "pristine").chmod(0o644)
         rest = {**{k: None for k, v in tensors.items() if v is None}, **(constants or {})}   # None: bf16 has no scale
-        _write(_side(self.path, "constants"), pickle.dumps(rest))
+        dev = next(iter(self.tensors.values())).device.type if self.tensors else "cpu"   # a jail renumbers GPUs
+        _write(_side(self.path, "constants"), pickle.dumps({**rest, DEVICE: dev}))
         _write(self.path, bytes(ForkingPickler.dumps({**self.tensors, **rest})))
         _HELD[self.path.resolve()] = {**self.tensors, **rest}
 
@@ -73,24 +81,53 @@ class Holder:
         return [k for k, v in self.tensors.items() if not _equal(v, clean[k])]
 
 
-def attach(path: Path) -> dict[str, torch.Tensor]:
-    """The holder's tensors, in this process, aliasing its memory (no copy)."""
+def attach(path: Path, copy_ok: bool = False) -> dict[str, torch.Tensor]:
+    """The holder's tensors, in this process, aliasing its memory (no copy); with `copy_ok`, a copy of the pristine
+    weights on the holder's device when CUDA IPC refuses the attach."""
     torch.multiprocessing.set_sharing_strategy("file_system")
     raw = _trusted(path).read_bytes()
     own = _HELD.get(Path(path).resolve())        # the holder's own process: CUDA IPC cannot reopen its own handles
-    held = dict(own) if own is not None else pickle.loads(raw)
-    _ATTACHED.update(v.data_ptr() for v in held.values() if isinstance(v, torch.Tensor))
+    try:
+        held = dict(own) if own is not None else _rebuild(raw)
+    except RuntimeError as e:                    # CUDA IPC refused (a jail, 2026-10-25)
+        if "cuda" not in str(e).lower():
+            raise
+        if not copy_ok:
+            raise RuntimeError(f"cannot attach the shared weights {path} over CUDA IPC ({e}): checking or restoring "
+                               "them needs the holder's own memory") from e
+        held = {**constants(path), **{k: v.to(_device(path)) for k, v in _pristine(path).items()}}
+        _COPIED.add(Path(path).resolve())
+    _ATTACHED[:] = [r for r in _ATTACHED if r() is not None] + \
+        [weakref.ref(v) for v in held.values() if isinstance(v, torch.Tensor)]
     return held
 
 
+def _rebuild(raw: bytes) -> dict:
+    """The handles file's entries, the tensors mapped over IPC (torch's reducers)."""
+    return pickle.loads(raw)
+
+
+def attached_by_copy(path: Path) -> bool:
+    """Whether this process holds its own copy of `path`'s weights (the IPC attach was refused)."""
+    return Path(path).resolve() in _COPIED
+
+
+def _device(path: Path) -> str:
+    """The device the holder's tensors live on, as it wrote it; for an older holder, whether its handles name CUDA."""
+    dev = pickle.loads(_trusted(_side(path, "constants")).read_bytes()).get(DEVICE)
+    return dev or ("cuda" if b"cuda" in _trusted(path).read_bytes() else "cpu")
+
+
 def is_shared_weight(t: torch.Tensor) -> bool:
-    """Whether `t` is a tensor attached from a holder in this process."""
-    return t.data_ptr() in _ATTACHED
+    """Whether `t` shares memory with a live tensor attached from a holder in this process."""
+    return any(w is not None and w.data_ptr() == t.data_ptr() for w in (r() for r in _ATTACHED))
 
 
 def constants(path: Path) -> dict:
     """The holder's non-tensor entries (its constants and None weights), read without attaching any tensor."""
-    return pickle.loads(_trusted(_side(path, "constants")).read_bytes())
+    d = pickle.loads(_trusted(_side(path, "constants")).read_bytes())
+    d.pop(DEVICE, None)
+    return d
 
 
 def _pristine(path: Path) -> dict:

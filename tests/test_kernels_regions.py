@@ -54,6 +54,43 @@ def test_the_reference_runs_the_baseline_once_per_input_shapes_for_its_dtypes():
     assert len(runs) == 2
 
 
+def test_the_reference_keeps_the_baselines_experts_and_weighs_them_in_fp32():
+    def route(c):                                    # top-1 by a stable sort: a tie goes to the lower expert
+        top = torch.argsort(c["logits"], dim=-1, descending=True, stable=True)[:, 0]
+        return {"sorted_ids": torch.arange(top.numel()), "expert_ids": top, "tok": torch.arange(top.numel()),
+                "pair_w": torch.softmax(c["logits"].float(), -1).gather(1, top[:, None])[:, 0]}
+    stations = (Station("router", ("x", "w"), ("logits",), lambda c: {"logits": c["x"] @ c["w"]}),
+                Station("route", ("logits",), ("sorted_ids", "expert_ids", "tok", "pair_w"), route),
+                Station("down", ("e", "expert_ids", "pair_w"), ("y",),
+                        lambda c: {"y": (c["e"][c["expert_ids"]].float() * c["pair_w"][:, None]).to(c["e"].dtype)}))
+    bf = torch.bfloat16
+    x, w = torch.tensor([[1.0, 2 ** -9]], dtype=bf), torch.tensor([[1.0, 1.0], [0.0, 1.0]], dtype=bf)
+    e = torch.tensor([[10.0, 20.0], [30.0, 40.0]], dtype=bf)
+    assert torch.equal((x @ w)[0], torch.tensor([1.0, 1.0], dtype=bf))                  # bf16: a tie, expert 0
+    p32 = torch.softmax(x.float() @ w.float(), -1)[0]
+    assert p32[1] > p32[0]                                                               # fp32: expert 1 would win
+    base, ref, ins, outs = functions(stations, "router", "down", live=("y",))
+    assert ins == ("x", "w", "e") and outs == ("y",)
+    b, r = base(x, w, e), ref(x, w, e)
+    assert torch.equal(b[0], (e[:1].float() * 0.5).to(bf))                              # bf16's tie: weight 0.5
+    assert torch.equal(r[0], (e[:1].float() * p32[0]).to(bf))                           # expert 0 at its fp32 weight
+
+
+def test_pair_weights_read_the_routes_block_layout_and_renormalize_per_token():
+    from kernels.regions import pair_weights
+    logits = torch.tensor([[1.0, 2.0, 0.0], [0.0, 1.0, 3.0]])
+    # pairs 0,1 = token 0 (experts 1, 0), pairs 2,3 = token 1 (experts 2, 1); blocks of 2 by expert, padded with M=4
+    sorted_ids = torch.tensor([1, 4, 0, 3, 2, 4], dtype=torch.int32)
+    expert_ids = torch.tensor([0, 1, 2], dtype=torch.int32)
+    tok = torch.tensor([0, 0, 1, 1], dtype=torch.int32)
+    p = torch.softmax(logits, -1)
+    want = torch.stack([p[0, 1], p[0, 0], p[1, 2], p[1, 1]])
+    assert torch.allclose(pair_weights(logits.bfloat16(), sorted_ids, expert_ids, tok, False),
+                          torch.softmax(logits.bfloat16().float(), -1)[[0, 0, 1, 1], [1, 0, 2, 1]])
+    got = pair_weights(logits, sorted_ids, expert_ids, tok, True)
+    assert got.dtype == torch.float32 and torch.allclose(got, want / want.view(2, 2).sum(1).repeat_interleave(2))
+
+
 def test_fusing_moves_fewer_bytes_than_the_stations_one_by_one():
     c = ctx((8, 64), torch.float32, "cpu", torch.Generator().manual_seed(0))
     m = bytes_moved(STATIONS, "norm", "act", c)

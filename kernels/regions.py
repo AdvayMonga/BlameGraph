@@ -52,11 +52,32 @@ def interface(stations: tuple[Station, ...], first: str, last: str,
     return tuple(inputs), tuple(w for w in written if w in needed)
 
 
-def run(region: tuple[Station, ...], ctx: dict, outputs: tuple[str, ...]) -> tuple:
-    ctx = dict(ctx)
+def run(region: tuple[Station, ...], ctx: dict, outputs: tuple[str, ...], pinned: dict | None = None) -> tuple:
+    """The stations in order; a station named in `pinned` runs that function (ctx -> its writes) instead."""
+    ctx, pinned = dict(ctx), pinned or {}
     for s in region:
-        ctx.update(s.fn(ctx))
+        ctx.update((pinned.get(s.name) or s.fn)(ctx))
     return tuple(ctx[o] for o in outputs)
+
+
+ROUTE_WRITES = ("sorted_ids", "expert_ids", "tok", "pair_w")    # the engine's `route` station's writes
+DISCRETE = ("sorted_ids", "expert_ids", "tok")                  # its discrete choice: which expert each pair goes to
+
+
+def pair_weights(logits, sorted_ids, expert_ids, tok, renorm: bool) -> torch.Tensor:
+    """Each pair's routing weight in fp32 at the expert it was sent to: the softmax of its token's logits there,
+    renormalized over the token's pairs when `renorm` (norm_topk_prob). The layout is the engine's route's: pair ids
+    grouped by expert in `sorted_ids`, padded with M to blocks of `block_m`, `expert_ids` each block's expert."""
+    M = tok.numel()
+    block_m = sorted_ids.numel() // expert_ids.numel()
+    slots = torch.nonzero(sorted_ids < M).view(-1)
+    expert = torch.empty(M, dtype=torch.long, device=tok.device)
+    expert[sorted_ids[slots].long()] = expert_ids[slots // block_m].long()
+    t = tok.long()
+    w = torch.softmax(logits.float(), dim=-1)[t, expert]
+    if renorm:
+        w = w / torch.zeros(logits.shape[0], device=w.device).index_add_(0, t, w)[t]
+    return w
 
 
 def functions(stations, first, last, live=(), constants: dict | None = None,
@@ -64,12 +85,15 @@ def functions(stations, first, last, live=(), constants: dict | None = None,
     """(baseline, reference, inputs, outputs): both take the inputs as tensors in `inputs` order (the `constants`, e.g.
     a layer config, bound instead) and return the outputs in `outputs` order. The reference computes in fp32 on
     `reference_stations` (the same stations in a form that runs in fp32: an engine's torch versions of its kernels),
-    returning each output in the baseline's dtype; without them, on the stations themselves."""
+    returning each output in the baseline's dtype; without them, on the stations themselves. A region holding the
+    `route` station keeps the baseline's routing (fp32 logits may send a near-tied token to another expert) and
+    computes each pair's weight in fp32 at the baseline's expert (`pair_weights`)."""
     consts = dict(constants or {})
     region = span(stations, first, last)
     ref_region = span(reference_stations, first, last) if reference_stations is not None else region
     ins, outs = interface(stations, first, last, live)
     ins = tuple(i for i in ins if i not in consts)
+    route = next((s for s in region if set(ROUTE_WRITES) <= set(s.writes)), None)   # its reads include `logits`
 
     def baseline(*xs):
         return run(region, {**consts, **dict(zip(ins, xs))}, outs)
@@ -78,7 +102,14 @@ def functions(stations, first, last, live=(), constants: dict | None = None,
 
     def reference(*xs):
         up = [x.float() if isinstance(x, torch.Tensor) and x.is_floating_point() else x for x in xs]
-        exact = run(ref_region, {**consts, **dict(zip(ins, up))}, outs)
+        pinned = None
+        if route is not None:            # the baseline's discrete routing, from the un-upcast inputs
+            clones = [x.clone() if isinstance(x, torch.Tensor) else x for x in xs]
+            picks = dict(zip(DISCRETE, run(region[:region.index(route) + 1], {**consts, **dict(zip(ins, clones))},
+                                           DISCRETE)))
+            pinned = {route.name: lambda c: {**picks, "pair_w": pair_weights(
+                c["logits"], *(picks[k] for k in DISCRETE), bool(getattr(c.get("cfg"), "norm_topk_prob", False)))}}
+        exact = run(ref_region, {**consts, **dict(zip(ins, up))}, outs, pinned)
         key = tuple((tuple(x.shape), x.dtype) if isinstance(x, torch.Tensor) else x for x in xs)
         if key not in dtypes:
             dtypes[key] = [o.dtype for o in baseline(*[x.clone() if isinstance(x, torch.Tensor) else x for x in xs])]
@@ -127,11 +158,34 @@ def task(name: str, stations: tuple[Station, ...], first: str, last: str,
 
 # -- the engine's stations (inference-server models/stations.py; data/notes/handoff-engine-stations.md) ---------------
 ENGINE = "inference_server.models.stations"
+OVERRIDES_PACKAGE = "inference_server.models.regions"    # where the engine's `overrides()` reads OVERRIDES from
+# The engine modules the stations call into at call time (watched for patches; the engine may export this later).
+STATION_MODULES = ("inference_server.models.fused", "inference_server.models.moe_kernel",
+                   "inference_server.models.paged_attention_kernel", "inference_server.models.paged_kv_cache",
+                   "inference_server.models.qwen3_moe")
+POOL = ("k_cache", "v_cache")           # the K/V pool's names when the engine declares no IN_PLACE
 
 
 def _engine():
     import importlib
     return importlib.import_module(ENGINE)
+
+
+def _importable(names: tuple[str, ...]) -> tuple[str, ...]:
+    """The modules of `names` that exist (core._watched imports every watched module)."""
+    import importlib.util
+    out = []
+    for n in names:
+        try:
+            out += [n] if importlib.util.find_spec(n) else []
+        except (ImportError, ValueError):
+            pass
+    return tuple(out)
+
+
+def _pool() -> tuple[str, ...]:
+    """The K/V pool's entries: the whole pool, whose block count is the launch's memory budget, not a call's shape."""
+    return tuple(getattr(_engine(), "IN_PLACE", POOL))
 
 
 def engine_stations() -> tuple[Station, ...]:
@@ -153,18 +207,24 @@ def live() -> tuple[str, ...]:
     return tuple(getattr(_engine(), "LIVE", ("h", "k_cache", "v_cache")))
 
 
+def _shaped(reads: dict) -> list[str]:
+    """The reads that give a call its shape: activations with a shape, not weights (the same for every call) and not
+    the K/V pool (sized by the launch, not the call)."""
+    pool = _pool()
+    return [k for k in sorted(reads) if not k.startswith("w.") and k not in pool and "shape" in reads[k]]
+
+
 def _signature(reads: dict) -> tuple[int, ...]:
-    """A captured call's shape: its activations' shapes in name order, flattened (weights are the same for every call)."""
-    return tuple(d for k in sorted(reads) if not k.startswith("w.") and "shape" in reads[k] for d in reads[k]["shape"])
+    """A captured call's shape: its activations' shapes in name order, flattened."""
+    return tuple(d for k in _shaped(reads) for d in reads[k]["shape"])
 
 
 def _heldout_axes(reads: dict, ins: tuple[str, ...]) -> tuple[int, ...]:
     """Where in the flat signature the held-out axes are: the rows of the region's first activation, and the attention
     block tables' width (the context, in blocks) when the region reads them."""
     at, pos = {}, 0
-    for k in sorted(reads):
-        if not k.startswith("w.") and "shape" in reads[k]:
-            at[k], pos = pos, pos + len(reads[k]["shape"])
+    for k in _shaped(reads):
+        at[k], pos = pos, pos + len(reads[k]["shape"])
     first = next((i for i in ins if i in at and reads[i]["shape"]), None)
     ctx = "attn_block_tables" in ins and len(reads.get("attn_block_tables", {}).get("shape", ())) == 2
     return tuple(([at[first]] if first else []) + ([at["attn_block_tables"] + 1] if ctx else []))
@@ -195,7 +255,7 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
     activations, never the weights."""
     from kernels.shared_weights import attach
     stations = _region(first, last)
-    held = attach(Path(shared_weights)) if shared_weights else {}
+    held = attach(Path(shared_weights), copy_ok=True) if shared_weights else {}   # the jail's IPC may be refused
     consts = _consts(held, constants)
     ins = tuple(i for i in interface(stations, first, last, live())[0] if i not in consts)
     fn, layer = f"region:{first}:{last}", consts.get("layer")
@@ -232,9 +292,11 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
             return None
         s = _signature(call.get("reads") or {})
         return s if s in by_shape else None          # a shape with no saved sample (over the engine's cap) is skipped
-    return task(fn, stations, first, last, make_ctx, shape_of, dtypes=dtypes, live=live(), watch=(ENGINE,),
-                entry=f"{ENGINE}:DECODE", capture_fn=fn, seen_default=tuple(by_shape), constants=consts,
-                reference_stations=reference_stations(), heldout_axes=_heldout_axes(reads, ins) if calls else (),
+    start = (lambda: start_program(first, last, constants, shared_weights)) if shared_weights else None
+    return task(fn, stations, first, last, make_ctx, shape_of, dtypes=dtypes, live=live(),
+                watch=(ENGINE, *_importable(STATION_MODULES)), entry=f"{ENGINE}:DECODE", capture_fn=fn,
+                seen_default=tuple(by_shape), constants=consts, reference_stations=reference_stations(),
+                heldout_axes=_heldout_axes(reads, ins) if calls else (), start_program=start,
                 edge_shapes=lambda shape: [])     # inputs come from captures only: no synthetic edge shapes
 
 
@@ -255,3 +317,20 @@ def start_program(first: str, last: str, constants: dict | None = None, shared_w
             "_STATIONS = [s.fn for s in _PURE if s.name in _NAMES]\n\n\n"
             "def kernel(*xs):\n    ctx = {**_CONST, **dict(zip(_INPUTS, xs))}\n    for fn in _STATIONS:\n"
             "        ctx.update(fn(ctx))\n    return tuple(ctx[o] for o in _OUTPUTS)\n# EVOLVE-BLOCK-END\n")
+
+
+def override_module(program: str, first: str, last: str) -> str:
+    """A winning program as a module of the engine's overrides package: the program (`kernel`, `_INPUTS`, `_OUTPUTS`,
+    `_CONST`) plus `OVERRIDES = {(first, last): _override}`, which the engine's `overrides()` reads and `resolve()`
+    checks against the stretch's interface. Each call checks that what the engine passes for a baked constant is
+    that constant (None stays None, `cfg` equal): per call but trivial next to the kernel (graph replays skip it)."""
+    from kernels.evolve.ship import module_source
+    return (module_source(program, "kernel").rstrip("\n") + "\n\n\ndef _override(c):\n"
+            "    bad = [k for k, v in globals().get('_CONST', {}).items() if k in c and not (c[k] is None if v is None else\n"
+            "                                                           type(c[k]) is type(v) and c[k] == v)]\n"
+            "    if bad:\n"
+            "        raise ValueError(f'region override {list(OVERRIDES)}: the engine passes {bad} unlike the values '\n"
+            "                         f'it was built with ({ {k: _CONST[k] for k in bad} }): rebuild it for this engine')\n"
+            "    out = kernel(*(c[k] for k in _INPUTS))\n"
+            "    return dict(zip(_OUTPUTS, out if isinstance(out, (tuple, list)) else (out,)))\n\n\n"
+            f"OVERRIDES = {{({first!r}, {last!r}): _override}}\n")
