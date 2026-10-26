@@ -1,4 +1,5 @@
 """python -m kernels.search --task T [--shapes SHAPES.json | --captures DIR ...] --out DIR [--evals N] [--usd X]
+                          [--samples DIR --shared-weights FILE]   (T = region:FIRST:LAST: its captures, its holder)
                           [--model CODER] [--judge-model JUDGE|none] [--effort E] [--[no-]ncu] [--device cuda]
                           [--initial PROGRAM.py] [--retime K] [--tune-points N]
 
@@ -17,13 +18,13 @@ from typing import Callable
 import torch
 
 from kernels.evolve import evaluator
-from kernels.evolve.run import (_shapes, _target_tolerances, prepare, record, retime, setting, system_message,
-                               tolerances)
+from kernels.evolve.run import (_shapes, _target_tolerances, prepare, record, region_args, retime, setting,
+                               system_message, task_args, tolerances)
 from kernels.search import detect, tune
 from kernels.search.llm import Claude
 from kernels.search.loop import cascade, search
 from kernels.search.tree import UCT_C
-from kernels.tasks import TASKS, load
+from kernels.tasks import load
 
 
 TUNE_FACT = ("A program may define, at module level, `CONFIG` (a dict of the launch parameters its kernel uses) and "
@@ -120,7 +121,7 @@ def _funnel(a, task, review):
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="kernels.search")
-    ap.add_argument("--task", required=True, choices=TASKS)
+    task_args(ap)
     ap.add_argument("--shapes")
     ap.add_argument("--captures", action="append")
     ap.add_argument("--out", required=True)
@@ -167,10 +168,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="the funnel's no-GPU build check and compiler report before stage 1")
     a = ap.parse_args(argv)
     a.ncu = a.device.startswith("cuda") if a.ncu is None else a.ncu
-    task = load(a.task)
+    task = load(a.task, **region_args(a))
     out = Path(a.out)
     tol = tolerances(_target_tolerances())
-    sets, program = prepare(task, _shapes(task, a), out, a.device, tol, a.timing_shapes, a.initial)
+    sets, program = prepare(task, _shapes(task, a), out, a.device, tol, a.timing_shapes, a.initial, region_args(a))
     review = None if a.judge_model == "none" else Claude(a.judge_model, a.effort, tools=a.judge_tools)
     judge = cascade(evaluator.judge_stage, counters=a.ncu)
     system = (system_message(task) + "\n\n" + setting(task, sets, a.device, tol)

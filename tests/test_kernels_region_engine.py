@@ -261,3 +261,33 @@ def test_a_region_overlapping_an_override_already_shipped_is_refused(tmp_path, m
     ship("act", "add", "a", "b")                                            # beside it: shipped
     with pytest.raises(ValueError, match=r"norm\.\.act overlaps the override (act\.\.add|mm\.\.mm) already in"):
         ship("norm", "act", "b", "c")
+
+
+def test_the_search_cli_takes_a_region_with_its_samples_and_holder(tmp_path, monkeypatch):
+    import argparse
+    import pytest
+    from kernels.evolve import run
+    from kernels.search import __main__ as cli
+    regions = engine(tmp_path, monkeypatch)
+    h = held(tmp_path, regions)
+    caps = captures(tmp_path, [(4, 64, 0, True)] * 3 + [(16, 64, 0, True)] * 2 + [(64, 64, 0, True)])
+    for k in ("KERNEL_EVAL_CONFIG", "KERNELS_EVAL_LOG"):
+        monkeypatch.setenv(k, "")
+    monkeypatch.setattr(cli, "Claude", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "search", lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))   # stop before it
+    out = tmp_path / "out"
+    with pytest.raises(KeyboardInterrupt):
+        cli.main(["--task", "region:norm:add", "--samples", str(caps), "--shared-weights", str(h.path),
+                  "--out", str(out), "--judge-model", "none", "--device", "cpu"])
+    cfg = json.loads((out / "eval_config.json").read_text())
+    assert cfg["task"] == "region:norm:add" and cfg["samples"] == str(caps.resolve())
+    assert cfg["shared_weights"] == str(h.path.resolve()) and cfg["seen"] == [[4, 64], [16, 64]]   # split from samples
+    assert "_CONST['w.mm_scale'] = None" in (out / "initial_program.py").read_text()
+    gates = []
+    monkeypatch.setattr(run, "judge_jailed", lambda cfg, *a, **k: gates.append(cfg) or {"metrics": {}})
+    run.main(["gate", "--task", "region:norm:add", "--samples", str(caps), "--shared-weights", str(h.path),
+              "--program", str(out / "initial_program.py"), "--device", "cpu"])
+    assert gates[0]["heldout"] == [[64, 64]] and gates[0]["samples"] == cfg["samples"]
+    assert gates[0]["shared_weights"] == cfg["shared_weights"]
+    with pytest.raises(argparse.ArgumentTypeError):
+        run.task_name("region:norm")
