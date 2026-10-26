@@ -13,7 +13,7 @@ How results are scored
 - {measurement}
 - Latency limits, checked at p99: interactive TTFT <= {interactive_ttft_ms:g} ms and TPOT <= {interactive_tpot_ms:g} ms; conversational TTFT <= {conversational_ttft_ms:g} ms and TPOT <= {conversational_tpot_ms:g} ms.
 - Tiers: short = {short_probe:g} s probes and a {short_final:g} s measurement window per regime; full = {full_probe:g} s probes and {full_final:g} s.
-- A submit reports, per regime, the change against the base commit measured the same way, and a verdict: `improved` or `regressed` when the change exceeds the regime's noise band (its run-to-run spread on the base engine at this commit), `within_band` when it does not, `unknown_band` when no band was measured at this engine commit.
+- A submit reports, per regime, the change against the base commit measured the same way, and a verdict: `improved` or `regressed` when the change exceeds the regime's noise band (its run-to-run spread on the base engine), `within_band` when it does not, `unknown_band` when no band was measured for this target on this corpus version.
 - Correctness (`equiv`): the engine's answers to a fixed question set (MMLU-Pro, MATH, unit-tested code, long-context retrieval) against the unmodified reference model's: pooled score >= {min_score_ratio:g} of the reference's, answer length >= {min_length_ratio:g} of its, consistent streams. A loss under the line fails only when it is statistically significant; else the verdict is inconclusive, which never counts as a pass.
 
 Environment

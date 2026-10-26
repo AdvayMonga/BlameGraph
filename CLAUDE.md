@@ -46,7 +46,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   measures and records them in `config.profiles`, and the verdict checks the same. The harness reads only the file.
   A profile launch that fails makes its regimes invalid with the reason (`profiles_failed`) and the rest is kept; a
   busy GPU, contamination or the general launch failing still fail the measurement. The profiler tools take
-  `profile` too. Noise bands stay the base engine's general config (the latest per target, any engine commit), stated in the harness facts.
+  `profile` too. Noise bands stay the base engine's general config (the latest per target, any engine commit, same corpus version), stated in the harness facts.
 - `targets/<name>.toml` + `lab/target.py` — **the target spec** (since 2026-10-06): model + chat kwargs, engine
   (repo, python, launch command with `{port}`, health path, env, logprobs `api` vllm|sglang|none, write surface,
   add-only globs, test and lint commands, optional `[engine.telemetry] env` with `{dir}`, optional `profiles` +
@@ -162,7 +162,11 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   natively (schema 1, inference-server#102); the target names its env vars in `[engine.telemetry] env` (`{dir}`); serve collects
   the files after every bench/equiv/submit and the contract check's report is stored beside them. vLLM OTel span mapping is in the spec, not implemented.
 - `corpus/` — frozen workload traces (BurstGPT timing, WildChat text), seen/heldout, hashed, `manifest.json`;
-  `build_corpus.py` / `fetch_traces.py` rebuild it; any change is a new `corpus_version`. Since 2026-10-09 (version
+  `build_corpus.py` / `fetch_traces.py` rebuild it; any change is a new `corpus_version`. `lengths.py` (`python -m
+  corpus.lengths --url URL`, decided 2026-10-25) writes each record's `expected_output_tokens` (and a multi-turn
+  record's per-turn `expected_turn_output_tokens`) from a served reference, both splits, resuming from a log in
+  `data/`; a new version whose manifest `prompts_version` stays the held-out guard's key (`Manifest.budget_key`); the
+  provenance test rebuilds and applies them; not run yet. The run's base cache is per corpus version. Since 2026-10-09 (version
   `131149…`) the held-out traces and the build seed (`corpus/.seed`, which reproduces them) are gitignored and live in
   the store (`python -m store pull --corpus`); the previous version's held-out split was public in git.
 - `lab/search.py` — the `search` tool (2026-10-15): one document per `hypothesis` record across every run, with its
@@ -384,7 +388,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `client.py` (one streamed chat request: TTFT from *scheduled* send to first real token, TPOT = (E2E − TTFT)/(n − 1),
   status ok / error (explicit 4xx or 503 rejection) / silent_drop / truncated / crash (other 5xx, no response,
   stream died); a one-token answer has no TPOT and never meets the limits; corpus headers X-Session-Id,
-  X-Turn-Index, X-Trace-Id), `runner.py` (open loop: schedule dealt to 4 client processes on one shared start, each
+  X-Turn-Index, X-Trace-Id; a record with `expected_output_tokens` is sent at that length, or the regime's
+  `max_tokens`, with `ignore_eos` and `skip_special_tokens: false`, and one that ends earlier is `truncated`:
+  `workload.to_request`), `runner.py` (open loop: schedule dealt to 4 client processes on one shared start, each
   request on a thread started 5 ms early, so p99 send lag stays ~1–3 ms; closed loop; `summarize`: p50/p99, failures,
   attainment, valid only if no silent drop/truncation/crash and client lag p99 ≤ 10 ms; `find_goodput`: double then
   bisect on ≥99% meeting both limits), `workload.py` (reads `corpus/` through `lab.corpus`'s verified loader — hashes checked, a changed trace

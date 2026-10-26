@@ -278,6 +278,17 @@ def test_submit_reports_no_heldout_delta_without_a_seen_delta(lab, monkeypatch, 
     ledger.append({"kind": "noise", "result": {**band, "target": target.load().name, "engine_commit": "abc",
                                                "band_pct": 2.0}}, root)
     assert evaltools.noise_band_pct("single_stream", target.load(), root) == 2.0
+    # but only on the corpus version it was measured on: fixed answer lengths are a new version
+    import dataclasses
+
+    from lab.corpus import CORPUS_DIR
+    from regimes.workload import corpus_version
+    t = dataclasses.replace(target.load(), corpus_dir=CORPUS_DIR)
+    ledger.append({"kind": "noise", "result": {**band, "target": t.name, "corpus_version": "old", "band_pct": 3.0}}, root)
+    assert evaltools.noise_band_pct("single_stream", t, root) == 2.0
+    ledger.append({"kind": "noise", "result": {**band, "target": t.name, "band_pct": 4.0,
+                                               "corpus_version": corpus_version(CORPUS_DIR)}}, root)
+    assert evaltools.noise_band_pct("single_stream", t, root) == 4.0
 
 
 def test_submit_scores_the_task(lab, tmp_path):
@@ -397,7 +408,8 @@ def test_baseline_is_measured_once_per_run_and_briefed_with_one_ledger_record(la
     assert len(base) == 1 and base[0]["result"]["verdict"] == "ok"
     assert base[0]["cost"]["seconds"] > 0 and "rate_known" in base[0]["cost"]
     assert base[0]["config"] == {"split": "seen", "tier": "short", "commit": session._resolve(cfg.repo, "HEAD")}
-    assert (tmp_path / "runs" / "rb" / "base-seen-short.json").exists()      # the cache submit compares against
+    assert [p for p in (tmp_path / "runs" / "rb").glob("base-seen-short*.json")     # the cache submit compares against
+            if not p.name.endswith(".calibrated.json")]
     first, second = (sp.prompt for sp in p.specs)
     for prompt in (first, second):
         line = prompt.split("Baseline (", 1)[1].split("\n")[1]
@@ -475,12 +487,14 @@ def test_bench_starts_its_searches_where_the_base_ended(lab, monkeypatch):
     monkeypatch.setattr(evaltools, "run_regimes", lambda url, t, names, split, tier, seed, rows=None, hints=None,
                         bands=None: got.append(hints) or [])
     tb.bench({"regimes": ["saturated"]})                                     # no base measured yet: a cold search
-    (s.run_dir / "base-seen-short.json").write_text(json.dumps(
-        {"saturated": {"value": 3.8, "valid": True, "concurrency": 64}, "bursty": {"value": 2.0, "valid": True},
-         "single_stream": {"value": 0.006, "valid": True}}))
+    base = json.dumps({"saturated": {"value": 3.8, "valid": True, "concurrency": 64}, "bursty": {"value": 2.0, "valid": True},
+                       "single_stream": {"value": 0.006, "valid": True}})
+    (s.run_dir / "base-seen-short-000000000000.json").write_text(base)
+    tb.bench({"regimes": ["saturated"]})                                     # a base on another corpus version: unused
+    tb._base_cache("seen", "short").write_text(base)
     tb.bench({"regimes": ["saturated"]})
     tb.bench({"regimes": ["saturated"], "seed": 3})                          # another sample: not the base's search
-    assert got == [{}, {"saturated": {"concurrency": 64}, "bursty": {"load": 2.0}}, {}]
+    assert got == [{}, {}, {"saturated": {"concurrency": 64}, "bursty": {"load": 2.0}}, {}]
 
 
 @pytest.fixture

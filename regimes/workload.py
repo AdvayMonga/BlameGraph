@@ -1,6 +1,7 @@
 """Workloads: the corpus (`corpus/`, real BurstGPT timing + WildChat text; built by corpus/build_corpus.py) and seeded
 schedules built from it. Trace format (corpus/README.md): one request per line with `arrival_s`, `session_id`,
-`turn_index`, `prompt`, `max_tokens`, `build_prompt_tokens`, and `messages` on multi-turn requests.
+`turn_index`, `prompt`, `max_tokens`, `build_prompt_tokens`, `messages` on multi-turn requests, and
+`expected_output_tokens` (the reference's answer length) once measured.
 """
 from __future__ import annotations
 
@@ -52,13 +53,16 @@ def messages(rec: dict) -> list[dict]:
 
 def to_request(rec: dict, at_s: float = 0.0, max_tokens: int | None = None, suffix: str = "", system: str | None = None,
                rid: str | None = None) -> Request:
+    """A record with a measured reference length is sent at a fixed length: the regime's `max_tokens` when it sets
+    one, else that length, with ignore_eos."""
     msgs = [dict(m) for m in messages(rec)]
     if suffix:
         msgs[-1]["content"] = msgs[-1]["content"] + suffix
     if system:
         msgs = [{"role": "system", "content": system}] + msgs
-    return Request(rid or rec["id"], msgs, max_tokens or rec.get("max_tokens") or 2048, at_s,
-                   rec.get("session_id"), rec.get("turn_index"))
+    fixed = rec.get("expected_output_tokens")
+    return Request(rid or rec["id"], msgs, max_tokens or fixed or rec.get("max_tokens") or 2048, at_s,
+                   rec.get("session_id"), rec.get("turn_index"), ignore_eos=fixed is not None)
 
 
 def synthetic(n: int, words: int = 60, seed: int = 0, prefix: str = "syn") -> list[dict]:
@@ -107,14 +111,16 @@ def peak_window(trace: list[dict], width_s: float = 180.0) -> tuple[float, float
 
 def conversations(pool: list[dict], max_turns: int = 6) -> list[list[dict]]:
     """Each record with a stored history [user, assistant, ..., user] becomes a conversation of its first
-    `max_turns` user turns; turn j sends the history up to the j-th user message."""
+    `max_turns` user turns; turn j sends the history up to the j-th user message, at the reference's length for that
+    prefix when measured (`expected_turn_output_tokens`)."""
     convs = []
     for r in pool:
         msgs = r.get("messages") or []
         users = [i for i, m in enumerate(msgs) if m.get("role") == "user"][:max_turns]
+        turns = r.get("expected_turn_output_tokens")
         if len(users) >= 2:
-            convs.append([{**r, "id": f"{r['id']}.t{j}", "messages": msgs[:i + 1], "turn_index": j}
-                          for j, i in enumerate(users)])
+            convs.append([{**r, "id": f"{r['id']}.t{j}", "messages": msgs[:i + 1], "turn_index": j,
+                           "expected_output_tokens": turns[j] if turns else None} for j, i in enumerate(users)])
     return convs
 
 

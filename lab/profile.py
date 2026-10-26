@@ -112,8 +112,9 @@ async def _sampled(sched: ContinuousBatchScheduler, prompts: list[list[int]], ma
 async def _fire(sched: ContinuousBatchScheduler, prompts: list[list[int]], max_tokens: int,
                 session: str) -> list:
     loop = asyncio.get_running_loop()
-    reqs = [ScheduledRequest(token_ids=p, max_tokens=max_tokens, session_id=f"{session}-{i}",
-                             future=loop.create_future()) for i, p in enumerate(prompts)]
+    fixed = {"ignore_eos": True} if "ignore_eos" in {f.name for f in dataclasses.fields(ScheduledRequest)} else {}
+    reqs = [ScheduledRequest(token_ids=p, max_tokens=max_tokens, session_id=f"{session}-{i}",   # each runs to max_tokens
+                             future=loop.create_future(), **fixed) for i, p in enumerate(prompts)]
     return await asyncio.gather(*(sched.submit(r) for r in reqs), return_exceptions=True)
 
 

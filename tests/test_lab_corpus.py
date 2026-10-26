@@ -30,6 +30,7 @@ from lab.corpus import (
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "corpus"))
 import build_corpus as bc  # noqa: E402
+import lengths  # noqa: E402
 
 REGIMES = ("cold_start", "steady_interactive", "long_context", "spike")
 MIXED_CLASSES = ("mixed_1", "mixed_2", "mixed_3")
@@ -88,10 +89,14 @@ def test_committed_corpus_verifies_and_every_class_is_non_empty():
 @pytest.mark.needs_host
 def test_committed_corpus_is_what_the_builder_produces(tmp_path):
     """Provenance: the data on disk came from build_corpus.py at the secret seed (corpus/.seed) from the
-    pinned raw inputs, byte for byte. A changed input or class table is a new version."""
+    pinned raw inputs, byte for byte, plus the measured reference lengths (corpus/lengths.py) when they are set.
+    A changed input or class table is a new version."""
     if not (CORPUS_DIR / ".seed").exists():
         pytest.skip("no corpus/.seed: pull it with `python -m store pull --corpus`")
     rebuilt = bc.build_corpus(tmp_path, int((CORPUS_DIR / ".seed").read_text()))
+    measured = lengths.read(CORPUS_DIR)
+    if any(n is not None for ns in measured.values() for n in ns):
+        rebuilt = lengths.apply(tmp_path, measured)
     committed = load_manifest(CORPUS_DIR)
     assert rebuilt.files == committed.files
     assert rebuilt.corpus_version == committed.corpus_version
@@ -162,11 +167,17 @@ def test_no_committed_corpus_file_contains_a_credential():
 
 @pytest.mark.needs_host
 @needs_heldout
-def test_no_oracle_is_set():
-    for name in CLASSES:
-        for r in _all(name):
-            assert r.sampling["temperature"] == 0.0, "temperature 0 for equivalence"
-            assert r.expected_output_hash is None and r.expected_output_tokens is None
+def test_no_oracle_is_set_and_lengths_are_all_or_nothing():
+    every = [r for name in CLASSES for r in _all(name)]
+    for r in every:
+        assert r.sampling["temperature"] == 0.0, "temperature 0 for equivalence"
+        assert r.expected_output_hash is None
+        assert r.expected_output_tokens is None or 1 <= r.expected_output_tokens <= r.max_tokens
+        if r.expected_output_tokens is not None and len([m for m in r.messages or [] if m["role"] == "user"]) >= 2:
+            turns = r.expected_turn_output_tokens
+            assert turns and len(turns) == len([m for m in r.messages if m["role"] == "user"])
+            assert turns[-1] == r.expected_output_tokens
+    assert len({r.expected_output_tokens is None for r in every}) == 1, "corpus/lengths.py measures every record"
 
 
 @pytest.mark.needs_host
@@ -194,6 +205,78 @@ def test_multi_turn_requests_carry_real_assistant_turns():
 
 
 # ---------------------------------------------------------------- the rules
+
+def test_lengths_are_written_into_every_trace_as_a_new_version_with_the_same_budget(tmp_path):
+    m = _mini_corpus(tmp_path)
+    got = lengths.read(tmp_path)
+    assert got and all(x == (None, None) for xs in got.values() for x in xs)
+    want = {rel: [(7 + i, None) for i in range(len(xs))] for rel, xs in got.items()}
+    new = lengths.apply(tmp_path, want)
+    assert new.corpus_version != m.corpus_version and new.budget_key == m.corpus_version == m.budget_key
+    back = load_manifest(tmp_path)
+    assert back.corpus_version == new.corpus_version and back.budget_key == m.corpus_version
+    assert lengths.read(tmp_path) == want and not list(tmp_path.rglob("*.tmp"))
+    again = lengths.apply(tmp_path, want)
+    assert again.notes == new.notes and again.budget_key == m.corpus_version     # the note and the key stay
+    with pytest.raises(ValueError, match="0 lengths for 1 records"):
+        lengths.apply(tmp_path, {rel: [] for rel in got})
+
+
+def _multi_turn_corpus(d: Path):
+    m = _mini_corpus(d)
+    msgs = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}, {"role": "user", "content": "cc"},
+            {"role": "assistant", "content": "d"}, {"role": "user", "content": "eee"}]
+    write_trace(d / "cold_start" / "seen.jsonl", [TraceRequest(0.0, "s", 2, "a\n\nb\n\ncc\n\nd\n\neee", 64,
+                                                               messages=msgs)])
+    m = build_manifest(m.classes, d)
+    (d / "manifest.json").write_text(json.dumps(m.to_dict(), indent=2) + "\n")
+
+
+def _fake_reference(monkeypatch, fail=lambda req: False):
+    from regimes import client
+    sent = []
+
+    def fake_send(url, model, req, scheduled, clock, chat_kwargs=None, **k):
+        sent.append((url, req, chat_kwargs))
+        if fail(req):
+            return client.Row(req.id, "silent_drop", 0.0, 0.0, detail="200 with no generated text")
+        return client.Row(req.id, "ok", 0.0, 0.0, n_tokens=len(req.messages[-1]["content"]))
+
+    monkeypatch.setattr(client, "send", fake_send)
+    monkeypatch.setattr(lengths.time, "sleep", lambda s: None)
+    return sent
+
+
+def test_lengths_are_the_references_completion_tokens_per_record_and_turn(tmp_path, monkeypatch):
+    _multi_turn_corpus(tmp_path)
+    sent = _fake_reference(monkeypatch)
+    out = lengths.measure("http://ref", "m", {"enable_thinking": False}, tmp_path, concurrency=2, log=tmp_path / "l.jsonl")
+    assert out["cold_start/seen.jsonl"] == [(3, [1, 2, 3])]                  # each user-turn prefix, the last = itself
+    assert out["long_context/seen.jsonl"] == [(len("Case long_context seen"), None)]
+    assert len(sent) == 6 and all(u == "http://ref" and kw == {"enable_thinking": False} and not r.ignore_eos
+                                  and r.max_tokens == 64 for u, r, kw in sent)
+
+
+def test_a_failed_length_is_reported_after_the_rest_and_a_rerun_resumes(tmp_path, monkeypatch):
+    _multi_turn_corpus(tmp_path)
+    log = tmp_path / "l.jsonl"
+    sent = _fake_reference(monkeypatch, fail=lambda req: req.messages[-1]["content"] == "cc")
+    with pytest.raises(RuntimeError, match="1 of 6 requests failed.*a rerun resumes"):
+        lengths.measure("http://ref", "m", {}, tmp_path, log=log)
+    assert len(sent) == 5 + 3 and len(log.read_text().splitlines()) == 5      # 3 attempts on the failing one
+    sent = _fake_reference(monkeypatch)
+    assert lengths.measure("http://ref", "m", {}, tmp_path, log=log)["cold_start/seen.jsonl"] == [(3, [1, 2, 3])]
+    assert len(sent) == 1                                                      # only the failed one again
+
+
+def test_a_missing_heldout_trace_is_named_before_any_request(tmp_path, monkeypatch):
+    _mini_corpus(tmp_path)
+    (tmp_path / "long_context" / "heldout.jsonl").unlink()
+    sent = _fake_reference(monkeypatch)
+    with pytest.raises(CorpusError, match="store pull --corpus"):
+        lengths.measure("http://ref", "m", {}, tmp_path, log=tmp_path / "l.jsonl")
+    assert sent == []
+
 
 def test_tampered_trace_is_refused(tmp_path):
     _mini_corpus(tmp_path)

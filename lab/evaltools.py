@@ -85,11 +85,15 @@ def headline(results: list[dict]) -> dict:
 
 def noise_band_pct(regime: str, t: target.Target | None = None, root: Path = ledger.ROOT) -> float | None:
     """The latest run-to-run band for a regime from the ledger's `noise` records, only if it was measured on this
-    target's engine (at any engine commit: the calibration is once per user); a band from another target is ignored."""
+    target's engine (at any engine commit: the calibration is once per user) and on its current corpus version (a
+    record without one counts); a band from another target or corpus version is ignored."""
+    from regimes.workload import corpus_version
+    version = corpus_version(t.corpus_dir) if t is not None and t.corpus_dir.is_dir() else None
     d = None
     for r in ledger.records(root, kind="noise"):
         x = r["result"]
-        if x.get("regime") == regime and (t is None or (x.get("target") == t.name and x.get("server") == "engine")):
+        if x.get("regime") == regime and (t is None or (x.get("target") == t.name and x.get("server") == "engine"
+                                                         and x.get("corpus_version") in (None, version))):
             d = x
     return None if d is None else d.get("band_pct")
 
@@ -159,7 +163,8 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
                         "tasks": list(t.tasks)},
         "noise_bands_pct": {n: noise_band_pct(n, t, ledger_root or ledger.ROOT) for n in suite.REGIMES},
         "noise_bands_measured_on": "the base commit's engine with its general config, repeated unchanged runs "
-                                   "(lab.validate, the latest at any engine commit); submit applies them to every candidate and "
+                                   "(lab.validate, the latest at any engine commit on this corpus version); submit applies them "
+                                   "to every candidate and "
                                    "every launch profile; None where no band was measured for this target",
         "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,
         "ceilings": _ceiling_facts(t, ledger_root),
@@ -174,15 +179,15 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
 
 
 def holdout_guard(t: target.Target) -> HoldoutGuard:
-    """The one Thresholdout guard of the target's corpus version, shared by every run and machine through the store
+    """The one Thresholdout guard of the target's corpus prompts (`Manifest.budget_key`), shared by every run and machine through the store
     (LAB_STORE). Refused where there is no store: a local budget would start over on every machine."""
-    from regimes.workload import corpus_version
     from store.remote import NoRemote, open_remote
     try:
         remote = open_remote()
     except NoRemote as e:
         raise Refused(f"no shared held-out budget on this host ({e})") from None
-    version = corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else "no-corpus"   # synthetic workloads
+    from lab.corpus import load_manifest
+    version = load_manifest(t.corpus_dir).budget_key if t.corpus_dir.is_dir() else "no-corpus"   # synthetic workloads
     return HoldoutGuard(remote, f"heldout/guard/{version}", HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT)
 
 
@@ -286,7 +291,7 @@ class EvalTools:
         t0 = time.monotonic()
         work = self._work("bench")
         try:
-            base = self.s.run_dir / f"base-seen-{tier}.json"
+            base = self._base_cache("seen", tier)
             hints = search_hints(json.loads(base.read_text())) if base.exists() and seed == self.seed else {}
             r = self._measure(tree, work, "serve-bench.log", names=names, split="seen", tier=tier, passive=True,
                               seed=seed, hints=hints, bands=self._bands(names))
@@ -394,7 +399,7 @@ class EvalTools:
             # which profile launches failed and how (did not start / the exception's type), never its text
             failed = {p: why.split(":", 1)[0] for p, why in (r.get("profiles_failed") or {}).items()}
             new = headline(r["results"])
-            cal_path = self.s.run_dir / f"base-seen-{BENCH_TIER}.calibrated.json"
+            cal_path = self._base_cache("seen", BENCH_TIER).with_suffix(".calibrated.json")
             seen_cal = json.loads(cal_path.read_text()) if cal_path.exists() else {}
             metrics, better = {}, {}
             for n in names:
@@ -470,9 +475,16 @@ class EvalTools:
         artifacts.write_rows(work, equiv_rows(out))
         return artifacts.store(work, self.s.ledger_root)
 
+    def _base_cache(self, split: str, tier: str) -> Path:
+        """The base's cached measurement, one per corpus version: a base from another corpus is never compared."""
+        from regimes.workload import corpus_version
+        t = target.load()
+        v = corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None
+        return self.s.run_dir / (f"base-{split}-{tier}-{v[:12]}.json" if v else f"base-{split}-{tier}.json")
+
     def _base_measure(self, t: target.Target, names: list[str], split: str, tier: str) -> dict:
         """The base commit measured like a candidate, once per run per split; cached outside the jail."""
-        cache = self.s.run_dir / f"base-{split}-{tier}.json"
+        cache = self._base_cache(split, tier)
         have = json.loads(cache.read_text()) if cache.exists() else {}
         missing = [n for n in names if n not in have]
         if missing:
@@ -505,7 +517,7 @@ class EvalTools:
         self._t0 = time.monotonic()
         try:
             seen = self.base_seen(target.load(), names)
-            cal = self.s.run_dir / f"base-seen-{BENCH_TIER}.calibrated.json"
+            cal = self._base_cache("seen", BENCH_TIER).with_suffix(".calibrated.json")
             calibrated = json.loads(cal.read_text()) if cal.exists() else {}
             result = {"verdict": "ok", "metrics": {n: seen[n] for n in names},
                       "calibrated": {n: calibrated[n] for n in names if n in calibrated}}

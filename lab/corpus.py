@@ -42,6 +42,8 @@ class TraceRequest:
                                                                "top_k": 0})
     expected_output_hash: str | None = None    # filled by a reference run; the correctness oracle
     expected_output_tokens: int | None = None  # ditto; the termination oracle. None = not measured
+    # the reference's answer length to each user-turn prefix of `messages` (the shared-prefix regime's turns)
+    expected_turn_output_tokens: list[int] | None = None
     # A real conversation ending in a user turn; None = one user message, `prompt`. When set,
     # `prompt` is its contents joined by blank lines, for the raw route and the simulator.
     messages: list[dict[str, str]] | None = None
@@ -52,11 +54,11 @@ class TraceRequest:
         return self.messages or [{"role": "user", "content": self.prompt}]
 
     def to_dict(self) -> dict[str, Any]:
-        """`expected_output_tokens`, `messages` and `build_prompt_tokens` are omitted when
-        unset, so a trace written without them is byte-identical to one from before they existed.
-        `expected_output_hash` keeps serialising its null: it is already in every committed trace."""
+        """The optional fields are omitted when unset, so a trace written without them is byte-identical to one
+        from before they existed. `expected_output_hash` keeps serialising its null: it is already in every
+        committed trace."""
         d = asdict(self)
-        for k in ("expected_output_tokens", "messages", "build_prompt_tokens", "regime"):
+        for k in ("expected_output_tokens", "expected_turn_output_tokens", "messages", "build_prompt_tokens", "regime"):
             if d[k] is None:
                 del d[k]
         return d
@@ -97,6 +99,14 @@ class Manifest:
     notes: str = ""
     # relative path -> factor every real inter-arrival was stretched by; absent = not recorded
     dilation: dict[str, float] = field(default_factory=dict)
+    # the version before measured answer lengths were added (corpus/lengths.py): the same prompts, so the held-out
+    # budget stays keyed to it; None = no lengths, `corpus_version` is that key
+    prompts_version: str | None = None
+
+    @property
+    def budget_key(self) -> str:
+        """The held-out budget's key: lengths change no prompt, so they do not start a new budget."""
+        return self.prompts_version or self.corpus_version
 
     def to_dict(self) -> dict[str, Any]:
         d = {"schema_version": self.schema_version, "corpus_version": self.corpus_version,
@@ -104,6 +114,8 @@ class Manifest:
              "files": dict(sorted(self.files.items())), "notes": self.notes}
         if self.dilation:
             d["dilation"] = dict(sorted(self.dilation.items()))
+        if self.prompts_version:
+            d["prompts_version"] = self.prompts_version
         return d
 
     @classmethod
@@ -111,7 +123,7 @@ class Manifest:
         return cls(schema_version=d["schema_version"], corpus_version=d["corpus_version"],
                    classes={k: WorkloadClass(**v) for k, v in d["classes"].items()},
                    files=dict(d["files"]), notes=d.get("notes", ""),
-                   dilation=dict(d.get("dilation", {})))
+                   dilation=dict(d.get("dilation", {})), prompts_version=d.get("prompts_version"))
 
 
 def file_sha256(path: Path) -> str:

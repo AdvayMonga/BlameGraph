@@ -1,6 +1,7 @@
 """A fake OpenAI-compatible streaming engine with a fixed number of decode slots, for the regime tests.
 
-Requests wait for a free slot (so queueing raises TTFT), then stream one token per `token_s`. With `queue_limit`, a
+Requests wait for a free slot (so queueing raises TTFT), then stream one token per `token_s`; with `ignore_eos` a
+streamed request runs to its max_tokens and finishes with "length". With `queue_limit`, a
 request arriving to a full queue gets an explicit 503. With $TELEMETRY_DIR set, each streamed request appends
 {trace_id, tokens_out} to `requests.jsonl` there, like an engine's own per-request rows. Run standalone:
   python tests/fake_engine.py --port N [--delay S]
@@ -16,8 +17,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, queue_limit: int | None = None,
-                port: int = 0, wrong_every: int = 0) -> ThreadingHTTPServer:
-    """`wrong_every` = N: every Nth multiple-choice answer is wrong (a known-bad candidate for the gate)."""
+                port: int = 0, wrong_every: int = 0, ignore_eos: bool = True) -> ThreadingHTTPServer:
+    """`wrong_every` = N: every Nth multiple-choice answer is wrong (a known-bad candidate for the gate);
+    `ignore_eos` False: an engine that ignores the field."""
     counter = [0]
     sem, lock, waiting = threading.Semaphore(slots), threading.Lock(), [0]
 
@@ -72,13 +74,16 @@ def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, qu
             try:
                 last = body["messages"][-1]["content"]
                 text = ["42"] if "17 + 25" in last else [f"t{i} " for i in range(min(out_tokens, body.get("max_tokens") or out_tokens))]
+                fixed = ignore_eos and body.get("ignore_eos")
+                if fixed:                            # a fixed-length request runs to max_tokens
+                    text = [f"t{i} " for i in range(body["max_tokens"])]
                 self.send_response(200); self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Transfer-Encoding", "chunked"); self.end_headers()
                 self._chunk({"choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}]})
                 for t in text:
                     time.sleep(token_s)
                     self._chunk({"choices": [{"index": 0, "delta": {"content": t}}]})
-                self._chunk({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
+                self._chunk({"choices": [{"index": 0, "delta": {}, "finish_reason": "length" if fixed else "stop"}]})
                 self._chunk({"choices": [], "usage": {"prompt_tokens": sum(len(m["content"].split()) for m in body["messages"]),
                                                       "completion_tokens": len(text)}})
                 if os.environ.get("TELEMETRY_DIR"):

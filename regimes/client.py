@@ -22,6 +22,7 @@ class Request:
     at_s: float = 0.0                 # scheduled send, seconds after the run starts (open loop)
     session_id: str | None = None
     turn_index: int | None = None
+    ignore_eos: bool = False          # fixed answer length: the server runs to max_tokens past its stop token
 
 
 @dataclass
@@ -55,6 +56,8 @@ def send(url: str, model: str, req: Request, scheduled: float, clock, timeout: f
             "stream": True, "stream_options": {"include_usage": True}}
     if chat_kwargs:
         body["chat_template_kwargs"] = dict(chat_kwargs)
+    if req.ignore_eos:            # special tokens kept in the text, so a re-count from it stays exact
+        body.update(ignore_eos=True, skip_special_tokens=False)
     headers = {"Content-Type": "application/json", "X-Trace-Id": f"{trace_prefix}-{req.id}"}
     if req.session_id is not None:
         headers["X-Session-Id"] = str(req.session_id)
@@ -112,6 +115,8 @@ def send(url: str, model: str, req: Request, scheduled: float, clock, timeout: f
         row.status, row.detail = "silent_drop", "200 with no generated text"
     elif not done and finish is None:
         row.status, row.detail = "truncated", "stream ended without a finish reason or [DONE]"
+    elif req.ignore_eos and finish != "length":
+        row.status, row.detail = "truncated", f"fixed-length answer ended with finish {finish!r} before max_tokens"
     else:
         row.status = "ok"
     return row
