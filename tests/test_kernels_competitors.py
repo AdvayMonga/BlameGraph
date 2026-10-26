@@ -139,7 +139,9 @@ def test_timed_paths_skip_copies_and_conversions(monkeypatch):
     res, x = competitors._vllm_fused_add_rms_norm(h, a, w)
     assert res is not h and torch.equal(h, torch.ones(2, 4))                           # checked: inputs untouched
     res, x = competitors._vllm_fused_add_rms_norm(h, a, w, timed=True)
-    assert res is h and x is a and float(h[0, 0]) == 2.0                                # timed: in place
+    assert res is not h and torch.equal(h, torch.ones(2, 4)) and float(res[0, 0]) == 2.0     # timed: on its own copy
+    again, _ = competitors._vllm_fused_add_rms_norm(h, a, w, timed=True)
+    assert again is res                                                                  # made once per input set
 
     def topk_softmax(w, ids, tok, logits, *rest):
         w.fill_(0.5)
@@ -169,9 +171,15 @@ def test_timed_outputs_are_checked_and_each_shape_keeps_its_spread_and_config(mo
     monkeypatch.setitem(competitors.UNTIMED, "c", lambda o, x, w: o.flip(0))           # its own order, mapped back
     assert isinstance(competitors.time_competitor(t, "c", flipped, t.reference, [(8, 256)], {}, 6, "cpu"), list)
     in_place = lambda x, w, timed=False: x.copy_(t.reference(x, w)) if timed else t.reference(x, w)  # noqa: E731
-    assert isinstance(competitors.time_competitor(t, "p", in_place, t.reference, [(8, 256)], {}, 6, "cpu"), str)
     monkeypatch.setattr(competitors, "IN_PLACE", {"p"})
-    assert isinstance(competitors.time_competitor(t, "p", in_place, t.reference, [(8, 256)], {}, 6, "cpu"), list)
+    assert "changed" in competitors.time_competitor(t, "p", in_place, t.reference, [(8, 256)], {}, 6, "cpu")  # shared
+    scratch = {}                                          # in place on its own copy of each input set: timed
+
+    def own(x, w, timed=False):
+        if not timed:
+            return t.reference(x, w)
+        return scratch.setdefault(x.data_ptr(), torch.empty_like(x)).copy_(t.reference(x, w))
+    assert isinstance(competitors.time_competitor(t, "p", own, t.reference, [(8, 256)], {}, 6, "cpu"), list)
     raises = lambda x, w, timed=False: 1 / 0 if timed else t.reference(x, w)           # noqa: E731
     assert competitors.time_competitor(t, "r", raises, t.reference, [(8, 256)], {}, 6, "cpu").startswith(
         "timing raised ZeroDivisionError")
