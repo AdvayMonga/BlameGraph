@@ -239,3 +239,25 @@ def test_a_region_ships_as_an_override_module_never_through_the_entry_path(tmp_p
     got = ns["OVERRIDES"][("norm", "add")](c)
     want = t.baseline()(hh.clone(), h.tensors["w.mm"])
     assert list(got) == ["h"] and torch.equal(got["h"], want[0]) and torch.equal(c["h"], hh)   # h not written in place
+    import pytest
+    for k, v in (("w.mm_scale", torch.ones(1)), ("cfg", st.LayerConfig(1e-5))):    # fp8 scales for bf16; another cfg
+        with pytest.raises(ValueError, match=f"passes \\['{k}'\\] unlike"):
+            ns["OVERRIDES"][("norm", "add")]({**c, k: v})
+
+
+def test_a_region_overlapping_an_override_already_shipped_is_refused(tmp_path, monkeypatch):
+    import pytest
+    from kernels.evolve import ship as ship_mod
+    from kernels.evolve.run import initial_program
+    regions, repo, git = _engine_repo(tmp_path, monkeypatch)
+    h = held(tmp_path, regions)
+    ok = {"metrics": {"correct": 1.0}, "artifacts": {"gates": json.dumps(
+        {"correctness_heldout": {"passed": True, "cases": 6}, "physics": {"passed": True}})}}
+
+    def ship(first, last, base, branch):
+        t = regions.from_engine(first, last, shared_weights=str(h.path))
+        return ship_mod.ship(t, initial_program(t), ok, repo, base=base, branch=branch)
+    ship("mm", "mm", "HEAD", "a")
+    ship("act", "add", "a", "b")                                            # beside it: shipped
+    with pytest.raises(ValueError, match=r"norm\.\.act overlaps the override (act\.\.add|mm\.\.mm) already in"):
+        ship("norm", "act", "b", "c")

@@ -58,6 +58,23 @@ def _module_path(repo: Path, base: str, module: str) -> str:
     raise FileNotFoundError(f"{module} is not in {repo} at {base}")
 
 
+def _overrides_at(repo: Path, base: str, pkg: str) -> list[tuple[str, tuple[str, str]]]:
+    """(module path, (first, last)) of every OVERRIDES key in the overrides package's modules at `base`."""
+    import ast
+    out = []
+    for path in _git(repo, "ls-tree", "--name-only", f"{base}:{pkg}").split() if _exists(repo, base, pkg) else []:
+        if path.endswith(".py"):
+            for node in ast.walk(ast.parse(_git(repo, "show", f"{base}:{pkg}/{path}"))):
+                if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict) and \
+                        any(isinstance(t, ast.Name) and t.id == "OVERRIDES" for t in node.targets):
+                    out += [(f"{pkg}/{path}", tuple(ast.literal_eval(k))) for k in node.value.keys]
+    return out
+
+
+def _exists(repo: Path, base: str, path: str) -> bool:
+    return subprocess.run(["git", "-C", str(repo), "cat-file", "-e", f"{base}:{path}"], capture_output=True).returncode == 0
+
+
 def _region_files(task, program: str, repo: Path, base: str) -> dict[str, str]:
     """A region's winner as a module of the engine's overrides package (`regions.override_module`), beside the
     stations module; the package's `__init__.py` added when the engine lacks it."""
@@ -65,9 +82,13 @@ def _region_files(task, program: str, repo: Path, base: str) -> dict[str, str]:
     _, first, last = task.name.split(":")
     root = _module_path(repo, base, regions.ENGINE).removesuffix(regions.ENGINE.replace(".", "/") + ".py")
     pkg = root + regions.OVERRIDES_PACKAGE.replace(".", "/")
+    names = [s.name for s in regions.engine_stations()]
+    for path, (a, b) in _overrides_at(repo, base, pkg):
+        if names.index(a) <= names.index(last) and names.index(first) <= names.index(b):
+            raise ValueError(f"region {first}..{last} overlaps the override {a}..{b} already in {path} at {base}")
     files = {f"{pkg}/{first}_{last}.py": regions.override_module(program, first, last)}
     init = f"{pkg}/__init__.py"
-    if subprocess.run(["git", "-C", str(repo), "cat-file", "-e", f"{base}:{init}"], capture_output=True).returncode:
+    if not _exists(repo, base, init):
         files[init] = '"""Region overrides from the layer-1 loop (models/stations.py: `overrides`)."""\n'
     return files
 

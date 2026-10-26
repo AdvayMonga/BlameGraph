@@ -212,7 +212,9 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
         if stage == PRECHECK_STAGE:
             env["CUDA_VISIBLE_DEVICES"] = ""
         read += [home] if home else []
-        read += [Path(cfg[k]) for k in ("samples", "shared_weights") if cfg.get(k)]   # a region's captures, weights
+        read += [Path(cfg["samples"])] if cfg.get("samples") else []                  # a region's captures
+        read += [shared_weights._side(Path(cfg["shared_weights"]), k) if k else Path(cfg["shared_weights"])
+                 for k in ("", "pristine", "constants")] if cfg.get("shared_weights") else []   # handles + sidecars
         ipc = bool(cfg.get("shared_weights")) and stage != PRECHECK_STAGE     # CUDA IPC to the holder; no GPU there
         sw, changed = cfg.get("shared_weights"), []
         with shared_weights.exclusive(sw) if ipc else contextlib.nullcontext():   # one judgment per holder at a time
