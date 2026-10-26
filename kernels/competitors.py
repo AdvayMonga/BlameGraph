@@ -86,9 +86,18 @@ def _vllm_rms_norm(x, w):
 @adapter("add_rmsnorm", "vllm.fused_add_rms_norm", r"fused_add_rms_norm_kernel")
 def _vllm_fused_add_rms_norm(h, a, w, timed=False):
     _vllm("vllm._C")
-    res, x = (h, a) if timed else (h.clone(), a.clone())    # in place: res becomes h + a, x its norm; timed: no copies
+    if timed:                                    # its own copies, made once per input set (outside the timed calls):
+        key = (h.data_ptr(), a.data_ptr())       # in place on the shared buffers would change what ours then reads
+        if key not in _SCRATCH:
+            _SCRATCH[key] = (h.clone(), a.clone())
+        res, x = _SCRATCH[key]
+    else:
+        res, x = h.clone(), a.clone()            # in place: res becomes h + a, x its norm
     torch.ops._C.fused_add_rms_norm(x, res, w, EPS)
     return res, x
+
+
+_SCRATCH: dict = {}
 
 
 IN_PLACE.add("vllm.fused_add_rms_norm")
@@ -195,6 +204,7 @@ def _reset():
     keyed by address, so never reused across inputs."""
     _MOE.clear()
     _FI.clear()
+    _SCRATCH.clear()
     CONFIGS.clear()
 
 
