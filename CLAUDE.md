@@ -46,7 +46,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   measures and records them in `config.profiles`, and the verdict checks the same. The harness reads only the file.
   A profile launch that fails makes its regimes invalid with the reason (`profiles_failed`) and the rest is kept; a
   busy GPU, contamination or the general launch failing still fail the measurement. The profiler tools take
-  `profile` too. Noise bands stay the base engine's general config (the latest per target, any engine commit), stated in the harness facts.
+  `profile` too. Noise bands stay the base engine's general config (the latest per target, any engine commit, same corpus version), stated in the harness facts.
 - `targets/<name>.toml` + `lab/target.py` — **the target spec** (since 2026-10-06): model + chat kwargs, engine
   (repo, python, launch command with `{port}`, health path, env, logprobs `api` vllm|sglang|none, write surface,
   add-only globs, test and lint commands, optional `[engine.telemetry] env` with `{dir}`, optional `profiles` +
@@ -163,8 +163,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   the files after every bench/equiv/submit and the contract check's report is stored beside them. vLLM OTel span mapping is in the spec, not implemented.
 - `corpus/` — frozen workload traces (BurstGPT timing, WildChat text), seen/heldout, hashed, `manifest.json`;
   `build_corpus.py` / `fetch_traces.py` rebuild it; any change is a new `corpus_version`. `lengths.py` (`python -m
-  corpus.lengths --url URL`, decided 2026-10-25) writes each record's `expected_output_tokens` from a served reference
-  (both splits, a new version; the provenance test rebuilds and applies them); not run yet. Since 2026-10-09 (version
+  corpus.lengths --url URL`, decided 2026-10-25) writes each record's `expected_output_tokens` (and a multi-turn
+  record's per-turn `expected_turn_output_tokens`) from a served reference, both splits, resuming from a log in
+  `data/`; a new version whose manifest `prompts_version` stays the held-out guard's key (`Manifest.budget_key`); the
+  provenance test rebuilds and applies them; not run yet. The run's base cache is per corpus version. Since 2026-10-09 (version
   `131149…`) the held-out traces and the build seed (`corpus/.seed`, which reproduces them) are gitignored and live in
   the store (`python -m store pull --corpus`); the previous version's held-out split was public in git.
 - `lab/search.py` — the `search` tool (2026-10-15): one document per `hypothesis` record across every run, with its

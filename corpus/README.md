@@ -23,11 +23,13 @@ only — `messages`.
   ending in the user's k-th follow-up, with WildChat's stored assistant replies (from
   GPT-3.5/GPT-4). `prompt` is the same contents joined by blank lines, for the raw route and
   the simulator's length model.
-- `max_tokens` is 2048 everywhere, deliberately generous so answers end on their own stop token
-  (the trace's response tokens are NOT used). `expected_output_tokens` is the reference's own
-  answer length to that record, measured on a served reference by `python -m corpus.lengths
-  --url URL` (both splits, a new corpus version); unset until then. Once set, the regimes send
-  every request at a fixed length with `ignore_eos`.
+- `max_tokens` is 2048 everywhere: the cap under which the reference's answers end on their own
+  stop token (the trace's response tokens are NOT used). `expected_output_tokens` is the length
+  of that answer, and on a multi-turn record `expected_turn_output_tokens` the same for each
+  user-turn prefix of its messages, measured on a served reference by `python -m corpus.lengths
+  --url URL` (both splits, a new corpus version; the manifest's `prompts_version` keeps the
+  held-out budget's key); unset until then. Once set, the regimes send every request at that
+  fixed length with `ignore_eos`.
 
 An open-loop replayer (the eval harness's job) fires each request at its `arrival_s` on the client's own clock — open loop —
 and posts `messages` (or one user message) to `/v1/chat/completions`, so the serving model's

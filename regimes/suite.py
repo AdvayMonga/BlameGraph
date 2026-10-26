@@ -388,8 +388,9 @@ MEASUREMENT = ("TTFT runs from a request's scheduled send to its initial real to
                "limit; goodput is the highest load at which at least 99% of requests are good. A run is invalid on any "
                "silent drop, truncation or crash, or when the client's own send lag p99 exceeds 10 ms. When the corpus "
                "carries the reference's answer lengths, every request is sent with ignore_eos at a fixed length (the "
-               "regime's max_tokens where it names one, else the reference's own answer to that request) and special "
-               "tokens kept in the text; an answer that ends before that length is a truncation.")
+               "regime's max_tokens where it names one, else the length of the reference's own answer to the corpus "
+               "messages it carries, measured without the shared-prefix regime's system prompt) and special tokens kept "
+               "in the text; an answer that ends before that length is a truncation.")
 
 REGIMES = {"single_stream": single_stream, "saturated": saturated, "bursty": bursty,
            "long_prompt_short_output": long_prompt_short_output, "short_prompt_long_output": short_prompt_long_output,

@@ -15,8 +15,12 @@ numbers without the engine getting faster or slower, which added to the noise; w
 candidate do the same work. The length is the reference's own answer (the user's choice over BurstGPT's recorded
 ChatGPT lengths or one cap for all), so the work is what this model really does; special tokens stay in the text so
 the client's re-count stays exact. Natural stopping stays judged by `equiv` (length ratio, consistency). Once the
-lengths are filled, the noise bands and the performance reference are measured again (`lab.validate`). Replaces
-natural-length answers under a 2,048 cap.
+lengths are filled, the noise bands and the performance reference are measured again (`lab.validate`); a band now
+counts only on the corpus version it was measured on, so an old band is not applied to fixed-length runs, and a run's
+cached base is kept per corpus version. The lengths change no prompt, so the held-out guard keeps its budget: it is
+keyed to the version before lengths (`prompts_version`), not to the new one. Shared-prefix turns each get their own
+measured length; the `profile` tool's requests also run to their max_tokens. Replaces natural-length answers under
+a 2,048 cap.
 
 ## 2026-10-25 — The funnel is kernels.search's default; the beam becomes an arm
 `kernels.search` runs one funnel round per expansion by default (`--no-funnel`: the beam, A/B arm `search-beam`);

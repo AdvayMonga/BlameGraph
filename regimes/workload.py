@@ -111,14 +111,16 @@ def peak_window(trace: list[dict], width_s: float = 180.0) -> tuple[float, float
 
 def conversations(pool: list[dict], max_turns: int = 6) -> list[list[dict]]:
     """Each record with a stored history [user, assistant, ..., user] becomes a conversation of its first
-    `max_turns` user turns; turn j sends the history up to the j-th user message."""
+    `max_turns` user turns; turn j sends the history up to the j-th user message, at the reference's length for that
+    prefix when measured (`expected_turn_output_tokens`)."""
     convs = []
     for r in pool:
         msgs = r.get("messages") or []
         users = [i for i, m in enumerate(msgs) if m.get("role") == "user"][:max_turns]
+        turns = r.get("expected_turn_output_tokens")
         if len(users) >= 2:
-            convs.append([{**r, "id": f"{r['id']}.t{j}", "messages": msgs[:i + 1], "turn_index": j}
-                          for j, i in enumerate(users)])
+            convs.append([{**r, "id": f"{r['id']}.t{j}", "messages": msgs[:i + 1], "turn_index": j,
+                           "expected_output_tokens": turns[j] if turns else None} for j, i in enumerate(users)])
     return convs
 
 

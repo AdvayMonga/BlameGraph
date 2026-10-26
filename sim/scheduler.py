@@ -312,7 +312,7 @@ def simulate(records: list[dict], settings: Settings | None = None, cost: CostMo
         key = 10 + len(backend.plan)                      # ids[0] names the row to the backend (never EOS)
         backend.plan[str(key)] = cost.out_tokens(rec, rng)
         fut, q = _Future(), _Queue(clock)
-        req = ScheduledRequest(token_ids=[key] + [1] * (n_prompt - 1), max_tokens=int(rec.get("max_tokens") or 16),
+        req = ScheduledRequest(token_ids=[key] + [1] * (n_prompt - 1), max_tokens=int(rec.get("expected_output_tokens") or rec.get("max_tokens") or 16),
                                session_id=str(rec.get("session_id") or rec.get("id")), future=fut, token_queue=q,
                                trace_id=str(rec.get("id")), turn_index=int(rec.get("turn_index") or 0))
         with clock.at(at):

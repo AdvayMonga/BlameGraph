@@ -37,3 +37,12 @@ def test_a_fixed_length_answer_runs_to_max_tokens_and_an_early_stop_is_truncated
     finally:
         srv.shutdown()
         plain.shutdown()
+
+
+def test_each_shared_prefix_turn_gets_its_own_measured_length():
+    msgs = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}, {"role": "user", "content": "c"}]
+    rec = {**REC, "messages": msgs, "expected_output_tokens": 9, "expected_turn_output_tokens": [4, 9]}
+    reqs = W.sessions([rec], rate=10.0, duration_s=0.5, seed=1)
+    assert reqs and [(r.max_tokens, r.ignore_eos) for r in reqs[:2]] == [(4, True), (9, True)]
+    unmeasured = {**REC, "messages": msgs}
+    assert [r.ignore_eos for r in W.sessions([unmeasured], rate=10.0, duration_s=0.5, seed=1)] == [False] * len(reqs)
