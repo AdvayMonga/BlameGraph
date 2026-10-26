@@ -1,12 +1,13 @@
 """Fixed-length requests: a record with a measured reference length is sent at that length with ignore_eos, and an
-answer that ends before it is truncated."""
+answer that ends before it is truncated. Run: python tests/test_regimes_client.py"""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fake_engine import make_server  # noqa: E402
 
 from regimes import workload as W  # noqa: E402
@@ -46,3 +47,9 @@ def test_each_shared_prefix_turn_gets_its_own_measured_length():
     assert reqs and [(r.max_tokens, r.ignore_eos) for r in reqs[:2]] == [(4, True), (9, True)]
     unmeasured = {**REC, "messages": msgs}
     assert [r.ignore_eos for r in W.sessions([unmeasured], rate=10.0, duration_s=0.5, seed=1)] == [False] * len(reqs)
+
+
+if __name__ == "__main__":
+    for name, fn in list(globals().items()):
+        if name.startswith("test_"):
+            fn(); print("ok", name)
