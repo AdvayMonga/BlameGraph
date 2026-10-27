@@ -71,7 +71,7 @@ def test_refused_off_the_kernels_layer_and_beyond_the_budget(tb, monkeypatch):
                      ({"task": "silu_mul", "budget_usd": 0}, "budget_usd"),
                      ({"task": "silu_mul", "budget_usd": 10_000}, "more than the run has left"),
                      ({"task": "silu_mul", "budget_usd": 0.5}, "a search needs at least"),
-                     ({"task": "silu_mul", "budget_usd": 12}, "first two generations of model calls")):   # 2026-10-25: $6 timed nothing
+                     ({"task": "silu_mul", "budget_usd": 12}, "two generations of model calls")):   # 2026-10-25: $6 timed nothing
         with pytest.raises(ValueError, match=why):
             spec(tb).fn({"hypothesis_id": k, "expect": EXPECT, **bad})
 

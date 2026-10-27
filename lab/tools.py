@@ -226,7 +226,7 @@ class Toolbox(EvalTools, ProfTools):
         evals = int((usd - model_usd) / (rate * KERNEL_SEARCH_GPU_MIN / 60)) if rate else 30
         if evals < KERNEL_SEARCH_MIN_EVALS:
             least = KERNEL_SEARCH_ROUND_USD + KERNEL_SEARCH_MIN_EVALS * rate * KERNEL_SEARCH_GPU_MIN / 60
-            raise ValueError(f"`budget_usd` {usd} leaves ${usd - model_usd:.2f} of GPU time after the first two generations of model calls "
+            raise ValueError(f"`budget_usd` {usd} leaves ${usd - model_usd:.2f} of GPU time after two generations of model calls "
                              f"(${KERNEL_SEARCH_ROUND_USD:g}): {evals} judged programs at ${rate:g}/GPU-hour; a search needs "
                              f"at least {KERNEL_SEARCH_MIN_EVALS} (~${least:.2f} in all)")
         evals = min(60, evals)
@@ -527,7 +527,7 @@ class Toolbox(EvalTools, ProfTools):
                      "and gates the winner on the held-out shapes. Returns the winner's seen-shape speedup, the gate's "
                      "verdict and held-out speedup, the `kernels` ledger record of the search, and, if the gate passed, "
                      "the path of a patch of the engine module in your workspace (not applied). Blocks until done. "
-                     f"`budget_usd` covers the search's first two generations of model calls (${KERNEL_SEARCH_ROUND_USD:g}; "
+                     f"`budget_usd` covers two generations of the search's model calls (${KERNEL_SEARCH_ROUND_USD:g}; "
                      f"later generations run while the model half lasts) plus GPU time at {KERNEL_SEARCH_GPU_MIN:g} min "
                      f"per judged program, {KERNEL_SEARCH_MIN_EVALS} programs at least."
                      + gpu("hours, sized to `budget_usd`"),
