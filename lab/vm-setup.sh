@@ -92,7 +92,10 @@ $SUDO docker run --rm lab-jail python3 -c "import socket; socket.create_connecti
 echo "== counters: open GPU performance counters to non-admin users (the jails run as one)"
 # ncu needs NVreg_RestrictProfilingToAdminUsers=0 or root; the jails are neither. A single-use VM may open them
 # (lab/RUNTIME.md): the option is set for the driver, which is reloaded when nothing holds the GPU, else at reboot.
-restrict() { grep -o 'RestrictProfilingToAdminUsers: [0-9]' /proc/driver/nvidia/params 2>/dev/null | grep -o '[0-9]$'; }
+# The driver lists the option as RmProfilingAdminOnly (every setup before 2026-10-27 grepped the module option's name,
+# found nothing, and left the counters closed).
+restrict() { grep -oE '(RmProfilingAdminOnly|RestrictProfilingToAdminUsers): [0-9]' /proc/driver/nvidia/params 2>/dev/null \
+  | grep -o '[0-9]$'; }
 if [ "$(restrict)" = "1" ]; then
   echo "options nvidia NVreg_RestrictProfilingToAdminUsers=0" | $SUDO tee /etc/modprobe.d/lab-profiling.conf >/dev/null
   busy=$( { nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null;
@@ -116,7 +119,7 @@ if [ "$(restrict)" = "1" ]; then
     echo "counters: the GPU or a jail is in use; they open at the next reboot"
   fi
 fi
-echo "RestrictProfilingToAdminUsers: $(restrict || echo unknown)"
+echo "RmProfilingAdminOnly: $(restrict || echo unknown)"
 
 echo "== clocks: can we lock them?"
 $SUDO nvidia-smi -pm 1 >/dev/null 2>&1 && echo "persistence mode: on" || echo "persistence mode: refused"

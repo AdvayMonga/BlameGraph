@@ -112,6 +112,8 @@ def test_a_region_of_the_engines_stations_is_judged_end_to_end(tmp_path, monkeyp
     assert core.screen(start.read_text()) == []
     r = core.judge(t, start, [(4, 64), (16, 64)], [], None, "cpu", None, 2, iters=3)
     assert r["metrics"]["correct"] == 1.0, r["artifacts"]
+    assert r["metrics"]["combined_score"] > 0, r["artifacts"]          # timed: the roofline's bytes read `cfg` too
+    assert t.cost((4, 64), torch.float32)[1] > 0
     assert h.changed() == []
 
 

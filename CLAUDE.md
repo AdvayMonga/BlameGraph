@@ -285,8 +285,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   (each and its fate in `hypotheses.jsonl`), from the facts (and, its choice when, Anthropic's web search
   and read-only SQL over the agent's view of the ledger index, `--judge-tools`; the harness pastes no research), with
   up to 2 better programs from other branches as diffs (CodeEvolve's inspirations), including CudaForge's 24 ncu counters
-  (`kernels/evolve/ncu.py`, stage 3 of the jailed evaluator; none collected yet: every profile so far failed with
-  ERR_NVGPUCTRPERM, and a run stops asking after the first refusal), and the coder writing it; a failed child is repaired in
+  (`kernels/evolve/ncu.py`, stage 3 of the jailed evaluator; collected in the jail since 2026-10-27, on a Nebius H200
+  whose driver had them open: the earlier refusals, ERR_NVGPUCTRPERM, were on hosts with them closed, which
+  `vm-setup.sh` never opened because it grepped the module option's name, not the driver's `RmProfilingAdminOnly`; a
+  run stops asking after the first refusal), and the coder writing it; a failed child is repaired in
   correction mode, chained up to 3 deep; launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen afterwards by a grid
   search on each of the top 4 re-timed programs (8 points each, no ncu), written back as constants, the best point
   promoted only if its re-timed median beats the winner's
@@ -333,15 +335,21 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   under /dev/shm or a jail-writable dir); judgments on one holder hold its lock, `restore` runs before and (in a
   `finally`) after each one, and a judgment that wrote a weight is void and the weight copied back. `time_pair`
   fingerprints every input between calls (outside the window): a call that changes an input fails the timing. On the
-  H200 (2026-10-25) the IPC attach works between host processes but is refused inside the jail; `attach(copy_ok=True)`
-  (only `from_engine`, the evaluator's task) then copies the pristine weights to the holder's device, kept in
+  H200 (2026-10-27) a jail attaches over CUDA IPC once the holder (`Holder(jail_uid=)`, a root lab's jail user) links
+  its IPC semaphore pools in /dev/shm under the jail user's name (`cuda.shm.<uid>.<pid>.<n>`, hex; an importer looks
+  them up under its own uid), open to that user's group; where an attach is still refused, `attach(copy_ok=True)`
+  (only `from_engine`, the evaluator's task) copies the pristine weights to the holder's device, kept in
   `.constants` (`attached_by_copy`; fine for one layer's ~0.6 GB, not for a whole step); `restore` never copies and
   raises when it cannot alias the holder's memory. A region's winner ships as a module of the engine's overrides
   package (`OVERRIDES_PACKAGE`, `override_module`, `ship._region_files`; refused when it overlaps an override already in
   the base tree); each call checks the engine passes the constants it was built with (None scales, `cfg`); the fp32
   reference keeps the baseline's experts (`run(..., pinned)`) and computes each pair's weight in fp32 at them
   (`pair_weights`: softmax at the pair's expert, renormalized when `norm_topk_prob`); the modules the
-  stations call (`STATION_MODULES`) are watched; the K/V pool's shape is not part of a shape. Not yet run on a GPU.
+  stations call (`STATION_MODULES`) are watched; the K/V pool's shape is not part of a shape. First run on the H200
+  2026-10-27 (engine branch engine/region-capture): router..down of layer 0 captured under mixed_1 and mixed_3, held,
+  split and gated jailed with the weights attached over IPC: the start program passed every gate, 1.0x seen, 1.001x
+  held-out. A region search from the controller (the evaluator over ssh) is still refused: the task loads where
+  the engine and the holder are.
 - `kernels/ptx.py` — the PTX comparison's cards (decided 2026-10-22, after Standard Kernel): each implementation's
   kernels counted from its PTX (or `cuobjdump -sass` output, for libraries that ship no PTX): instruction classes,
   widest vector access, declared registers, static shared memory, and the Hopper features in use (wgmma, TMA,
