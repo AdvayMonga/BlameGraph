@@ -86,7 +86,7 @@ def test_the_search_runs_funnel_rounds_and_the_archive_reads_them_back(tmp_path)
     from lab import ledger
     f = funnel()
     tree, cost = search(START, "SYS", coder, lambda c: stage(c, 2), tmp_path, evals=5, usd=50.0,
-                        review=f.models.judge, funnel=f)
+                        funnel=f)
     assert tree.best().score >= 2.2 and cost["usd"] > 0
     root = tmp_path / "ledger"
     root.mkdir()

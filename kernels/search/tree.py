@@ -23,8 +23,7 @@ class Node:
     iteration: int
     proposal: str = ""                       # the model text that produced it (empty for the root)
     judge: str = ""                          # the judge's plan it was written from (empty without a judge)
-    mode: str = "optimization"               # or "correction": a repair of a failed parent
-    repairs: int = 0                         # repairs in the chain that led here (a repair of a repair counts 2)
+    mode: str = "optimization"               # kept in the trace; "correction" only in runs before 2026-10-27
     visits: int = 0                          # MCTS: judged programs in its subtree, itself included
     children: list[str] = field(default_factory=list)
     failures: int = 0                        # judged children that failed

@@ -18,7 +18,6 @@ os.environ.setdefault("LAB_NO_JAIL", "1")
 
 from kernels.search import diff  # noqa: E402
 from kernels.search.tree import Node, Tree, fingerprint  # noqa: E402
-import re  # noqa: E402
 
 SEED = ROOT / "kernels" / "evolve" / "seeds" / "toy_rmsnorm.py"
 LOOP = '''    out = torch.empty_like(x)
@@ -98,31 +97,6 @@ def test_review_fixes_parents_repairs_duplicates_and_noise():
     judge = lambda c: {"metrics": {"combined_score": 1.02 if "'a': 2" in c else 1.0, "correct": 1.0}, "artifacts": {}}  # noqa: E731
     assert not _tune([(grid, {}, 1.0)], judge, 2, margin=0.05)[2]["promoted"]      # +2% inside a 5% spread
     assert _tune([(grid, {}, 1.0)], judge, 2, margin=0.01)[2]["promoted"]
-
-
-def test_a_repair_chain_resets_when_a_repair_succeeds():
-    from kernels.search.loop import search
-
-    def review(system, user):
-        if "failed (see its measurements)" in system:
-            return '{"critical_issue": "x", "why_it_matters": "y", "minimal_fix_hint": "z"}', 0.0
-        return json.dumps([{"modification_plan": "set x = 0", "expected_speedup": 1.0}]), 0.0
-
-    def propose(system, user):                           # optimization breaks it (x = 0), a repair fixes it (x = 2)
-        cur = re.search(r"```python\nx = (\d)", user).group(1)
-        v = "2" if "critical_issue" in user else "0"
-        return f"<<<<<<< SEARCH\nx = {cur}\n=======\nx = {v}\n>>>>>>> REPLACE", 0.0
-
-    def judge(code):
-        x = int(code.split("=")[1])
-        return {"metrics": {"combined_score": {1: 1.0, 0: 0.0, 2: 1.5}[x], "correct": float(x != 0), "stage": 2},
-                "artifacts": {}}
-    with tempfile.TemporaryDirectory() as d:
-        tree, _ = search("x = 1\n", "S", propose, judge, Path(d), evals=6, usd=1.0, review=review, beam=1)
-    fixed = [n for n in tree.nodes.values() if n.score == 1.5]
-    assert fixed and all(n.mode == "correction" and n.repairs == 1 for n in fixed)
-    under = [n for n in tree.nodes.values() if n.parent in {f.id for f in fixed} and n.mode == "optimization"]
-    assert under and all(n.repairs == 0 for n in under)          # was 1: the chain leaked into new work
 
 
 def test_counters_are_not_asked_for_again_once_the_host_refuses_them():
@@ -223,48 +197,10 @@ def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_node():
         assert len(rec["result"]["candidates"]) == len(tree.nodes)
 
 
-def test_an_expansion_measures_every_change_the_judge_names_and_repairs_failures_in_a_chain():
-    from kernels.search.loop import hypotheses, search
-    calls = []
-
-    def review(system, user):
-        if "critical_issue" in system:
-            calls.append(("judge", "correction", user))
-            return json.dumps({"critical_issue": "x"}), 1.0
-        calls.append(("judge", "optimization", user))
-        assert "Name 3 distinct changes" in system and "expected_speedup" not in system
-        return "Here: " + json.dumps([{"modification_plan": f"set x = {v}"} for v in (2, 3, 9)]), 1.0
-
-    def propose(system, user):
-        calls.append(("coder", system, user))
-        m = re.search(r"set x = (\d+)", user)
-        if m:
-            return f"<<<<<<< SEARCH\nx = 1\n=======\nx = {m.group(1)}\n>>>>>>> REPLACE", 0.5
-        cur = re.search(r"```python\nx = (\d+)", user).group(1)                        # a repair: edit what is shown
-        return f"<<<<<<< SEARCH\nx = {cur}\n=======\nx = {10 + len(calls)}\n>>>>>>> REPLACE", 0.5
-
-    def judge(code):                             # x = 3 is the win; x = 9 (and every repair of it) fails
-        x = int(code.split("=")[1])
-        ok = x in (1, 2, 3, 4)
-        m = {"combined_score": {1: 1.0, 2: 1.1, 3: 1.6, 4: 1.0}.get(x, 0.0), "correct": 1.0 if ok else 0.0, "stage": 2}
-        return {"metrics": m, "artifacts": {} if ok else {"error": "stage 1: wrong output"}}
-
+def test_the_judges_json_is_read_best_effort():
+    from kernels.search.loop import hypotheses
     assert len(hypotheses("pre " + json.dumps([{"a": 1}, {"b": 2}, 3]) + " post", 16)) == 2
     assert hypotheses("not json", 4) == [{"plan": "not json"}] and hypotheses("", 4) == []
-    with tempfile.TemporaryDirectory() as d:
-        tree, cost = search("x = 1\n", "SYSTEM", propose, judge, Path(d), evals=8, usd=100.0, review=review, beam=3,
-                            max_repairs=3)
-        log = [json.loads(x) for x in (Path(d) / "hypotheses.jsonl").read_text().splitlines()]
-    first = log[0]
-    assert len(first["hypotheses"]) == 3 and [m["index"] for m in first["measured"]] == [0, 1, 2]   # all, in order
-    assert set(first) == {"iteration", "parent_id", "parent_score", "hypotheses", "measured"}
-    coder = [c for c in calls if c[0] == "coder"]
-    assert "SEARCH/REPLACE" in coder[0][1] and "set x = 2" in coder[0][2] and "Other programs" not in coder[0][2]
-    assert "SEARCH/REPLACE" not in [c for c in calls if c[0] == "judge"][0][2]
-    chain = [n for n in tree.nodes.values() if n.mode == "correction"]
-    assert [n.repairs for n in sorted(chain, key=lambda n: n.repairs)] == [1, 2, 3]       # repaired up to 3 deep
-    assert "stage 1: wrong output" in next(c for c in calls if c[1] == "correction")[2]
-    assert "set x = 3" in tree.best().judge and tree.best().score == 1.6
 
 
 def test_the_search_stops_near_the_roofline_and_states_the_gap():
@@ -467,6 +403,7 @@ def test_every_arm_differs_from_kernels_search_in_one_flag():
     try:
         from types import SimpleNamespace
         a = SimpleNamespace(task="t", shapes="s", evals=3, usd=1.0, model="m", device="cpu", initial=None)
+        assert "search-beam" not in ab.ARMS                       # the beam was removed (2026-10-27)
         for arm in ("kernels.search", "search-no-tools", "search-mcts", "search-gen20", "search-crossover"):
             ab.ARMS[arm](a, Path("/tmp/x"), 0)
     finally:
