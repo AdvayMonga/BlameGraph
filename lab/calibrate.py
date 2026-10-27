@@ -214,6 +214,84 @@ def calibrate_ncu(path: Path, gpu: dict | None) -> dict | None:
             "ceiling_missing": None if hw else "no measured or spec-sheet peaks for this GPU"}
 
 
+def _window_s(out: Path) -> float | None:
+    """The profiled window of the lab.profile bundle inside an instrument's output dir."""
+    metas = sorted(out.glob("bundle/*/meta.json"))
+    return (json.loads(metas[-1].read_text()).get("window") or {}).get("wall_s") if metas else None
+
+
+NSYS_COUNTS = ("Instances", "Num Calls", "Count", "Calls")   # the count column's name differs by report and version
+
+
+def _nsys_rows(path: Path, name: str, top: int) -> tuple[float, int, list[dict]]:
+    """An `nsys stats` CSV: total seconds, total count, and its `top` rows by time."""
+    if not path.exists():
+        return 0.0, 0, []
+    rows = [{"name": r.get(name), "total_s": (_num(r.get("Total Time (ns)")) or 0) / 1e9,
+             "count": int(next((_num(r[c]) for c in NSYS_COUNTS if r.get(c) not in (None, "")), None) or 0)}
+            for r in csv.DictReader(path.open())]
+    rows.sort(key=lambda r: -r["total_s"])
+    return sum(r["total_s"] for r in rows), sum(r["count"] for r in rows), rows[:top]
+
+
+def calibrate_nsys(out: Path, ranged: bool, top: int = 15) -> dict | None:
+    """From a `trace` output dir (`nsys stats` CSVs): GPU kernel time, launches and memory-copy time, each kernel's
+    and CUDA API call's total, and their share of lab.profile's window when the trace covered only that window."""
+    kern = out / "stats_cuda_gpu_kern_sum.csv"
+    if not kern.exists():
+        return None
+    kernel_s, launches, kernels = _nsys_rows(kern, "Name", top)
+    copy_s, copies, _ = _nsys_rows(out / "stats_cuda_gpu_mem_time_sum.csv", "Operation", 0)
+    _, _, api = _nsys_rows(out / "stats_cuda_api_sum.csv", "Name", 10)
+    window_s = _window_s(out) if ranged else None
+    for k in kernels:
+        k["share_of_kernel_time"] = k["total_s"] / kernel_s if kernel_s else None
+        k["share_of_window"] = k["total_s"] / window_s if window_s else None
+    return {"window_s": window_s, "kernel_s": kernel_s, "launches": launches,
+            "kernel_share_of_window": kernel_s / window_s if window_s else None,
+            "memcpy_s": copy_s, "memcpy_count": copies, "kernels": kernels, "cuda_api": api,
+            "window_missing": None if window_s else ("the trace was not limited to the profiled window (no "
+                                                     "--capture-range cudaProfilerApi)" if not ranged else
+                                                     "no lab.profile bundle with a window in the output"),
+            "basis": "nsys stats over the capture range; kernel times are summed per kernel, so kernels overlapping "
+                     "on several streams count once each and the share can exceed the GPU's busy time"}
+
+
+def calibrate_pyspy(out: Path, top: int = 15) -> dict | None:
+    """From a `hostprof` output dir (py-spy's speedscope file): the samples per thread, and the functions holding the
+    most samples, at the top of the stack (self) and anywhere in it (total), as shares of all samples."""
+    found = sorted(out.glob("bundle/*/pyspy.speedscope.json"))
+    if not found:
+        return None
+    doc = json.loads(found[-1].read_text())
+    frames = (doc.get("shared") or {}).get("frames") or []
+    threads, own, total, n = [], {}, {}, 0
+    for p in doc.get("profiles") or []:
+        weights = p.get("weights") or [1] * len(p.get("samples") or [])
+        count = 0
+        for stack, w in zip(p.get("samples") or [], weights):
+            count += w
+            if stack:                                # root first, leaf last (speedscope's order)
+                own[stack[-1]] = own.get(stack[-1], 0) + w
+            for i in set(stack):
+                total[i] = total.get(i, 0) + w
+        threads.append({"name": p.get("name"), "samples": count})
+        n += count
+    if not n:
+        return None
+
+    def ranked(counts: dict) -> list[dict]:
+        best = sorted(counts.items(), key=lambda kv: -kv[1])[:top]
+        return [{"function": frames[i].get("name"), "file": frames[i].get("file"), "line": frames[i].get("line"),
+                 "share": c / n} for i, c in best if i < len(frames)]
+    for t in threads:
+        t["share"] = t["samples"] / n
+    return {"samples": n, "window_s": _window_s(out), "threads": sorted(threads, key=lambda t: -t["samples"]),
+            "self": ranked(own), "total": ranked(total),
+            "basis": "share of all py-spy samples of the engine process (idle threads are not sampled unless "
+                     "pyspy_args has --idle); self = the function on top of the stack, total = anywhere in it"}
+
+
 def _num(s) -> float | None:
     """An ncu CSV cell as a number: thousands separators dropped, 'n/a' and blanks as None."""
     try:

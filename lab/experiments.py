@@ -12,6 +12,7 @@ from pathlib import Path
 from lab import ledger
 
 MEASURED = ("bench", "equiv", "submit", "profile", "trace", "kernel", "hostprof", "kernel_search")
+PROFILERS = ("profile", "trace", "kernel", "hostprof")      # results with no `metrics`: predictions name a path
 UNITS = ("absolute", "change_pct")
 LAYERS = ("kernels", "model_execution", "runtime", "serving")      # lab/layers.py's four layers
 # Runs made outside the lab by a researcher (`python -m lab.experiment`): their text is a person's, so no agent view
@@ -25,7 +26,9 @@ def researcher(run: str | None) -> bool:
 EXPECT_SCHEMA = {
     "type": "object", "required": ["metric", "value", "unit", "why"],
     "properties": {
-        "metric": {"type": "string", "description": "a key of this tool's result metrics (a regime for bench and submit)"},
+        "metric": {"type": "string", "description": "a key of this tool's result metrics (a regime for bench and "
+                   "submit); for profile, trace, kernel and hostprof, which have none, a dotted path to a number in "
+                   "the result, e.g. calibrated.kernel_share_of_window"},
         "value": {"type": "number"},
         "unit": {"type": "string", "enum": list(UNITS),
                  "description": "absolute: the metric's own value; change_pct: % change from the run's baseline"},
@@ -181,9 +184,13 @@ def new_reflection(root: Path, run: str, args: dict) -> dict:
 
 
 # -- outcome --------------------------------------------------------------------------------
-def _actual(tool: str, expect: dict, result: dict | None, metrics: dict | None, baseline: dict | None) -> tuple:
+def _actual(tool: str, expect: dict, result: dict | None, metrics: dict | None, baseline: dict | None,
+            base_result: dict | None) -> tuple:
     """(actual, missing): the measured counterpart of `expect` in this tool's result, or why there is none."""
     name, unit = expect["metric"], expect["unit"]
+    if tool in PROFILERS:
+        m = _mechanism(expect, result, base_result)
+        return m["actual"], m.get("actual_missing")
     if tool == "submit":
         m = (metrics or {}).get(name)
         if not isinstance(m, dict):
@@ -227,7 +234,7 @@ def outcome(tool: str, args: dict, result: dict | None = None, metrics: dict | N
             baseline: dict | None = None, band_pct: float | None = None, base_result: dict | None = None) -> dict:
     """The experiment block a measured record carries: hypothesis id, the predictions, and the computed gaps."""
     e = {k: v for k, v in args["expect"].items() if k != "mechanism"}
-    actual, missing = _actual(tool, e, result, metrics, baseline)
+    actual, missing = _actual(tool, e, result, metrics, baseline, base_result)
     out = {"hypothesis": args["hypothesis_id"], "expect": e, "actual": actual}
     if args.get("bundle"):
         out["bundle"], out["independence"] = list(args["bundle"]), args["independence"].strip()

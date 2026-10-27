@@ -26,6 +26,15 @@ Opus calls, as the frontier systems avoid by sampling in parallel (AlphaEvolve, 
 the strong coder rewriting every survivor (2026-10-23) and ncu at every full exam (2026-10-17).
 
 
+## 2026-10-27 — Every profiler's prediction is measured: numbers for trace and hostprof
+`trace` and `hostprof` records get a `calibrated` block like `profile`'s and `kernel`'s (nsys: kernel, memory-copy and
+CUDA API time, top kernels, kernel time's share of the profiled window; py-spy: samples per thread, top functions by
+self and total share), and a profiler's `expect.metric` is a dotted path into its result, as a mechanism's already
+was. Why (the user, choosing this over making `expect` optional for them): every measured tool requires an `expect`,
+but the main prediction was looked up only in `result.metrics`, which no profiler record has, so a prediction on
+`profile`, `trace`, `kernel` or `hostprof` never had a measured value; trace and hostprof had no numbers to predict.
+Amends 2026-10-11.
+
 ## 2026-10-26 — The kernel search runs generations: funnel rounds from fitness-drawn parents
 `kernels.search` becomes a genetic search inside one call (`kernels/search/generations.py`): generation 0 is the funnel
 from the start program (40 ideas, the fastest 12 to the full exam); each later generation draws 4 parents from the
