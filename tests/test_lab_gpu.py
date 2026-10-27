@@ -99,3 +99,46 @@ def test_descendants_include_children():
         assert {os.getpid(), child.pid} <= gpu.descendants(os.getpid())
     finally:
         child.kill()
+
+
+def _device_dir(tmp_path, source, fields, lines):
+    import json
+    d = tmp_path / source; d.mkdir()
+    (d / "meta.json").write_text(json.dumps({"available": True, "source": source, "fields": fields}))
+    (d / "samples.csv").write_text("".join(f"{t},{line}\n" for t, line in lines))
+    return d
+
+
+def test_read_samples_parses_dcgm_lines_and_drops_headers(tmp_path):
+    d = _device_dir(tmp_path, "dcgm", list(gpu.DCGM_FIELDS.values()), [
+        (1.0, "#Entity         SMACT        SMOCC        TENSO        DRAMA        PCITX   PCIRX   POWER   SMCLK  MMCLK  DVCCTR"),
+        (1.0, "ID                                                                                    W"),
+        (1.1, "GPU 0           0.039        0.010        0.008        N/A          1328024 4133503 75.507  345    3201   1"),
+        (1.2, "GPU 0           0.9")])                       # cut off when the sampler stopped: missing fields absent
+    rows = list(gpu.read_samples(d))
+    assert len(rows) == 2
+    assert rows[0] == {"epoch_s": 1.1, "source": "dcgm", "sm_active": 0.039, "sm_occupancy": 0.01, "tensor_active": 0.008,
+                       "dram_active": None, "pcie_tx_bytes": 1328024.0, "pcie_rx_bytes": 4133503.0, "power_w": 75.507,
+                       "sm_clock_mhz": 345.0, "mem_clock_mhz": 3201.0, "throttle_reasons": 1}
+    assert rows[1] == {"epoch_s": 1.2, "source": "dcgm", "sm_active": 0.9}
+
+
+def test_read_samples_names_nvidia_smi_fields_like_dcgm(tmp_path):
+    fields = [*gpu.SAMPLE, gpu.REASONS[0]]
+    d = _device_dir(tmp_path, "nvidia-smi", fields, [
+        (1.0, "timestamp, utilization.gpu [%], utilization.memory [%], clocks.sm [MHz], clocks.mem [MHz], power.draw [W], "
+              "temperature.gpu, memory.used [MiB], clocks_event_reasons.active"),
+        (1.1, "2026/10/27 10:00:00.100, 90, 40, 1980, 3201, 650.5, 61, 120000, 0x0000000000000004"),
+        (1.2, "2026/10/27 10:00:00.200, 91, [N/A], 1980, 3201, 651.0, 61, 120000, 0x0000000000000000")])
+    rows = list(gpu.read_samples(d))
+    assert [r["epoch_s"] for r in rows] == [1.1, 1.2]
+    assert rows[0] == {"epoch_s": 1.1, "source": "nvidia-smi", "timestamp": "2026/10/27 10:00:00.100", "utilization_gpu": 90.0,
+                       "utilization_memory": 40.0, "sm_clock_mhz": 1980.0, "mem_clock_mhz": 3201.0, "power_w": 650.5,
+                       "temperature_gpu": 61.0, "memory_used": 120000.0, "throttle_reasons": 4}
+    assert rows[1]["utilization_memory"] is None
+
+
+def test_read_samples_without_a_source_is_empty(tmp_path):
+    import json
+    (tmp_path / "meta.json").write_text(json.dumps({"available": False}))
+    assert list(gpu.read_samples(tmp_path)) == []

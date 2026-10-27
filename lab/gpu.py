@@ -163,6 +163,52 @@ class DeviceSampler(Sampler):
         (self.path.parent / "meta.json").write_text(json.dumps(meta, indent=1))
 
 
+# nvidia-smi fields DCGM also samples, under DCGM's names; the rest keep nvidia-smi's with dots as underscores.
+SHARED = {"clocks.sm": "sm_clock_mhz", "clocks.mem": "mem_clock_mhz", "power.draw": "power_w",
+          **{f: "throttle_reasons" for f in REASONS}}
+
+
+def _value(name: str, v: str):
+    if v in MISSING or v == "":
+        return None
+    if name == "throttle_reasons":
+        return int(v, 0)                         # a bitmask: DCGM prints it decimal, nvidia-smi as 0x...
+    if name == "timestamp":
+        return v
+    try:
+        return float(v)
+    except ValueError:
+        return None
+
+
+def read_samples(dir: Path):
+    """A DeviceSampler dir's samples as rows, the same for both sources: `epoch_s`, then each field (DCGM's name,
+    else nvidia-smi's via SHARED) as a number, None where the tool printed N/A. Header lines are dropped."""
+    dir = Path(dir)
+    meta = json.loads((dir / "meta.json").read_text()) if (dir / "meta.json").exists() else {}
+    source, path = meta.get("source"), dir / "samples.csv"
+    if not source or not path.exists():
+        return
+    names = [SHARED.get(f, f.replace(".", "_")) for f in meta.get("fields") or []]
+    for line in path.read_text(errors="replace").splitlines():
+        t, _, rest = line.partition(",")
+        if source == "dcgm":                     # "GPU 0  v1  v2 ...", column-aligned; "#Entity" and "ID" are headers
+            parts = rest.split()
+            if parts[:1] != ["GPU"]:
+                continue
+            values = parts[2:]
+        else:                                    # one CSV line per sample; the header names the first field
+            values = [v.strip() for v in rest.split(",")]
+            if not values or values[0].startswith(meta["fields"][0]):
+                continue
+        try:
+            row = {"epoch_s": float(t), "source": source}
+            row.update((n, _value(n, v)) for n, v in zip(names, values))
+        except ValueError:                       # a line cut off when the sampler stopped
+            continue
+        yield row
+
+
 def compute_apps() -> list[dict] | None:
     """Every process holding a GPU context (host pids): pid, used MiB, name. None where there is no nvidia-smi."""
     if not available():

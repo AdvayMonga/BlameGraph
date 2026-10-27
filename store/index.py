@@ -17,8 +17,6 @@ all.duckdb (researcher).
 
 from __future__ import annotations
 
-import csv
-import io
 import json
 import os
 import tempfile
@@ -28,7 +26,7 @@ from typing import Iterable, Iterator
 
 import duckdb
 
-from lab import artifacts, experiments, ledger
+from lab import artifacts, experiments, gpu, ledger
 
 QUERY_TIMEOUT_S = 60
 MAX_ROWS = 200
@@ -129,17 +127,8 @@ def _passive(root: Path, recs: list[dict], missing: list) -> tuple[Iterator, Ite
     def device():
         for r in with_art:
             d = _blob(root, r["result"]["artifacts"].get("device"), missing)
-            if not d or not (d / "samples.csv").exists():
-                continue
-            meta = json.loads((d / "meta.json").read_text()) if (d / "meta.json").exists() else {}
-            text = (d / "samples.csv").read_text(errors="replace")
-            if meta.get("source") == "nvidia-smi":          # a CSV with a header: one column per field
-                for row in csv.DictReader(io.StringIO(text), skipinitialspace=True):
-                    yield {**_key(r), "source": "nvidia-smi", **row}
-            else:                                            # DCGM lines stay raw, prefixed with epoch seconds
-                for line in text.splitlines():
-                    t, _, rest = line.partition(",")
-                    yield {**_key(r), "source": meta.get("source"), "epoch_s": t, "line": rest}
+            for row in gpu.read_samples(d) if d else ():
+                yield {**_key(r), **row}
     return client(), engine(), device()
 
 

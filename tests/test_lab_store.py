@@ -20,8 +20,8 @@ def _lab(root, runs):
     rows = root.parent / "rows.jsonl"
     rows.write_text("".join(json.dumps({"id": i, "status": "ok", "ttft_s": 0.1 * i}) + "\n" for i in range(3)))
     dev = root.parent / "device"; dev.mkdir()
-    (dev / "meta.json").write_text(json.dumps({"available": True, "source": "nvidia-smi"}))
-    (dev / "samples.csv").write_text("epoch_s,timestamp,utilization.gpu\n1.0,t,90\n1.1,t,95\n")
+    (dev / "meta.json").write_text(json.dumps({"available": True, "source": "dcgm", "fields": ["sm_active", "power_w"]}))
+    (dev / "samples.csv").write_text("1.0,#Entity  SMACT  POWER\n1.0,ID  W\n1.1,GPU 0  0.5  300.0\n1.2,GPU 0  0.6  310.0\n")
     bundle = root.parent / "bundle"; bundle.mkdir()
     (bundle / "kernels.json").write_text(json.dumps({"kernels": [{"name": "gemm", "count": 4, "total_us": 10.0}]}))
     art = {"client_rows": ledger.put_blob(rows, root, ".jsonl"), "device": ledger.put_blob(dev, root),
@@ -161,6 +161,8 @@ def test_index_tables_and_the_agent_never_sees_heldout_rows(lab):
     out = index.build(root, root / "index" / "all.duckdb", heldout_runs=runs)
     assert out["tables"]["client_rows"] == 3 and out["tables"]["device_samples"] == 2
     assert out["tables"]["kernels"] == 1 and out["tables"]["heldout_rows"] == 1 and not out["missing_blobs"]
+    q = index.query(root / "index" / "all.duckdb", "SELECT epoch_s, sm_active, power_w FROM device_samples ORDER BY 1")
+    assert q["rows"] == [[1.1, 0.5, 300.0], [1.2, 0.6, 310.0]]
     q = index.query(root / "index" / "all.duckdb", "SELECT regime, value FROM regimes")
     assert q["rows"] == [["saturated", 18.4]]
     q = index.query(root / "index" / "all.duckdb", "SELECT delta_pct, verdict FROM heldout_aggregates")
