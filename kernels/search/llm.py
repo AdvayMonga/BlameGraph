@@ -5,7 +5,13 @@ call priced from its usage at lab.apiproxy's rates (web searches at $10 per 1,00
 With `tools=True` the model may use two tools, its own choice when: Anthropic's web search (server-side), and
 `query`, read-only SQL over the agent's view of the ledger index (store/index.py: every run's records, kernel-loop
 runs and their candidates included; never held-out rows or a person's runs). The harness pastes no research or
-advice into a prompt; what the model reads it chose to read."""
+advice into a prompt; what the model reads it chose to read.
+
+Prompt caching (2026-10-27): a prompt marks where its stable part ends with `CACHE_SPLIT` (the task's setting before
+a role's instructions in the system prompt; a parent's program and measurements before one idea's plan in the user
+message). The client sends each part as its own text block, the marker removed, with a cache breakpoint on every
+system part and on every user part but the last, so the calls of one round on one parent read their shared prefix
+from the cache (`lab.apiproxy.cost_usd` prices reads and writes)."""
 from __future__ import annotations
 
 import json
@@ -16,6 +22,7 @@ from lab.apiproxy import cost_usd, price
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 WEB_SEARCH_USD = 0.01
 QUERY_MAX_BYTES = 20_000
+CACHE_SPLIT = "\x1e"                             # ends a prompt's stable part (removed before sending)
 RETRIES = 3                                      # a turn whose stream dies (a read timeout, a dropped connection) is re-sent
 TOOLS = [
     {"type": "web_search_20260209", "name": "web_search", "max_uses": 5},
@@ -85,7 +92,12 @@ class Claude:
             "output_config": {"effort": self.effort}, "betas": [FALLBACK_BETA], "fallbacks": "default"}
         if self.tools:
             kw["tools"] = TOOLS
-        messages, usd = [{"role": "user", "content": user}], 0.0
+        system = [{"type": "text", "text": t, "cache_control": {"type": "ephemeral"}} for t in system.split(CACHE_SPLIT)
+                  if t]
+        parts = [t for t in user.split(CACHE_SPLIT) if t]
+        content = [{"type": "text", "text": t, **({"cache_control": {"type": "ephemeral"}} if i < len(parts) - 1 else {})}
+                   for i, t in enumerate(parts)]
+        messages, usd = [{"role": "user", "content": content}], 0.0
         for _ in range(self.max_turns):
             m = self._turn(system, messages, kw)
             usd += self._usd(m)

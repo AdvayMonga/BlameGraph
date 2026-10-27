@@ -121,7 +121,7 @@ def _funnel(a, task, review):
     models = Models(review, Claude(a.cheap_model, "low"), Claude(a.wide_model, a.effort), Claude(a.model, a.effort), mix)
     return Funnel(models, staged(evaluator.judge_stage), entries, task.name,
                   archive._embedder(ledger.ROOT) if entries else None, Path(a.ptx).read_text() if a.ptx else None,
-                  a.per_call, a.keep, a.parallel, a.max_repairs, a.ncu, a.precheck)
+                  a.per_call, a.keep, a.parallel, a.max_repairs, a.ncu, a.precheck, workers=a.workers)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -181,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--facts", help="a text of further facts for every prompt (e.g. the kernel's share of the engine's "
                                     "time and the regimes it is scored under), appended to the system message")
     ap.add_argument("--parallel", type=int, default=4, help="correctness checks run at once")
+    ap.add_argument("--workers", type=int, default=8, help="the funnel's model calls run at once")
     ap.add_argument("--archive", help="an exported idea archive (python -m kernels.archive export)")
     ap.add_argument("--ptx", help="the PTX comparison's feature cards (text)")
     ap.add_argument("--precheck", action=argparse.BooleanOptionalAction, default=True,

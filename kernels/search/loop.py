@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Callable
 
 from kernels.search import diff
+from kernels.search.llm import CACHE_SPLIT
 from kernels.search.tree import UCT_C, Node, Tree, fingerprint
 
 FORMAT = """Answer with SEARCH/REPLACE blocks against the program shown. Each SEARCH section must match the program
@@ -137,7 +138,8 @@ def prompt(tree: Tree, node: Node, plan: str = "", coder: bool = True) -> str:
             f"```python\n{node.code}\n```\n\n# Its measurements\n{facts(node)}\n\n"
             f"# Lineage (node, score)\n{path}\n\n# Programs already derived from it\n{kids}\n\n"
             + (f"# Other programs in the tree\n{other}\n" if other else "")
-            + (f"# The change to make (from the judge)\n{plan}\n\n" if plan else "") + (FORMAT if coder else ""))
+            + (f"{CACHE_SPLIT}# The change to make (from the judge)\n{plan}\n\n" if plan else "")
+            + (FORMAT if coder else ""))
 
 
 REFUSED = "ERR_NVGPUCTRPERM"        # ncu: this host does not let the jail read GPU performance counters
