@@ -14,6 +14,7 @@ import difflib
 import json
 import re
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Callable
@@ -43,6 +44,10 @@ MODES = {
                     'words>", "modification_plan": "<max 35 words>", "mechanism": [{{"counter": "<an ncu metric name '
                     'from the measurements>", "change_pct": <predicted % change, summed over the program\'s kernels>}}]}}. '
                     '"mechanism" may be empty. Every one is written and measured.',
+    "restructure": 'The program is correct. Name {n} distinct changes that each replace its algorithm, data layout '
+                   'or implementation as a whole rather than adjusting it, as one JSON array of {n} objects and nothing '
+                   'else, each {{"bottleneck": "<max 30 words>", "optimisation_method": "<max 35 words>", '
+                   '"modification_plan": "<max 35 words>", "mechanism": []}}. Every one is written and measured.',
     "crossover": 'The program is correct. Below it is another program from the same search, as a diff. Name {n} '
                  'change(s) to this program that carry over what the other program does differently, as one JSON '
                  'array of {n} objects and nothing else, each {{"bottleneck": "<max 30 words>", "optimisation_method": '
@@ -171,7 +176,7 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
            judge: Callable[[str], dict], out: Path, evals: int, usd: float, seed: int = 0,
            stop_pct: float | None = None, patience: int | None = None, children: int = 4,
            uct_c: float = UCT_C, funnel=None, gpu_s: float | None = None,
-           gpu_used: Callable[[], float] | None = None) -> tuple[Tree, dict]:
+           gpu_used: Callable[[], float] | None = None, wall_s: float | None = None) -> tuple[Tree, dict]:
     """Search until `evals` programs are judged, `usd` is spent on model calls, nothing is left to try, or the best
     program reaches `stop_pct`% of its roofline bound, or `patience` programs have been judged since the best last
     improved (MANTIS, Hari et al.: within 25% of speed-of-light or 16 attempts without progress kept 96% of the geomean
@@ -183,11 +188,14 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
     out.mkdir(parents=True, exist_ok=True)
     tree, spent, calls, judged, it = Tree(seed, c=uct_c), 0.0, 0, 0, 0
 
+    deadline = time.monotonic() + wall_s if wall_s else None
+
     def gpu_out() -> bool:
-        return bool(gpu_s is not None and gpu_used and gpu_used() >= gpu_s)
+        return bool((gpu_s is not None and gpu_used and gpu_used() >= gpu_s)
+                    or (deadline is not None and time.monotonic() >= deadline))
     if funnel is not None:                       # its rounds stop mid-way at the same caps
         funnel.usd_cap = usd if funnel.usd_cap is None else funnel.usd_cap
-        funnel.gpu_s_cap, funnel.gpu_used = gpu_s, gpu_used
+        funnel.gpu_s_cap, funnel.gpu_used, funnel.deadline = gpu_s, gpu_used, deadline
     with open(out / "trace.jsonl", "w") as trace, open(out / "hypotheses.jsonl", "w") as hyplog:
         def keep(node: Node, cost: float) -> None:
             tree.add(node)

@@ -273,8 +273,16 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   the best always, the rest by percentile reward + 0.05 without replacement) with `--gen-size` (24) ideas split among
   them and the fastest `--keep` (8) to the full exam, children under their own parent; a generation where under 1/5 of
   the examined beat their parent makes the next 2/3 as large; stops at the roofline, `--patience` (3) generations with
-  no new best, or the budget; `--crossover F` (an arm) gives that fraction of a generation's ideas to a judge call shown
-  another parent's diff; with `--mcts` instead a tree of refinement chains, one parent per round chosen by MCTS (UCT with
+  no new best, the budget or `--wall-s` (wall-clock; `--gpu-s` sums every evaluator job's seconds, parallel ones and
+  the no-GPU precheck included); `--crossover F` (an arm) gives that fraction of a generation's ideas to a judge call
+  shown another parent's diff; `--ideas` (arm `search-ideas`, decided 2026-10-27 after K-Search, arXiv 2602.19128)
+  keeps an idea table (`kernels/search/ideas.py`): every idea with its measured attempts, best measurement (full
+  exam, else quick timing), gain over its parent and the diff of its best attempt; each generation the 4 best active
+  ideas by measured gain get 2 more drafts each, shown their history (an idea closes after 3 generations without a
+  better measurement, so a slower first step does not drop it), sub-ideas the table's edit call added (one judge
+  call per generation: close ideas, add sub-ideas) and new ideas fill the exploration slots, and 4 immigrant ideas
+  naming whole-program changes (`MODES["restructure"]`) go to the start program or, every other generation, a random
+  program outside the parents; with `--mcts` instead a tree of refinement chains, one parent per round chosen by MCTS (UCT with
   C = 0.6 on percentile rewards and max backup,
   KernelPro's progressive widening and virtual-child rule), a node closed after 3 judged failed children or 3 edits
   that never reached the GPU; in every mode the model is shown only the

@@ -166,7 +166,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--parents", type=int, default=4, help="parents per generation, drawn by fitness")
     ap.add_argument("--crossover", type=float, default=0.0,
                     help="fraction of a generation's ideas that combine a parent with another parent's diff (an arm)")
-    ap.add_argument("--gpu-s", type=float, help="stop once judging has taken this many seconds (the GPU host's time)")
+    ap.add_argument("--gpu-s", type=float, help="stop once judging has taken this many seconds, summed over jobs")
+    ap.add_argument("--wall-s", type=float, help="stop starting new work once the search has run this many seconds")
+    ap.add_argument("--ideas", action="store_true",
+                    help="generations keep an idea table: persistence, sub-ideas and immigrants (kernels/search/ideas.py)")
     ap.add_argument("--wide-model", default="claude-sonnet-5-5", help="the funnel's wide coder")
     ap.add_argument("--cheap-model", default="claude-haiku-5-5", help="merges duplicate hypotheses")
     ap.add_argument("--second-judge-model", default="claude-sonnet-5-5",
@@ -200,11 +203,11 @@ def main(argv: list[str] | None = None) -> int:
         tree, cost = evolve(program.read_text(), system, fun, judge, out, a.evals, a.usd, a.seed, a.gen_size, a.keep,
                             a.parents, a.generations, stop_pct=a.stop_pct or None,
                             patience=3 if a.patience is None else a.patience or None, gpu_s=a.gpu_s,
-                            gpu_used=gpu_used, crossover=a.crossover)
+                            gpu_used=gpu_used, crossover=a.crossover, ideas=a.ideas, wall_s=a.wall_s)
     else:
         tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.usd, a.seed,
                             stop_pct=a.stop_pct or None, patience=16 if a.patience is None else a.patience or None,
-                            uct_c=a.uct_c, funnel=fun, gpu_s=a.gpu_s, gpu_used=gpu_used)
+                            uct_c=a.uct_c, funnel=fun, gpu_s=a.gpu_s, gpu_used=gpu_used, wall_s=a.wall_s)
     spent: list = []
     exclude = detect.detector(Claude(a.detector_model, a.effort), spent) if a.detector_model != "none" else None
     code, metrics, retimed = (retime(out / "trace.jsonl", a.retime, exclude=exclude) if a.retime

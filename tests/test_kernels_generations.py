@@ -184,3 +184,86 @@ if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
             fn(*[Path(tempfile.mkdtemp()) for _ in inspect.signature(fn).parameters]); print("ok", name)
+
+
+def test_the_idea_table_keeps_measured_history_ranks_by_gain_and_closes_after_patience():
+    from kernels.search import ideas as I
+    t, table = Tree(), I.Table()
+    ok = lambda sc: {"correct": 1.0, "combined_score": sc, "stage": 2}      # noqa: E731
+    t.add(Node("p", None, "a = 1\n", ok(1.0), {}, 0))
+    t.add(Node("c", "p", "a = 2\n", ok(1.2), {}, 1))
+    idea = lambda i: {"bottleneck": "b", "optimisation_method": f"m{i}", "modification_plan": "x", "idea_id": f"i{i}",  # noqa: E731
+                      "parent_id": "p"}
+    row = {"parents": [{"id": "p", "score": 1.0}], "ideas": [
+        {"idea": idea(1), "fate": "full exam", "child_id": "c", "child_score": 1.2, "quick": {"combined_score": 1.19},
+         "diff": "+a = 2"},
+        {"idea": idea(2), "fate": "quick speed test: not among the fastest", "quick": {"combined_score": 0.9}},
+        {"idea": idea(2), "fate": "quick speed test: not among the fastest", "quick": {"combined_score": 0.95}}]}
+    table.record(row, 0)
+    i1, i2 = table.ideas["i1"], table.ideas["i2"]
+    assert (i1.best, i1.best_child, i1.best_diff) == (1.2, "c", "+a = 2") and i2.best == 0.95   # its better draft
+    assert len(i2.attempts) == 1 and abs(i1.gain() - 1.2) < 1e-9
+    drafts = table.persistent(t)
+    assert [d["idea_id"] for d in drafts] == ["i1"] * I.DRAFTS + ["i2"] * I.DRAFTS            # by measured gain
+    assert drafts[0]["parent_id"] == "c" and drafts[-1]["parent_id"] == "p"   # from its best examined attempt
+    assert "full exam 1.2000" in drafts[0]["history"] and "+a = 2" in drafts[0]["history"]
+    for g in range(1, I.PATIENCE + 1):                       # no better measurement for PATIENCE generations
+        table.record({"parents": [{"id": "p", "score": 1.0}], "ideas": [
+            {"idea": idea(2), "fate": "quick speed test: scored 0", "quick": {"combined_score": 0.0}}]}, g)
+    assert i2.status == "closed" and i1.status == "active"
+    got = table.edit(json.dumps([{"action": "close", "id": "i1", "why": "w"},
+                                 {"action": "add", "from": "i1", "idea": {"bottleneck": "s", "modification_plan": "y"}}]),
+                     t)
+    assert i1.status == "closed" and len(got) == 2 and table.pending[0]["parent_id"] == "c"
+    assert table.take_pending(t)[0]["from_idea"] == "i1" and table.pending == []
+    assert table.edit("not json", t) == []
+
+
+def test_the_ideas_mode_refines_kept_ideas_drafts_sub_ideas_and_sends_an_immigrant_whole_program_changes(tmp_path):
+    f = funnel()
+    systems, users = [], []
+    j, s5 = f.models.judge, f.models.judges[-1]
+
+    def edit_aware(model):
+        def call(system, user):
+            systems.append(system)
+            users.append(user)
+            if "table of ideas" in system:                   # the table's edit: one sub-idea of the best idea
+                first = re.search(r"## Idea (\w+)", user).group(1)
+                return json.dumps([{"action": "add", "from": first, "idea": {
+                    "bottleneck": "sub", "optimisation_method": "sub", "modification_plan": "set a = 777"}}]), 0.01
+            return model(system, user)
+        return call
+    f.models.judge = edit_aware(j)
+    f.models.judges = tuple(edit_aware(m) for m in (j, j, j, s5))
+    drafts = []
+    f.models.wide = lambda system, user: (drafts.append(user), coder(system, user))[1]
+    tree, cost = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, evals=200, usd=50.0, gen_size=12, keep=3,
+                          n_parents=3, generations=2, patience=None, ideas=True)
+    rows = [json.loads(x) for x in (tmp_path / "hypotheses.jsonl").read_text().splitlines()]
+    slices_ = [{x["idea"].get("slice") for x in r["ideas"]} for r in rows]
+    assert "persistence" in slices_[1] and "sub-idea" in slices_[2]            # refined; the edit's sub-idea drafted
+    assert any("Name" in s and "replace its algorithm" in s for s in systems)  # the immigrant's whole-program changes
+    assert any("This idea's earlier attempts" in u for u in drafts)              # the coder sees the history
+    table = json.loads((tmp_path / "ideas.json").read_text())
+    assert table["ideas"] and all(i["attempts"] for i in table["ideas"])
+    assert all("history" not in x["idea"] for r in rows for x in r["ideas"])   # histories stay in the table
+    assert any(x.get("diff") for r in rows for x in r["ideas"])
+
+
+def test_a_search_stops_starting_work_at_its_wall_clock(tmp_path, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(G.time, "monotonic", lambda: clock[0])
+    import kernels.search.funnel as F
+    monkeypatch.setattr(F.time, "monotonic", lambda: clock[0])
+    f = funnel()
+    orig = f.stage
+
+    def slow(code, n):
+        clock[0] += 10.0                                  # every evaluator job takes 10 s of wall-clock
+        return orig(code, n)
+    f.stage = slow
+    _, cost = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, evals=10**6, usd=10**6, gen_size=8, keep=2,
+                       n_parents=2, generations=50, patience=None, wall_s=300)
+    rows = [json.loads(x) for x in (tmp_path / "hypotheses.jsonl").read_text().splitlines()]
+    assert cost["stopped_wall_clock"] and rows[-1].get("stopped") == "wall-clock" and clock[0] < 400

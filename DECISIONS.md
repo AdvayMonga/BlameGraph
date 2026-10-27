@@ -3,6 +3,21 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-27 — Ideas kept across generations (K-Search's persistence), as an arm; searches capped by wall-clock
+`kernels.search --ideas` (arm `search-ideas`) keeps an idea table: every idea with its measured attempts, so the 4
+best active ideas by measured gain are refined again each generation (2 drafts each, shown their history), an idea
+closes only after 3 generations without a better measurement (a slower first step does not drop it), one judge call
+per generation closes ideas and adds sub-ideas, and 4 immigrant ideas per generation name whole-program changes on
+the start program or a random program outside the parents. Ideas are ranked by measurement, never by the model's
+score. `--wall-s` caps a search by wall-clock. Why (the user, after the first real generations run): K-Search
+(Berkeley Sky Lab, arXiv 2602.19128) reports 2.1x over OpenEvolve and ShinkaEvolve by keeping ideas and refining them
+until they stagnate, and our generations tried every idea once; a slower first step was dropped; and nothing
+restarted from elsewhere if the first parents were poor. The model's priority score that K-Search ranks by is not
+copied: a text-only ranking did no better than random on our runs (2026-10-20), and K-Search reports no ablation of
+it. The 2,700-s `--gpu-s` cap stopped the 2026-10-27 run after 2 of 10 generations because it sums parallel jobs and
+the no-GPU precheck. It becomes the default only if it wins the A/B against the generations, the real K-Search and
+OpenEvolve on the same task, evaluator, model and wall-clock.
+
 ## 2026-10-27 — The beam is removed
 The beam (each MCTS expansion: the judge names 4 changes, the coder writes all 4, each judged in full, a failed child
 repaired in correction mode up to 3 deep) and its A/B arm `search-beam`, `--no-funnel` and `--beam` are deleted;
