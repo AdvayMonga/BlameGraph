@@ -206,8 +206,8 @@ def test_counters_are_taken_when_a_program_first_becomes_a_parent_and_the_strong
     assert all("ncu" not in k.artifacts for k in kids)
     rewrites = [u for u in strong if "passed correctness" in u]
     assert len(rewrites) == len(kids) == 2                    # the kept two only, not every correct draft
-    assert rows[0]["rewritten"] == 0 and all(x.get("written_by") == "draft" for x in rows[0]["ideas"]
-                                               if x["fate"] == "full exam")    # a rewrite to the same code: refused
+    assert rows[0]["rewritten"] == 0 and all(x.get("written_by", "").startswith("draft (rewrite not applied: identical")
+                                               for x in rows[0]["ideas"] if x["fate"] == "full exam")   # same code
     expand(f, t, kids[0], "SYS", 2, lambda n, c: t.add(n), [].append)
     assert stages.count(3) == 2 and "ncu" in kids[0].artifacts                  # profiled once chosen as a parent
 

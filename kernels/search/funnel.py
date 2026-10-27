@@ -493,7 +493,7 @@ def rewrite(f: Funnel, tree: Tree, system: str, by_id: dict, finalists: list, se
             counts: dict) -> list:
     """The strong coder rewrites each finalist (idea, plan, draft, quick result) from its idea and the passing draft;
     the rewrite replaces the draft when it builds, passes stage 1 and its quick time is faster. Returns (idea, plan,
-    code, quick result, "rewrite" | "draft") for each."""
+    code, quick result, "rewrite" | "draft (why the rewrite was not kept)") for each."""
     from kernels.search.loop import prompt
 
     def ask(x):
@@ -502,7 +502,8 @@ def rewrite(f: Funnel, tree: Tree, system: str, by_id: dict, finalists: list, se
         ref = plan + "\n\n# A version that passed correctness, as a diff from this program\n" + \
             "".join(difflib.unified_diff(p.code.splitlines(True), code.splitlines(True), n=2))[:6000]
         return write(f, f.models.strong, system, prompt(tree, p, ref), p.code, set(seen))
-    news = [c for c, _ in written(f, pmap(f, ask, finalists), seen)]
+    asked = written(f, pmap(f, ask, finalists), seen)
+    news = [c for c, _ in asked]
     ok = {}
     todo = [c for c in news if c]
     if f.precheck and todo:
@@ -515,14 +516,19 @@ def rewrite(f: Funnel, tree: Tree, system: str, by_id: dict, finalists: list, se
     for c, r in zip(todo, correct(f, todo)):
         ok[c] = r["metrics"].get("correct") == 1.0
     out = []
-    for (h, plan, code, q), c2 in zip(finalists, news):
-        if c2 and ok.get(c2):
+    for (h, plan, code, q), (c2, why) in zip(finalists, asked):
+        if not c2:
+            out.append((h, plan, code, q, f"draft (rewrite not applied: {why[:200]})"))
+        elif not ok.get(c2):
+            out.append((h, plan, code, q, "draft (rewrite failed " + ("the precheck)" if c2 in ok and ok[c2] is False
+                                                                     and c2 not in todo else "stage 1)")))
+        else:
             q2 = f.run(c2, 4)
             if _score(q2) > _score(q):
                 counts["rewritten"] += 1
                 out.append((h, plan, c2, q2, "rewrite"))
-                continue
-        out.append((h, plan, code, q, "draft"))
+            else:
+                out.append((h, plan, code, q, f"draft (rewrite quick {_score(q2):.4f} vs {_score(q):.4f})"))
     return out
 
 
