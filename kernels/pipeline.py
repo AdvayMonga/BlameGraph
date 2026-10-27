@@ -113,12 +113,34 @@ def spent(out: Path) -> float:
     return round(usd, 4)
 
 
+def facts(task, kernel_tasks: dict | None, regimes: tuple[str, ...] = ()) -> str:
+    """The bigger picture as facts for every prompt of the search: the regimes the kernel's engine is scored under,
+    and from the latest profile (`kernel_tasks`, lab/evaltools.harness_facts) the task's share of the engine's
+    profiled window and the window's speedup if its kernels took no time; or that no profile has them."""
+    out = ["# The engine this kernel runs in"]
+    if regimes:
+        out.append(f"Scored regimes of the task the engine is optimized for: {', '.join(regimes)}.")
+    t = ((kernel_tasks or {}).get("tasks") or {}).get(task.name)
+    if t and t.get("share_of_window") is not None:
+        s = t["share_of_window"]
+        free = t.get("speedup_if_free")
+        out.append(f"In the latest profile of the engine (record {kernel_tasks.get('record')}), this kernel's launches "
+                   f"took {100 * s:.1f}% of the window ({', '.join(t.get('kernels') or [])}); the window would be "
+                   + (f"{free:.3f}x faster if they took no time" if free else "no faster: the share is 1") + ".")
+    else:
+        out.append("No profile of the engine with this kernel's share of its time is recorded yet.")
+    return "\n".join(out)
+
+
 def search(task, caps: list[Path], start: Path, out: Path, usd: float, evals: int, ledger_root: Path, env: dict,
-           funnel: bool = True, device: str = "cuda") -> dict:
+           funnel: bool = True, device: str = "cuda", facts_text: str | None = None) -> dict:
     """`python -m kernels.search` on the captures: its last JSON line (best, cost, out, ledger record id)."""
+    out.mkdir(parents=True, exist_ok=True)
+    if facts_text:
+        (out / "facts.txt").write_text(facts_text)
     argv = [sys.executable, "-m", "kernels.search", "--task", task.name, "--out", str(out), "--usd", str(usd),
             "--evals", str(evals), "--initial", str(start), "--ledger", str(ledger_root), "--equal-captures",
-            "--device", device,
+            "--device", device, *(["--facts", str(out / "facts.txt")] if facts_text else []),
             *[w for c in caps for w in ("--captures", str(c))], *([] if funnel else ["--no-funnel"])]
     p = subprocess.run(argv, capture_output=True, text=True, cwd=ROOT, env={**os.environ, **env})
     lines = [x for x in p.stdout.splitlines() if x.startswith("{")]

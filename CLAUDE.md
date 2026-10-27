@@ -267,12 +267,20 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   after every call the checker makes (`core._watched`; the timer binds its own at import); the exploit canaries in
   `tests/test_kernels_evolve.py` must all score 0; selection never sees held-out shapes, `gate` judges them (correctness, and their speedup as a fact); `validate_gpu.sh` = the GPU validation (shapes captured under real corpus traffic at several concurrencies, `CAPTURE_SPECS`; never synthetic prompts, whose batches have uniform lengths); tolerances from the target's
   `[kernels]`). `kernels/search/` (extra `kernel-search`; our own layer-1 generator, replacing OpenEvolve, which stays as the A/B baseline: `python -m
-  kernels.search`; a tree of refinement chains, parents chosen by MCTS (UCT with C = 0.6 on percentile rewards and max backup,
+  kernels.search`; by default the genetic search (`kernels/search/generations.py`, decided 2026-10-26): generation 0 is
+  one funnel round from the start program (40 ideas, the fastest 12 to the full exam), then up to `--generations` (10)
+  generations, each a funnel round from `--parents` (4) programs drawn from the population (the 32 best open programs;
+  the best always, the rest by percentile reward + 0.05 without replacement) with `--gen-size` (24) ideas split among
+  them and the fastest `--keep` (8) to the full exam, children under their own parent; a generation where under 1/5 of
+  the examined beat their parent makes the next 2/3 as large; stops at the roofline, `--patience` (3) generations with
+  no new best, or the budget; `--crossover F` (an arm) gives that fraction of a generation's ideas to a judge call shown
+  another parent's diff; with `--mcts` instead a tree of refinement chains, one parent per round chosen by MCTS (UCT with
+  C = 0.6 on percentile rewards and max backup,
   KernelPro's progressive widening and virtual-child rule), a node closed after 3 judged failed children or 3 edits
-  that never reached the GPU, the model shown only the
+  that never reached the GPU; in every mode the model is shown only the
   parent program, its measurements and its lineage, SEARCH/REPLACE answers, duplicates refused before any GPU time,
-  each expansion one funnel round by default (`kernels/search/funnel.py`, since it won the 2026-10-24 A/B); with
-  `--no-funnel` the beam: with a judge (default) each step is two calls,
+  each round one funnel round by default (`kernels/search/funnel.py`, since it won the 2026-10-24 A/B); with
+  `--mcts --no-funnel` the beam: with a judge (default) each step is two calls,
   the judge (Opus 5.5) naming as many changes as the beam is wide (`--beam`, 4) as JSON, every one written and judged
   (each and its fate in `hypotheses.jsonl`), from the facts (and, its choice when, Anthropic's web search
   and read-only SQL over the agent's view of the ledger index, `--judge-tools`; the harness pastes no research), with
@@ -291,7 +299,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   passed over, recorded with its evidence (`kernels/search/detect.py`, MANTIS; never changes a score);
   every call priced (OpenEvolve's too, via a usage log);
   `python -m kernels.search.ab --arms ...` runs OpenEvolve and kernels.search (and variants differing in one flag:
-  `search-no-tools`, `search-c1.41`, `search-beam`) on one task with the same shapes, start, evaluator,
+  `search-no-tools`, `search-mcts`, `search-c1.41`, `search-beam`, `search-gen20`, `search-crossover`) on one task with the same shapes, start, evaluator,
   the same post-search promotion for every arm (`ab.SAME_PROMOTION`: top 3 re-timed, no tuning, no detector), single model
   and judged-program budget, gates each winner on held-out shapes, and writes `ab.json`; `kernels/METHOD.md` maps
   every component to its published source and number, or says why ours; same evaluator, run dir, re-timed promotion and `kernels` record as `kernels.evolve run`). `kernels/evolve/ship.py` (`python -m kernels.evolve ship`: a program with a passing held-out gate becomes a
@@ -340,17 +348,25 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   setmaxnreg, mbarrier, cp.async, mma, ldmatrix), with a measured time beside it when given; fastest first.
   `python -m kernels.ptx card --name N PTX ... [--timing N=MS] --out F`, read by `kernels.search --ptx F`. Producing
   competitors' PTX and timings on our shapes needs their libraries on the GPU host (not built yet).
-- `kernels/search/funnel.py` — one funnel round (decided 2026-10-22; `kernels.search`'s default since 2026-10-25, when
-  it beat the beam on moe_gemm_fp8 1.161x to 1.026x seen, 1.284x to 1.096x held-out; the beam is `--no-funnel`, A/B arm
-  `search-beam`): judge calls per slice of facts (measurements, archive matches, winners elsewhere in the tree,
-  compiler report, PTX comparison; a slice with no facts is skipped) x `--per-call` hypotheses, same-idea clusters
+- `kernels/search/funnel.py` — one funnel round (decided 2026-10-22; `kernels.search`'s tiers since 2026-10-25, when
+  it beat the beam on moe_gemm_fp8 1.161x to 1.026x seen, 1.284x to 1.096x held-out; the beam is `--mcts --no-funnel`,
+  A/B arm `search-beam`), from one parent (`expand`, an MCTS expansion: one judge call per slice of facts x `--per-call`
+  hypotheses) or several (`generation`: one call per parent naming its quota, the slices rotated across the parents so
+  each call reads one slice and every slice is read; generation 0 splits its 40 over the start's slices). The slices:
+  measurements, archive matches, winners elsewhere in the tree, compiler report, PTX comparison; a slice with no facts
+  is skipped. Hypothesis calls cycle through the judge mix (`--second-judge-model` Sonnet 5.5 one call in
+  `--second-judge-share` 4; the past-failure check stays the judge's). Then: same-idea clusters
   merged by `--cheap-model`, ideas like archived ones that never beat their parent kept only when the judge names what
   differs, `--wide-model` writes each, the no-GPU precheck (`--precheck`, default on) drops what fails to build and keeps
   the compiler's report on the program (the compiler slice of its children), stage 1 in `--parallel` jails, failures repaired once and survivors rewritten by
-  the strong coder, a quick timing on the most-called shape (`jailed.QUICK_STAGE`), the fastest `--keep` to stage 2
+  the strong coder, a quick timing on the most-called shape (`jailed.QUICK_STAGE`; programs within 5% of the cutoff
+  timed once more and ranked by their mean, `race`), the fastest `--keep` to stage 2
   (+ncu); only those join the tree (a round that examined nothing is one failure of its parent). Each hypothesis may
   predict ncu counter changes (`mechanism`), measured against the parent's. Every idea's fate goes to
-  `hypotheses.jsonl`, which the archive reads.
+  `hypotheses.jsonl` (each idea with its `parent_id`; the row's `parents`, `improved` and the Spearman rank correlation
+  between the quick timing and the full exam over the programs that took both, `quick_vs_full_spearman`), which the
+  archive reads. `--facts FILE` adds facts to every prompt; the `kernel_search` tool passes the scored regimes and the
+  task's share of the latest profiled window (`pipeline.facts`).
 - `kernels/archive.py` — the idea archive (decided 2026-10-22): every distinct kernel idea from the `kernels` records'
   hypothesis logs and traces, with each outcome (run, parent and its score, child and its score, improved, stage
   reached, error); an idea within cosine 0.92 of an earlier one on the same task is folded into it (identical texts only

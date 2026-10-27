@@ -46,7 +46,18 @@ MODES = {
     "correction": 'The program failed (see its measurements). Name one fix, as one JSON object and nothing else: '
                   '{{"critical_issue": "<max 20 words>", "why_it_matters": "<max 35 words>", "minimal_fix_hint": '
                   '"<max 20 words>"}}.',
+    "crossover": 'The program is correct. Below it is another program from the same search, as a diff. Name {n} '
+                 'change(s) to this program that carry over what the other program does differently, as one JSON '
+                 'array of {n} objects and nothing else, each {{"bottleneck": "<max 30 words>", "optimisation_method": '
+                 '"<max 35 words>", "modification_plan": "<max 35 words>", "mechanism": []}}.',
 }
+
+
+def trace_row(node: Node, cost: float) -> dict:
+    """A node as `<out>/trace.jsonl` keeps it (the fields `kernels.evolve.run.record` and `retime` read)."""
+    return {"iteration": node.iteration, "parent_id": node.parent, "child_id": node.id, "child_metrics": node.metrics,
+            "child_code": node.code, "mode": node.mode, "artifacts": node.artifacts, "judge": node.judge,
+            "proposal": node.proposal, "cost_usd": cost}
 
 
 def hypotheses(text: str, n: int) -> list[dict]:
@@ -186,10 +197,7 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
     with open(out / "trace.jsonl", "w") as trace, open(out / "hypotheses.jsonl", "w") as hyplog:
         def keep(node: Node, cost: float) -> None:
             tree.add(node)
-            trace.write(json.dumps({"iteration": node.iteration, "parent_id": node.parent, "child_id": node.id,
-                                    "child_metrics": node.metrics, "child_code": node.code, "mode": node.mode,
-                                    "artifacts": node.artifacts, "judge": node.judge, "proposal": node.proposal,
-                                    "cost_usd": cost}) + "\n")
+            trace.write(json.dumps(trace_row(node, cost)) + "\n")
             trace.flush()
 
         def attempt(parent: Node, plan: str, mode: str, cost: float) -> Node | None:
