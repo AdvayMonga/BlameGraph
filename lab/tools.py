@@ -461,7 +461,7 @@ class Toolbox(EvalTools, ProfTools):
                      "baseline), heldout_aggregates (each regime of a submit), noise (run-to-run band per regime), "
                      "client_rows (per-request client rows of every bench and equiv, record_id = records.id), "
                      "engine_rows (the engine's per-request telemetry, trace_id = 'bg-' || client_rows.id), "
-                     "device_samples (GPU samples over each served window), kernels and ops (profile bundles). "
+                     "device_samples (GPU samples over each served window), kernels and ops (profile bundles, each bench's `profiled` included). "
                      "`DESCRIBE <table>` lists a table's columns. Returns columns and up to 200 rows as JSON, cut to whole "
                      f"rows under {QUERY_MAX_BYTES // 1000} kB (`truncated` says when rows were dropped)." + free,
                      {"type": "object", "required": ["sql"], "properties": {"sql": {"type": "string"}}}, self.query),
