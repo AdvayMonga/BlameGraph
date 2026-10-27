@@ -24,8 +24,9 @@ def _load(d: Path) -> dict:
             for r in json.loads(f.read_text())["results"]:
                 regs.setdefault(r["regime"], []).append(r)
         read = lambda name: json.loads((cfg / name).read_text()) if (cfg / name).exists() else None
+        gpus = {json.loads(f.read_text()).get("gpu_uuid") for f in cfg.glob("facts-*.json")}
         out[(engine, precision)] = {"regimes": regs, "equiv": read("equiv.json"), "cold": read("cold.json"),
-                                    "launch": read("launch.json")}
+                                    "launch": read("launch.json"), "gpus": gpus - {None, ""}}
     return out
 
 
@@ -106,6 +107,11 @@ def render(d: Path, gpu_usd_per_hour: float | None = None, tol_pct: float = 2.0)
     for (e, p), v in sorted(data.items()):
         q = v["equiv"] or {}
         lines.append(f"| {e} | {p} | {q.get('verdict', '-')} | {'; '.join(q.get('reasons') or [])[:120]} |")
+    gpus = {g for v in data.values() for g in v["gpus"]}
+    if len(gpus) > 1:
+        lines += ["", f"**Measured on {len(gpus)} different GPUs** (a spot VM restarted on another host): "
+                  + "; ".join(f"{e}-{p}: {', '.join(sorted(v['gpus']))}" for (e, p), v in sorted(data.items())),
+                  "Compare only configurations measured on the same GPU, or rerun on one."]
     check = d / "clientcheck.json"
     if check.exists():
         c = json.loads(check.read_text())

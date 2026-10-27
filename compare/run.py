@@ -81,6 +81,7 @@ def facts() -> dict:
     """What the GPU and host were during a configuration's runs."""
     return {"gpu": _sh("nvidia-smi", "--query-gpu=name,driver_version,clocks.sm,clocks.max.sm,clocks.mem,power.limit,"
                      "temperature.gpu,clocks_throttle_reasons.active", "--format=csv,noheader"),
+            "gpu_uuid": _sh("nvidia-smi", "--query-gpu=uuid", "--format=csv,noheader"),   # a spot VM can move hosts
             "cpus": os.cpu_count(), "kernel": _sh("uname", "-r"), "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
 
 
