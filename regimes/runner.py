@@ -175,18 +175,20 @@ def summarize(rows: list[Row], limits: Limits, elapsed_s: float | None = None) -
     }
 
 
-def find_goodput(probe: Callable[[float], dict], start: float, max_probes: int = 10, rel_tol: float = 0.1,
+def find_goodput(probe: Callable[[float], dict], start: float, max_probes: int = 40, rel_tol: float = 0.1,
                  min_load: float | None = None, growth: float = 2.0) -> dict:
     """Highest load x with probe(x)["meets_limits"]: grow by `growth` from `start` until a probe fails (or shrink by
     it until one passes), the step squaring on each move up to 2x, then bisect until the bracket is within `rel_tol`.
     An invalid probe (client bottleneck, silent drops, crashes) stops the search, as does going below `min_load`
-    (default start/16: a server that fails there has no goodput worth finding). Returns {goodput, probes}."""
+    (default start/16: a server that fails there has no goodput worth finding). Returns {goodput, fails_at (the lowest
+    failing load, None if none failed), stopped (resolved | invalid | below_min | probe_budget), probes}."""
     min_load = start / 16 if min_load is None else min_load
-    probes, lo, hi, x, step = [], 0.0, None, start, growth
+    probes, lo, hi, x, step, stopped = [], 0.0, None, start, growth, "probe_budget"
     for _ in range(max_probes):
         s = probe(x)
         probes.append({"load": x, **s})
         if not s["valid"]:
+            stopped = "invalid"
             break
         if s["meets_limits"]:
             lo = x
@@ -199,9 +201,11 @@ def find_goodput(probe: Callable[[float], dict], start: float, max_probes: int =
             x = hi / step
             step = min(step * step, 2.0)
             if x < min_load:
+                stopped = "below_min"
                 break
         elif (hi - lo) / hi <= rel_tol:
+            stopped = "resolved"
             break
         else:
             x = (lo + hi) / 2
-    return {"goodput": lo or None, "probes": probes}
+    return {"goodput": lo or None, "fails_at": hi, "stopped": stopped, "probes": probes}

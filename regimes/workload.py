@@ -89,12 +89,28 @@ def poisson(pool: list[dict], rate: float, duration_s: float, seed: int, **req_k
         out.append(to_request(rec, t, rid=f"{rec['id']}#{len(out)}", **req_kw))
 
 
-def replay(trace: list[dict], speed: float = 1.0, window: tuple[float, float] | None = None) -> list[Request]:
-    """The trace at its own arrival times, compressed by `speed` (2.0 = twice the rate, same burst shape),
-    optionally cropped to `window` (seconds of original trace time)."""
-    recs = [r for r in trace if window is None or window[0] <= r["arrival_s"] < window[1]]
-    t0 = min((r["arrival_s"] for r in recs), default=0.0)
-    return [to_request(r, (r["arrival_s"] - t0) / speed) for r in recs]
+def scaled(trace: list[dict], factor: float = 1.0, window: tuple[float, float] | None = None,
+           seed: int = 0) -> list[Request]:
+    """The trace at `factor` x its request rate over its own span, optionally cropped to `window` (seconds of trace
+    time): each arrival stays and is joined by factor - 1 more (a fraction by chance), placed uniformly in the gap to
+    the next arrival and drawn in a seeded order from the trace, so the rate scales in every gap and the burst shape
+    is kept. factor 1 is the trace itself; below 1 arrivals are dropped by chance."""
+    recs = sorted((r for r in trace if window is None or window[0] <= r["arrival_s"] < window[1]),
+                  key=lambda r: r["arrival_s"])
+    if not recs:
+        return []
+    t0, rng = recs[0]["arrival_s"], random.Random(seed)
+    ts = [r["arrival_s"] - t0 for r in recs]
+    mean_gap = ts[-1] / (len(ts) - 1) if len(ts) > 1 else 1.0
+    draw, k, out = rng.sample(trace, len(trace)), 0, []
+    for i, (r, t) in enumerate(zip(recs, ts)):
+        gap = ts[i + 1] - t if i + 1 < len(ts) else mean_gap
+        n = int(factor) + (rng.random() < factor - int(factor))
+        for j in range(n):
+            src = r if j == 0 else draw[k % len(draw)]
+            k += j > 0
+            out.append(to_request(src, t if j == 0 else t + rng.random() * gap, rid=f"{src['id']}#{i}.{j}"))
+    return sorted(out, key=lambda q: q.at_s)
 
 
 def peak_window(trace: list[dict], width_s: float = 180.0) -> tuple[float, float]:

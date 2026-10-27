@@ -2,7 +2,7 @@
 
   single_stream             one user at a time: p99 time per output token (interactive limits)
   saturated                 closed-loop concurrency sweep: goodput in req/s
-  bursty                    the corpus burst trace, sped up until it breaks: goodput as a speed-up factor
+  bursty                    the corpus burst trace at a multiple of its request rate until it breaks: goodput as that multiple
   long_prompt_short_output  long-context prompts, 64-token answers, Poisson arrivals: goodput in req/s
   short_prompt_long_output  short prompts, answers up to 1024 tokens, Poisson arrivals: goodput in req/s
   shared_prefix_multi_turn  conversations resending their history under one shared system prompt: goodput in sessions/s
@@ -53,6 +53,7 @@ class Ctx:
     rows: list | None = None           # when a list, every measured row lands here (no text), tagged with its call
     hints: dict = field(default_factory=dict)   # {regime: {"load" | "concurrency": x}}: where the base's search ended
     bands: dict = field(default_factory=dict)   # {regime: run-to-run band %}: the search resolves to it, not finer
+    tol: float | None = None                    # the search's relative resolution for every regime, over the bands
     on_rows: object = None             # called with each run_open/run_closed call's rows (lab.live progress)
     _pools: dict = field(default_factory=dict)
     _calls: int = 0
@@ -111,7 +112,7 @@ class Ctx:
     def search(self, regime: str, start: float) -> dict:
         """find_goodput's start, growth and tolerance for a regime: from the base's result when hinted (steps of two
         bands), resolved to the regime's noise band when one is known (else 10%)."""
-        tol = (self.bands.get(regime) or 10.0) / 100
+        tol = self.tol or (self.bands.get(regime) or 10.0) / 100
         hint = (self.hints.get(regime) or {}).get("load")
         if not hint:
             return {"start": start, "rel_tol": tol}
@@ -146,9 +147,9 @@ def _result(name, objective, value, direction, summary, **extra) -> dict:
             "invalid_reasons": summary["invalid_reasons"] if summary else ["no measurement"], **extra}
 
 
-def _search_and_confirm(measure, search_args: dict) -> tuple[float | None, dict | None, list]:
+def _search_and_confirm(measure, search_args: dict) -> tuple[float | None, dict | None, dict]:
     """find_goodput with measure(load, final=False), then confirm with measure(load, final=True), backing off 15%
-    up to 5 times. Returns (confirmed load or None, final summary, probes)."""
+    up to 5 times. Returns (confirmed load or None, final summary, the search's bracket and probes)."""
     search = find_goodput(lambda x: measure(x, False), **search_args)
     load, final = search["goodput"], None
     for _ in range(6):
@@ -161,7 +162,12 @@ def _search_and_confirm(measure, search_args: dict) -> tuple[float | None, dict 
     ok = final is not None and final["meets_limits"] and final["valid"]
     if final is None and search["probes"]:
         final = search["probes"][-1]
-    return (load if ok else None), final, search["probes"]
+    return (load if ok else None), final, _bracket(search)
+
+
+def _bracket(search: dict) -> dict:
+    """Where the search ended: the lowest failing load and why it stopped, beside its probes."""
+    return {"fails_at": search["fails_at"], "stopped": search["stopped"], "probes": search["probes"]}
 
 
 def _goodput_regime(ctx: Ctx, name: str, objective: str, build, limits: Limits, per_unit: float = 1.0,
@@ -174,8 +180,8 @@ def _goodput_regime(ctx: Ctx, name: str, objective: str, build, limits: Limits, 
         duration = ctx.duration(load * per_unit, final)
         rows = ctx.run_open(build(load, duration + ramp_s))
         return summarize([r for r in rows if ramp_s <= r.scheduled_s < ramp_s + duration], limits, duration)
-    load, final, probes = _search_and_confirm(measure, ctx.search(name, ctx.min_requests / (ctx.probe_s * per_unit)))
-    return _result(name, objective, load, "higher", final, probes=probes)
+    load, final, found = _search_and_confirm(measure, ctx.search(name, ctx.min_requests / (ctx.probe_s * per_unit)))
+    return _result(name, objective, load, "higher", final, **found)
 
 
 def single_stream(ctx: Ctx) -> dict:
@@ -187,9 +193,10 @@ def single_stream(ctx: Ctx) -> dict:
     return _result("single_stream", "tpot_p99_s", s["tpot_p99_s"], "lower", s, ttft_p99_s=s["ttft_p99_s"])
 
 
-def saturated(ctx: Ctx, max_concurrency: int = 512) -> dict:
+def saturated(ctx: Ctx, max_concurrency: int = 4096) -> dict:
     """Doubling concurrency; goodput = good req/s at the best level whose requests meet the limits. With a hint the
-    sweep starts at the base's concurrency, halving first while that level fails."""
+    sweep starts at the base's concurrency, halving first while that level fails. `stopped` says why the sweep ended
+    (two failing levels, an invalid level, or `max_concurrency` reached while still passing)."""
     pool = ctx.pool(None)
     _warmup(ctx, pool)
     order = random.Random(ctx.seed).sample(pool, len(pool))
@@ -219,6 +226,8 @@ def saturated(ctx: Ctx, max_concurrency: int = 512) -> dict:
         elif not s["meets_limits"]:
             misses += 1
         c *= 2
+    stopped = ("invalid" if not s["valid"] else "max_concurrency" if c > max_concurrency and s["meets_limits"]
+               else "resolved")
     final, best = None, None
     passing = sorted((lv for lv in levels if lv["meets_limits"]), key=lambda lv: -lv["good_req_per_s"])
     for cand in passing[:3]:                       # confirm at full length; a short probe can flatter a level
@@ -229,11 +238,13 @@ def saturated(ctx: Ctx, max_concurrency: int = 512) -> dict:
             break
     ok = final is not None and final["meets_limits"] and final["valid"]
     return _result("saturated", "goodput_req_per_s", final["good_req_per_s"] if ok else None, "higher",
-                   final or (levels[-1] if levels else None), concurrency=best and best["concurrency"], levels=levels)
+                   final or (levels[-1] if levels else None), concurrency=best and best["concurrency"], levels=levels,
+                   stopped=stopped)
 
 
 def bursty(ctx: Ctx) -> dict:
-    """The spike trace replayed at `speed` x its real rate (burst shape kept); short tier crops to the peak window."""
+    """The spike trace at `speed` x its real request rate over its own span (burst shape kept, `W.scaled`); short tier
+    crops to the peak window."""
     if ctx.workload is not None:
         return {**_result("bursty", "speedup", None, "higher", None),
                 "invalid_reasons": ["a --workload file has no arrival times to replay"]}
@@ -242,9 +253,9 @@ def bursty(ctx: Ctx) -> dict:
     window = W.peak_window(trace) if ctx.tier == "short" else None
 
     def measure(speed, _final):                     # the trace is its own duration; confirming is a rerun
-        return summarize(ctx.run_open(W.replay(trace, speed, window)), ctx.conversational)
-    speed, final, probes = _search_and_confirm(measure, ctx.search("bursty", 1.0))
-    return _result("bursty", "speedup", speed, "higher", final, probes=probes,
+        return summarize(ctx.run_open(W.scaled(trace, speed, window, ctx.seed)), ctx.conversational)
+    speed, final, found = _search_and_confirm(measure, ctx.search("bursty", 1.0))
+    return _result("bursty", "speedup", speed, "higher", final, **found,
                    good_req_per_s=final and final["good_req_per_s"])
 
 
@@ -372,8 +383,10 @@ FACTS = {
                       "p99 time per output token, seconds", "interactive"),
     "saturated": ("closed loop at doubling concurrency over every corpus class; each level's requests judged against "
                   "the limits, the highest passing level rerun at full length", "goodput, good requests/s", "conversational"),
-    "bursty": ("the spike trace replayed open loop at a searched multiple of its real rate, burst shape kept (short "
-               "tier: its peak window)", "the highest speed-up whose requests meet the limits", "conversational"),
+    "bursty": ("the spike trace open loop at a searched multiple of its real request rate over its own span, burst "
+               "shape kept: each arrival is joined by that many more, spread over the gap to the next and drawn from the "
+               "trace (short tier: its peak window)", "the highest multiple whose requests meet the limits",
+               "conversational"),
     "long_prompt_short_output": ("Poisson arrivals of long_context prompts, max_tokens 64",
                                  "goodput, good requests/s", "conversational"),
     "short_prompt_long_output": (f"Poisson arrivals of prompts of at most {SHORT_PROMPT_TOKENS} tokens asking for an "

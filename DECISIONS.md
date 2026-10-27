@@ -3,6 +3,19 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-27 — No ties at the search's edge: bursty scales its request count, searches run to a break point
+Bursty's load multiple now means that many times the trace's requests over the trace's own span (`W.scaled`: each
+arrival joined by factor - 1 more, spread over the gap to the next, drawn from the trace), not the same requests
+replayed faster. The load searches run until a probe fails (40 probes, was 10; saturated up to 4,096 concurrency, was
+512), and every goodput result carries where the search ended: the lowest failing load (`fails_at`) and why it
+stopped (`stopped`: resolved, invalid, below_min, probe_budget; saturated: max_concurrency). `regimes run --tol` sets
+the search's resolution for an engine comparison. Why (the user: never accept a tie unless a physical ceiling is hit):
+the short tier's spike window holds 158 requests, so at 256x they all arrived within 0.7 s and any engine that could
+batch 158 passed at every speed; 512x was voided by the client's own send lag (32-51 ms), not by an engine. Long
+prompt (80) and shared prefix (0.81) were real break points that both engines reported alike because the search
+stops at a 10% bracket (80 passed, 86.7 failed); the bracket now shows when two results are within it. Replaces the
+time-compressed replay (2026-10-02 eval conventions' bursty).
+
 
 ## 2026-10-26 — The kernel search runs generations: funnel rounds from fitness-drawn parents
 `kernels.search` becomes a genetic search inside one call (`kernels/search/generations.py`): generation 0 is the funnel

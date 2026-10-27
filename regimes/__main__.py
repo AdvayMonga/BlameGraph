@@ -30,6 +30,7 @@ def main():
     r.add_argument("--tier", choices=tuple(suite.TIERS), default="short")
     r.add_argument("--seed", type=int, default=0); r.add_argument("--timeout", type=float, default=600.0)
     r.add_argument("--tokenizer", help="re-count output tokens with this HF tokenizer (default: server usage)")
+    r.add_argument("--tol", type=float, help="the load searches' relative resolution (default: each regime's band, else 0.1)")
     r.add_argument("--out")
     c = sub.add_parser("cold-start")
     c.add_argument("--url", required=True); c.add_argument("--cmd", required=True)
@@ -51,7 +52,8 @@ def main():
             from transformers import AutoTokenizer
             tok = AutoTokenizer.from_pretrained(a.tokenizer)
             count = lambda s: tok.encode(s, add_special_tokens=False)
-        ctx = suite.Ctx.from_target(t, a.url, split=a.split, tier=a.tier, seed=a.seed, timeout=a.timeout, count_tokens=count)
+        ctx = suite.Ctx.from_target(t, a.url, split=a.split, tier=a.tier, seed=a.seed, timeout=a.timeout, count_tokens=count,
+                                     tol=a.tol)
         if a.corpus:
             ctx.corpus = a.corpus
         ctx.workload = a.workload

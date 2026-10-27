@@ -87,7 +87,12 @@ def test_workload_builders():
     s0 = [r for r in reqs if r.session_id == reqs[0].session_id]
     assert [round(r.at_s - s0[0].at_s, 6) for r in s0] == [0.0, 2.0, 4.0]
     trace = [{"id": f"t{k}", "prompt": "p", "arrival_s": 100.0 + k, "max_tokens": 8} for k in range(10)]
-    assert [r.at_s for r in W.replay(trace, 2.0)][:3] == [0.0, 0.5, 1.0]
+    assert [r.at_s for r in W.scaled(trace)] == [float(k) for k in range(10)]
+    double = W.scaled(trace, 2.0)
+    assert len(double) == 20 and len({r.id for r in double}) == 20 and max(r.at_s for r in double) < 10.0
+    assert all(sum(k <= r.at_s < k + 1 for r in double) == 2 for k in range(10))    # the rate doubles in every gap
+    many = [{**trace[0], "id": f"m{k}", "arrival_s": k * 0.37} for k in range(1000)]     # fractions by chance
+    assert 2400 <= len(W.scaled(many, 2.5)) <= 2600 and 450 <= len(W.scaled(many, 0.5)) <= 550
     lo, hi = W.peak_window(trace + [{"id": "b", "prompt": "p", "arrival_s": 500.0 + k / 10, "max_tokens": 8} for k in range(30)])
     assert lo < 500 < hi
     from lab.corpus import CorpusError, TraceRequest, WorkloadClass, build_manifest, write_trace
