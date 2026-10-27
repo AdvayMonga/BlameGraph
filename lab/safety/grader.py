@@ -259,18 +259,24 @@ def jailed_popen(tree: Path, argv: list[str], *, env_extra: dict | None = None, 
 
 def jailed(tree: Path, argv: list[str], *, timeout_s: float, env_extra: dict | None = None,
            domains: list[str] = (), read: list[Path] = (), memory: str | None = None,
-           gpu: bool | None = None, ipc_host: bool = False) -> subprocess.CompletedProcess:
+           gpu: bool | None = None, ipc_host: bool = False, on_start=None) -> subprocess.CompletedProcess:
     """Run `argv` in `tree` as agent code: wiped env, jail around the tree and a private tmp, weights and `read`
     read-only; `memory` caps the container jail's host RAM (docker's syntax, e.g. "32g"); `gpu=False` attaches no
-    GPU to the container jail."""
+    GPU to the container jail; `on_start(pids)` is called once it runs, `pids()` = every host pid of the jail."""
     wrapped, env, tmp, name = _jail_argv(tree, argv, env_extra, domains, read=read, memory=memory, gpu=gpu,
                                          ipc_host=ipc_host)
     try:
-        return subprocess.run(wrapped, cwd=tree, env=env, capture_output=True, text=True, timeout=timeout_s)
-    except subprocess.TimeoutExpired as e:     # a hung suite is a failed run, recorded like any other
-        out = (e.stdout or b"")
-        return subprocess.CompletedProcess(argv, -9, out.decode(errors="replace") if isinstance(out, bytes) else out,
-                                           f"timed out after {timeout_s:.0f}s")
+        proc = subprocess.Popen(wrapped, cwd=tree, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if on_start:
+            from lab.gpu import descendants     # the `gpu` argument shadows the module here
+            on_start((lambda: container.pids(name)) if name else (lambda: descendants(proc.pid)))
+        try:
+            out, err = proc.communicate(timeout=timeout_s)
+        except subprocess.TimeoutExpired:      # a hung suite is a failed run, recorded like any other
+            proc.kill()
+            out, _ = proc.communicate()
+            return subprocess.CompletedProcess(argv, -9, out or "", f"timed out after {timeout_s:.0f}s")
+        return subprocess.CompletedProcess(wrapped, proc.returncode, out, err)
     finally:
         if name:
             container.remove(name)

@@ -92,8 +92,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   and saves a patch of the engine module in the workspace for the agent to apply; kernels-layer hypotheses only;
   `budget_usd` split between model calls and GPU time); every record's `cost` has wall seconds, and
   GPU tools charge them at `LAB_GPU_USD_PER_HOUR` / the target's `[cost] gpu_usd_per_hour` to the run's budget) +
-  `proftools.py` (trace = nsys, kernel = ncu, hostprof = py-spy, each wrapping lab.profile's workload in the jail
-  with validated args) + `evaltools.py` (bench → `regimes` on
+  `proftools.py` (profile = torch.profiler, trace = nsys, kernel = ncu, hostprof = py-spy, all one path: lab.profile's
+  workload in the jail with validated args, the GPU watched like a served engine (`serve.Watch`: refused when busy,
+  contaminated when shared), one record shape) + `evaltools.py` (bench → `regimes` on
   the seen split, default regimes saturated + the task's, each search started where the run's base measurement ended and
   resolved to the regime's noise band, then the same tree profiled once in its own launch (`profiled`: the layer facts
   a mechanism prediction is measured against; the baseline too); equiv → `correctness` candidate vs the target's reference, 32 requests in flight (scoring at 4),

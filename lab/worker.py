@@ -159,7 +159,9 @@ def job_profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
 
 
 def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
-    from lab import profiles, proftools, tools as T
+    """Every instrument the same way: lab.profile's workload inside the jail, wrapped by the instrument (none for
+    torch), watched like a served engine (`serve.Watch`: GpuBusy before, Contaminated after), then its report step."""
+    from lab import gpu, profiles, proftools, tools as T
     tree, kind, a = inputs["tree"], args["kind"], args["args"]
     prof = {"env": profiles.env(target.load(), a["profile"])} if a.get("profile") else {}
     if a.get("capture"):                         # calls replayed from CUDA graphs never reach the capture's wrappers
@@ -167,54 +169,51 @@ def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     if a.get("capture_task"):                    # what the task's calls need to occur at all (e.g. fp8 KV pools)
         from kernels.tasks import load as load_task
         prof["env"] = {**prof.get("env", {}), **dict(load_task(a["capture_task"]).capture_env)}
-    files = out / "files"
-    harness = T.stage_harness(tree)
-    if kind == "profile":
-        runs = tree / "lab" / "runs"
-        n = int(a.get("requests", 8))
-        argv = [engine.python(), "-m", "lab.profile", "--requests", str(n), "--max-tokens", str(a.get("max_tokens", 32)),
-                "--out", str(runs), *T.workload_flags(a, harness, n),
-                *[w for f in a.get("capture") or [] for w in ("--capture", str(f))]]
-        from lab import gpu
-        before = gpu.compute_apps()                  # anything on the GPU before or after the run shares it
-        limit = {"timeout_s": args["timeout_s"]} if args.get("timeout_s") else {}
-        proc = (hooks.get("profile_runner") or T.default_profile_runner)(tree, argv, **prof, **limit)
-        others = [*(before or []), *(gpu.compute_apps() or [])]
-        bundles = sorted(runs.glob("*")) if runs.exists() else []
-        if bundles:
-            T._drop_links(bundles[-1])
-            shutil.copytree(bundles[-1], files)
-        return {"returncode": proc.returncode, "output": (proc.stdout + proc.stderr)[-3000:], "gpu": gpu.query(),
-                "gpu_others": others}
+    if args.get("timeout_s"):
+        prof["timeout_s"] = args["timeout_s"]
     ins = proftools.instrument(kind, a)
-    exe = shutil.which(ins["binary"])
-    if not exe:
-        return {"refused": f"{ins['binary']} is not on PATH on this host"}
-    exe = str(Path(exe).resolve())
+    exe, read = None, []
+    if ins["binary"]:
+        exe = shutil.which(ins["binary"])
+        if not exe:
+            return {"refused": f"{ins['binary']} is not on PATH on this host"}
+        exe = str(Path(exe).resolve())
+        read = [Path(exe).parent, Path(exe).parent.parent]  # the install root: nsys's importer lives beside its binary dir
+        if Path("/opt/nvidia").is_dir():
+            read.append(Path("/opt/nvidia"))                # where launchers like CUDA's bin/ncu find the real install
     work = tree / proftools.OUT
+    shutil.rmtree(work, ignore_errors=True)
     work.mkdir()
-    read = [Path(exe).parent, Path(exe).parent.parent]     # the install root: nsys's importer lives beside its binary dir
-    if Path("/opt/nvidia").is_dir():
-        read.append(Path("/opt/nvidia"))                    # where launchers like CUDA's bin/ncu find the real install
+    harness = T.stage_harness(tree)
     src = T.workload_flags(a, harness, proftools._int(a, "requests", *proftools.WORKLOAD["requests"]))
     argv = [*ins["wrap"](exe, work), engine.python(), "-m", "lab.profile", *ins["flags"], *src, *ins["extra"](exe),
             "--out", str(work / "bundle")]
-    proc = T.default_profile_runner(tree, argv, read=read, **prof)
+    runner = hooks.get("profile_runner") or T.default_profile_runner
+    watch = serve.Watch()
+    try:
+        proc = runner(tree, argv, read=read, on_start=watch.start, **prof)
+    finally:
+        foreign = watch.stop()
+    if foreign:
+        raise serve.Contaminated(foreign)
     log, commands = proc.stdout + proc.stderr, [argv]
     T._drop_links(work)
     if ins["post"] and proc.returncode == 0:
         pargv, dest = ins["post"](exe, work)
         commands.append(pargv)
-        p = T.default_profile_runner(tree, pargv, read=read, **prof)
+        p = runner(tree, pargv, read=read, **prof)
         if dest:
             dest.write_text(p.stdout)
         log += p.stderr if dest else p.stdout + p.stderr
         proc = p if p.returncode else proc
         T._drop_links(work)
-    found = sorted(work.glob(ins["summary"]))
-    if any(p.is_file() for p in work.rglob("*")):
-        shutil.copytree(work, files)
-    from lab import gpu
+    keep = work
+    if ins["bundle_only"]:                       # the bundle itself is the record's blob (calibration reads it there)
+        bundles = sorted((work / "bundle").glob("*")) if (work / "bundle").is_dir() else []
+        keep = bundles[-1] if bundles else None
+    if keep and any(p.is_file() for p in keep.rglob("*")):
+        shutil.copytree(keep, out / "files")
+    found = sorted(work.glob(ins["summary"])) if ins["summary"] else []
     return {"returncode": proc.returncode, "instrument": exe, "argv": commands, "output": log[-3000:],
             "head": proftools._head(found[-1] if found else None), "gpu": gpu.query()}
 
