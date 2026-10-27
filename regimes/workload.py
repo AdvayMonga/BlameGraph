@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import random
+from collections import Counter
 from pathlib import Path
 
 from .client import Request
@@ -52,10 +53,13 @@ def messages(rec: dict) -> list[dict]:
 
 
 def to_request(rec: dict, at_s: float = 0.0, max_tokens: int | None = None, suffix: str = "", system: str | None = None,
-               rid: str | None = None) -> Request:
+               rid: str | None = None, salt: int = 0) -> Request:
     """A record with a measured reference length is sent at a fixed length: the regime's `max_tokens` when it sets
-    one, else that length, with ignore_eos."""
+    one, else that length, with ignore_eos. `salt` > 0 (the record's salt-th reuse in one schedule) starts its first
+    message with "[salt] ", so a reused record shares no prefix with its earlier sends."""
     msgs = [dict(m) for m in messages(rec)]
+    if salt:
+        msgs[0]["content"] = f"[{salt}] " + msgs[0]["content"]
     if suffix:
         msgs[-1]["content"] = msgs[-1]["content"] + suffix
     if system:
@@ -63,6 +67,24 @@ def to_request(rec: dict, at_s: float = 0.0, max_tokens: int | None = None, suff
     fixed = rec.get("expected_output_tokens")
     return Request(rid or rec["id"], msgs, max_tokens or fixed or rec.get("max_tokens") or 2048, at_s,
                    rec.get("session_id"), rec.get("turn_index"), ignore_eos=fixed is not None)
+
+
+class Cycle:
+    """Closed-loop requests built one at a time, cycling `order`; pass p > 0 salts every request with p. `part(k, n)`
+    is every n-th request from the k-th, for one of n client processes (ids stay unique across parts)."""
+
+    def __init__(self, order: list[dict], tag: str = "", k: int = 0, n: int = 1):
+        self.order, self.tag, self.k, self.n = order, tag, k, n
+
+    def part(self, k: int, n: int) -> "Cycle":
+        return Cycle(self.order, self.tag, k, n)
+
+    def __iter__(self):
+        i = self.k
+        while True:
+            r = self.order[i % len(self.order)]
+            yield to_request(r, rid=f"{r['id']}#{self.tag}{i}", salt=i // len(self.order))
+            i += self.n
 
 
 def synthetic(n: int, words: int = 60, seed: int = 0, prefix: str = "syn") -> list[dict]:
@@ -80,13 +102,14 @@ def shared_system_prompt(words: int = 1200, seed: int = 0) -> str:
 
 def poisson(pool: list[dict], rate: float, duration_s: float, seed: int, **req_kw) -> list[Request]:
     """Open-loop arrivals at `rate` req/s for `duration_s`, requests drawn with replacement from `pool`."""
-    rng, t, out = random.Random(seed), 0.0, []
+    rng, t, out, uses = random.Random(seed), 0.0, [], Counter()
     while True:
         t += rng.expovariate(rate)
         if t >= duration_s:
             return out
         rec = rng.choice(pool)
-        out.append(to_request(rec, t, rid=f"{rec['id']}#{len(out)}", **req_kw))
+        out.append(to_request(rec, t, rid=f"{rec['id']}#{len(out)}", salt=uses[rec["id"]], **req_kw))
+        uses[rec["id"]] += 1
 
 
 def scaled(trace: list[dict], factor: float = 1.0, window: tuple[float, float] | None = None,
@@ -102,14 +125,16 @@ def scaled(trace: list[dict], factor: float = 1.0, window: tuple[float, float] |
     t0, rng = recs[0]["arrival_s"], random.Random(seed)
     ts = [r["arrival_s"] - t0 for r in recs]
     mean_gap = ts[-1] / (len(ts) - 1) if len(ts) > 1 else 1.0
-    draw, k, out = rng.sample(trace, len(trace)), 0, []
+    draw, k, out, uses = rng.sample(trace, len(trace)), 0, [], Counter()
     for i, (r, t) in enumerate(zip(recs, ts)):
         gap = ts[i + 1] - t if i + 1 < len(ts) else mean_gap
         n = int(factor) + (rng.random() < factor - int(factor))
         for j in range(n):
             src = r if j == 0 else draw[k % len(draw)]
             k += j > 0
-            out.append(to_request(src, t if j == 0 else t + rng.random() * gap, rid=f"{src['id']}#{i}.{j}"))
+            out.append(to_request(src, t if j == 0 else t + rng.random() * gap, rid=f"{src['id']}#{i}.{j}",
+                                  salt=uses[src["id"]]))
+            uses[src["id"]] += 1
     return sorted(out, key=lambda q: q.at_s)
 
 
@@ -144,17 +169,18 @@ def sessions(pool: list[dict], rate: float, duration_s: float, seed: int, think_
              system: str | None = None, max_turns: int = 6) -> list[Request]:
     """Multi-turn conversations arriving at `rate` sessions/s; turn k of a session follows turn k-1 by `think_s`.
     Each turn resends the conversation so far, and every request carries the same `system` prompt, so prefixes
-    are shared within and across sessions."""
+    are shared within and across sessions; a conversation drawn again is salted after the system prompt."""
     convs = conversations(pool, max_turns)
     if not convs:
         raise ValueError("no multi-turn conversations in the pool")
-    rng, t, out = random.Random(seed), 0.0, []
+    rng, t, out, uses = random.Random(seed), 0.0, [], Counter()
     while True:
         t += rng.expovariate(rate)
         if t >= duration_s:
             return out
         conv, sid = rng.choice(convs), len(out)
+        salt, uses[conv[0]["id"]] = uses[conv[0]["id"]], uses[conv[0]["id"]] + 1
         for k, rec in enumerate(conv):
-            req = to_request(rec, t + k * think_s, system=system, rid=f"{rec['id']}#{sid}")
+            req = to_request(rec, t + k * think_s, system=system, rid=f"{rec['id']}#{sid}", salt=salt)
             req.session_id = f"{rec.get('session_id')}#{sid}"
             out.append(req)

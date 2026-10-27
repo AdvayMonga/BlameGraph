@@ -54,6 +54,8 @@ class Ctx:
     hints: dict = field(default_factory=dict)   # {regime: {"load" | "concurrency": x}}: where the base's search ended
     bands: dict = field(default_factory=dict)   # {regime: run-to-run band %}: the search resolves to it, not finer
     tol: float | None = None                    # the search's relative resolution for every regime, over the bands
+    client_procs: int | None = None             # client processes (default: 4 open loop, 1 closed loop)
+    client_cpus: list | None = None             # cores the client runs on (Linux), apart from the server's
     on_rows: object = None             # called with each run_open/run_closed call's rows (lab.live progress)
     _pools: dict = field(default_factory=dict)
     _calls: int = 0
@@ -91,13 +93,13 @@ class Ctx:
 
     def run_open(self, reqs):
         started = time.time()
-        return self._keep(run_open(self.url, self.model, reqs, self.timeout, self.count_tokens,
-                                   chat_kwargs=self.chat_kwargs), started)
+        return self._keep(run_open(self.url, self.model, reqs, self.timeout, self.count_tokens, self.client_procs or 4,
+                                   chat_kwargs=self.chat_kwargs, cpus=self.client_cpus), started)
 
     def run_closed(self, reqs, c, duration):
         started = time.time()
         rows, elapsed = run_closed(self.url, self.model, reqs, c, duration, self.timeout, self.count_tokens,
-                                   chat_kwargs=self.chat_kwargs)
+                                   chat_kwargs=self.chat_kwargs, procs=self.client_procs or 1, cpus=self.client_cpus)
         return self._keep(rows, started), elapsed
 
     def _keep(self, rows, started: float):
@@ -125,15 +127,6 @@ class Ctx:
         return cls(url, t.model, str(t.corpus_dir) if t.corpus_dir.is_dir() else None, chat_kwargs=t.chat_kwargs,
                    interactive=Limits(t.interactive.ttft_s, t.interactive.tpot_s),
                    conversational=Limits(t.conversational.ttft_s, t.conversational.tpot_s), **kw)
-
-
-def _cycle(order: list[dict], tag: str = ""):
-    """Requests built one at a time, cycling the pool: closed-loop runs consume only what they send."""
-    k = 0
-    while True:
-        for r in order:
-            yield W.to_request(r, rid=f"{r['id']}#{tag}{k}")
-            k += 1
 
 
 def _warmup(ctx: Ctx, pool: list[dict], n: int = 8):
@@ -188,7 +181,7 @@ def single_stream(ctx: Ctx) -> dict:
     pool = ctx.pool("steady_interactive")
     _warmup(ctx, pool)
     order = random.Random(ctx.seed).sample(pool, len(pool))
-    rows, elapsed = ctx.run_closed(_cycle(order), 1, ctx.final_s)
+    rows, elapsed = ctx.run_closed(W.Cycle(order), 1, ctx.final_s)
     s = summarize(rows, ctx.interactive, elapsed)
     return _result("single_stream", "tpot_p99_s", s["tpot_p99_s"], "lower", s, ttft_p99_s=s["ttft_p99_s"])
 
@@ -203,7 +196,7 @@ def saturated(ctx: Ctx, max_concurrency: int = 4096) -> dict:
     levels, best, misses = [], None, 0
 
     def probe(c):
-        rows, elapsed = ctx.run_closed(_cycle(order, f"c{c}"), c, ctx.probe_s)
+        rows, elapsed = ctx.run_closed(W.Cycle(order, f"c{c}"), c, ctx.probe_s)
         levels.append({"concurrency": c, **summarize(rows, ctx.conversational, elapsed)})
         return levels[-1]
     c = int((ctx.hints.get("saturated") or {}).get("concurrency") or 1)
@@ -231,7 +224,7 @@ def saturated(ctx: Ctx, max_concurrency: int = 4096) -> dict:
     final, best = None, None
     passing = sorted((lv for lv in levels if lv["meets_limits"]), key=lambda lv: -lv["good_req_per_s"])
     for cand in passing[:3]:                       # confirm at full length; a short probe can flatter a level
-        rows, elapsed = ctx.run_closed(_cycle(order, f"f{cand['concurrency']}"), cand["concurrency"], ctx.final_s)
+        rows, elapsed = ctx.run_closed(W.Cycle(order, f"f{cand['concurrency']}"), cand["concurrency"], ctx.final_s)
         final = summarize(rows, ctx.conversational, elapsed)
         if final["meets_limits"] or not final["valid"]:
             best = cand
@@ -323,12 +316,14 @@ PROBE = [{"role": "user", "content": "What is 17 + 25? Reply with the number onl
 
 def cold_start(url: str, model: str, cmd: str, expect: str = "42", timeout_s: float = 1800.0, poll_s: float = 0.25,
                warm: bool = True, log_dir: str | None = None) -> dict:
-    """Launch `cmd` with empty compile caches (fresh VLLM_CACHE_ROOT / TORCHINDUCTOR_CACHE_DIR / TRITON_CACHE_DIR),
+    """Launch `cmd` with empty compile caches (fresh VLLM_CACHE_ROOT / TORCHINDUCTOR_CACHE_DIR / TRITON_CACHE_DIR /
+    TORCH_EXTENSIONS_DIR / CUDA_CACHE_PATH; a containerized cmd mounts their parent dir as its own cache),
     poll until a reply contains `expect`, and report seconds from launch to that first correct token. With `warm`,
     relaunch on the now-filled caches and report that too. Weights may already be on disk."""
     cache = tempfile.mkdtemp(prefix="bg-coldstart-")
     env = {**os.environ, "VLLM_CACHE_ROOT": f"{cache}/vllm", "TORCHINDUCTOR_CACHE_DIR": f"{cache}/inductor",
-           "TRITON_CACHE_DIR": f"{cache}/triton"}
+           "TRITON_CACHE_DIR": f"{cache}/triton", "TORCH_EXTENSIONS_DIR": f"{cache}/torch_extensions",
+           "CUDA_CACHE_PATH": f"{cache}/nv"}
     out = {"regime": "cold_start", "objective": "first_correct_token_s", "better": "lower", "cmd": cmd}
     try:
         for label in (("cold", "warm") if warm else ("cold",)):

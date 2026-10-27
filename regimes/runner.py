@@ -8,15 +8,17 @@ from __future__ import annotations
 
 import math
 import multiprocessing as mp
+import os
 import queue
 import threading
 import time
 from dataclasses import dataclass
 from typing import Callable
 
-from .client import Request, Row, recount, send, wall_clock
+from .client import Request, Row, recount, send
 
 MAX_CLIENT_LAG_S = 0.010     # p99 send lag above this means the client, not the server, was the bottleneck
+MAX_CLIENT_CPU = 0.8         # a closed-loop client process busier than this (CPU / wall) may have read streams late
 ATTAINMENT = 0.99            # goodput: share of requests that must meet both limits
 
 
@@ -31,49 +33,67 @@ CONVERSATIONAL = Limits(2.0, 0.100)   # MLPerf Llama-3.1-8B conversational, chec
 
 
 def run_open(url: str, model: str, requests: list[Request], timeout: float = 600, count_tokens=None,
-             procs: int = 4, chat_kwargs: dict | None = None) -> list[Row]:
+             procs: int = 4, chat_kwargs: dict | None = None, cpus: list[int] | None = None) -> list[Row]:
     """Fire each request at its `at_s`; returns one row per request in input order. The schedule is dealt
     round-robin to `procs` client processes on one shared start time, so parsing many concurrent streams can't
-    starve the sender of interpreter time (the per-request lag check would void the run)."""
+    starve the sender of interpreter time (the per-request lag check would void the run). `cpus`: the cores the
+    client processes run on (Linux), apart from the server's."""
     order = sorted(range(len(requests)), key=lambda i: requests[i].at_s)
     procs = max(1, min(procs, len(requests)))
     if procs == 1:
+        _pin(cpus)
         rows = dict(zip(order, _fire_all(url, model, [requests[i] for i in order], timeout, time.perf_counter(),
                                          chat_kwargs=chat_kwargs)))
     else:
-        ctx = mp.get_context("spawn")
-        ready, results, go, t0 = ctx.Queue(), ctx.Queue(), ctx.Event(), ctx.Value("d", 0.0)
         slices = [order[k::procs] for k in range(procs)]
-        workers = [ctx.Process(target=_worker, args=(k, url, model, [requests[i] for i in sl], timeout, ready, go,
-                                                     t0, results, chat_kwargs), daemon=True) for k, sl in enumerate(slices)]
-        for w in workers:
-            w.start()
-        try:
-            for _ in workers:
-                ready.get(timeout=120)
-        except queue.Empty:
-            raise RuntimeError("client worker processes did not start (spawn needs an importable __main__)") from None
-        t0.value = time.perf_counter() + 0.05
-        go.set()
-        rows = {}
-        while len(rows) < len(order):
-            try:
-                k, part = results.get(timeout=5)
-            except queue.Empty:
-                dead = [w.exitcode for w in workers if w.exitcode not in (None, 0)]
-                if dead:
-                    raise RuntimeError(f"client worker exited with {dead[0]}") from None
-                continue
-            rows.update(zip(slices[k], part))
-        for w in workers:
-            w.join()
+        parts = _spawn([(_fire_all, (url, model, [requests[i] for i in sl], timeout), {"chat_kwargs": chat_kwargs})
+                        for sl in slices], cpus)
+        rows = {i: row for sl, part in zip(slices, parts) for i, row in zip(sl, part)}
     return [recount(rows[i], count_tokens) for i in range(len(requests))]
 
 
-def _worker(k, url, model, reqs, timeout, ready, go, t0, results, chat_kwargs=None):
+def _pin(cpus: list[int] | None):
+    if cpus and hasattr(os, "sched_setaffinity"):
+        os.sched_setaffinity(0, cpus)
+
+
+def _spawn(jobs: list[tuple], cpus: list[int] | None) -> list[list[Row]]:
+    """Each (fn, args, kw) in its own client process, all started together: fn(*args, t0, **kw) on one shared
+    perf_counter start t0 (CLOCK_MONOTONIC is system-wide, so processes agree on it). Returns each job's rows."""
+    ctx = mp.get_context("spawn")
+    ready, results, go, t0 = ctx.Queue(), ctx.Queue(), ctx.Event(), ctx.Value("d", 0.0)
+    workers = [ctx.Process(target=_worker, args=(k, job, cpus, ready, go, t0, results), daemon=True)
+               for k, job in enumerate(jobs)]
+    for w in workers:
+        w.start()
+    try:
+        for _ in workers:
+            ready.get(timeout=120)
+    except queue.Empty:
+        raise RuntimeError("client worker processes did not start (spawn needs an importable __main__)") from None
+    t0.value = time.perf_counter() + 0.05
+    go.set()
+    parts: dict[int, list[Row]] = {}
+    while len(parts) < len(workers):
+        try:
+            k, part = results.get(timeout=5)
+        except queue.Empty:
+            dead = [w.exitcode for w in workers if w.exitcode not in (None, 0)]
+            if dead:
+                raise RuntimeError(f"client worker exited with {dead[0]}") from None
+            continue
+        parts[k] = part
+    for w in workers:
+        w.join()
+    return [parts[k] for k in range(len(workers))]
+
+
+def _worker(k, job, cpus, ready, go, t0, results):
+    fn, args, kw = job
+    _pin(cpus)
     ready.put(k)
     go.wait()
-    results.put((k, _fire_all(url, model, reqs, timeout, t0.value, chat_kwargs=chat_kwargs)))
+    results.put((k, fn(*args, t0.value, **kw)))
 
 
 def _fire_all(url, model, reqs: list[Request], timeout: float, t0: float, lead_s: float = 0.005,
@@ -108,10 +128,31 @@ def _wait_until(clock, t: float, spin_s: float = 0.002):
 
 
 def run_closed(url: str, model: str, requests, concurrency: int, duration_s: float | None = None,
-               timeout: float = 600, count_tokens=None, chat_kwargs: dict | None = None) -> tuple[list[Row], float]:
+               timeout: float = 600, count_tokens=None, chat_kwargs: dict | None = None, procs: int = 1,
+               cpus: list[int] | None = None) -> tuple[list[Row], float]:
     """`concurrency` clients take requests in order from `requests` (any iterable, consumed lazily) until it (or
-    `duration_s`) runs out. Returns (rows, elapsed seconds). A request's scheduled time is when its client became free."""
-    clock = wall_clock()
+    `duration_s`) runs out. Returns (rows, elapsed seconds). A request's scheduled time is when its client became free.
+    With `procs` > 1 and a `requests` that splits (`part(k, n)`, e.g. `workload.Cycle`), the clients are dealt to that
+    many processes on one shared start, so parsing many streams can't starve one interpreter; `cpus` as in run_open."""
+    procs = min(procs, concurrency) if hasattr(requests, "part") else 1
+    if procs == 1:
+        _pin(cpus)
+        rows = _closed_all(url, model, requests, concurrency, duration_s, timeout, time.perf_counter(),
+                           chat_kwargs=chat_kwargs)
+    else:
+        sizes = [concurrency // procs + (k < concurrency % procs) for k in range(procs)]
+        parts = _spawn([(_closed_all, (url, model, requests.part(k, procs), sizes[k], duration_s, timeout),
+                         {"chat_kwargs": chat_kwargs}) for k in range(procs)], cpus)
+        rows = [r for part in parts for r in part]
+    return [recount(r, count_tokens) for r in rows], max((r.scheduled_s + (r.e2e_s or 0) for r in rows), default=0.0)
+
+
+def _closed_all(url, model, requests, concurrency: int, duration_s: float | None, timeout: float, t0: float,
+                chat_kwargs: dict | None = None) -> list[Row]:
+    """One process's closed-loop clients on the shared start t0; every client stops once `duration_s` has passed.
+    Each row carries the process's CPU share over the call: closed loop has no send schedule to lag behind, so a busy
+    client process is the sign that it read its streams late."""
+    clock, c0, w0 = (lambda: time.perf_counter() - t0), time.process_time(), time.perf_counter()
     lock, it, rows = threading.Lock(), iter(requests), []
 
     def client():
@@ -123,7 +164,7 @@ def run_closed(url: str, model: str, requests, concurrency: int, duration_s: flo
             if req is None:
                 return
             try:
-                row = send(url, model, req, clock(), clock, timeout, count_tokens, chat_kwargs=chat_kwargs)
+                row = send(url, model, req, clock(), clock, timeout, chat_kwargs=chat_kwargs)
             except Exception as e:
                 row = Row(req.id, "crash", clock(), 0.0, detail=f"client {type(e).__name__}: {e}"[:200])
             with lock:
@@ -134,7 +175,10 @@ def run_closed(url: str, model: str, requests, concurrency: int, duration_s: flo
         t.start()
     for t in threads:
         t.join()
-    return rows, clock()
+    share = (time.process_time() - c0) / max(time.perf_counter() - w0, 1e-9)
+    for r in rows:
+        r.client_cpu = share
+    return rows
 
 
 def _q(xs: list[float], q: float) -> float | None:
@@ -163,6 +207,9 @@ def summarize(rows: list[Row], limits: Limits, elapsed_s: float | None = None) -
     lag99 = _q(lags, 0.99)
     if lag99 is not None and lag99 > MAX_CLIENT_LAG_S:
         reasons.append(f"client lag p99 {lag99 * 1000:.1f} ms > {MAX_CLIENT_LAG_S * 1000:.0f} ms: the client was the bottleneck")
+    cpu = max((r.client_cpu for r in rows if r.client_cpu is not None), default=None)
+    if cpu is not None and cpu > MAX_CLIENT_CPU:
+        reasons.append(f"a client process ran at {cpu:.0%} CPU > {MAX_CLIENT_CPU:.0%}: the client may have been the bottleneck")
     return {
         "n": n, **counts, "attainment": len(meets) / n if n else 0.0,
         "meets_limits": bool(n) and len(meets) / n >= ATTAINMENT,
@@ -170,7 +217,7 @@ def summarize(rows: list[Row], limits: Limits, elapsed_s: float | None = None) -
         "output_tokens": sum(r.n_tokens for r in ok), "elapsed_s": span,
         "req_per_s": len(ok) / span if span else 0.0, "good_req_per_s": len(meets) / span if span else 0.0,
         "output_tok_per_s": sum(r.n_tokens for r in ok) / span if span else 0.0,
-        "client_lag_p99_s": lag99, "limits": {"ttft_s": limits.ttft_s, "tpot_s": limits.tpot_s},
+        "client_lag_p99_s": lag99, "client_cpu_max": cpu, "limits": {"ttft_s": limits.ttft_s, "tpot_s": limits.tpot_s},
         "valid": not reasons, "invalid_reasons": reasons,
     }
 

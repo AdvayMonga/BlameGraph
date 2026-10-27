@@ -51,6 +51,21 @@ def test_open_loop_keeps_its_schedule():
         proc.kill()
 
 
+def test_closed_loop_split_over_processes():
+    proc, url = spawn(slots=64, token_s=0.002, out_tokens=10)
+    try:
+        pool = W.synthetic(5)
+        rows, elapsed = runner.run_closed(url, "m", W.Cycle(pool, "p"), 8, 1.0, procs=3)
+        assert len({r.id for r in rows}) == len(rows) > 8 and all(r.status == "ok" for r in rows)
+        assert 1.0 <= elapsed < 2.0 and all(r.client_cpu is not None for r in rows)
+        assert any(r.id.endswith(f"p{k}") for r in rows for k in range(5, 40)), "the cycle wraps past the pool"
+        assert summarize(rows, LOOSE, elapsed)["valid"]
+        busy = [runner.Row("x", "ok", 0.0, 0.0, 0.01, 0.1, 10, client_cpu=0.95)]
+        assert not summarize(busy, LOOSE)["valid"]
+    finally:
+        proc.kill()
+
+
 def test_goodput_search_finds_the_capacity():
     proc, url = spawn(slots=4, token_s=0.005, out_tokens=20)       # 0.1 s per request x 4 slots = 40 req/s
     try:
@@ -88,6 +103,17 @@ def test_workload_builders():
     assert [round(r.at_s - s0[0].at_s, 6) for r in s0] == [0.0, 2.0, 4.0]
     trace = [{"id": f"t{k}", "prompt": "p", "arrival_s": 100.0 + k, "max_tokens": 8} for k in range(10)]
     assert [r.at_s for r in W.scaled(trace)] == [float(k) for k in range(10)]
+    first = lambda q: q.messages[0]["content"]                       # a reused record shares no prefix
+    assert [first(q) for q in W.poisson(trace[:1], 50.0, 1.0, seed=0)][:3] == ["p", "[1] p", "[2] p"]
+    assert {first(q) for q in W.scaled(trace, 3.0)} == {"p", "[1] p", "[2] p"}
+    cyc = iter(W.Cycle(trace[:2]))
+    assert [first(next(cyc)) for _ in range(5)] == ["p", "p", "[1] p", "[1] p", "[2] p"]
+    turns = W.sessions([rec], rate=20.0, duration_s=1.0, seed=0, think_s=2.0, system="SYS")
+    by = {}
+    for q in turns:
+        by.setdefault(q.session_id, []).append(q.messages[1]["content"])
+    assert len({v[0] for v in by.values()}) == len(by) > 2 and "a" in {v[0] for v in by.values()}
+    assert all(len(set(v)) == 1 for v in by.values())                # one salt for every turn of a session
     double = W.scaled(trace, 2.0)
     assert len(double) == 20 and len({r.id for r in double}) == 20 and max(r.at_s for r in double) < 10.0
     assert all(sum(k <= r.at_s < k + 1 for r in double) == 2 for k in range(10))    # the rate doubles in every gap

@@ -412,7 +412,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   attainment, valid only if no silent drop/truncation/crash and client lag p99 ≤ 10 ms; `find_goodput`: double then
   bisect on ≥99% meeting both limits, up to 40 probes, reporting the lowest failing load `fails_at` and why it stopped,
   `stopped`; saturated sweeps to 4,096 concurrency; bursty = the spike trace at N x its requests over its own span,
-  `workload.scaled`, decided 2026-10-27; `regimes run --tol` sets the search's resolution), `workload.py` (reads `corpus/` through `lab.corpus`'s verified loader — hashes checked, a changed trace
+  `workload.scaled`, decided 2026-10-27; `regimes run --tol` sets the search's resolution; a record reused in one
+  schedule is salted, `to_request(salt=)`; closed loop can split over processes, `--client-procs`, invalid when a client
+  process ran above 80% CPU; `--client-cpus` pins the client), `workload.py` (reads `corpus/` through `lab.corpus`'s verified loader — hashes checked, a changed trace
   refuses — plus Poisson, trace replay with speed-up and peak-window crop, multi-turn
   conversations rebuilt from stored histories under one shared system prompt; synthetic prompts when no corpus),
   `suite.py` (the 8 regimes; probes ≥ `min_requests` (100) and tier length, capped at 4× the tier length, then a
@@ -424,6 +426,15 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `python -m regimes run REGIME[,..]|all --url URL [--corpus DIR | --workload FILE] [--synthetic] [--split] [--tier] [--tokenizer] [--out]`
   (`--workload`: a `workloads/` file is one pool for every regime; bursty is refused, no arrival times),
   `python -m regimes cold-start --url URL --cmd "..."`. Closed-loop runs can't detect a client bottleneck by lag.
+- `compare/` — the engine comparison (decided 2026-10-27): `engines.toml` (ours, vLLM 0.32.0, SGLang 0.5.22,
+  TensorRT-LLM 1.4.0rc1 in their official containers; bf16 and fp8 configurations; shared limits; server cores 0-7,
+  client 8-15), `run.py` (`python -m compare.run --out DIR` on the GPU VM: the client check, then per configuration a
+  launch check, the regimes at `--tol 0.02`, equiv, cold start; repeats rotate the order; each stage one file, skipped
+  when present), `report.py` (`python -m compare.report DIR [--gpu-usd-per-hour P]`: per regime the winner and whether
+  the lead is clear of every spread and of the runner-up's bracket; the saturated curve with $/M output tokens),
+  `vm-setup.sh` (images and checkpoints; its header lists the session's steps). Not run yet.
+- `regimes/clientcheck.py` — `python -m regimes.clientcheck`: the client's own TPOT error at each closed-loop concurrency
+  and open-loop rate, against a fixed-schedule server that logs its true send times.
 - `workloads/` — frontier benchmark request data, researcher-only (never reaches the agent: nothing in `lab/` reads
   it), for manual runs: overfitting checks on data the agent never saw, the corpus's missing shapes, engine vs
   vLLM/SGLang on identical requests. One module per benchmark, docstring = source, sizes, output limit, MLPerf

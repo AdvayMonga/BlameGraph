@@ -1,0 +1,68 @@
+# The engine comparison (compare/run.py): every engine on one H200, the same corpus, client, tokenizer recount and
+# correctness reference; each at each precision; each with its own documented serving settings, nothing tuned by us.
+# {model} {port} {cfg} are filled by the driver; {cache} is the cold start's fresh cache dir (empty on a cold launch).
+# Versions: each project's newest release as of 2026-10-27 (TensorRT-LLM's newest stable, 1.2.1, is from April; its
+# release candidates are what NVIDIA publishes on NGC's release channel since).
+
+[common]
+served_name = "Qwen/Qwen3-30B-A3B"           # what the client sends as `model`
+tokenizer = "Qwen/Qwen3-30B-A3B"             # every engine's output tokens re-counted with the same tokenizer
+max_model_len = 32768
+max_seqs = 1024                              # the most rows any engine decodes at once (ours: MAX_BATCH_SIZE default)
+gpu_mem = 0.90                               # share of HBM for weights + KV where an engine asks for it
+engine_cpus = "0-7"                          # server cores; the client runs on 8-15 (16 vCPU VM)
+client_cpus = "8-15"
+prefix_cache = "on"                          # each engine's default; reused corpus records are salted (DECISIONS 2026-10-27)
+
+[precision.bf16]                             # bf16 weights, bf16 activations, bf16 KV cache
+checkpoint = "Qwen/Qwen3-30B-A3B"
+[precision.fp8]                              # fp8 e4m3 weights and activations (W8A8), fp8 KV cache
+checkpoint = "Qwen/Qwen3-30B-A3B-FP8"        # Qwen's own: block-wise 128x128 scales on every linear but the router/head
+# ours quantizes the bf16 checkpoint's MoE experts at load (per output channel, activations per token) and keeps
+# attention bf16: a fact of the comparison, not a handicap the others carry
+
+[engines.ours]
+kind = "venv"                                # the engine repo's .venv on the VM (lab/vm-setup.sh)
+version = "inference-server main"            # the commit is recorded per run
+api = "vllm"                                 # its prompt_logprobs shim
+health = "/health"
+cmd = "MODEL_NAME={served_name} CONTEXT_WINDOW={max_model_len} MAX_BATCH_SIZE={max_seqs} BACKEND=custom-cuda {env} .venv/bin/python -m uvicorn inference_server.server:app --host 127.0.0.1 --port {port}"
+precision.bf16 = "CUSTOM_BACKEND_QUANT=bf16 KV_CACHE_DTYPE=bf16"
+precision.fp8 = "CUSTOM_BACKEND_QUANT=fp8 KV_CACHE_DTYPE=fp8"
+checkpoint = "Qwen/Qwen3-30B-A3B"            # both precisions load the bf16 checkpoint
+
+[engines.vllm]
+kind = "docker"
+image = "vllm/vllm-openai:v0.32.0"
+version = "0.32.0"
+api = "vllm"
+health = "/health"
+cmd = "{model} --served-model-name {served_name} --host 127.0.0.1 --port {port} --max-model-len {max_model_len} --max-num-seqs {max_seqs} --gpu-memory-utilization {gpu_mem} {env}"
+precision.bf16 = "--dtype bfloat16 --kv-cache-dtype auto"
+precision.fp8 = "--kv-cache-dtype fp8"
+
+[engines.sglang]
+kind = "docker"
+image = "lmsysorg/sglang:v0.5.22-cu130"
+version = "0.5.22"
+api = "sglang"
+health = "/health"
+cmd = "python3 -m sglang.launch_server --model-path {model} --served-model-name {served_name} --host 127.0.0.1 --port {port} --context-length {max_model_len} --max-running-requests {max_seqs} --mem-fraction-static {gpu_mem} {env}"
+precision.bf16 = "--dtype bfloat16"
+precision.fp8 = "--kv-cache-dtype fp8_e4m3"
+
+[engines.trtllm]
+kind = "docker"
+image = "nvcr.io/nvidia/tensorrt-llm/release:1.4.0rc1"
+version = "1.4.0rc1"
+api = "none"                                 # no prompt_logprobs route: equiv's divergence facts are not run, the verdict is
+health = "/health"
+cmd = "trtllm-serve serve {model} --host 127.0.0.1 --port {port} --backend pytorch --max_batch_size {max_seqs} --max_num_tokens 8192 --max_seq_len {max_model_len} --kv_cache_free_gpu_memory_fraction {gpu_mem} --extra_llm_api_options {cfg}"
+precision.bf16 = """
+kv_cache_config: {enable_block_reuse: true}
+cuda_graph_config: {enable_padding: true, max_batch_size: 1024}
+"""
+precision.fp8 = """
+kv_cache_config: {enable_block_reuse: true, dtype: fp8}
+cuda_graph_config: {enable_padding: true, max_batch_size: 1024}
+"""

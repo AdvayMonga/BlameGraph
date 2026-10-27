@@ -39,6 +39,7 @@ class Row:
     tpot_s: float | None = None
     http_status: int | None = None
     finish_reason: str | None = None
+    client_cpu: float | None = None    # closed loop: CPU time / wall time of the process that sent it, over its call
     detail: str = ""
     text: str = field(default="", repr=False)
 
