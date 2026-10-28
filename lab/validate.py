@@ -27,6 +27,7 @@ import time
 from pathlib import Path
 
 from lab import calibrate, engine, gpu, ledger, serve, target
+from lab.evaltools import BENCH_TIER
 
 
 def band_pct(values: list[float]) -> float | None:
@@ -89,13 +90,13 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
         with serve.Served(t.engine_repo, t.engine, log=log_dir / "serve-noise.log", jailed=False) as srv:
             values: dict[str, list] = {n: [] for n in names}
             for k in range(noise_runs):
-                ctx = suite.Ctx.from_target(t, srv.url, split="seen", tier="short", seed=k)
+                ctx = suite.Ctx.from_target(t, srv.url, split="seen", tier=BENCH_TIER, seed=k)
                 for n in names:
                     r = suite.REGIMES[n](ctx)
                     values[n].append(r["value"] if r["valid"] else None)
             srv.exclusive()                     # a band from a shared GPU would skew every submit
         for n in names:
-            report["noise"][n] = write_noise(n, values[n], t, {"tier": "short", "split": "seen",
+            report["noise"][n] = write_noise(n, values[n], t, {"tier": BENCH_TIER, "split": "seen",
                                                                 "engine_commit": engine.commit(t.engine_repo, clean=True)}, root)
     report["bands_measured"] = all(d["band_pct"] is not None for d in report["noise"].values()) if names and noise_runs else None
     # 4. the reference engine under the same regimes, once, without its determinism switches: what every bench is shown next to
@@ -103,8 +104,8 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
         with serve.Served(target.ENV_ROOT, calibrate.perf_reference(t), log=log_dir / "serve-reference-regimes.log",
                           jailed=False) as srv:
             rows: list = []
-            ctx = suite.Ctx.from_target(t, srv.url, split="seen", tier="short", seed=0, rows=rows)
-            fp = calibrate.fingerprint(t, gpu.query(), "short", "seen", 0)
+            ctx = suite.Ctx.from_target(t, srv.url, split="seen", tier=BENCH_TIER, seed=0, rows=rows)
+            fp = calibrate.fingerprint(t, gpu.query(), BENCH_TIER, "seen", 0)
             for n in names:
                 k = len(rows)
                 r = suite.REGIMES[n](ctx)

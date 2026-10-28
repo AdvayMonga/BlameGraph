@@ -2,9 +2,9 @@
 
   reference   once per model/hardware: the unmodified model (vLLM, BF16, VLLM_BATCH_INVARIANT=1) answers every task
               item and scores its own outputs token by token. Saved to a directory.
-  candidate   per change: the optimized server answers the same items and scores the reference's tokens; the gate
-              compares. Items go in one fixed order (by id hash, the same for every candidate) and the gate looks at
-              200, 400, 800, ... of them, stopping once the accuracy is clear of the line either way (`_decided`).
+  candidate   per change: the optimized server answers the same items; the gate compares accuracy and length
+              (MLPerf's rule only; divergence is `quick`'s). Items go in one fixed order (by id hash, the same for
+              every candidate) and the gate looks at 200, 400, 800, ... of them, stopping once the accuracy is clear of the line either way (`_decided`).
               Writes the verdict and an inference-server lab-ledger `equiv` record.
   verdict     re-judge saved candidate results under a policy, without a server.
 """
@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from . import client
-from .checks import consistency, length_ratio
+from .checks import length_ratio
 from .divergence import Position, compare_positions, divergence_summary
 from .flips import flip_test
 from .gate import Thresholds, evaluate, pooled_accuracy, to_ledger_record
@@ -205,7 +205,7 @@ def quick(ref_dir: str | Path, url: str, model: str, out_path: str | Path, api: 
 
 
 def candidate(ref_dir: str | Path, url: str, model: str, out_path: str | Path, encoder: Encoder,
-              thresholds: Thresholds | None = None, probe_n: int = 20, concurrency: int = 16,
+              thresholds: Thresholds | None = None, concurrency: int = 16,
               score_item: Callable | None = None, config: dict | None = None,
               api: client.Api = client.DEFAULT) -> dict:
     from .tasks import score_item as default_score
@@ -244,27 +244,10 @@ def candidate(ref_dir: str | Path, url: str, model: str, out_path: str | Path, e
     ids = [it["id"] for it in items if it["id"] in ref_out and it["id"] in answered]
     length = length_ratio([len(encoder.encode(ref_out[i].get("text") or "")) for i in ids],
                           [len(encoder.encode(answered[i].get("text") or "")) for i in ids])
-    # divergence on the reference's own tokens (a fact, not a gate); skipped when the engine exposes no logprobs
-    div, unscored = _divergence(ref, url, model, meta["top_k"], api, min(_score_concurrency(concurrency), CANDIDATE_SCORE_MAX))
-    # consistency, on a streamed probe of the first items; a shed or errored probe is counted, not fatal
-    probe, probe_errors = [], []
-    for it in items[:probe_n]:
-        try:
-            s = _retrying(client.generate_stream, url, model, it["messages"], it.get("max_tokens", 2048), api)
-        except Exception as e:
-            probe_errors.append(f"{it['id']}: {type(e).__name__}: {e}"[:200])
-            continue
-        probe.append({**s, "reported_tokens": answered.get(it["id"], {}).get("completion_tokens")
-                      if (answered.get(it["id"], {}).get("text") == s["text"]) else None})
-    cons = consistency(probe, encoder.encode) if probe else None
-    result = evaluate(div, flips, length, cons, th, unanswered=len(unanswered))
-    if probe_errors:
-        result["metrics"]["consistency_probe_errors"] = probe_errors[:5]
+    result = evaluate(None, flips, length, None, th, unanswered=len(unanswered))
     result["metrics"]["unanswered"] = {"n": len(unanswered), "of": len(items),
                                        "examples": dict(list(unanswered.items())[:5])}
     result["metrics"]["sample"] = {"items": len(items), "of": len(every), "looks": looks[:looks.index(len(items)) + 1]}
-    if unscored:
-        result["metrics"]["divergence_unscored"] = unscored[:5]
     record = to_ledger_record(result, {"split": "seen", "model": model, **(config or {})}, base=meta["model"])
     out_path.write_text(json.dumps({"result": result, "ledger_record": record}, indent=1, default=str))
     return result
