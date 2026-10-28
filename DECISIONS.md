@@ -3,6 +3,18 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-28 — Minimal gates: a merge is bench + equiv; bench at a `min` tier; equiv is MLPerf's rule only
+A change is merged on a seen-split `bench` and a passing dev-tier `equiv`; `submit` stays as built but is not
+required (the agent's referee still asks for one). `bench` runs at a new tier `min` (15 s probes, 30 s final, still
+at least 100 requests per probe), which submit, the base cache and `lab.validate`'s noise bands and performance
+reference use too, and profiles the tree afterwards only when asked (`profile: true`; the run's baseline still
+profiles). `equiv`'s candidate run gates on accuracy (>= 99% of the reference, pooled) and length (>= 90%) only: no
+consistency probe and no teacher-forced divergence pass (that stays the `quick` tier's). The dev tier (1,597 items,
+early stop at 200, 400, 800, ...) is kept: fewer items would leave a real 1% loss inconclusive. Why (the user): do
+only as much as a merge needs for now; with one session at a time and no noise bands measured, a second held-out
+bench adds little. Replaces, in part, 2026-10-18 (short gates: short-tier bench and submit), 2026-10-22 (every bench
+followed by a profile) and the consistency gate of 2026-10-04.
+
 ## 2026-10-27 — No roofline stop: a search runs to its budget
 `kernels.search` no longer stops when the best program reaches a share of its roofline (`--stop-pct`, 80 by
 default, removed); it stops at its generations, budget, wall-clock or patience. The % of roofline stays a fact in

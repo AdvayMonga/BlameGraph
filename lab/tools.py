@@ -12,7 +12,7 @@ from typing import Any
 from lab import corpus, engine, experiments, ledger, target
 from lab.agent import ToolSpec
 from lab.budget import Budget, BudgetExceeded, gpu_rate
-from lab.evaltools import EvalTools
+from lab.evaltools import BENCH_TIER, EvalTools
 from lab.proftools import ProfTools
 from lab.safety import grader
 
@@ -381,10 +381,10 @@ class Toolbox(EvalTools, ProfTools):
             return (f" Costs GPU time: ~{t} per call, charged at ${rate:g}/h." if known else
                     f" Costs GPU time: ~{t} per call; no GPU rate is configured on this host, so it is charged $0."
                     ) + offline + paused
-        short, full = suite.TIERS["short"], suite.TIERS["full"]
-        windows = (f"one engine start plus, per regime, a {short['final_s']:.0f} s measurement window at tier short or "
-                   f"{full['final_s']:.0f} s at full, plus {short['probe_s']:.0f} s / {full['probe_s']:.0f} s probes for "
-                   f"regimes that search for a load")
+        windows = ("one engine start plus, per regime, a measurement window of " +
+                   ", ".join(f"{v['final_s']:.0f} s at tier {k}" for k, v in suite.TIERS.items()) +
+                   ", plus probes of " + " / ".join(f"{v['probe_s']:.0f} s" for v in suite.TIERS.values()) +
+                   " for regimes that search for a load")
         tg = target.load()
         prof = (f" Launch profiles: the engine's {tg.profiles} holds [general] and optional tables named after regimes. "
                 f"Every regime is measured on the general launch; a regime whose table is non-empty is also measured "
@@ -430,17 +430,18 @@ class Toolbox(EvalTools, ProfTools):
                      {"type": "object", "required": ["text"], "properties": {"text": {"type": "string"}}}, self.note),
             ToolSpec("bench", "Serve a pristine copy of your current workspace (jailed) and measure it under load "
                      f"regimes on the seen split. `regimes`: default {_names(self.bench_defaults())}; 'all'; or "
-                     f"any of {_names(suite.REGIMES)}. `tier`: short (default) or full. `seed`: the seen-split workload sample "
+                     f"any of {_names(suite.REGIMES)}. `tier`: {BENCH_TIER} (default), {_names(t for t in suite.TIERS if t != BENCH_TIER)}. `seed`: the seen-split workload sample "
                      f"(default {self.seed}). Returns one headline per regime "
-                     f"(objective, value, direction, validity), raw. Takes {windows}. At the default seed and tier short, each "
+                     f"(objective, value, direction, validity), raw. Takes {windows}. At the default seed and tier, each "
                      "search starts where the run's base measurement of that regime ended; every search stops once its "
-                     "bracket is within the regime's noise band (10% where none is measured). Then profiles the same tree once "
-                     "with `profile`'s defaults, in its own launch, and keeps it under the result's `profiled` (bundle, "
-                     "calibrated layer facts); a failed profile is recorded there and never fails the bench."
-                     + prof + gpu("5-25 min per regime, plus the profile's 1-7 min"),
+                     "bracket is within the regime's noise band (10% where none is measured). With `profile` true, then profiles "
+                     "the same tree once with `profile`'s defaults, in its own launch, and keeps it under the result's "
+                     "`profiled` (bundle, calibrated layer facts); a failed profile is recorded there and never fails the bench."
+                     + prof + gpu("~2 min engine start plus 2-20 min per regime, plus the profile's 1-7 min when asked"),
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}},
-                                                       "tier": {"type": "string", "enum": ["short", "full"]},
-                                                       "seed": {"type": "integer"}}}, self.bench),
+                                                       "tier": {"type": "string", "enum": list(suite.TIERS)},
+                                                       "seed": {"type": "integer"},
+                                                       "profile": {"type": "boolean"}}}, self.bench),
             ToolSpec("equiv", "Serve your current workspace and run the correctness gate against the reference "
                      "model's outputs at `tier` dev (default) or full. Returns pass, fail or inconclusive with every "
                      "metric. Items are answered in one fixed order and the gate stops at 200, 400, 800, ... items once "

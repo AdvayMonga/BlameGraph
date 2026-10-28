@@ -115,15 +115,14 @@ def test_gate_flow():
             same = run.candidate(d / "ref", servers["ref"][1], "m", d / "same.json", enc, Thresholds(), concurrency=8)
             assert same["passed"] and same["metrics"]["sample"] == {"items": 200, "of": 3000, "looks": [200]}
             assert run._looks(3000) == [200, 400, 800, 1600, 3000] and run._looks(150) == [150]
-            assert bad["metrics"]["divergence"]["kl_mean"] > good["metrics"]["divergence"]["kl_mean"]
             rec = json.loads((d / "bad2.json").read_text())["ledger_record"]
-            assert rec["kind"] == "equiv" and rec["gates"]["consistency"]["passed"] is True
+            assert rec["kind"] == "equiv" and set(rec["gates"]) == {"accuracy", "length"}   # MLPerf's rule only
+            assert "divergence" not in good["metrics"]
             # the quick check: the same divergence, no answers generated, facts and no verdict
             qg = run.quick(d / "ref", servers["good"][1], "m", d / "qgood.json")
             qb = run.quick(d / "ref", servers["bad"][1], "m", d / "qbad.json")
             assert qg["verdict"] == "facts" and qg["passed"] is None and qg["metrics"]["n_sequences"] == 60
             assert qb["metrics"]["kl_mean"] > qg["metrics"]["kl_mean"]
-            assert qg["metrics"]["kl_mean"] == good["metrics"]["divergence"]["kl_mean"]
             assert not (d / "qgood.outputs.jsonl").exists()          # nothing was generated
     finally:
         for s, _ in servers.values():

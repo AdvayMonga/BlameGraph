@@ -95,10 +95,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `proftools.py` (profile = torch.profiler, trace = nsys, kernel = ncu, hostprof = py-spy, all one path: lab.profile's
   workload in the jail with validated args, the GPU watched like a served engine (`serve.Watch`: refused when busy,
   contaminated when shared), one record shape) + `evaltools.py` (bench → `regimes` on
-  the seen split, default regimes saturated + the task's, each search started where the run's base measurement ended and
-  resolved to the regime's noise band, then the same tree profiled once in its own launch (`profiled`: the layer facts
-  a mechanism prediction is measured against; the baseline too); equiv → `correctness` candidate vs the target's reference, 32 requests in flight (scoring at 4),
-  items in one fixed order and stopped at 200, 400, 800, ... once accuracy is clear of the line; submit → held-out short tier vs the
+  the seen split at tier `min` (`BENCH_TIER`), default regimes saturated + the task's, each search started where the run's base measurement ended and
+  resolved to the regime's noise band, then, only with `profile: true`, the same tree profiled once in its own launch (`profiled`: the layer facts
+  a mechanism prediction is measured against; the baseline always); equiv → `correctness` candidate vs the target's reference, 32 requests in flight,
+  MLPerf's accuracy and length gates only, items in one fixed order and stopped at 200, 400, 800, ... once accuracy is clear of the line; submit → held-out `min` tier vs the
   base commit, one aggregate per regime through the Thresholdout guard; nothing is measured while another process holds
   the GPU (`refused`), and a process other than the engine on the GPU mid-run makes it `contaminated` (never evidence,
   never the cached base; `serve.Served.exclusive()`); all three serve the pristine tree via
@@ -198,7 +198,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
 - `correctness/` — correctness gate. `divergence.py` (teacher-forced KL / top-1 agreement / ref-token
   logprob shift, top-k or full logits), `flips.py` (paired flip test, exact one-sided McNemar), `checks.py` (length
   ratio, consistency), `gate.py` (`evaluate` → three-valued verdict pass|fail|inconclusive; gates = pooled
-  accuracy ≥ 99% of reference, length, consistency; a ratio under the line FAILS only if the net loss is
+  accuracy ≥ 99% of reference, length, and consistency only when a caller passes it (the candidate run does not,
+  nor does it score divergence: that is `quick`'s, decided 2026-10-28); a ratio under the line FAILS only if the net loss is
   significant (McNemar p < alpha 0.01), else INCONCLUSIVE, because a non-deterministic engine churns ~1 point at
   the dev tier; unanswered items (shed/errored after retries) → inconclusive; 95% CI on the ratio is a fact;
   divergence and per-task flips are facts; `to_ledger_record` → lab ledger `equiv` record),
@@ -429,7 +430,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   confirmation at `final_s` backing off 15% up to 5 times; the load search stops below start/16; closed-loop
   schedules are generated lazily; shared-prefix runs score only the steady-state window; cold start launches a command with
   fresh VLLM/inductor/Triton cache dirs, polls until "17 + 25" is answered "42", then relaunches for the warm figure).
-  Tiers: short (30 s probes, 60 s final), full (60 s probes, 600 s final). Probes must last well beyond the TTFT limit
+  Tiers: min (15 s probes, 30 s final; bursty cropped to its peak window like short), short (30 s probes, 60 s final),
+  full (60 s probes, 600 s final). Probes must last well beyond the TTFT limit
   or a short overload goes unseen; limits are settable per `Ctx` (MLPerf by default). CLI:
   `python -m regimes run REGIME[,..]|all --url URL [--corpus DIR | --workload FILE] [--synthetic] [--split] [--tier] [--tokenizer] [--out]`
   (`--workload`: a `workloads/` file is one pool for every regime; bursty is refused, no arrival times),

@@ -1,8 +1,8 @@
 """Combine the checks into one verdict under the MLPerf accuracy policy.
 
 Quantization is allowed (MLPerf rule: purely mathematical, original weights). A candidate passes if it keeps >= 99%
-of the reference's score, pooled over every task item, its outputs are >= 90% of the reference's length, and its
-reported tokens match its text. Divergence and per-task flips are reported as facts, not gated.
+of the reference's score, pooled over every task item, and its outputs are >= 90% of the reference's length. The
+candidate run checks nothing more; consistency and divergence are judged only when a caller supplies them.
 
 The verdict is three-valued. An engine that is not run-to-run deterministic churns answers both ways; at the dev
 tier that churn alone moves the pooled ratio by about a point. So a ratio under the line only FAILS when the net
@@ -42,9 +42,9 @@ def pooled_accuracy(flips: dict[str, dict]) -> dict:
 def evaluate(divergence: dict | None = None, flips: dict[str, dict] | None = None, length: dict | None = None,
              consistency: dict | None = None, th: Thresholds | None = None, unanswered: int = 0) -> dict:
     """Return {"verdict": pass|fail|inconclusive, "passed", "reasons", "gates": {name: {passed, reason, evidence}},
-    "metrics", "thresholds"}. Gates: accuracy, length, consistency; a gate's `passed` is True, False or None
-    (not run / inconclusive). `passed` is True only when every gate passed. `metrics` also carries divergence and
-    per-task flips as facts."""
+    "metrics", "thresholds"}. Gates: accuracy, length (MLPerf's rule), and consistency only when given; a gate's
+    `passed` is True, False or None (not run / inconclusive). `passed` is True only when every gate passed. `metrics`
+    also carries per-task flips, and divergence when given, as facts."""
     th = th or Thresholds()
     gates: dict[str, dict] = {}
 
@@ -78,15 +78,14 @@ def evaluate(divergence: dict | None = None, flips: dict[str, dict] | None = Non
     else:
         ok = length["ratio"] >= th.min_length_ratio
         gate("length", ok, "ok" if ok else f"output length ratio {length['ratio']:.3f} < {th.min_length_ratio}", length)
-    if consistency is None:
-        gate("consistency", None, "not run", None)
-    else:
+    if consistency is not None:
         gate("consistency", consistency["consistent"], "ok" if consistency["consistent"] else
              f"first-token mismatches {consistency['first_token_mismatch']}, token-count mismatches "
              f"{consistency['token_count_mismatch']}, text after EOS {consistency['text_after_eos']}", consistency)
     reasons = [f"{k}: {g['reason']}" for k, g in gates.items() if g["passed"] is not True]
     metrics = {k: g["evidence"] for k, g in gates.items() if g["evidence"] is not None}
-    metrics["divergence"] = divergence if divergence is not None else {"not_run": "the engine exposes no logprobs or scoring failed"}
+    if divergence is not None:
+        metrics["divergence"] = divergence
     metrics.update({f"flips:{t}": f for t, f in (flips or {}).items()})
     states = [g["passed"] for g in gates.values()]
     verdict = "fail" if False in states else ("pass" if all(x is True for x in states) else "inconclusive")

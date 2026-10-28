@@ -104,13 +104,13 @@ def lab(tmp_path, monkeypatch):
     tb.serve_jailed = False
     tb.bench_default_regimes = ("single_stream",)
     from regimes import runner
-    saved, think, lag = dict(suite.TIERS["short"]), suite.THINK_S, runner.MAX_CLIENT_LAG_S
+    saved, think, lag = dict(suite.TIERS["min"]), suite.THINK_S, runner.MAX_CLIENT_LAG_S
     runner.MAX_CLIENT_LAG_S = 0.05      # wiring tests on a shared laptop; client precision has its own test
-    suite.TIERS["short"].update(probe_s=1.0, final_s=1.5)
+    suite.TIERS["min"].update(probe_s=1.0, final_s=1.5)
     suite.TIERS["full"].update(probe_s=1.0, final_s=1.5)
     suite.THINK_S = 0.3
     yield tb, s
-    suite.TIERS["short"].update(saved); suite.TIERS["full"].update(probe_s=60.0, final_s=600.0); suite.THINK_S = think
+    suite.TIERS["min"].update(saved); suite.TIERS["full"].update(probe_s=60.0, final_s=600.0); suite.THINK_S = think
     runner.MAX_CLIENT_LAG_S = lag
     target._cache.clear()
 
@@ -121,9 +121,9 @@ def test_bench_serves_and_measures(lab):
     assert out["split"] == "seen" and out["metrics"]["single_stream"]["valid"]
     assert out["metrics"]["single_stream"]["value"] is not None
     rec = next(ledger.records(s.ledger_root, kind="bench"))
-    assert rec["config"] == {"split": "seen", "tier": "short", "seed": tb.seed} and rec["result"]["verdict"] == "ok"
+    assert rec["config"] == {"split": "seen", "tier": "min", "seed": tb.seed} and rec["result"]["verdict"] == "ok"
     cal = out["calibrated"]["single_stream"]                   # every number with its context, or why it has none
-    assert cal["value"] == out["metrics"]["single_stream"]["value"] and cal["fingerprint"]["tier"] == "short"
+    assert cal["value"] == out["metrics"]["single_stream"]["value"] and cal["fingerprint"]["tier"] == "min"
     assert ("ceiling_missing" in cal) == (cal.get("ceiling") is None) and "reference_missing" in cal
     assert cal["shape"]["prompt_tokens_mean"] > 0 if cal.get("shape") else True
     assert rec["result"]["ready_s"] is not None and (s.run_dir / "serve-bench.log").exists()
@@ -154,7 +154,7 @@ def test_equiv_judges_against_the_reference(lab):
     tb, s = lab
     out = json.loads(tb.equiv({}))
     assert out["verdict"] == "pass", out["reasons"]
-    assert out["metrics"]["accuracy"]["unanswered"] == 0 and "kl_mean" in out["metrics"]["divergence"]
+    assert out["metrics"]["accuracy"]["unanswered"] == 0 and "divergence" not in out["metrics"]
     rec = next(ledger.records(s.ledger_root, kind="equiv"))
     assert rec["result"]["passed"] is True and rec["result"]["tier"] == "dev"
     from lab import artifacts
@@ -194,9 +194,9 @@ def test_submit_needs_full_equiv_and_a_bench_then_records_one_aggregate_per_metr
     tb, s = lab
     assert tb.submit({}).startswith("submit refused: no full-tier equiv")
     assert json.loads(tb.equiv({"tier": "full"}))["verdict"] == "pass"
-    assert tb.submit({}).startswith("submit refused: no completed short-tier seen-split bench")
+    assert tb.submit({}).startswith("submit refused: no completed min-tier seen-split bench")
     tb.bench({"regimes": ["single_stream"], "tier": "full"})            # the wrong tier does not count
-    assert tb.submit({}).startswith("submit refused: no completed short-tier seen-split bench")
+    assert tb.submit({}).startswith("submit refused: no completed min-tier seen-split bench")
     tb.bench({"regimes": ["single_stream"]})
     out = json.loads(tb.submit({}))
     assert out["split"] == "heldout" and set(out["metrics"]) == {"single_stream"}
@@ -207,7 +207,7 @@ def test_submit_needs_full_equiv_and_a_bench_then_records_one_aggregate_per_metr
     assert "result" not in rec and rec["metrics"] == out["metrics"]        # the ledger's held-out shape, nothing else
     from lab import evaltools
     assert evaltools.holdout_guard(target.load()).state()["n_queries"] == 1
-    assert (s.run_dir / "base-heldout-short.json").exists()
+    assert (s.run_dir / "base-heldout-min.json").exists()
 
 
 def test_submit_takes_the_equiv_tier_the_target_names(lab, monkeypatch):
@@ -239,7 +239,7 @@ def test_submit_is_refused_where_there_is_no_shared_heldout_budget(lab, monkeypa
     tb.equiv({"tier": "full"}); tb.bench({"regimes": ["single_stream"]})
     monkeypatch.delenv("LAB_STORE")
     assert tb.submit({}).startswith("submit refused: no shared held-out budget on this host")
-    assert not (s.run_dir / "base-heldout-short.json").exists()             # refused before anything was measured
+    assert not (s.run_dir / "base-heldout-min.json").exists()             # refused before anything was measured
 
 
 def test_inconclusive_equiv_is_neither_passing_nor_failing(lab, monkeypatch):
@@ -328,7 +328,7 @@ def test_the_workbench_is_quieted_for_a_measurement_and_what_was_killed_is_a_fac
         yield [{"pid": 4242, "used_mib": 9000, "name": "python"}]
     monkeypatch.setattr(container, "quiet", quiet)
     out = json.loads(tb.bench({"regimes": ["single_stream"]}))
-    assert asked == ["lab-workbench-r1-s1"] * 2 and out["workbench_killed"][0]["pid"] == 4242   # measure, then profile
+    assert asked == ["lab-workbench-r1-s1"] and out["workbench_killed"][0]["pid"] == 4242   # measure (no profile asked)
     rec = list(ledger.records(s.ledger_root, kind="bench"))[-1]["result"]
     assert rec["verdict"] == "ok" and rec["workbench_killed"][0]["pid"] == 4242
 
@@ -407,8 +407,8 @@ def test_baseline_is_measured_once_per_run_and_briefed_with_one_ledger_record(la
     base = list(ledger.records(cfg.ledger_root, kind="baseline"))
     assert len(base) == 1 and base[0]["result"]["verdict"] == "ok"
     assert base[0]["cost"]["seconds"] > 0 and "rate_known" in base[0]["cost"]
-    assert base[0]["config"] == {"split": "seen", "tier": "short", "commit": session._resolve(cfg.repo, "HEAD")}
-    assert [p for p in (tmp_path / "runs" / "rb").glob("base-seen-short*.json")     # the cache submit compares against
+    assert base[0]["config"] == {"split": "seen", "tier": "min", "commit": session._resolve(cfg.repo, "HEAD")}
+    assert [p for p in (tmp_path / "runs" / "rb").glob("base-seen-min*.json")     # the cache submit compares against
             if not p.name.endswith(".calibrated.json")]
     first, second = (sp.prompt for sp in p.specs)
     for prompt in (first, second):
@@ -489,9 +489,9 @@ def test_bench_starts_its_searches_where_the_base_ended(lab, monkeypatch):
     tb.bench({"regimes": ["saturated"]})                                     # no base measured yet: a cold search
     base = json.dumps({"saturated": {"value": 3.8, "valid": True, "concurrency": 64}, "bursty": {"value": 2.0, "valid": True},
                        "single_stream": {"value": 0.006, "valid": True}})
-    (s.run_dir / "base-seen-short-000000000000.json").write_text(base)
+    (s.run_dir / "base-seen-min-000000000000.json").write_text(base)
     tb.bench({"regimes": ["saturated"]})                                     # a base on another corpus version: unused
-    tb._base_cache("seen", "short").write_text(base)
+    tb._base_cache("seen", "min").write_text(base)
     tb.bench({"regimes": ["saturated"]})
     tb.bench({"regimes": ["saturated"], "seed": 3})                          # another sample: not the base's search
     assert got == [{}, {}, {"saturated": {"concurrency": 64}, "bursty": {"load": 2.0}}, {}]
@@ -552,7 +552,7 @@ def test_submit_needs_a_passing_full_equiv_for_each_profile_it_measures(lab):
     _profile(s, "[single_stream]\nMAX_BATCH_SIZE = 1\n")
     tb.equiv({"tier": "full"}); tb.bench({"regimes": ["single_stream"]})
     assert tb.submit({}).startswith("submit refused: no passing full-tier equiv for profile(s) ['single_stream']")
-    assert not (s.run_dir / "base-heldout-short.json").exists()             # refused before anything was measured
+    assert not (s.run_dir / "base-heldout-min.json").exists()             # refused before anything was measured
     assert json.loads(tb.equiv({"tier": "full", "profile": "single_stream"}))["verdict"] == "pass"
     out = json.loads(tb.submit({}))
     assert set(out["metrics"]) == {"single_stream"}
@@ -603,10 +603,13 @@ def test_submit_says_which_heldout_profile_launch_failed_and_how_only(lab, monke
     assert rec["config"]["profiles_failed"] == {"single_stream": "engine did not start"}
 
 
-def test_bench_profiles_the_tree_after_measuring_and_a_failed_profile_is_only_a_fact(lab):
+def test_bench_profiles_the_tree_only_when_asked_and_a_failed_profile_is_only_a_fact(lab):
     tb, s = lab                                 # no corpus to sample here, so the profile job fails
     out = json.loads(tb.bench({"regimes": ["single_stream"]}))
     rec = next(ledger.records(s.ledger_root, kind="bench"))
+    assert "profiled" not in rec["result"] and "profiled" not in out
+    out = json.loads(tb.bench({"regimes": ["single_stream"], "profile": True}))
+    rec = list(ledger.records(s.ledger_root, kind="bench"))[-1]
     assert rec["result"]["verdict"] == "ok" and out["metrics"]["single_stream"]["valid"]
     assert "manifest.json" in rec["result"]["profiled"]["error"] and "error" in out["profiled"]
 
