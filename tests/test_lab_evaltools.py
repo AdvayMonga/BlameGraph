@@ -291,15 +291,19 @@ def test_submit_reports_no_heldout_delta_without_a_seen_delta(lab, monkeypatch, 
     assert evaltools.noise_band_pct("single_stream", t, root) == 4.0
 
 
-def test_a_cost_objective_is_scored_lower_is_better(tmp_path):
-    from lab import evaltools
+def test_the_cost_objective_compares_tokens_and_prices_base_and_new_alike(tmp_path):
+    from lab import calibrate, evaltools
     from lab.task import Task, score
     p = tmp_path / "task.toml"
     p.write_text('[task]\ngoal = "g"\n[objective]\nregimes = ["batch"]\n[constraints]\nsaturated = { max_regression_pct = 5.0 }\n')
-    metrics = {"batch": {"delta_pct": -10.0, "verdict": "improved"}, "saturated": {"delta_pct": -3.0}}
+    metrics = {"batch": {"delta_pct": 25.0, "verdict": "improved"}, "saturated": {"delta_pct": -3.0}}
     sc = score(metrics, Task.parse(p))
-    assert sc["gains_pct"] == {"batch": 10.0} and sc["constraints"]["saturated"]["ok"] and sc["win"]
-    assert evaltools.aggregate({"value": 5.0}, -10.0, "lower", 2.0)["verdict"] == "improved"
+    assert sc["gains_pct"] == {"batch": 25.0} and sc["constraints"]["saturated"]["ok"] and sc["win"]
+    m = evaltools.aggregate({"value": 100.0}, 25.0, "higher", 2.0)     # good output tokens/s, never $
+    m.update(calibrate.heldout_cost(m, 3.6))
+    assert m["verdict"] == "improved" and m["usd_per_m_base"] == pytest.approx(10.0) and m["usd_per_m_new"] == pytest.approx(8.0)
+    assert "no GPU price" in calibrate.heldout_cost(m, None)["cost_missing"]
+    ledger._check({"kind": "submit", "config": {"split": "heldout"}, "metrics": {"batch": m}})   # a held-out aggregate
 
 
 def test_submit_scores_the_task(lab, tmp_path):
@@ -496,7 +500,7 @@ def test_bench_starts_its_searches_where_the_base_ended(lab, monkeypatch):
     tb, s = lab
     got = []
     monkeypatch.setattr(evaltools, "run_regimes", lambda url, t, names, split, tier, seed, rows=None, hints=None,
-                        bands=None, gpu_usd_per_hour=None: got.append(hints) or [])
+                        bands=None: got.append(hints) or [])
     tb.bench({"regimes": ["saturated"]})                                     # no base measured yet: a cold search
     base = json.dumps({"saturated": {"value": 3.8, "valid": True, "concurrency": 64}, "bursty": {"value": 2.0, "valid": True},
                        "single_stream": {"value": 0.006, "valid": True}})

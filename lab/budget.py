@@ -43,7 +43,7 @@ class Budget:
 
 def gpu_rate(t=None) -> tuple[float, bool]:
     """(USD per GPU-hour, known): LAB_GPU_USD_PER_HOUR, else the target's [cost] gpu_usd_per_hour, else (0, False).
-    The batch regime's $ figure and every calibrated $ fact are computed at this price."""
+    Every calibrated $ fact is computed at this price."""
     raw = os.environ.get("LAB_GPU_USD_PER_HOUR")
     if raw is None:
         from lab import target

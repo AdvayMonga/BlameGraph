@@ -78,8 +78,8 @@ def job_test(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
 
 
 def job_measure(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
-    """`args`: names, split, tier, seed, jailed, passive (keep device/telemetry/client rows in `out`), hints, bands
-    and gpu_usd_per_hour (`run_regimes`). One engine
+    """`args`: names, split, tier, seed, jailed, passive (keep device/telemetry/client rows in `out`), hints and bands
+    (`run_regimes`). One engine
     launch per profile (lab/profiles.py), general first; every result and row carries its `profile` (None = general),
     and a profile's device/telemetry/serve log land in `out/profiles/<regime>/`. A profile launch that fails makes
     its regimes invalid with the reason and the measurement goes on; the general launch failing, a busy GPU or a
@@ -101,7 +101,7 @@ def job_measure(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
                     with serve.Served(inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"],
                                       artifacts=where, env_extra=profiles.env(t, prof)) as srv:
                         got = run_regimes(srv.url, t, names, args["split"], args["tier"], args["seed"], rows,
-                                          args.get("hints"), args.get("bands"), args.get("gpu_usd_per_hour"))
+                                          args.get("hints"), args.get("bands"))
                         srv.exclusive()
                     ready[prof] = srv.ready_s
                 except (serve.GpuBusy, serve.Contaminated):

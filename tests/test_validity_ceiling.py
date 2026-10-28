@@ -63,9 +63,8 @@ def test_regime_ceilings_by_objective():
     assert ttft["better"] == "lower" and "p99 prompt" in ttft["basis"]
     assert good["better"] == "higher" and good["ceiling"] > 10
     assert ceiling.regime_ceiling("speedup", m, H200, shape, lim) is None
-    usd = ceiling.regime_ceiling("usd_per_m_output_tokens", m, H200, shape, lim, usd_per_hour=3.6)
-    assert usd["better"] == "lower" and usd["ceiling"] == 3.6 / 3600 / (good["ceiling"] * 200) * 1e6
-    assert ceiling.regime_ceiling("usd_per_m_output_tokens", m, H200, shape, lim) is None    # no price, no bound
+    tok = ceiling.regime_ceiling("good_output_tok_per_s", m, H200, shape, lim)
+    assert tok["better"] == "higher" and tok["ceiling"] == good["ceiling"] * 200
 
 
 def test_pct_of_and_ceiling_gain():

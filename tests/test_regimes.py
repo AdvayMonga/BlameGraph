@@ -117,7 +117,7 @@ def test_every_regime_runs_on_a_fake_engine():
     runner.MAX_CLIENT_LAG_S = 0.05      # wiring test; client precision is test_open_loop_keeps_its_schedule's job
     try:
         tight = Limits(ttft_s=0.25, tpot_s=0.05)                  # 1 s probes only see overload against a tight TTFT
-        ctx = suite.Ctx(url, "m", min_requests=10, interactive=tight, conversational=tight, gpu_usd_per_hour=3.6)
+        ctx = suite.Ctx(url, "m", min_requests=10, interactive=tight, conversational=tight)
         for name, fn in suite.REGIMES.items():
             res = fn(ctx, max_concurrency=8) if name in ("saturated", "batch") else fn(ctx)
             assert res["regime"] == name and res["valid"], (name, res["invalid_reasons"])
@@ -144,8 +144,7 @@ def test_every_regime_runs_from_a_workload_file():
     runner.MAX_CLIENT_LAG_S = 0.05
     try:
         tight = Limits(ttft_s=0.25, tpot_s=0.05)
-        ctx = suite.Ctx(url, "m", workload=str(path), min_requests=10, interactive=tight, conversational=tight,
-                        gpu_usd_per_hour=3.6)
+        ctx = suite.Ctx(url, "m", workload=str(path), min_requests=10, interactive=tight, conversational=tight)
         assert len(ctx.pool("spike")) == len(ctx.pool(None)) == 40
         for name, fn in suite.REGIMES.items():
             res = fn(ctx, max_concurrency=8) if name in ("saturated", "batch") else fn(ctx)
@@ -172,17 +171,18 @@ def test_no_ttft_limit_judges_tpot_alone():
     assert not summarize(starved, runner.BATCH)["meets_limits"]
 
 
-def test_batch_reports_dollars_per_million_tokens_at_the_price_or_says_it_has_none():
-    proc, url = spawn(slots=2, token_s=0.005, out_tokens=10)
+def test_batch_measures_good_output_tokens_and_stops_once_they_plateau():
+    proc, url = spawn(slots=2, token_s=0.005, out_tokens=10)       # 2 slots: no more tokens/s past concurrency 2
     saved, lag = dict(suite.TIERS["short"]), runner.MAX_CLIENT_LAG_S
     suite.TIERS["short"].update(probe_s=1.0, final_s=2.0)
     runner.MAX_CLIENT_LAG_S = 0.05
     try:
-        res = suite.batch(suite.Ctx(url, "m", min_requests=10, gpu_usd_per_hour=3.6), max_concurrency=4)
-        assert res["valid"] and res["better"] == "lower" and res["objective"] == "usd_per_m_output_tokens", res
-        assert res["value"] == 3.6 / 3600 / res["good_output_tok_per_s"] * 1e6 and res["concurrency"], res
-        none = suite.batch(suite.Ctx(url, "m", min_requests=10), max_concurrency=2)
-        assert none["value"] is None and none["good_output_tok_per_s"] and "no GPU price" in none["value_missing"], none
+        res = suite.batch(suite.Ctx(url, "m", min_requests=10))
+        assert res["valid"] and res["better"] == "higher" and res["objective"] == "good_output_tok_per_s", res
+        assert res["value"] > 0 and res["concurrency"], res
+        tok = [lv["good_output_tok_per_s"] for lv in res["levels"]]
+        assert res["levels"][-1]["concurrency"] <= 16, res["levels"]          # stopped well short of 512
+        assert tok[-1] <= max(tok[:-1]) * 1.1, tok                            # at a level within 10% of the high
     finally:
         suite.TIERS["short"].update(saved)
         runner.MAX_CLIENT_LAG_S = lag

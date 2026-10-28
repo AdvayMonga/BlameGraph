@@ -6,11 +6,15 @@ a reversed decision gets a new entry that names the old one. Change any of these
 ## 2026-10-28 — Cost as an objective: a batch regime under its own limits, $ beside every regime
 A third limit class, `batch` (no TTFT limit, TPOT <= 250 ms at p99 by default; the target's `[limits] batch`), and a
 ninth regime, `batch`: saturated's closed-loop concurrency sweep over every corpus class, judged at those limits, the
-level kept by good output tokens/s, reporting $ per 1M good output tokens at the GPU's hourly price (lower is
-better). A task names it as its objective like any regime. Every other regime's calibrated block also carries $ per
+level kept by good output tokens/s, stopped once a passing level beats the high so far by no more than the noise
+band (10% without one; with no TTFT limit nearly every level passes, so the sweep would otherwise run to 512). Its
+measured value is good output tokens/s (higher is better), in the bench, the cached base, submit's aggregates and the
+noise bands; $ per 1M good output tokens is computed from it at the current price only when reported (bench's
+calibrated block; submit's batch aggregate prices base and new at the same price), so a price change cannot skew a
+comparison. A task names it as its objective like any regime. Every other regime's calibrated block also carries $ per
 1M good output tokens and per good request (per session for shared_prefix_multi_turn) as facts. The price is
-`LAB_GPU_USD_PER_HOUR`, else the target's `[cost] gpu_usd_per_hour`, read on the controller and sent to the worker;
-without one the value and the $ facts say it is missing and why. Why (the user, via the product session): the
+`LAB_GPU_USD_PER_HOUR`, else the target's `[cost] gpu_usd_per_hour`, read on the controller; without one the $
+facts say they are missing and why. Why (the user, via the product session): the
 customers in mind (applied-AI companies on agentic and batch traffic) care about cost more than per-request
 latency. On one GPU at a fixed price $ per token only mirrors throughput, so cost under the chat limits would rank
 changes exactly as goodput does; what makes it cost is the looser limit, which lets a change trade latency for

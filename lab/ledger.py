@@ -25,7 +25,8 @@ WRITER_FIELDS = {"id", "at", "schema"}
 HELDOUT_FIELDS = {"kind", "config", "metrics", "run", "session", "snapshot", "snapshot_blob", "patch",
                   "tool", "args", "cost", "claim", "experiment"}
 HELDOUT_METRIC_KEYS = {"base", "new", "delta_pct", "band_pct", "verdict",
-                       "ceiling", "pct_of_ceiling_base", "pct_of_ceiling_new", "ceiling_from", "reference_missing"}
+                       "ceiling", "pct_of_ceiling_base", "pct_of_ceiling_new", "ceiling_from", "reference_missing",
+                       "gpu_usd_per_hour", "usd_per_m_base", "usd_per_m_new", "cost_missing"}
 EXPERIMENT_FIELDS = {"hypothesis", "expect", "actual", "actual_missing", "gap", "gap_pct_of_expected", "noise_band_pct",
                      "bundle", "independence"}
 SCALAR = (int, float, str, bool, type(None))

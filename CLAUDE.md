@@ -429,7 +429,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   refuses — plus Poisson, trace replay with speed-up and peak-window crop, multi-turn
   conversations rebuilt from stored histories under one shared system prompt; synthetic prompts when no corpus),
   `suite.py` (the 9 regimes; `batch` (2026-10-28) = saturated's sweep under the `batch` limits (`runner.BATCH`: no
-  TTFT limit, TPOT 250 ms), reporting $ per 1M good output tokens at `Ctx.gpu_usd_per_hour`, None without a price; probes ≥ `min_requests` (100) and tier length, capped at 4× the tier length, then a
+  TTFT limit, TPOT 250 ms), stopped at a passing level within the noise band (10% without one) of the high so far,
+  measuring good output tokens/s; its $ per 1M is computed at the current price only when reported
+  (`calibrate.cost`, and submit's batch aggregate prices base and new alike, `calibrate.heldout_cost`); probes ≥ `min_requests` (100) and tier length, capped at 4× the tier length, then a
   confirmation at `final_s` backing off 15% up to 5 times; the load search stops below start/16; closed-loop
   schedules are generated lazily; shared-prefix runs score only the steady-state window; cold start launches a command with
   fresh VLLM/inductor/Triton cache dirs, polls until "17 + 25" is answered "42", then relaunches for the warm figure).

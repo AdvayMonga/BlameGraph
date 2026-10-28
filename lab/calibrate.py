@@ -11,7 +11,6 @@ import statistics
 from pathlib import Path
 
 from lab import target
-from regimes.suite import NO_PRICE, usd_per_m
 from validity import ceiling, peaks
 from validity.ceiling import ModelSpec, Shape
 
@@ -138,6 +137,22 @@ def calibrate_results(results: list[dict], rows: list[dict], t: target.Target, g
         return {"error": f"calibration failed: {type(e).__name__}: {e}"}
 
 
+NO_PRICE = "no GPU price: set LAB_GPU_USD_PER_HOUR or the target's [cost] gpu_usd_per_hour"
+
+
+def usd_per_m(usd_per_hour: float | None, per_s: float | None) -> float | None:
+    """Dollars per million units at `per_s` units/s on one GPU at `usd_per_hour`; None without both."""
+    return usd_per_hour / 3600 / per_s * 1e6 if usd_per_hour is not None and per_s else None
+
+
+def heldout_cost(m: dict, usd_per_hour: float | None) -> dict:
+    """The batch aggregate's base and new good output tokens/s as $ per 1M at one price; else `cost_missing`."""
+    if usd_per_hour is None:
+        return {"cost_missing": NO_PRICE}
+    return {"gpu_usd_per_hour": usd_per_hour, "usd_per_m_base": usd_per_m(usd_per_hour, m.get("base")),
+            "usd_per_m_new": usd_per_m(usd_per_hour, m.get("new"))}
+
+
 def cost(r: dict, value: float | None, usd_per_hour: float | None) -> dict:
     """A regime's $ facts on one GPU at its price: per 1M good output tokens and per good request (per session for
     shared_prefix_multi_turn), from the measured summary; else `cost_missing` says why."""
@@ -167,8 +182,7 @@ def _calibrate_results(results, rows, t, gpu, tier, split, seed):
         value = r["value"] if r.get("valid") else None
         row = {"objective": obj, "value": value, "better": r["better"], "fingerprint": fp}
         if value is None:
-            row["value_missing"] = r.get("value_missing") or ("the measurement was invalid: "
-                                                               + "; ".join(r.get("invalid_reasons") or []))
+            row["value_missing"] = "the measurement was invalid: " + "; ".join(r.get("invalid_reasons") or [])
         row.update(cost(r, value, price))
         shape = shape_from_rows([x for x in rows if x.get("regime") == name and x.get("profile") == r.get("profile")])
         if hw is None:
@@ -179,10 +193,8 @@ def _calibrate_results(results, rows, t, gpu, tier, split, seed):
             row["ceiling"], row["ceiling_missing"] = None, "no completed requests with prompt token counts"
         else:
             limits = {"single_stream": t.interactive, "batch": t.batch}.get(name, t.conversational).__dict__
-            c = ceiling.regime_ceiling(obj, spec, hw, shape, limits, w, kv, price)
-            if c is None and obj == "usd_per_m_output_tokens" and price is None:
-                row["ceiling"], row["ceiling_missing"] = None, NO_PRICE
-            elif c is None:
+            c = ceiling.regime_ceiling(obj, spec, hw, shape, limits, w, kv)
+            if c is None:
                 row["ceiling"], row["ceiling_missing"] = None, f"no physical bound for {obj}"
             else:
                 row.update(ceiling=c["ceiling"], pct_of_ceiling=ceiling.pct_of(value, c["ceiling"], r["better"]),

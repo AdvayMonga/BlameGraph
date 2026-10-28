@@ -43,15 +43,13 @@ def _regimes(args: dict, default: tuple[str, ...]) -> list[str]:
 
 
 def run_regimes(url: str, t: target.Target, names: list[str], split: str, tier: str, seed: int,
-                rows: list | None = None, hints: dict | None = None, bands: dict | None = None,
-                gpu_usd_per_hour: float | None = None) -> list[dict]:
+                rows: list | None = None, hints: dict | None = None, bands: dict | None = None) -> list[dict]:
     """Each regime's result; with `rows`, every measured client row is appended to it, tagged with its regime.
-    `hints` / `bands`: where the base's searches ended and each regime's noise band; `gpu_usd_per_hour`: the
-    controller's price (`suite.Ctx`)."""
+    `hints` / `bands`: where the base's searches ended and each regime's noise band (`suite.Ctx`)."""
     from regimes import suite
     watch = split == "seen"             # the dashboard gets the seen split's progress, never the held-out's
     ctx = suite.Ctx.from_target(t, url, split=split, tier=tier, seed=seed, rows=rows, hints=hints or {},
-                                bands=bands or {}, on_rows=_progress if watch else None, gpu_usd_per_hour=gpu_usd_per_hour)
+                                bands=bands or {}, on_rows=_progress if watch else None)
     out = []
     for n in names:
         if watch:
@@ -422,6 +420,8 @@ class EvalTools:
                 better[n] = new[n].get("better", "higher")
                 metrics[n] = {**aggregate(base.get(n, {}), held_d, better[n], noise_band_pct(n, t, self.s.ledger_root)),
                               **heldout_context(seen_cal.get(n) or {}, base.get(n, {}), held_d, better[n])}
+                if n == "batch":                   # base and new at one price, the current one
+                    metrics[n].update(calibrate.heldout_cost(metrics[n], _price(t)))
         except Refused as e:
             self._record("submit", "submit", args, {"verdict": "refused", "reason": str(e)}, snap)
             return f"submit refused: {e}"
@@ -464,7 +464,6 @@ class EvalTools:
         """The worker's `measure` job into `out`; the engine's log is appended to `<run>/<log>` either way."""
         try:
             return self.worker.call("measure", {"tree": tree}, {"seed": self.seed, **args, "jailed": self.serve_jailed,
-                                                                "gpu_usd_per_hour": _price(),   # the controller's
                                                                 "workbench": getattr(self.s, "workbench", None)}, out)
         finally:
             src = out / worker.ENGINE_LOG

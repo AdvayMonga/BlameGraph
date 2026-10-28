@@ -7,7 +7,7 @@
   short_prompt_long_output  short prompts, answers up to 1024 tokens, Poisson arrivals: goodput in req/s
   shared_prefix_multi_turn  conversations resending their history under one shared system prompt: goodput in sessions/s
   overload                  Poisson at 2x the measured goodput: does it degrade honestly (explicit errors, no silent drops)
-  batch                     saturated's sweep under the batch limits: $ per 1M good output tokens at the GPU's price
+  batch                     saturated's sweep under the batch limits: good output tokens/s ($ per 1M at report time)
   cold_start                process launch to first correct token, empty compile caches, plus the warm figure
 
 Everything except single_stream, batch and cold_start is checked against the conversational limits (TTFT 2 s, TPOT
@@ -53,7 +53,6 @@ class Ctx:
     interactive: Limits = INTERACTIVE  # MLPerf limits; probes must last well beyond the TTFT limit to see overload
     conversational: Limits = CONVERSATIONAL
     batch: Limits = BATCH
-    gpu_usd_per_hour: float | None = None   # the price batch's $ figure is computed at; None = unknown
     rows: list | None = None           # when a list, every measured row lands here (no text), tagged with its call
     hints: dict = field(default_factory=dict)   # {regime: {"load" | "concurrency": x}}: where the base's search ended
     bands: dict = field(default_factory=dict)   # {regime: run-to-run band %}: the search resolves to it, not finer
@@ -123,12 +122,8 @@ class Ctx:
 
     @classmethod
     def from_target(cls, t, url: str, **kw) -> "Ctx":
-        """A Ctx for the target: its model, chat kwargs, corpus, limits and GPU price (lab.budget.gpu_rate); `kw`
-        overrides (tier, split, seed...)."""
-        from lab.budget import gpu_rate
+        """A Ctx for the target: its model, chat kwargs, corpus and limits; `kw` overrides (tier, split, seed...)."""
         from .runner import Limits
-        rate, known = gpu_rate(t)
-        kw.setdefault("gpu_usd_per_hour", rate if known else None)
         return cls(url, t.model, str(t.corpus_dir) if t.corpus_dir.is_dir() else None, chat_kwargs=t.chat_kwargs,
                    interactive=Limits(t.interactive.ttft_s, t.interactive.tpot_s),
                    conversational=Limits(t.conversational.ttft_s, t.conversational.tpot_s),
@@ -196,9 +191,10 @@ def single_stream(ctx: Ctx) -> dict:
     return _result("single_stream", "tpot_p99_s", s["tpot_p99_s"], "lower", s, ttft_p99_s=s["ttft_p99_s"])
 
 
-def _sweep(ctx: Ctx, name: str, limits: Limits, rate: str, max_concurrency: int) -> tuple:
+def _sweep(ctx: Ctx, name: str, limits: Limits, rate: str, max_concurrency: int, plateau: bool = False) -> tuple:
     """Doubling concurrency; the best level is the one with the highest `rate` (a summary key) whose requests meet
-    the limits. With a hint the sweep starts at the base's concurrency, halving first while that level fails.
+    the limits. With a hint the sweep starts at the base's concurrency, halving first while that level fails. With
+    `plateau` it stops at a passing level that beats the best so far by no more than the noise band (10% if none).
     Returns (confirmed final summary or None, its level, every probed level, the summary to report)."""
     pool = ctx.pool(None)
     _warmup(ctx, pool)
@@ -220,14 +216,18 @@ def _sweep(ctx: Ctx, name: str, limits: Limits, rate: str, max_concurrency: int)
     else:
         misses = 1
     c *= 2
+    tol = (ctx.bands.get(name) or 10.0) / 100
     while s["valid"] and not down and misses < 2 and c <= max_concurrency:   # down: the level above already failed
         s = probe(c)
         if not s["valid"]:
             break
+        flat = plateau and s["meets_limits"] and best is not None and s[rate] <= best[rate] * (1 + tol)
         if s["meets_limits"] and (best is None or s[rate] > best[rate]):
             best, misses = s, 0
         elif not s["meets_limits"]:
             misses += 1
+        if flat:
+            break
         c *= 2
     final, best = None, None
     passing = sorted((lv for lv in levels if lv["meets_limits"]), key=lambda lv: -lv[rate])
@@ -248,23 +248,12 @@ def saturated(ctx: Ctx, max_concurrency: int = 512) -> dict:
                    concurrency=best and best["concurrency"], levels=levels)
 
 
-NO_PRICE = "no GPU price: set LAB_GPU_USD_PER_HOUR or the target's [cost] gpu_usd_per_hour"
-
-
-def usd_per_m(usd_per_hour: float | None, per_s: float | None) -> float | None:
-    """Dollars per million units at `per_s` units/s on one GPU at `usd_per_hour`; None without both."""
-    return usd_per_hour / 3600 / per_s * 1e6 if usd_per_hour is not None and per_s else None
-
-
 def batch(ctx: Ctx, max_concurrency: int = 512) -> dict:
-    """saturated's sweep under the batch limits, the best level by good output tokens/s; reported as $ per 1M good
-    output tokens at the GPU's price, None when the price is unknown."""
-    ok, best, levels, summary = _sweep(ctx, "batch", ctx.batch, "good_output_tok_per_s", max_concurrency)
-    tok_s = ok["good_output_tok_per_s"] if ok else None
-    extra = {} if ctx.gpu_usd_per_hour is not None or tok_s is None else {"value_missing": NO_PRICE}
-    return _result("batch", "usd_per_m_output_tokens", usd_per_m(ctx.gpu_usd_per_hour, tok_s), "lower", summary,
-                   concurrency=best and best["concurrency"], levels=levels, good_output_tok_per_s=tok_s,
-                   gpu_usd_per_hour=ctx.gpu_usd_per_hour, **extra)
+    """saturated's sweep under the batch limits, stopped once it plateaus: good output tokens/s at the passing level
+    with the most. Its $ per 1M tokens is computed from this at report time (lab.calibrate.cost), never stored."""
+    ok, best, levels, summary = _sweep(ctx, "batch", ctx.batch, "good_output_tok_per_s", max_concurrency, plateau=True)
+    return _result("batch", "good_output_tok_per_s", ok["good_output_tok_per_s"] if ok else None, "higher", summary,
+                   concurrency=best and best["concurrency"], levels=levels)
 
 
 def bursty(ctx: Ctx) -> dict:
@@ -417,10 +406,10 @@ FACTS = {
                                  "one shared system prompt", "goodput, good sessions/s", "conversational"),
     "overload": ("Poisson at 2x the steady mix's goodput; an explicit rejection (4xx/503) is allowed, a silent drop, "
                  "truncated stream or no response makes the run invalid", "good requests/s at that load", "conversational"),
-    "batch": ("closed loop at doubling concurrency over every corpus class; the passing level with the most good "
-              "output tokens/s rerun at full length",
-              "dollars per 1M good output tokens on one GPU at its hourly price (lower is better); none without a price",
-              "batch"),
+    "batch": ("closed loop at doubling concurrency over every corpus class, stopped at a passing level within the "
+              "noise band of the previous high; the passing level with the most good output tokens/s rerun at full length",
+              "good output tokens/s; its dollars per 1M good output tokens are computed at the GPU's current hourly "
+              "price when reported", "batch"),
 }
 MEASUREMENT = ("TTFT runs from a request's scheduled send to its initial real token; TPOT = (E2E - TTFT) / (n - 1), "
                "tokens recounted with the reference tokenizer. A request is good when it meets both the TTFT and the TPOT "
