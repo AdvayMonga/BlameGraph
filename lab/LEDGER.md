@@ -56,6 +56,9 @@ rows by trace id (`joined`: client `X-Trace-Id` is `bg-<row id>`).
 - `device/`: `meta.json` (`available`; when true `source` dcgm|nvidia-smi, `coarse` (nvidia-smi utilization is
   coarse, DCGM profiling fields are not), `fields`, `interval_ms`, `exited` if the sampler died) and `samples.csv`,
   each raw tool line prefixed with epoch seconds. Covers the whole served window, launch to teardown.
+  `gpu.read_samples` reads either source as rows (the index's `device_samples`): `epoch_s`, then one number per
+  field under DCGM's name where both sample it (`power_w`, `sm_clock_mhz`, `mem_clock_mhz`, `throttle_reasons`),
+  nvidia-smi's others with dots as underscores, N/A as null.
 - `telemetry/`: whatever the engine wrote into `{dir}` (inference-server: `<run>.sqlite` with a `requests` table,
   `events.jsonl`).
 - `client_rows`: JSONL, one per measured request, without generated text. Bench: the regimes' rows with `regime`,
