@@ -273,9 +273,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   generations, each a funnel round from `--parents` (4) programs drawn from the population (the 32 best open programs;
   the best always, the rest by percentile reward + 0.05 without replacement) with `--gen-size` (24) ideas split among
   them and the fastest `--keep` (8) to the full exam, children under their own parent; a generation where under 1/5 of
-  the examined beat their parent makes the next 2/3 as large; stops at the roofline, `--patience` (3) generations with
-  no new best, or the budget; `--crossover F` (an arm) gives that fraction of a generation's ideas to a judge call shown
-  another parent's diff; with `--mcts` instead a tree of refinement chains, one parent per round chosen by MCTS (UCT with
+  the examined beat their parent makes the next 2/3 as large; stops after `--patience` (3) generations with
+  no new best, the budget or `--wall-s` (wall-clock; `--gpu-s` sums every evaluator job's seconds, parallel ones and
+  the no-GPU precheck included); `--crossover F` (an arm) gives that fraction of a generation's ideas to a judge call
+  shown another parent's diff; with `--mcts` instead a tree of refinement chains, one parent per round chosen by MCTS (UCT with
   C = 0.6 on percentile rewards and max backup,
   KernelPro's progressive widening and virtual-child rule), a node closed after 3 judged failed children or 3 edits
   that never reached the GPU; in every mode the model is shown only the
@@ -293,8 +294,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   promoted only if its re-timed median beats the winner's
   (`kernels/search/tune.py`), and when different points win in different size regions a dispatcher picks CONFIG per
   call from the call's size (`Task.size_expr`, tensor shapes only, so CUDA graphs bake it per captured size), promoted
-  on the same rule; the search stops once the best program is at `--stop-pct` (80) of its call-weighted
-  roofline bound, a figure the prompt states, or after `--patience` (16) judged programs with no new best (MANTIS);
+  on the same rule; the prompt states the best program's % of its call-weighted roofline bound as a fact, and with
+  `--mcts` the search stops after `--patience` (16) judged programs with no new best (MANTIS; no roofline stop since
+  2026-10-27);
   each timed shape carries its bound type (memory or compute) and the achieved % of peak bandwidth and of peak FLOPs,
   and ncu runs on the smallest and the largest seen shape; before promotion a model (`--detector-model`, Opus 5.5) reads each would-be winner for gaming and a flagged one is
   passed over, recorded with its evidence (`kernels/search/detect.py`, MANTIS; never changes a score);

@@ -3,6 +3,26 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-27 — No roofline stop: a search runs to its budget
+`kernels.search` no longer stops when the best program reaches a share of its roofline (`--stop-pct`, 80 by
+default, removed); it stops at its generations, budget, wall-clock or patience. The % of roofline stays a fact in
+every prompt and record. Why (the user): within a session the search should go as high as it can; the fixed
+generations already bound it, and the % of roofline is what tells the central agent whether another round on the same
+kernel is worth it. In the 2026-10-27 race on moe_gemm_fp8 the rule ended the generations arm at 83% (1.194x seen,
+1.391x held-out, 33 min) and the ideas arm at 81%, while OpenEvolve, with no such rule, ran its 2.5 h to 87% (1.250x,
+1.478x held-out). Replaces MANTIS's stop rule (2026-10-18, METHOD.md row 13); patience stays.
+
+## 2026-10-27 — Searches capped by wall-clock; K-Search's persistence tested and not adopted
+`--wall-s` caps a kernel search by wall-clock. Why: the 2,700-s `--gpu-s` cap stopped the first real generations run
+(2026-10-27) after 2 of 10 generations because it sums parallel jobs and the no-GPU precheck. Tested the same day and
+removed: an `--ideas` arm after K-Search (Berkeley Sky Lab, arXiv 2602.19128), which kept an idea table so the 4 best
+ideas by measured gain were refined again each generation (an idea closed after 3 generations without a better
+measurement), with a judge call closing ideas and adding sub-ideas and 4 immigrant ideas of whole-program changes per
+generation; and K-Search itself as an arm on our evaluator. On moe_gemm_fp8 (same shapes, start, evaluator, every role
+on Opus 5.5, 2.5 h cap): generations 1.196x seen / 1.391x held-out for $6.95; ideas 1.162x / 1.376x for $14.70;
+K-Search 1.158x / 1.267x for $29.92; OpenEvolve 1.250x / 1.478x for $78.67 (both of ours stopped at the roofline rule,
+removed the same day). The user dropped both arms; one run per arm, one task.
+
 ## 2026-10-27 — The beam is removed
 The beam (each MCTS expansion: the judge names 4 changes, the coder writes all 4, each judged in full, a failed child
 repaired in correction mode up to 3 deep) and its A/B arm `search-beam`, `--no-funnel` and `--beam` are deleted;

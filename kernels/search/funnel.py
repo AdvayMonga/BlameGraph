@@ -35,6 +35,7 @@ import difflib
 import json
 import math
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -84,6 +85,7 @@ class Funnel:
     gpu_s_cap: float | None = None           # GPU seconds at which a round stops (`gpu_used` reads the spend)
     gpu_used: Callable[[], float] | None = None
     workers: int = 8                         # model calls at once
+    deadline: float | None = None            # time.monotonic() at which a round stops (the search's wall-clock cap)
     spent: float = 0.0
     calls: int = 0
     judge_calls: int = 0                     # hypothesis-naming calls so far: picks the judge from the mix
@@ -108,7 +110,9 @@ class Funnel:
         return m
 
     def run(self, code: str, stage: int) -> dict:
-        """One evaluator stage, refused once the GPU budget is spent (the precheck uses no GPU)."""
+        """One evaluator stage, refused once the GPU budget or the wall-clock is spent (the precheck uses no GPU)."""
+        if self.deadline is not None and time.monotonic() >= self.deadline:
+            raise Spent("wall-clock")
         if stage != PRECHECK and self.gpu_s_cap is not None and self.gpu_used and self.gpu_used() >= self.gpu_s_cap:
             raise Spent("GPU budget")
         return self.stage(code, stage)
@@ -188,7 +192,7 @@ def merge(f: Funnel, ideas: list[dict]) -> list[dict]:
         if len(g) == 1:
             return {**ideas[g[0]], "merged_from": 1}
         got = hypotheses(f._ask(f.models.cheap, MERGE, "\n\n".join(json.dumps(ideas[i]) for i in g)), 1)
-        tags = {k: ideas[g[0]][k] for k in ("slice", "parent_id") if k in ideas[g[0]]}
+        tags = {k: ideas[g[0]][k] for k in ("slice", "parent_id", "idea_id") if k in ideas[g[0]]}
         return {**(got[0] if got else ideas[g[0]]), **tags, "merged_from": len(g)}
     return pmap(f, one, groups)
 
@@ -370,15 +374,19 @@ def generation(f: Funnel, tree: Tree, parents: list[Node], system: str, it: int,
     """One round from `parents`: each parent's judge calls name `quota` ideas (with `rotate`, one call on one slice,
     rotated across the parents; else one call per slice, `quota` each, or with `spread` the parent's `quota` split over
     its slices), `crossover` further ideas each combine a parent with another parent's diff; the fastest `keep` of the
-    whole round go to the full exam and join the tree under their own parent. A budget that runs out mid-round
-    (`Spent`) ends the round with what it has; the log says where."""
+    whole round go to the full exam and join the tree under their own parent. Every idea carries an `idea_id`, and its
+    log row the diff its program made. A budget that runs out mid-round (`Spent`) ends the round with what it has; the
+    log says where."""
     from kernels.search.loop import diff_from_root, prompt
     spent0, fates, children = f.spent, [], []
     counts = {"named": 0, "distinct": 0, "after_archive": 0, "written": 0, "correct": 0, "rewritten": 0}
-    stopped, pairs = None, []
+    stopped, pairs, code_of = None, [], {}       # code_of: each written idea's latest program, for the log's diff
     by_id = {p.id: p for p in parents}
+
+    def key(h):
+        return h.get("idea_id")
     try:
-        profile_parents(f, parents)
+        profile_parents(f, list(by_id.values()))
         need = [p for p in parents if f.precheck and "compile_report" not in p.artifacts]
         for p, r in zip(need, correct(f, [p.code for p in need], PRECHECK)):    # for the compiler slice
             if r["artifacts"].get("compile_report"):
@@ -394,13 +402,14 @@ def generation(f: Funnel, tree: Tree, parents: list[Node], system: str, it: int,
             else:
                 got = generate(f, system, bases[p.id], facts,
                                n=max(1, math.ceil(quota / len(facts))) if spread else quota)
-            return [{**h, "parent_id": p.id} for h in got]
+            return [{**h, "parent_id": p.id, "idea_id": uuid.uuid4().hex[:8]} for h in got]
         ideas = [h for got in pmap(f, name, list(enumerate(parents))) for h in got]
         pairs_x = [(parents[k % len(parents)], parents[(k + 1) % len(parents)])
                    for k in range(crossover if len(parents) > 1 else 0)]       # a parent shown another parent's diff
         for (p, o), got in zip(pairs_x, pmap(f, lambda po: _crossover(f, system, bases[po[0].id], tree, po[1],
                                                                        diff_from_root), pairs_x)):
-            ideas += [{**h, "parent_id": p.id, "slice": "crossover", "with": o.id} for h in got]
+            ideas += [{**h, "parent_id": p.id, "slice": "crossover", "with": o.id, "idea_id": uuid.uuid4().hex[:8]}
+                      for h in got]
         counts["named"] = len(ideas)
         ideas = merge(f, ideas)
         judged = pmap(f, lambda p: past_failures(f, system, bases[p.id], [h for h in ideas if h.get("parent_id") == p.id]),
@@ -422,6 +431,7 @@ def generation(f: Funnel, tree: Tree, parents: list[Node], system: str, it: int,
                 fates.append({"idea": h, "fate": f"not applied: {why}"})
             else:
                 wrote.append((h, plan_of(h), code))
+                code_of[key(h)] = code
         counts["written"] = len(wrote)
         reports = {}
         if f.precheck and wrote:                 # what fails to build never takes GPU time
@@ -451,6 +461,7 @@ def generation(f: Funnel, tree: Tree, parents: list[Node], system: str, it: int,
             r2 = next(results) if c2 else {"metrics": {"correct": 0.0}, "artifacts": {"error": why}}
             if c2 and r2["metrics"].get("correct") == 1.0:
                 survivors.append((h, plan, c2, r2))
+                code_of[key(h)] = c2
             else:
                 fates.append({"idea": h, "fate": "failed correctness, and its repair",
                               "error": str(r["artifacts"])[:300]})
@@ -468,6 +479,7 @@ def generation(f: Funnel, tree: Tree, parents: list[Node], system: str, it: int,
         finalists = rewrite(f, tree, system, by_id, finalists, seen, reports, counts)
         for h, plan, code, q, how in finalists:
             p = by_id[h["parent_id"]]
+            code_of[key(h)] = code
             r = f.run(code, 2)
             if reports.get(code):
                 r["artifacts"] = {**r["artifacts"], "compile_report": reports[code]}
@@ -480,9 +492,13 @@ def generation(f: Funnel, tree: Tree, parents: list[Node], system: str, it: int,
                           **({"mechanism": mechanism(h, p, child)} if h.get("mechanism") else {})})
     except Spent as e:
         stopped = str(e)
+    for x in fates:                              # each written idea's program as a diff from its parent
+        c, p = code_of.get(key(x["idea"])), by_id.get(x["idea"].get("parent_id"))
+        if c and p:
+            x["diff"] = "".join(difflib.unified_diff(p.code.splitlines(True), c.splitlines(True), n=2))[:4000]
     one = parents[0] if len(parents) == 1 else None
     log({"iteration": it, "parent_id": one.id if one else None, "parent_score": one.score if one else None,
-         "parents": [{"id": p.id, "score": p.score} for p in parents], **counts, "examined": len(children),
+         "parents": [{"id": p.id, "score": p.score} for p in by_id.values()], **counts, "examined": len(children),
          "improved": sum(c.score > by_id[c.parent].score for c in children),
          "quick_vs_full_spearman": spearman([a for a, _ in pairs], [b for _, b in pairs]) if children else None,
          "usd": round(f.spent - spent0, 4), **({"stopped": stopped} if stopped else {}), "ideas": fates})

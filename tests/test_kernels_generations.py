@@ -130,7 +130,7 @@ def test_the_search_stops_after_patience_generations_with_no_new_best(tmp_path):
     flat = {"metrics": {"correct": 1.0, "combined_score": 5.0, "stage": 2}, "artifacts": {}}
     _, cost = G.search(START, "SYS", f, lambda c: flat, tmp_path, evals=1000, usd=50.0, gen_size=4, keep=1,
                        n_parents=2, generations=20, patience=2)
-    assert cost["stopped_no_progress"] and cost["generations"] == 2 and not cost["stopped_near_roofline"]
+    assert cost["stopped_no_progress"] and cost["generations"] == 2
 
 
 def test_racing_times_the_programs_at_the_cutoff_again_and_the_rank_correlation_is_spearman():
@@ -184,3 +184,21 @@ if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
             fn(*[Path(tempfile.mkdtemp()) for _ in inspect.signature(fn).parameters]); print("ok", name)
+
+
+def test_a_search_stops_starting_work_at_its_wall_clock(tmp_path, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(G.time, "monotonic", lambda: clock[0])
+    import kernels.search.funnel as F
+    monkeypatch.setattr(F.time, "monotonic", lambda: clock[0])
+    f = funnel()
+    orig = f.stage
+
+    def slow(code, n):
+        clock[0] += 10.0                                  # every evaluator job takes 10 s of wall-clock
+        return orig(code, n)
+    f.stage = slow
+    _, cost = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, evals=10**6, usd=10**6, gen_size=8, keep=2,
+                       n_parents=2, generations=50, patience=None, wall_s=300)
+    rows = [json.loads(x) for x in (tmp_path / "hypotheses.jsonl").read_text().splitlines()]
+    assert cost["stopped_wall_clock"] and rows[-1].get("stopped") == "wall-clock" and clock[0] < 400
