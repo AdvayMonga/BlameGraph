@@ -61,18 +61,18 @@ def test_a_measurement_carries_the_prediction_and_blocks_until_reflected(tb):
     rec = list(ledger.records(tb.s.ledger_root, tool="trace"))[-1]
     x = rec["experiment"]
     assert x["hypothesis"] == h and x["expect"]["metric"] == "kernel_ms" and x["actual"] is None
-    assert "not a numeric metric" in x["actual_missing"] and f"Experiment record {rec['id']}" in out
+    assert "not a number in this result" in x["actual_missing"] and f"Experiment record {rec['id']}" in out
     with pytest.raises(ValueError, match="no reflection"):
         call(tb, "trace", {"hypothesis_id": h, "expect": EXPECT})
     with pytest.raises(ValueError):
         call(tb, "reflect", {"record": "other", "reflection": "x"})
-    call(tb, "reflect", {"record": rec["id"], "reflection": "trace has no scalar metric", "alternative": "h2"})
+    call(tb, "reflect", {"record": rec["id"], "reflection": "kernel_ms is not a path in a trace result", "alternative": "h2"})
     with pytest.raises(ValueError, match="already"):
         call(tb, "reflect", {"record": rec["id"], "reflection": "again"})
     call(tb, "trace", {"hypothesis_id": h, "expect": EXPECT})          # unblocked
     s = experiments.summary(tb.s.ledger_root, tb.s.run_id)
     assert len(s) == 1 and len(s[0]["measurements"]) == 2
-    assert s[0]["measurements"][0]["reflection"] == "trace has no scalar metric" and s[0]["measurements"][0]["alternative"] == "h2"
+    assert s[0]["measurements"][0]["reflection"] == "kernel_ms is not a path in a trace result" and s[0]["measurements"][0]["alternative"] == "h2"
 
 
 def test_unmeasured_tools_need_nothing(tb):
@@ -238,3 +238,20 @@ def test_a_profile_records_change_pct_reads_the_baselines_after_profile():
     base = {"profiled": {"calibrated": {"layers": {"runtime": {"gpu_idle_share": 0.2}}}}}
     (m,) = experiments.outcome("profile", args, result, base_result=base)["mechanism"]
     assert m["actual"] == pytest.approx(-50) and m["gap"] == pytest.approx(0)
+
+
+def test_a_profilers_prediction_names_a_row_and_has_a_baseline_only_when_measured_the_same_way():
+    from lab import experiments
+    res = {"calibrated": {"window_s": 2.0, "kernels": [{"name": "moe_gemm", "total_s": 0.5}, {"name": "attn", "total_s": 0.2}]}}
+    base = {"profiled": {"calibrated": {"window_s": 1.0, "kernels": [{"name": "moe_gemm", "total_s": 1.0}]}}}
+
+    def out(tool, metric, unit, **args):
+        return experiments.outcome(tool, {"hypothesis_id": "h", **args, "expect": {"metric": metric, "value": -50,
+                                                                                   "unit": unit, "why": "w"}}, res,
+                                   base_result=base)
+    assert out("trace", "calibrated.kernels.attn.total_s", "absolute")["actual"] == 0.2
+    assert out("trace", "calibrated.kernels.1.total_s", "absolute")["actual"] == 0.2
+    assert out("profile", "calibrated.kernels.moe_gemm.total_s", "change_pct")["actual"] == -50
+    assert out("profile", "calibrated.kernels.moe_gemm.total_s", "change_pct", requests=64)["actual"] is None
+    hp = out("hostprof", "calibrated.window_s", "change_pct")
+    assert hp["actual"] is None and "instrument and workload" in hp["actual_missing"]

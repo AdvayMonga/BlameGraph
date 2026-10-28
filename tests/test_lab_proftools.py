@@ -92,6 +92,8 @@ def test_trace_wraps_the_workload_in_nsys_then_exports_stats(tb):
     blob = tb.s.ledger_root / rec["result"]["bundle"]
     assert (blob / "trace.nsys-rep").exists() and (blob / "stats_cuda_gpu_kern_sum.csv").exists()
     assert (tb.s.workspace.path / rec["result"]["workspace_copy"] / "trace.nsys-rep").exists()
+    cal = rec["result"]["calibrated"]
+    assert cal["kernel_s"] == pytest.approx(1e-6) and cal["launches"] == 4 and cal["kernels"][0]["name"] == "gemm_kernel"
     assert_charged(tb, rec)
 
 
@@ -117,7 +119,8 @@ def test_hostprof_runs_the_workload_with_py_spy_readable_in_the_jail(tb, monkeyp
         b = tree / proftools.OUT / "bundle" / "b1"
         b.mkdir(parents=True)
         (b / "pyspy-dump.txt").write_text("Thread 1 (active): MainThread\n  step (scheduler.py:10)\n")
-        (b / "pyspy.speedscope.json").write_text("{}")
+        (b / "pyspy.speedscope.json").write_text(json.dumps({"shared": {"frames": [{"name": "step"}]}, "profiles": [
+            {"type": "sampled", "name": "MainThread", "samples": [[0], [0]], "weights": [1, 1]}]}))
         return subprocess.CompletedProcess(argv, 0, "", "")
     monkeypatch.setattr(labtools, "default_profile_runner", runner)
     out = tb.hostprof({"seconds": 5, "rate": 250})
@@ -129,6 +132,7 @@ def test_hostprof_runs_the_workload_with_py_spy_readable_in_the_jail(tb, monkeyp
     assert os.path.dirname(os.path.realpath(exe)) in map(str, seen["read"])
     rec = last(tb, kind="profile")
     assert rec["tool"] == "hostprof" and (tb.s.ledger_root / rec["result"]["bundle"] / "bundle/b1/pyspy-dump.txt").exists()
+    assert rec["result"]["calibrated"]["samples"] == 2 and rec["result"]["calibrated"]["self"][0]["function"] == "step"
     assert_charged(tb, rec)
 
 
@@ -331,3 +335,20 @@ def test_the_runner_gets_the_jobs_timeout_for_the_run_and_its_report(tb, monkeyp
     worker._profile({"tree": tree}, tb.s.run_dir / "out", {"kind": "trace", "args": {}, "timeout_s": 900},
                     {"profile_runner": runner})
     assert seen == [900, 900]
+
+def test_a_trace_prediction_is_measured_against_its_numbers(tb):
+    from lab import experiments
+    tb.trace({"requests": 2})
+    res = last(tb, kind="profile")["result"]
+    e = experiments.outcome("trace", {"hypothesis_id": "h", "expect": {"metric": "calibrated.launches", "value": 5,
+                                                                       "unit": "absolute", "why": "w"}}, res)
+    assert e["actual"] == 4 and e["gap"] == -1
+
+
+def test_a_trace_limited_to_the_window_by_either_flag_form_gets_its_window(tb, monkeypatch):
+    seen = []
+    monkeypatch.setattr(proftools.calibrate, "calibrate_nsys", lambda path, ranged: seen.append(ranged))
+    tb.trace({"requests": 2})
+    tb.trace({"requests": 2, "nsys_args": ["--trace", "cuda", "--capture-range=cudaProfilerApi"]})
+    tb.trace({"requests": 2, "nsys_args": ["--trace", "cuda"]})
+    assert seen == [True, True, False]

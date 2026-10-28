@@ -173,12 +173,13 @@ class ProfTools:
         return {"verdict": "ok" if ok else "failed", "returncode": r["returncode"], "bundle": blob,
                 "workspace_copy": visible, "instrument": r.get("instrument"), "argv": r.get("argv"),
                 "seconds": time.monotonic() - t0, "output": r["output"], "gpu": r.get("gpu"),
-                "calibrated": self._calibrated(tool, blob, r.get("gpu")) if blob else None,
+                "calibrated": self._calibrated(tool, args, blob, r.get("gpu")) if blob else None,
                 "head": r.get("head", ""), **_killed(r)}
 
-    def _calibrated(self, tool: str, blob: str, gpu: dict | None) -> dict | None:
+    def _calibrated(self, tool: str, args: dict, blob: str, gpu: dict | None) -> dict | None:
         """The instrument's numbers in context: torch's kernel time with each layer's facts and each kernel task's
-        share, ncu's metrics against the GPU's peaks; never costs the run it describes."""
+        share, ncu's metrics against the GPU's peaks, nsys's kernel and API time against the window, py-spy's samples
+        per thread and function; never costs the run it describes."""
         from lab.tools import task_shares
         path = self.s.ledger_root / blob
         try:
@@ -190,7 +191,9 @@ class ProfTools:
                 return cal
             if tool == "kernel":
                 return calibrate.calibrate_ncu(path / "metrics.csv", gpu)
-            return None
+            if tool == "trace":
+                return calibrate.calibrate_nsys(path, any("cudaProfilerApi" in f for f in _flags(args, "nsys_args", NSYS_FLAGS)))
+            return calibrate.calibrate_pyspy(path)
         except Exception as e:                   # noqa: BLE001
             return {"error": f"calibration failed: {type(e).__name__}: {e}"}
 
@@ -212,7 +215,9 @@ class ProfTools:
             ToolSpec("trace", "Run the profile workload of your current workspace under Nsight Systems (nsys). "
                      f"`nsys_args`: the `nsys profile` flags, default {' '.join(NSYS_FLAGS)} (the measured window "
                      "only); output and overwrite are set by the tool. Stores the .nsys-rep and `nsys stats` CSV tables "
-                     "(GPU kernels, CUDA API, memory copies, NVTX) in the ledger; returns the head of the kernel table. "
+                     "(GPU kernels, CUDA API, memory copies, NVTX) in the ledger; returns the head of the kernel table. The "
+                     "record's `calibrated`: kernel time, launches, memory-copy time, the top kernels and CUDA API calls "
+                     "by time, and kernel time's share of the profiled window. "
                      "Refused where nsys is not installed." + note + gpu("about 1 min measured at 16 requests x 64 tokens on an H200 (engine start, workload, report export)"),
                      _schema(nsys_args=FLAGS, **extra), self.trace),
             ToolSpec("kernel", "Run the profile workload under Nsight Compute (ncu) on the kernels whose name "
@@ -227,7 +232,9 @@ class ProfTools:
                              set={"type": "string", "default": "basic"}, ncu_args=FLAGS), self.kernel),
             ToolSpec("hostprof", "Sample the engine process with py-spy for `seconds` while the profile workload "
                      "repeats (scheduler and backend in process, warmup excluded). Stores a speedscope profile and one "
-                     "stack dump taken halfway in the ledger; returns the head of the dump. `pyspy_args` are appended "
+                     "stack dump taken halfway in the ledger; returns the head of the dump. The record's `calibrated`: "
+                     "samples per thread and the functions with the most samples on top of the stack (`self`) and "
+                     "anywhere in it (`total`), as shares of all samples. `pyspy_args` are appended "
                      "to `py-spy record`. Refused where py-spy is "
                      "not installed." + note + gpu("about 35 s plus `seconds`, measured on an H200"),
                      _schema(**extra, seconds={"type": "integer", "minimum": 1, "default": 20},
