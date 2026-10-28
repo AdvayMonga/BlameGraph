@@ -279,17 +279,15 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   KernelPro's progressive widening and virtual-child rule), a node closed after 3 judged failed children or 3 edits
   that never reached the GPU; in every mode the model is shown only the
   parent program, its measurements and its lineage, SEARCH/REPLACE answers, duplicates refused before any GPU time,
-  each round one funnel round by default (`kernels/search/funnel.py`, since it won the 2026-10-24 A/B); with
-  `--mcts --no-funnel` the beam: with a judge (default) each step is two calls,
-  the judge (Opus 5.5) naming as many changes as the beam is wide (`--beam`, 4) as JSON, every one written and judged
+  each round one funnel round (`kernels/search/funnel.py`, since it won the 2026-10-24 A/B; the beam it replaced was
+  removed 2026-10-27), its judge (Opus 5.5) naming changes as JSON, each written and judged
   (each and its fate in `hypotheses.jsonl`), from the facts (and, its choice when, Anthropic's web search
   and read-only SQL over the agent's view of the ledger index, `--judge-tools`; the harness pastes no research), with
   up to 2 better programs from other branches as diffs (CodeEvolve's inspirations), including CudaForge's 24 ncu counters
   (`kernels/evolve/ncu.py`, stage 3 of the jailed evaluator; collected in the jail since 2026-10-27, on a Nebius H200
   whose driver had them open: the earlier refusals, ERR_NVGPUCTRPERM, were on hosts with them closed, which
   `vm-setup.sh` never opened because it grepped the module option's name, not the driver's `RmProfilingAdminOnly`; a
-  run stops asking after the first refusal), and the coder writing it; a failed child is repaired in
-  correction mode, chained up to 3 deep; launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen afterwards by a grid
+  run stops asking after the first refusal), and the coder writing it; launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen afterwards by a grid
   search on each of the top 4 re-timed programs (8 points each, no ncu), written back as constants, the best point
   promoted only if its re-timed median beats the winner's
   (`kernels/search/tune.py`), and when different points win in different size regions a dispatcher picks CONFIG per
@@ -301,7 +299,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   passed over, recorded with its evidence (`kernels/search/detect.py`, MANTIS; never changes a score);
   every call priced (OpenEvolve's too, via a usage log);
   `python -m kernels.search.ab --arms ...` runs OpenEvolve and kernels.search (and variants differing in one flag:
-  `search-no-tools`, `search-mcts`, `search-c1.41`, `search-beam`, `search-gen20`, `search-crossover`) on one task with the same shapes, start, evaluator,
+  `search-no-tools`, `search-mcts`, `search-c1.41`, `search-gen20`, `search-crossover`) on one task with the same shapes, start, evaluator,
   the same post-search promotion for every arm (`ab.SAME_PROMOTION`: top 3 re-timed, no tuning, no detector), single model
   and judged-program budget, gates each winner on held-out shapes, and writes `ab.json`; `kernels/METHOD.md` maps
   every component to its published source and number, or says why ours; same evaluator, run dir, re-timed promotion and `kernels` record as `kernels.evolve run`). `kernels/evolve/ship.py` (`python -m kernels.evolve ship`: a program with a passing held-out gate becomes a
@@ -357,8 +355,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `python -m kernels.ptx card --name N PTX ... [--timing N=MS] --out F`, read by `kernels.search --ptx F`. Producing
   competitors' PTX and timings on our shapes needs their libraries on the GPU host (not built yet).
 - `kernels/search/funnel.py` — one funnel round (decided 2026-10-22; `kernels.search`'s tiers since 2026-10-25, when
-  it beat the beam on moe_gemm_fp8 1.161x to 1.026x seen, 1.284x to 1.096x held-out; the beam is `--mcts --no-funnel`,
-  A/B arm `search-beam`), from one parent (`expand`, an MCTS expansion: one judge call per slice of facts x `--per-call`
+  it beat the beam on moe_gemm_fp8 1.161x to 1.026x seen, 1.284x to 1.096x held-out; the beam was removed
+  2026-10-27), from one parent (`expand`, an MCTS expansion: one judge call per slice of facts x `--per-call`
   hypotheses) or several (`generation`: one call per parent naming its quota, the slices rotated across the parents so
   each call reads one slice and every slice is read; generation 0 splits its 40 over the start's slices). The slices:
   measurements, archive matches, winners elsewhere in the tree, compiler report, PTX comparison; a slice with no facts

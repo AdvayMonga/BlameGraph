@@ -3,6 +3,15 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-27 — The beam is removed
+The beam (each MCTS expansion: the judge names 4 changes, the coder writes all 4, each judged in full, a failed child
+repaired in correction mode up to 3 deep) and its A/B arm `search-beam`, `--no-funnel` and `--beam` are deleted;
+`kernels.search` with a judge always runs funnel rounds, and without one the coder alone proposes children (tests).
+Why (the user): it is no longer the main path and nothing measures it any more; the funnel beat it on 2026-10-24
+(moe_gemm_fp8 1.161x to 1.026x seen, 1.284x to 1.096x held-out). Its last code is on main before this change (git
+history), its records stay in the ledger. Revisit only to rerun that A/B. Replaces "the beam becomes an arm"
+(2026-10-25).
+
 ## 2026-10-27 — The funnel's model calls run in parallel; the strong coder writes only the programs kept
 Four changes to every funnel round, none to what a round decides. (1) Model calls (judge calls, merges, drafts,
 repairs, rewrites) run 8 at a time (`--workers`), the first of each batch alone so the rest read its prompt cache;
