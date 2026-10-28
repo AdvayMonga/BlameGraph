@@ -50,7 +50,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
 - `targets/<name>.toml` + `lab/target.py` — **the target spec** (since 2026-10-06): model + chat kwargs, engine
   (repo, python, launch command with `{port}`, health path, env, logprobs `api` vllm|sglang|none, write surface,
   add-only globs, test and lint commands, optional `[engine.telemetry] env` with `{dir}`, optional `profiles` +
-  `profile_env`: launch profiles, `lab/profiles.py`), reference server + its outputs dir, MLPerf latency limits, correctness
+  `profile_env`: launch profiles, `lab/profiles.py`), reference server + its outputs dir, MLPerf latency limits (+ `batch`: no TTFT limit, TPOT 250 ms), optional `[cost]
+  gpu_usd_per_hour`, correctness
   tasks and policy (`submit_tier`: the equiv tier submit requires, `dev` for the example engine until full fits), corpus dir. Selected by `LAB_TARGET` or `--target`; `target.load()` raises `NoTarget` otherwise.
   Nothing defaults to the user's engine or to Qwen3; `targets/inference-server.toml` is the committed example and
   what `tests/conftest.py` points at. Surfaces, grader commands, `lab/engine.py`, and the `correctness`,
@@ -80,7 +81,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   with `perf_reference` (the correctness reference minus its determinism switches, which are slow by design),
   and for kernels their share of the window; a ceiling or reference is shown only under a matching config
   fingerprint (model, dtypes, max_model_len, tier, split, corpus version, GPU), else the field says why it is
-  missing; bench, baseline and every profiler's records (profile, kernel, trace, hostprof) carry a `calibrated` block, the brief shows the baseline's;
+  missing; every regime's $ per 1M good output tokens and per good request at the GPU price (`cost_missing` without
+  one); bench, baseline and every profiler's records (profile, kernel, trace, hostprof) carry a `calibrated` block, the brief shows the baseline's;
   submit's held-out aggregates carry the ceiling from the base's seen-split shape and % of it, never anything computed
   from held-out requests; harness facts carry peaks and floors for the GPU the ledger last measured on),
   `import_runs.py` (a hand-made run dir → `bench`/`equiv` records under a `manual-` run, numbers only),
@@ -414,7 +416,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   recombined to length: 0 of ~2,000 generated prompts per class equal a real one; KS on prompt tokens ≤ 0.02 and
   per-10 s arrival counts within a few % of the real class (`python -m regimes.synth compare`). Not yet compared
   against the real corpus on a GPU; until then bench/submit stay on the public corpus.
-- `regimes/` — load generation: drives a live OpenAI-compatible server the eight ways it gets used, client-side.
+- `regimes/` — load generation: drives a live OpenAI-compatible server the nine ways it gets used, client-side.
   `client.py` (one streamed chat request: TTFT from *scheduled* send to first real token, TPOT = (E2E − TTFT)/(n − 1),
   status ok / error (explicit 4xx or 503 rejection) / silent_drop / truncated / crash (other 5xx, no response,
   stream died); a one-token answer has no TPOT and never meets the limits; corpus headers X-Session-Id,
@@ -426,7 +428,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   bisect on ≥99% meeting both limits), `workload.py` (reads `corpus/` through `lab.corpus`'s verified loader — hashes checked, a changed trace
   refuses — plus Poisson, trace replay with speed-up and peak-window crop, multi-turn
   conversations rebuilt from stored histories under one shared system prompt; synthetic prompts when no corpus),
-  `suite.py` (the 8 regimes; probes ≥ `min_requests` (100) and tier length, capped at 4× the tier length, then a
+  `suite.py` (the 9 regimes; `batch` (2026-10-28) = saturated's sweep under the `batch` limits (`runner.BATCH`: no
+  TTFT limit, TPOT 250 ms), reporting $ per 1M good output tokens at `Ctx.gpu_usd_per_hour`, None without a price; probes ≥ `min_requests` (100) and tier length, capped at 4× the tier length, then a
   confirmation at `final_s` backing off 15% up to 5 times; the load search stops below start/16; closed-loop
   schedules are generated lazily; shared-prefix runs score only the steady-state window; cold start launches a command with
   fresh VLLM/inductor/Triton cache dirs, polls until "17 + 25" is answered "42", then relaunches for the warm figure).

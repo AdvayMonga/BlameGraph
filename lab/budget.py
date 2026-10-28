@@ -41,12 +41,13 @@ class Budget:
         return seconds / 3600.0 * price_per_hour
 
 
-def gpu_rate() -> tuple[float, bool]:
-    """(USD per GPU-hour, known): LAB_GPU_USD_PER_HOUR, else the target's [cost] gpu_usd_per_hour, else (0, False)."""
+def gpu_rate(t=None) -> tuple[float, bool]:
+    """(USD per GPU-hour, known): LAB_GPU_USD_PER_HOUR, else the target's [cost] gpu_usd_per_hour, else (0, False).
+    The batch regime's $ figure and every calibrated $ fact are computed at this price."""
     raw = os.environ.get("LAB_GPU_USD_PER_HOUR")
     if raw is None:
         from lab import target
-        raw = (target.load().raw.get("cost") or {}).get("gpu_usd_per_hour")
+        raw = ((t or target.load()).raw.get("cost") or {}).get("gpu_usd_per_hour")
     if raw is None:
         return 0.0, False
     rate = float(raw)

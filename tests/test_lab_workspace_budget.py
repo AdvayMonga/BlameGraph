@@ -52,6 +52,19 @@ def test_budget_charges_and_refuses(tmp_path):
     assert Budget.gpu_usd(1800, 3.70) == pytest.approx(1.85)
 
 
+def test_gpu_rate_from_the_env_else_the_target_else_unknown(monkeypatch):
+    import dataclasses
+    from lab import target
+    from lab.budget import gpu_rate
+    t = target.load()
+    monkeypatch.delenv("LAB_GPU_USD_PER_HOUR", raising=False)
+    assert gpu_rate(dataclasses.replace(t, raw={})) == (0.0, False)
+    priced = dataclasses.replace(t, raw={"cost": {"gpu_usd_per_hour": 3.5}})
+    assert gpu_rate(priced) == (3.5, True)
+    monkeypatch.setenv("LAB_GPU_USD_PER_HOUR", "2.0")
+    assert gpu_rate(priced) == (2.0, True)
+
+
 def test_budget_resumes_from_the_ledger(tmp_path):
     root = tmp_path / "ledger"
     ledger.append({"kind": "session", "run": "r1", "cost": {"usd": 0.5}}, root)

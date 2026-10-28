@@ -1,4 +1,4 @@
-"""Load regimes: drive a live OpenAI-compatible server the eight ways it gets used and measure it client-side."""
+"""Load regimes: drive a live OpenAI-compatible server the nine ways it gets used and measure it client-side."""
 from .runner import CONVERSATIONAL, INTERACTIVE, Limits, find_goodput, run_closed, run_open, summarize
 from .suite import REGIMES, TIERS, Ctx, cold_start
 

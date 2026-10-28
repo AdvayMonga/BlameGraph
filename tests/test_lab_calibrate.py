@@ -139,6 +139,27 @@ def test_calibration_never_raises_and_invalid_values_say_why(t, monkeypatch):
     assert inv["value"] is None and "3 silent drops" in inv["value_missing"]
 
 
+def test_dollar_facts_at_the_gpu_price_or_why_not(t, monkeypatch):
+    summary = {"good_req_per_s": 2.0, "good_output_tok_per_s": 200.0}
+    sat = [{**results("saturated", "goodput_req_per_s", 2.0, "higher")[0], "summary": summary}]
+    monkeypatch.delenv("LAB_GPU_USD_PER_HOUR", raising=False)
+    none = calibrate.calibrate_results(sat, rows("saturated"), t, GPU, "short", "seen")["saturated"]
+    assert "usd_per_request" not in none and "no GPU price" in none["cost_missing"]
+    monkeypatch.setenv("LAB_GPU_USD_PER_HOUR", "3.6")
+    cal = calibrate.calibrate_results(sat, rows("saturated"), t, GPU, "short", "seen")["saturated"]
+    assert cal["usd_per_request"] == pytest.approx(0.0005) and cal["usd_per_m_output_tokens"] == pytest.approx(5.0)
+    spm = [{**results("shared_prefix_multi_turn", "goodput_sessions_per_s", 0.5, "higher")[0], "summary": summary}]
+    assert calibrate.calibrate_results(spm, [], t, GPU, "short", "seen")["shared_prefix_multi_turn"]["usd_per_session"] \
+        == pytest.approx(0.002)
+    batch = [{**results("batch", "usd_per_m_output_tokens", 5.0, "lower")[0], "summary": summary}]
+    b = calibrate.calibrate_results(batch, rows("batch"), t, GPU, "short", "seen")["batch"]
+    assert 0 < b["ceiling"] < 5.0 and 0 < b["pct_of_ceiling"] < 100 and "TPOT <= 0.25" in b["ceiling_basis"]
+    monkeypatch.delenv("LAB_GPU_USD_PER_HOUR")
+    b = calibrate.calibrate_results([{**batch[0], "value": None, "value_missing": "no GPU price: x"}], rows("batch"),
+                                    t, GPU, "short", "seen")["batch"]
+    assert b["value_missing"] == "no GPU price: x" and "no GPU price" in b["ceiling_missing"]
+
+
 def test_ncu_units_and_odd_cells(tmp_path):
     p = tmp_path / "metrics.csv"
     p.write_text('"ID","Kernel Name","gpu__time_duration.sum","dram__bytes.sum.per_second"\n'

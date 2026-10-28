@@ -16,7 +16,7 @@ class NoTarget(RuntimeError):
 
 @dataclass(frozen=True)
 class Limits:
-    ttft_s: float
+    ttft_s: float | None           # None = no TTFT limit
     tpot_s: float
 
 
@@ -52,6 +52,7 @@ class Target:
     reference_dir: Path | None
     interactive: Limits
     conversational: Limits
+    batch: Limits
     tasks: tuple[str, ...]
     min_score_ratio: float
     min_length_ratio: float
@@ -108,6 +109,7 @@ def parse(path: Path) -> Target:
         reference=_server(r), reference_dir=(ENV_ROOT / r["dir"]) if r and r.get("dir") else None,
         interactive=Limits(**lim.get("interactive", {"ttft_s": 0.5, "tpot_s": 0.030})),
         conversational=Limits(**lim.get("conversational", {"ttft_s": 2.0, "tpot_s": 0.100})),
+        batch=Limits(**{"ttft_s": None, **lim.get("batch", {"tpot_s": 0.25})}),
         tasks=tuple(c.get("tasks") or ("mmlu_pro", "math", "code", "needle")),
         min_score_ratio=float(c.get("min_score_ratio", 0.99)), min_length_ratio=float(c.get("min_length_ratio", 0.90)),
         submit_tier=_submit_tier(c.get("submit_tier", "full")),

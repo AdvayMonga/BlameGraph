@@ -2,7 +2,8 @@
 
 open loop    every request fires at its scheduled time whatever the server is doing (queues can grow)
 closed loop  a fixed number of clients, each sending its next request when the last one finishes
-goodput      the highest load at which >= 99% of requests meet both the TTFT and the TPOT limit
+goodput      the highest load at which >= 99% of requests meet both the TTFT and the TPOT limit (a limit class may
+             have no TTFT limit)
 """
 from __future__ import annotations
 
@@ -22,12 +23,13 @@ ATTAINMENT = 0.99            # goodput: share of requests that must meet both li
 
 @dataclass(frozen=True)
 class Limits:
-    ttft_s: float
+    ttft_s: float | None              # None = no TTFT limit
     tpot_s: float
 
 
 INTERACTIVE = Limits(0.5, 0.030)      # MLPerf Llama-3.1-8B interactive, checked at p99
 CONVERSATIONAL = Limits(2.0, 0.100)   # MLPerf Llama-3.1-8B conversational, checked at p99
+BATCH = Limits(None, 0.25)            # throughput at an acceptable reading speed: no TTFT limit, TPOT <= 250 ms
 
 
 def run_open(url: str, model: str, requests: list[Request], timeout: float = 600, count_tokens=None,
@@ -150,7 +152,7 @@ def summarize(rows: list[Row], limits: Limits, elapsed_s: float | None = None) -
     ok = [r for r in rows if r.status == "ok"]
     ttft = [r.ttft_s for r in ok if r.ttft_s is not None]
     tpot = [r.tpot_s for r in ok if r.tpot_s is not None]
-    meets = [r for r in ok if r.ttft_s is not None and r.ttft_s <= limits.ttft_s
+    meets = [r for r in ok if r.ttft_s is not None and (limits.ttft_s is None or r.ttft_s <= limits.ttft_s)
              and r.tpot_s is not None and r.tpot_s <= limits.tpot_s]
     lags = [r.lag_s for r in rows]
     span = elapsed_s if elapsed_s is not None else max((r.scheduled_s + (r.e2e_s or 0) for r in rows), default=0.0)
@@ -170,6 +172,7 @@ def summarize(rows: list[Row], limits: Limits, elapsed_s: float | None = None) -
         "output_tokens": sum(r.n_tokens for r in ok), "elapsed_s": span,
         "req_per_s": len(ok) / span if span else 0.0, "good_req_per_s": len(meets) / span if span else 0.0,
         "output_tok_per_s": sum(r.n_tokens for r in ok) / span if span else 0.0,
+        "good_output_tok_per_s": sum(r.n_tokens for r in meets) / span if span else 0.0,
         "client_lag_p99_s": lag99, "limits": {"ttft_s": limits.ttft_s, "tpot_s": limits.tpot_s},
         "valid": not reasons, "invalid_reasons": reasons,
     }

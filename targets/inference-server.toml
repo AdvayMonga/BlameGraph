@@ -43,6 +43,7 @@ capture_env = { CUSTOM_BACKEND_CUDA_GRAPH = "0" }   # a capture (`profile` with 
 [limits]                                     # MLPerf Llama-3.1-8B latency limits, checked at p99
 interactive = { ttft_s = 0.5, tpot_s = 0.030 }
 conversational = { ttft_s = 2.0, tpot_s = 0.100 }
+batch = { tpot_s = 0.25 }                    # ours, not MLPerf: no ttft_s = no TTFT limit
 
 [correctness]
 tasks = ["mmlu_pro", "math", "code", "needle"]

@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 
 from lab import artifacts, calibrate, ledger, live, profiles, serve, target, worker
+from lab.budget import gpu_rate
 from validity.holdout import HoldoutGuard, Refused
 
 HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT = 100, 2.0, 0.5
@@ -42,13 +43,15 @@ def _regimes(args: dict, default: tuple[str, ...]) -> list[str]:
 
 
 def run_regimes(url: str, t: target.Target, names: list[str], split: str, tier: str, seed: int,
-                rows: list | None = None, hints: dict | None = None, bands: dict | None = None) -> list[dict]:
+                rows: list | None = None, hints: dict | None = None, bands: dict | None = None,
+                gpu_usd_per_hour: float | None = None) -> list[dict]:
     """Each regime's result; with `rows`, every measured client row is appended to it, tagged with its regime.
-    `hints` / `bands`: where the base's searches ended and each regime's noise band (`suite.Ctx`)."""
+    `hints` / `bands`: where the base's searches ended and each regime's noise band; `gpu_usd_per_hour`: the
+    controller's price (`suite.Ctx`)."""
     from regimes import suite
     watch = split == "seen"             # the dashboard gets the seen split's progress, never the held-out's
     ctx = suite.Ctx.from_target(t, url, split=split, tier=tier, seed=seed, rows=rows, hints=hints or {},
-                                bands=bands or {}, on_rows=_progress if watch else None)
+                                bands=bands or {}, on_rows=_progress if watch else None, gpu_usd_per_hour=gpu_usd_per_hour)
     out = []
     for n in names:
         if watch:
@@ -155,7 +158,9 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
     from regimes.workload import corpus_version
     facts = {
         "model": t.model, "reference": t.reference.launch if t.reference else None,
-        "latency_limits": {"interactive": t.interactive.__dict__, "conversational": t.conversational.__dict__},
+        "latency_limits": {"interactive": t.interactive.__dict__, "conversational": t.conversational.__dict__,
+                           "batch": t.batch.__dict__},
+        "gpu_usd_per_hour": _price(t),
         "goodput_attainment": 0.99,
         "tiers": {k: dict(v) for k, v in suite.TIERS.items()},
         "correctness": {"policy": f"pooled task score >= {t.min_score_ratio} of the reference, length >= {t.min_length_ratio}; "
@@ -176,6 +181,12 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
     except Exception:                            # noqa: BLE001  no store here, or unreachable: the fact is absent
         pass
     return facts
+
+
+def _price(t: target.Target | None = None) -> float | None:
+    """USD per GPU-hour, None when unknown (`lab.budget.gpu_rate`)."""
+    rate, known = gpu_rate(t)
+    return rate if known else None
 
 
 def holdout_guard(t: target.Target) -> HoldoutGuard:
@@ -453,6 +464,7 @@ class EvalTools:
         """The worker's `measure` job into `out`; the engine's log is appended to `<run>/<log>` either way."""
         try:
             return self.worker.call("measure", {"tree": tree}, {"seed": self.seed, **args, "jailed": self.serve_jailed,
+                                                                "gpu_usd_per_hour": _price(),   # the controller's
                                                                 "workbench": getattr(self.s, "workbench", None)}, out)
         finally:
             src = out / worker.ENGINE_LOG

@@ -61,7 +61,7 @@ def gain_pct(agg: dict, better: str) -> float | None:
     return d if better == "higher" else -d
 
 
-LOWER_IS_BETTER = ("single_stream", "cold_start")     # fallback when the caller cannot pass the measured direction
+LOWER_IS_BETTER = ("single_stream", "cold_start", "batch")     # fallback when the caller cannot pass the measured direction
 
 
 def score(metrics: dict, task: Task, better: dict | None = None) -> dict:

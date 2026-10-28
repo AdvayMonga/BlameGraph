@@ -19,7 +19,8 @@ from typing import Callable
 CAPTURE_SPECS = (("mixed_1", 256), ("mixed_3", 64), ("long_context", 60))
 REGIME_CAPTURE = {"single_stream": ("steady_interactive", 1), "saturated": ("mixed_1", 256), "bursty": ("mixed_3", 64),
                   "long_prompt_short_output": ("long_context", 60), "short_prompt_long_output": ("steady_interactive", 64),
-                  "shared_prefix_multi_turn": ("mixed_3", 64), "overload": ("mixed_1", 256)}
+                  "shared_prefix_multi_turn": ("mixed_3", 64), "overload": ("mixed_1", 256),
+                  "batch": ("mixed_1", 512)}     # the top of batch's sweep: no TTFT limit lets it fill the engine
 
 
 def specs(regimes: tuple[str, ...] = ()) -> tuple[tuple[str, int], ...]:

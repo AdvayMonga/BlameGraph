@@ -11,7 +11,7 @@ How results are scored
 - `bench` (seen split) and `submit` (held-out split, tier {bench_tier}) drive the served engine with these regimes, client-side:
 {regimes}
 - {measurement}
-- Latency limits, checked at p99: interactive TTFT <= {interactive_ttft_ms:g} ms and TPOT <= {interactive_tpot_ms:g} ms; conversational TTFT <= {conversational_ttft_ms:g} ms and TPOT <= {conversational_tpot_ms:g} ms.
+- Latency limits, checked at p99: interactive TTFT <= {interactive_ttft_ms:g} ms and TPOT <= {interactive_tpot_ms:g} ms; conversational TTFT <= {conversational_ttft_ms:g} ms and TPOT <= {conversational_tpot_ms:g} ms; batch {batch_limits}.
 - Tiers: {tiers}.
 - A submit reports, per regime, the change against the base commit measured the same way, and a verdict: `improved` or `regressed` when the change exceeds the regime's noise band (its run-to-run spread on the base engine), `within_band` when it does not, `unknown_band` when no band was measured for this target on this corpus version.
 - Correctness (`equiv`): the engine's answers to a fixed question set (MMLU-Pro, MATH, unit-tested code, long-context retrieval) against the unmodified reference model's: pooled score >= {min_score_ratio:g} of the reference's, answer length >= {min_length_ratio:g} of its. A loss under the line fails only when it is statistically significant; else the verdict is inconclusive, which never counts as a pass.

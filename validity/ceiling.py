@@ -164,8 +164,9 @@ class Shape:
 
 
 def regime_ceiling(objective: str, m: ModelSpec, hw: Peaks, shape: Shape, limits: dict,
-                   w_dtype: str = "bf16", kv_dtype: str = "bf16") -> dict | None:
-    """The physical bound on a regime's objective, or None where none exists (speedup ratios, cold start)."""
+                   w_dtype: str = "bf16", kv_dtype: str = "bf16", usd_per_hour: float | None = None) -> dict | None:
+    """The physical bound on a regime's objective, or None where none exists (speedup ratios, cold start, a $
+    objective without a price)."""
     ctx = shape.prompt_tokens_mean + shape.output_tokens_mean / 2
     if objective == "tpot_p99_s":
         f = decode_step_floor(m, hw, max(1, round(shape.concurrency)), ctx, w_dtype, kv_dtype)
@@ -176,6 +177,13 @@ def regime_ceiling(objective: str, m: ModelSpec, hw: Peaks, shape: Shape, limits
         f = prefill_floor(m, hw, int(shape.prompt_tokens_p99), w_dtype, kv_dtype)
         return {"ceiling": f["floor_s"], "better": "lower", "bound": f["bound"],
                 "basis": f"prefill floor at the p99 prompt, {shape.prompt_tokens_p99:.0f} tokens, {w_dtype} weights"}
+    if objective == "usd_per_m_output_tokens":
+        g = regime_ceiling("goodput_req_per_s", m, hw, shape, limits, w_dtype, kv_dtype)
+        tps = g["ceiling"] * shape.output_tokens_mean
+        if usd_per_hour is None or not tps:
+            return None
+        return {"ceiling": usd_per_hour / 3600 / tps * 1e6, "better": "lower", "bound": g["bound"],
+                "basis": f"${usd_per_hour:g}/GPU-hour over the goodput ceiling's {tps:.0f} output tokens/s: " + g["basis"]}
     if objective in ("goodput_req_per_s", "good_req_per_s"):
         # each request costs its prefill FLOPs at peak (weights amortised over the batch) plus its output tokens at
         # the decode ceiling; one GPU-second holds at most 1 / (that) requests

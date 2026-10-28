@@ -3,6 +3,22 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-28 — Cost as an objective: a batch regime under its own limits, $ beside every regime
+A third limit class, `batch` (no TTFT limit, TPOT <= 250 ms at p99 by default; the target's `[limits] batch`), and a
+ninth regime, `batch`: saturated's closed-loop concurrency sweep over every corpus class, judged at those limits, the
+level kept by good output tokens/s, reporting $ per 1M good output tokens at the GPU's hourly price (lower is
+better). A task names it as its objective like any regime. Every other regime's calibrated block also carries $ per
+1M good output tokens and per good request (per session for shared_prefix_multi_turn) as facts. The price is
+`LAB_GPU_USD_PER_HOUR`, else the target's `[cost] gpu_usd_per_hour`, read on the controller and sent to the worker;
+without one the value and the $ facts say it is missing and why. Why (the user, via the product session): the
+customers in mind (applied-AI companies on agentic and batch traffic) care about cost more than per-request
+latency. On one GPU at a fixed price $ per token only mirrors throughput, so cost under the chat limits would rank
+changes exactly as goodput does; what makes it cost is the looser limit, which lets a change trade latency for
+throughput. A separate regime, not a per-task switch of limits, so its noise band, base cache, performance reference
+and held-out aggregate stay per regime. The 250 ms TPOT floor (no stream starves) is a default for the user to
+confirm. Out of scope: idle and cold-start cost on autoscaled hosts, several GPUs. Amends the eval conventions'
+cost metric (2026-10-02: goodput per GPU-second, reported, never an objective).
+
 ## 2026-10-28 — Minimal gates: a merge is bench + equiv; bench at a `min` tier; equiv is MLPerf's rule only
 A change is merged on a seen-split `bench` and a passing dev-tier `equiv`; `submit` stays as built but is not
 required (the agent's referee still asks for one). `bench` runs at a new tier `min` (15 s probes, 30 s final, still

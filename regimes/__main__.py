@@ -16,7 +16,7 @@ from .workload import corpus_version
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="regimes", description="measure a live server under the eight regimes")
+    ap = argparse.ArgumentParser(prog="regimes", description="measure a live server under the nine regimes")
     target.add_argument(ap)
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")

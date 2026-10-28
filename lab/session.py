@@ -109,6 +109,8 @@ def system_prompt(t: target.Target, spec: agent.AgentSpec) -> str:
         measurement=suite.MEASUREMENT, interactive_ttft_ms=t.interactive.ttft_s * 1e3,
         interactive_tpot_ms=t.interactive.tpot_s * 1e3, conversational_ttft_ms=t.conversational.ttft_s * 1e3,
         conversational_tpot_ms=t.conversational.tpot_s * 1e3, bench_tier=BENCH_TIER,
+        batch_limits=(f"TTFT <= {t.batch.ttft_s * 1e3:g} ms" if t.batch.ttft_s is not None else "no TTFT limit")
+        + f" and TPOT <= {t.batch.tpot_s * 1e3:g} ms",
         tiers="; ".join(f"{k} = {v['probe_s']:g} s probes and a {v['final_s']:g} s measurement window per regime"
                         for k, v in suite.TIERS.items()), min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio,
         workbench=workbench, write=globs(t.write), add_only=globs(t.add_only), deny=globs(ALWAYS_DENY),
