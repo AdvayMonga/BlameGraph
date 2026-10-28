@@ -114,7 +114,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   jail never opens this repo, which holds `.env` and the ledger; the tool samples its seen-split corpus workload out here, `corpus.sample`, and stages it as `_harness/workload.json`; window-only memory peaks and scheduler counters, warmup sized to the window, op/kernel tables), `canary.py` (honest regressions patched into
   the engine's process), `vm.py` + `providers/` + `vm-setup.sh` (one GPU VM on Verda/Nebius/Crusoe; pushes both
   trees, engine to `LAB_VM_DIR`, this repo to `LAB_VM_ENV_DIR`; `run --env` runs here; `run` stops the VM when done
-  unless `--keep`; a `--env` run is always brought home first, `collect`: the VM's ledger merged, its run dirs minus
+  unless `--keep`; Nebius `LAB_VM_SPOT=1` = a preemptible VM at the spot price, stopped on preemption; a `--env` run is always brought home first, `collect`: the VM's ledger merged, its run dirs minus
   rebuildable trees, then `store push` when `LAB_STORE` is set; held-out traces are pushed explicitly since git
   lacks them), and every session is capped by `LAB_VM_MAX_MINUTES` via `timeout` + a local watchdog + in-VM
   shutdown, because a stalled session once billed 12 h for 3.5 h of work), `corpus.py` +
