@@ -621,10 +621,12 @@ def test_the_bench_reply_shows_profiled_in_the_records_shape():
 
 def test_an_after_profile_shares_no_gpu_and_spends_no_budget_that_is_gone(lab, monkeypatch):
     tb, s = lab
-    r = {"returncode": 0, "output": "", "gpu_others": [{"pid": 7, "name": "other"}], "killed": []}
-    monkeypatch.setattr(type(tb), "_profile_job", lambda self, tree, args, timeout_s=None: (r, "blob", "copy", {}))
+    def call(job, inputs, args, out):
+        raise serve.Contaminated([AGENT_PROC])
+    monkeypatch.setattr(tb.worker, "call", call)
     out = tb._after_bench(s.run_dir)
-    assert out["contaminated"] is True and out["gpu_others"][0]["pid"] == 7 and out["launch"] == "general"
+    assert out["verdict"] == "contaminated" and out["gpu_processes"] == [AGENT_PROC] and out["launch"] == "general"
+    assert "bundle" not in out and "calibrated" not in out
     monkeypatch.setenv("LAB_GPU_USD_PER_HOUR", "3")
     s.budget.spent_usd = s.budget.cap_usd
     assert "skipped" in tb._after_bench(s.run_dir)

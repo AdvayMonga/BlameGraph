@@ -7,10 +7,11 @@ import os
 import shutil
 import stat
 import subprocess
+import time
 
 import pytest
 
-from lab import ledger, proftools
+from lab import gpu, ledger, proftools, serve
 from lab import tools as labtools
 from lab.budget import Budget, BudgetExceeded
 from lab.safety import container, jail
@@ -111,7 +112,7 @@ def test_kernel_targets_the_regex_with_limits_and_keeps_raw_metrics(tb):
 def test_hostprof_runs_the_workload_with_py_spy_readable_in_the_jail(tb, monkeypatch):
     seen = {}
 
-    def runner(tree, argv, read=()):            # stands in for lab.profile, which needs the engine
+    def runner(tree, argv, read=(), **_):            # stands in for lab.profile, which needs the engine
         seen.update(argv=argv, read=read)
         b = tree / proftools.OUT / "bundle" / "b1"
         b.mkdir(parents=True)
@@ -137,7 +138,7 @@ def test_refused_cleanly_without_the_instrument(tb, monkeypatch, tool, args):
     monkeypatch.setattr(proftools.shutil, "which", lambda n, *a, **k: None if n in INSTRUMENTS else real(n, *a, **k))
     out = getattr(tb, tool)(args)
     assert out.startswith(f"{tool} refused:") and "not on PATH" in out
-    rec = last(tb, kind="note")
+    rec = last(tb, kind="profile")
     assert rec["tool"] == tool and rec["result"]["verdict"] == "refused" and calls(tb) == []
 
 
@@ -174,7 +175,7 @@ def test_instrument_flags_pass_through_as_single_argv_items_with_no_upper_limits
     assert "--kernel-name" not in calls(tb)[4]
     seen = {}
     monkeypatch.setattr(labtools, "default_profile_runner",
-                        lambda tree, argv, read=(): seen.update(argv=argv) or subprocess.CompletedProcess(argv, 1, "", ""))
+                        lambda tree, argv, read=(), **_: seen.update(argv=argv) or subprocess.CompletedProcess(argv, 1, "", ""))
     tb.hostprof({"seconds": 900, "rate": 5000, "pyspy_args": ["--native", "--idle"]})
     a = seen["argv"]
     assert after(a, "--seconds") == "900" and after(a, "--rate") == "5000"
@@ -193,7 +194,7 @@ def test_cost_free_tools_record_wall_time_and_zero(tb):
 def test_an_unknown_rate_is_recorded_as_unknown_and_charged_zero(tb, monkeypatch):
     monkeypatch.delenv("LAB_GPU_USD_PER_HOUR")
     monkeypatch.setattr(labtools, "default_profile_runner",
-                        lambda tree, argv, read=(): subprocess.CompletedProcess(argv, 1, "", "no engine"))
+                        lambda tree, argv, read=(), **_: subprocess.CompletedProcess(argv, 1, "", "no engine"))
     tb.profile({})
     c = last(tb, kind="profile")["cost"]
     assert c["usd"] == 0.0 and c["rate_known"] is False and c["seconds"] > 0
@@ -202,7 +203,7 @@ def test_an_unknown_rate_is_recorded_as_unknown_and_charged_zero(tb, monkeypatch
 
 def test_gpu_time_is_charged_to_the_budget_and_stops_at_the_cap(tb, monkeypatch):
     monkeypatch.setattr(labtools, "default_profile_runner",
-                        lambda tree, argv, read=(): subprocess.CompletedProcess(argv, 1, "", "no engine"))
+                        lambda tree, argv, read=(), **_: subprocess.CompletedProcess(argv, 1, "", "no engine"))
     tb.profile({})
     spent = tb.s.budget.spent_usd
     assert spent > 0 and Budget.resume(100.0, "r1", tb.s.ledger_root).spent_usd == pytest.approx(spent)
@@ -231,7 +232,7 @@ def test_symlinks_left_by_the_jailed_run_are_not_copied_out(tb, monkeypatch):
     secret.parent.mkdir()
     secret.write_text("held-out")
 
-    def runner(tree, argv, read=()):
+    def runner(tree, argv, read=(), **_):
         b = __import__("pathlib").Path(after(argv, "--out")) / "b1"
         b.mkdir(parents=True)
         (b / "meta.json").write_text("{}")
@@ -246,7 +247,7 @@ def test_symlinks_left_by_the_jailed_run_are_not_copied_out(tb, monkeypatch):
 
 def test_profiler_tools_run_a_launch_profile_only_when_the_file_has_it(tb, monkeypatch):
     seen = []
-    monkeypatch.setattr(labtools, "default_profile_runner", lambda tree, argv, read=(), env=None:
+    monkeypatch.setattr(labtools, "default_profile_runner", lambda tree, argv, read=(), env=None, **_:
                         seen.append(env) or subprocess.CompletedProcess(argv, 1, "", "no engine"))
     assert tb.profile({"profile": "single_stream"}).startswith("profile refused: no [single_stream] table")
     assert tb.trace({"profile": "single_stream"}).startswith("trace refused: no [single_stream] table")
@@ -258,3 +259,75 @@ def test_profiler_tools_run_a_launch_profile_only_when_the_file_has_it(tb, monke
     assert seen == [{"ENGINE_PROFILE": "single_stream"}] * 2 + [None]
     assert all("profile" in t.schema["properties"] for t in tb.specs()
                if t.name in ("profile", "trace", "kernel", "hostprof", "equiv"))
+
+
+@pytest.mark.parametrize("tool,args", [("profile", {"synthetic": True}), ("trace", {}), ("kernel", {}), ("hostprof", {})])
+def test_every_instrument_is_refused_on_a_busy_gpu_and_contaminated_by_a_sharer(tb, monkeypatch, tool, args):
+    other = {"pid": 4242, "used_mib": 9000, "name": "python"}
+    monkeypatch.setattr(serve, "POLL_S", 0.01)
+    monkeypatch.setattr(gpu, "compute_apps", lambda: [other])
+    assert getattr(tb, tool)(dict(args)).startswith(f"{tool} refused: the GPU was in use")
+    rec = last(tb, kind="profile")["result"]
+    assert rec["verdict"] == "refused" and rec["gpu_processes"] == [other] and calls(tb) == []
+    held = []
+    monkeypatch.setattr(gpu, "compute_apps", lambda: list(held))
+
+    def runner(tree, argv, read=(), on_start=None, **_):      # the jail's own pid is 1; 4242 arrives mid-run
+        if on_start:
+            on_start(lambda: {1})
+            held.append(other)
+            time.sleep(0.1)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(labtools, "default_profile_runner", runner)
+    assert getattr(tb, tool)(dict(args)).startswith(f"{tool} contaminated: another process held the GPU")
+    rec = last(tb, kind="profile")["result"]
+    assert rec["verdict"] == "contaminated" and rec["gpu_processes"] == [other]
+    assert "bundle" not in rec and "calibrated" not in rec
+
+
+@pytest.mark.parametrize("tool,args", [("profile", {"synthetic": True}), ("trace", {}), ("kernel", {}), ("hostprof", {})])
+def test_every_instrument_records_the_same_shape(tb, monkeypatch, tool, args):
+    def runner(tree, argv, read=(), **_):
+        if "--out" in argv:
+            b = __import__("pathlib").Path(after(argv, "--out")) / "b1"
+            b.mkdir(parents=True)
+            (b / "meta.json").write_text("{}")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(labtools, "default_profile_runner", runner)
+    getattr(tb, tool)(dict(args))
+    rec = last(tb, kind="profile")
+    assert rec["tool"] == tool and rec["result"]["verdict"] == "ok"
+    assert {"returncode", "bundle", "workspace_copy", "instrument", "argv", "seconds", "output", "gpu",
+            "calibrated"} <= set(rec["result"]) and "head" not in rec["result"]
+    assert_charged(tb, rec)
+
+
+def test_a_watch_never_counts_the_jobs_own_exiting_process_as_another(monkeypatch):
+    monkeypatch.setattr(serve, "POLL_S", 0.01)
+    n = {"apps": 0}
+
+    def apps():                                     # free at the start, then the job's own pid 7 on the GPU
+        n["apps"] += 1
+        return [] if n["apps"] == 1 else [{"pid": 7, "used_mib": 1, "name": "engine"}]
+    monkeypatch.setattr(gpu, "compute_apps", apps)
+    own = iter([{7}, {7}])
+    w = serve.Watch()
+    w.start(lambda: next(own, set()))               # the jail tears down: its pids are gone, the GPU still lists 7
+    time.sleep(0.1)
+    assert w.stop() == []
+
+
+def test_the_runner_gets_the_jobs_timeout_for_the_run_and_its_report(tb, monkeypatch):
+    from lab import worker
+    seen = []
+    monkeypatch.setattr(labtools, "stage_harness", lambda tree: tree)
+    monkeypatch.setattr(labtools, "workload_flags", lambda a, h, n: [])
+
+    def runner(tree, argv, read=(), timeout_s=None, **_):
+        seen.append(timeout_s)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    tree = tb.s.run_dir / "t"
+    tree.mkdir()
+    worker._profile({"tree": tree}, tb.s.run_dir / "out", {"kind": "trace", "args": {}, "timeout_s": 900},
+                    {"profile_runner": runner})
+    assert seen == [900, 900]

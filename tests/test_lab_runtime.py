@@ -157,9 +157,9 @@ def test_an_overspending_provider_is_recorded_and_stopped(cfg):
 
 def test_restore_and_profile_tools(cfg, monkeypatch):
     calls = []
-    def fake_profile(tree, argv):
+    def fake_profile(tree, argv, **_):
         calls.append(argv)
-        out = tree / "lab" / "runs" / "b1"
+        out = Path(argv[argv.index("--out") + 1]) / "b1"
         out.mkdir(parents=True)
         (out / "meta.json").write_text("{}")
         return subprocess.CompletedProcess(argv, 0, "ok", "")
@@ -186,7 +186,7 @@ def test_restore_and_profile_tools(cfg, monkeypatch):
     prof = next(ledger.records(cfg.ledger_root, kind="profile"))
     assert prof["result"]["bundle"].startswith("blobs/") and (cfg.ledger_root / prof["result"]["bundle"] / "meta.json").exists()
     assert "--requests" in calls[0] and "2" in calls[0]
-    assert "bundle at lab/runs/" in dict(p.outputs)["profile"]
+    assert "profile output at lab/runs/" in dict(p.outputs)["profile"]
     copy = ws / prof["result"]["workspace_copy"]
     assert (copy / "meta.json").exists()                      # readable from inside the jail
     assert prof["result"]["workspace_copy"].startswith("lab/runs/")   # scratch: never part of the change
