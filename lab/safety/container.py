@@ -21,6 +21,9 @@ from pathlib import Path
 
 IMAGE = os.environ.get("LAB_JAIL_IMAGE", "lab-jail")
 DOCKERFILE = Path(__file__).parent / "jail.Dockerfile"
+# socat's own listen backlog is 5: a load probe opening 256 connections at once lost 17-21 of them as resets
+# (2026-10-27, a bench starting at the base's concurrency); the kernel caps it at net.core.somaxconn.
+BACKLOG = 4096
 JAIL_UID = 10001             # the jail's user when the lab runs as root; otherwise the lab's own uid
 CLIENT_CORES = 4             # kept out of every jail's cpuset so the measurement clients cannot be starved
 SYSTEM_PREFIXES = {Path("/"), Path("/usr"), Path("/usr/local")}   # the image has its own; never mounted over it
@@ -131,7 +134,8 @@ def argv(name: str, workdir: Path, command: list[str], env: dict[str, str], writ
     if bridge_port is None:
         return out + command
     sock = writable[-1].resolve() / BRIDGE
-    return out + ["sh", "-c", f'socat UNIX-LISTEN:{sock},fork,mode=666 TCP:127.0.0.1:{bridge_port} & exec "$@"',
+    return out + ["sh", "-c", f'socat UNIX-LISTEN:{sock},fork,mode=666,backlog={BACKLOG} TCP:127.0.0.1:{bridge_port} '
+                              '& exec "$@"',
                   "jail", *command]
 
 
@@ -239,7 +243,7 @@ class Bridge:
     """Host side: 127.0.0.1:port on the host forwarded to the jail's socket. Only host processes can reach it."""
 
     def __init__(self, port: int, sock: Path):
-        self.proc = subprocess.Popen(["socat", f"TCP-LISTEN:{port},bind=127.0.0.1,reuseaddr,fork",
+        self.proc = subprocess.Popen(["socat", f"TCP-LISTEN:{port},bind=127.0.0.1,reuseaddr,fork,backlog={BACKLOG}",
                                       f"UNIX-CONNECT:{sock}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                      start_new_session=True)
 

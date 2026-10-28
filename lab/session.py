@@ -14,6 +14,7 @@ from pathlib import Path
 
 from lab import agent, engine, experiments, ledger, live, target, worker
 from lab.budget import Budget, BudgetExceeded
+from lab.evaltools import BENCH_TIER
 from lab.safety import grader
 from lab.task import Task
 from lab.tools import Toolbox, clean_pristine
@@ -107,9 +108,9 @@ def system_prompt(t: target.Target, spec: agent.AgentSpec) -> str:
         env=json.dumps(t.engine.env), layers=layer_map(t, spec.base_files), regimes=regimes,
         measurement=suite.MEASUREMENT, interactive_ttft_ms=t.interactive.ttft_s * 1e3,
         interactive_tpot_ms=t.interactive.tpot_s * 1e3, conversational_ttft_ms=t.conversational.ttft_s * 1e3,
-        conversational_tpot_ms=t.conversational.tpot_s * 1e3, short_probe=suite.TIERS["short"]["probe_s"],
-        short_final=suite.TIERS["short"]["final_s"], full_probe=suite.TIERS["full"]["probe_s"],
-        full_final=suite.TIERS["full"]["final_s"], min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio,
+        conversational_tpot_ms=t.conversational.tpot_s * 1e3, bench_tier=BENCH_TIER,
+        tiers="; ".join(f"{k} = {v['probe_s']:g} s probes and a {v['final_s']:g} s measurement window per regime"
+                        for k, v in suite.TIERS.items()), min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio,
         workbench=workbench, write=globs(t.write), add_only=globs(t.add_only), deny=globs(ALWAYS_DENY),
         tools="\n".join(f"- `{x.name}`: {x.description}" for x in spec.tools),
         session_usd=spec.max_budget_usd, max_turns=spec.max_turns, timeout_s=spec.timeout_s,

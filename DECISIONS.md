@@ -3,6 +3,20 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-28 — Minimal gates: a merge is bench + equiv; bench at a `min` tier; equiv is MLPerf's rule only
+A change is merged on a seen-split `bench` and a passing dev-tier `equiv`; `submit` stays as built but is not
+required (the agent's referee still asks for one). `bench` runs at a new tier `min` (15 s probes, 30 s final, still
+at least 100 requests per probe), which submit, the base cache and `lab.validate`'s noise bands and performance
+reference use too, and profiles the tree afterwards only when asked (`profile: true`; the run's baseline still
+profiles). `equiv`'s candidate run gates on accuracy (>= 99% of the reference, pooled) and length (>= 90%) only: no
+consistency probe and no teacher-forced divergence pass (that stays the `quick` tier's). The dev tier (1,597 items,
+early stop at 200, 400, 800, ...) is kept: fewer items would leave a real 1% loss inconclusive. Why (the user): do
+only as much as a merge needs for now; with one session at a time and no noise bands measured, a second held-out
+bench adds little. Replaces, in part, 2026-10-18 (short gates: short-tier bench and submit), 2026-10-22 (every bench
+followed by a profile) and the consistency gate of 2026-10-04. Consequence: the performance references in
+`knowledge/reference/` were measured at `short`, so a `min` bench shows no `% of reference` (the field says why)
+until `lab.validate` measures them again.
+
 ## 2026-10-27 — The engine comparison: one GPU, one client, matched precision, a win only beyond noise
 `compare/` runs ours, vLLM 0.32.0, SGLang 0.5.22 and TensorRT-LLM 1.4.0rc1 (each project's newest release; official
 containers) one at a time on one H200, at bf16 (weights, activations, KV) and fp8 (W8A8 + fp8 KV; the others load
@@ -34,6 +48,57 @@ prompt (80) and shared prefix (0.81) were real break points that both engines re
 stops at a 10% bracket (80 passed, 86.7 failed); the bracket now shows when two results are within it. Replaces the
 time-compressed replay (2026-10-02 eval conventions' bursty).
 
+## 2026-10-27 — No roofline stop: a search runs to its budget
+`kernels.search` no longer stops when the best program reaches a share of its roofline (`--stop-pct`, 80 by
+default, removed); it stops at its generations, budget, wall-clock or patience. The % of roofline stays a fact in
+every prompt and record. Why (the user): within a session the search should go as high as it can; the fixed
+generations already bound it, and the % of roofline is what tells the central agent whether another round on the same
+kernel is worth it. In the 2026-10-27 race on moe_gemm_fp8 the rule ended the generations arm at 83% (1.194x seen,
+1.391x held-out, 33 min) and the ideas arm at 81%, while OpenEvolve, with no such rule, ran its 2.5 h to 87% (1.250x,
+1.478x held-out). Replaces MANTIS's stop rule (2026-10-18, METHOD.md row 13); patience stays.
+
+## 2026-10-27 — Searches capped by wall-clock; K-Search's persistence tested and not adopted
+`--wall-s` caps a kernel search by wall-clock. Why: the 2,700-s `--gpu-s` cap stopped the first real generations run
+(2026-10-27) after 2 of 10 generations because it sums parallel jobs and the no-GPU precheck. Tested the same day and
+removed: an `--ideas` arm after K-Search (Berkeley Sky Lab, arXiv 2602.19128), which kept an idea table so the 4 best
+ideas by measured gain were refined again each generation (an idea closed after 3 generations without a better
+measurement), with a judge call closing ideas and adding sub-ideas and 4 immigrant ideas of whole-program changes per
+generation; and K-Search itself as an arm on our evaluator. On moe_gemm_fp8 (same shapes, start, evaluator, every role
+on Opus 5.5, 2.5 h cap): generations 1.196x seen / 1.391x held-out for $6.95; ideas 1.162x / 1.376x for $14.70;
+K-Search 1.158x / 1.267x for $29.92; OpenEvolve 1.250x / 1.478x for $78.67 (both of ours stopped at the roofline rule,
+removed the same day). The user dropped both arms; one run per arm, one task.
+
+## 2026-10-27 — The beam is removed
+The beam (each MCTS expansion: the judge names 4 changes, the coder writes all 4, each judged in full, a failed child
+repaired in correction mode up to 3 deep) and its A/B arm `search-beam`, `--no-funnel` and `--beam` are deleted;
+`kernels.search` with a judge always runs funnel rounds, and without one the coder alone proposes children (tests).
+Why (the user): it is no longer the main path and nothing measures it any more; the funnel beat it on 2026-10-24
+(moe_gemm_fp8 1.161x to 1.026x seen, 1.284x to 1.096x held-out). Its last code is on main before this change (git
+history), its records stay in the ledger. Revisit only to rerun that A/B. Replaces "the beam becomes an arm"
+(2026-10-25).
+
+## 2026-10-27 — The funnel's model calls run in parallel; the strong coder writes only the programs kept
+Four changes to every funnel round, none to what a round decides. (1) Model calls (judge calls, merges, drafts,
+repairs, rewrites) run 8 at a time (`--workers`), the first of each batch alone so the rest read its prompt cache;
+GPU timings stay one at a time. (2) The strong coder (Opus) rewrites only the programs that pass the quick timing's
+cut, not every correct draft, and a rewrite replaces its draft only when it passes stage 1 and times faster; the
+drafts stay the wide coder's (Sonnet), repairs the strong coder's. (3) Prompts are cached: the task's setting and a
+parent's program and measurements are sent as cached blocks before the per-call part (`llm.CACHE_SPLIT`). (4) ncu
+counters are taken when a program is first chosen as a parent, not at its full exam: they feed only its children's
+prompts, so a child's predicted counter changes are measured only when its parent had them. Why (the user, after the
+first real generations run sat ~1 h in generation 0): the checks took ~10 of its 57 minutes; the rest was ~80 serial
+Opus calls, as the frontier systems avoid by sampling in parallel (AlphaEvolve, OpenEvolve, ShinkaEvolve). Replaces
+the strong coder rewriting every survivor (2026-10-23) and ncu at every full exam (2026-10-17).
+
+
+## 2026-10-27 — Every profiler's prediction is measured: numbers for trace and hostprof
+`trace` and `hostprof` records get a `calibrated` block like `profile`'s and `kernel`'s (nsys: kernel, memory-copy and
+CUDA API time, top kernels, kernel time's share of the profiled window; py-spy: samples per thread, top functions by
+self and total share), and a profiler's `expect.metric` is a dotted path into its result, as a mechanism's already
+was. Why (the user, choosing this over making `expect` optional for them): every measured tool requires an `expect`,
+but the main prediction was looked up only in `result.metrics`, which no profiler record has, so a prediction on
+`profile`, `trace`, `kernel` or `hostprof` never had a measured value; trace and hostprof had no numbers to predict.
+Amends 2026-10-11.
 
 ## 2026-10-26 — The kernel search runs generations: funnel rounds from fitness-drawn parents
 `kernels.search` becomes a genetic search inside one call (`kernels/search/generations.py`): generation 0 is the funnel

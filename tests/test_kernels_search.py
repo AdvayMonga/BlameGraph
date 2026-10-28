@@ -18,7 +18,6 @@ os.environ.setdefault("LAB_NO_JAIL", "1")
 
 from kernels.search import diff  # noqa: E402
 from kernels.search.tree import Node, Tree, fingerprint  # noqa: E402
-import re  # noqa: E402
 
 SEED = ROOT / "kernels" / "evolve" / "seeds" / "toy_rmsnorm.py"
 LOOP = '''    out = torch.empty_like(x)
@@ -98,31 +97,6 @@ def test_review_fixes_parents_repairs_duplicates_and_noise():
     judge = lambda c: {"metrics": {"combined_score": 1.02 if "'a': 2" in c else 1.0, "correct": 1.0}, "artifacts": {}}  # noqa: E731
     assert not _tune([(grid, {}, 1.0)], judge, 2, margin=0.05)[2]["promoted"]      # +2% inside a 5% spread
     assert _tune([(grid, {}, 1.0)], judge, 2, margin=0.01)[2]["promoted"]
-
-
-def test_a_repair_chain_resets_when_a_repair_succeeds():
-    from kernels.search.loop import search
-
-    def review(system, user):
-        if "failed (see its measurements)" in system:
-            return '{"critical_issue": "x", "why_it_matters": "y", "minimal_fix_hint": "z"}', 0.0
-        return json.dumps([{"modification_plan": "set x = 0", "expected_speedup": 1.0}]), 0.0
-
-    def propose(system, user):                           # optimization breaks it (x = 0), a repair fixes it (x = 2)
-        cur = re.search(r"```python\nx = (\d)", user).group(1)
-        v = "2" if "critical_issue" in user else "0"
-        return f"<<<<<<< SEARCH\nx = {cur}\n=======\nx = {v}\n>>>>>>> REPLACE", 0.0
-
-    def judge(code):
-        x = int(code.split("=")[1])
-        return {"metrics": {"combined_score": {1: 1.0, 0: 0.0, 2: 1.5}[x], "correct": float(x != 0), "stage": 2},
-                "artifacts": {}}
-    with tempfile.TemporaryDirectory() as d:
-        tree, _ = search("x = 1\n", "S", propose, judge, Path(d), evals=6, usd=1.0, review=review, beam=1)
-    fixed = [n for n in tree.nodes.values() if n.score == 1.5]
-    assert fixed and all(n.mode == "correction" and n.repairs == 1 for n in fixed)
-    under = [n for n in tree.nodes.values() if n.parent in {f.id for f in fixed} and n.mode == "optimization"]
-    assert under and all(n.repairs == 0 for n in under)          # was 1: the chain leaked into new work
 
 
 def test_counters_are_not_asked_for_again_once_the_host_refuses_them():
@@ -223,51 +197,13 @@ def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_node():
         assert len(rec["result"]["candidates"]) == len(tree.nodes)
 
 
-def test_an_expansion_measures_every_change_the_judge_names_and_repairs_failures_in_a_chain():
-    from kernels.search.loop import hypotheses, search
-    calls = []
-
-    def review(system, user):
-        if "critical_issue" in system:
-            calls.append(("judge", "correction", user))
-            return json.dumps({"critical_issue": "x"}), 1.0
-        calls.append(("judge", "optimization", user))
-        assert "Name 3 distinct changes" in system and "expected_speedup" not in system
-        return "Here: " + json.dumps([{"modification_plan": f"set x = {v}"} for v in (2, 3, 9)]), 1.0
-
-    def propose(system, user):
-        calls.append(("coder", system, user))
-        m = re.search(r"set x = (\d+)", user)
-        if m:
-            return f"<<<<<<< SEARCH\nx = 1\n=======\nx = {m.group(1)}\n>>>>>>> REPLACE", 0.5
-        cur = re.search(r"```python\nx = (\d+)", user).group(1)                        # a repair: edit what is shown
-        return f"<<<<<<< SEARCH\nx = {cur}\n=======\nx = {10 + len(calls)}\n>>>>>>> REPLACE", 0.5
-
-    def judge(code):                             # x = 3 is the win; x = 9 (and every repair of it) fails
-        x = int(code.split("=")[1])
-        ok = x in (1, 2, 3, 4)
-        m = {"combined_score": {1: 1.0, 2: 1.1, 3: 1.6, 4: 1.0}.get(x, 0.0), "correct": 1.0 if ok else 0.0, "stage": 2}
-        return {"metrics": m, "artifacts": {} if ok else {"error": "stage 1: wrong output"}}
-
+def test_the_judges_json_is_read_best_effort():
+    from kernels.search.loop import hypotheses
     assert len(hypotheses("pre " + json.dumps([{"a": 1}, {"b": 2}, 3]) + " post", 16)) == 2
     assert hypotheses("not json", 4) == [{"plan": "not json"}] and hypotheses("", 4) == []
-    with tempfile.TemporaryDirectory() as d:
-        tree, cost = search("x = 1\n", "SYSTEM", propose, judge, Path(d), evals=8, usd=100.0, review=review, beam=3,
-                            max_repairs=3)
-        log = [json.loads(x) for x in (Path(d) / "hypotheses.jsonl").read_text().splitlines()]
-    first = log[0]
-    assert len(first["hypotheses"]) == 3 and [m["index"] for m in first["measured"]] == [0, 1, 2]   # all, in order
-    assert set(first) == {"iteration", "parent_id", "parent_score", "hypotheses", "measured"}
-    coder = [c for c in calls if c[0] == "coder"]
-    assert "SEARCH/REPLACE" in coder[0][1] and "set x = 2" in coder[0][2] and "Other programs" not in coder[0][2]
-    assert "SEARCH/REPLACE" not in [c for c in calls if c[0] == "judge"][0][2]
-    chain = [n for n in tree.nodes.values() if n.mode == "correction"]
-    assert [n.repairs for n in sorted(chain, key=lambda n: n.repairs)] == [1, 2, 3]       # repaired up to 3 deep
-    assert "stage 1: wrong output" in next(c for c in calls if c[1] == "correction")[2]
-    assert "set x = 3" in tree.best().judge and tree.best().score == 1.6
 
 
-def test_the_search_stops_near_the_roofline_and_states_the_gap():
+def test_the_prompt_states_the_roofline_gap_and_the_search_does_not_stop_there():
     from kernels.search.loop import prompt, search
     from kernels.search.tree import Node, Tree
     rows = [{"shape": [1], "weight": 0.75, "pct_of_roofline": 96.0}, {"shape": [2], "weight": 0.25,
@@ -278,10 +214,10 @@ def test_the_search_stops_near_the_roofline_and_states_the_gap():
     t.add(n)
     assert "92.0% of its roofline bound" in prompt(t, n)
     judge = lambda code: {"metrics": n.metrics, "artifacts": n.artifacts}
-    never = lambda system, user: (_ for _ in ()).throw(AssertionError("no model call near the roofline"))
+    silent = lambda system, user: ("", 0.0)
     with tempfile.TemporaryDirectory() as d:
-        _, cost = search("x = 1\n", "S", never, judge, Path(d), evals=5, usd=1.0, stop_pct=90.0)
-    assert cost["stopped_near_roofline"] and cost["model_calls"] == 0
+        _, cost = search("x = 1\n", "S", silent, judge, Path(d), evals=5, usd=1.0)
+    assert cost["model_calls"] > 0 and "stopped_near_roofline" not in cost
 
 
 def test_diagnosis_facts_bound_type_two_shape_counters_ranking_and_patience():
@@ -467,6 +403,7 @@ def test_every_arm_differs_from_kernels_search_in_one_flag():
     try:
         from types import SimpleNamespace
         a = SimpleNamespace(task="t", shapes="s", evals=3, usd=1.0, model="m", device="cpu", initial=None)
+        assert "search-beam" not in ab.ARMS                       # the beam was removed (2026-10-27)
         for arm in ("kernels.search", "search-no-tools", "search-mcts", "search-gen20", "search-crossover"):
             ab.ARMS[arm](a, Path("/tmp/x"), 0)
     finally:
@@ -564,9 +501,38 @@ def test_the_judge_can_query_the_ledger_and_search_the_web_across_turns():
     finally:
         llm.run_query = orig
     assert text == "[plan]" and len(sent) == 3 and {t["name"] for t in sent[0]["tools"]} == {"web_search", "query"}
-    results = next(m["content"] for m in sent[-1]["messages"] if m["role"] == "user" and isinstance(m["content"], list))
+    results = next(m["content"] for m in sent[-1]["messages"] if m["role"] == "user"
+                   and m["content"][0].get("type") == "tool_result")
     assert results[0]["type"] == "tool_result" and "SELECT 1" in results[0]["content"]
     assert abs(usd - 3 * (1000 * 4 + 100 * 20) / 1e6 - 3 * 2 * llm.WEB_SEARCH_USD) < 1e-9
+
+
+def test_the_stable_parts_of_a_prompt_are_sent_as_cached_blocks_and_the_marker_never_reaches_the_model():
+    from types import SimpleNamespace
+    from kernels.search import llm
+    sent = []
+
+    def stream(client, **kw):
+        sent.append(kw)
+        usage = SimpleNamespace(model_dump=lambda: {"input_tokens": 10, "output_tokens": 1,
+                                                    "cache_read_input_tokens": 1_000_000})
+        return SimpleNamespace(model="claude-opus-5-5", usage=usage, stop_reason="end_turn",
+                               content=[SimpleNamespace(type="text", text="ok")])
+    c = llm.Claude.__new__(llm.Claude)
+    c.client, c.model, c.effort, c.max_tokens, c.tools, c.max_turns, c.ledger_root = None, "claude-opus-5-5", "high", \
+        100, False, 8, None
+    orig, llm._stream = llm._stream, stream
+    try:
+        _, usd = c("SETTING" + llm.CACHE_SPLIT + "ROLE", "PROGRAM" + llm.CACHE_SPLIT + "PLAN")
+        c("SETTING", "PROGRAM ONLY")
+    finally:
+        llm._stream = orig
+    system, user = sent[0]["system"], sent[0]["messages"][0]["content"]
+    assert [b["text"] for b in system] == ["SETTING", "ROLE"] and all(b["cache_control"] for b in system)
+    assert [b["text"] for b in user] == ["PROGRAM", "PLAN"] and "cache_control" in user[0] and "cache_control" not in user[1]
+    assert llm.CACHE_SPLIT not in json.dumps(sent)
+    assert "cache_control" not in sent[1]["messages"][0]["content"][0]        # one part: nothing to share
+    assert 0.2 < usd < 0.3                                    # 1M cache-read tokens at $0.20, not the $4 input rate
 
 
 def test_a_turn_whose_stream_dies_is_sent_again_and_a_real_error_is_not():

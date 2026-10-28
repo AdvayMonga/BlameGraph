@@ -156,8 +156,9 @@ def test_verdict_is_three_valued():
     r = evaluate(None, good, ln, CONS, unanswered=3)
     assert r["verdict"] == "inconclusive" and "3 item(s) unanswered" in r["reasons"][0]
     assert evaluate(None, good, ln, CONS)["verdict"] == "pass"
-    # no logprobs: divergence is a fact that says so, not a gate
-    assert evaluate(None, good, ln, CONS)["metrics"]["divergence"]["not_run"]
+    # divergence is never a gate, and consistency gates only when given (the candidate run gives neither)
+    assert "divergence" not in evaluate(None, good, ln, CONS)["metrics"]
+    assert set(evaluate(None, good, ln)["gates"]) == {"accuracy", "length"} and evaluate(None, good, ln)["passed"]
 
 
 def test_sglang_adapter_scores_tokens():

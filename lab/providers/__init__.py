@@ -14,6 +14,11 @@ class Record:
     ip: str | None
     type: str
     detail: str = ""    # provider wording, for status output
+    spot: bool | None = None   # preemptible; None where the provider has no such option
+
+
+def pricing(spot: bool | None) -> str:
+    return "spot" if spot else "on-demand"
 
 
 class ProviderError(RuntimeError):

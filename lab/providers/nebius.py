@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from lab.providers import ProviderError, Record, env_field
+from lab.providers import ProviderError, Record, env_field, pricing
 
 USER = "lab"   # created by cloud-init; Nebius refuses root and admin as login names
 
@@ -22,6 +22,7 @@ class Nebius:
     disk_gb: str = env_field("LAB_VM_DISK_GB", "400")
     project: str = env_field("LAB_VM_PROJECT", "")                      # --parent-id; empty uses the profile's
     subnet: str = env_field("LAB_VM_SUBNET", "")                        # empty: the project's first subnet
+    spot: bool = field(default_factory=lambda: _flag("LAB_VM_SPOT"))   # preemptible at the spot price; fixed at create
     default_user: str = USER
     stop_word: str = "stop"
 
@@ -62,7 +63,8 @@ class Nebius:
                 break
         res = (raw.get("spec") or {}).get("resources") or {}
         kind = f"{res.get('platform', '')}/{res.get('preset', '')}".strip("/")
-        return Record(name=name, state=state, ip=ip, type=kind, detail=state)
+        spot = bool((raw.get("spec") or {}).get("preemptible"))
+        return Record(name=name, state=state, ip=ip, type=kind, detail=f"{state} {pricing(spot)}", spot=spot)
 
     def _subnet(self) -> str:
         if self.subnet:
@@ -88,7 +90,9 @@ class Nebius:
                   "--boot-disk-managed-disk-size-gibibytes", str(self.disk_gb),
                   "--boot-disk-managed-disk-source-image-family-image-family", self.image,
                   "--boot-disk-attach-mode", "READ_WRITE",
-                  "--network-interfaces", nics, "--cloud-init-user-data", user_data)
+                  "--network-interfaces", nics, "--cloud-init-user-data", user_data,
+                  *(("--follows-spot-price", "--preemptible-on-preemption", "stop", "--recovery-policy", "fail")
+                    if self.spot else ()))    # a preemptible instance takes only "fail" (the CLI's default: "recover")
 
     def _id(self, name: str) -> str:
         raw = self._raw(name)
@@ -113,3 +117,10 @@ class Nebius:
             presets = [x.get("name") for x in (p.get("spec") or {}).get("presets") or []]
             lines.append(f"{(p.get('metadata') or {}).get('name')}: {', '.join(filter(None, presets))}")
         return "\n".join(lines) + "\n"
+
+
+def _flag(name: str) -> bool:
+    value = os.environ.get(name, "")
+    if value not in ("", "0", "1"):
+        raise ProviderError(f"{name}={value!r}: use 1 or 0")
+    return value == "1"

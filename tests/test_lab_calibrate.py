@@ -63,6 +63,41 @@ def test_reference_only_under_the_same_fingerprint(t, tmp_path, monkeypatch):
     assert stored["server"] == "reference" and stored["shape"]["output_tokens_mean"] == 100
 
 
+def test_nsys_kernel_and_api_time_against_the_window(tmp_path):
+    (tmp_path / "bundle" / "b1").mkdir(parents=True)
+    (tmp_path / "bundle" / "b1" / "meta.json").write_text(json.dumps({"window": {"wall_s": 2.0}}))
+    (tmp_path / "stats_cuda_gpu_kern_sum.csv").write_text(
+        "Time (%),Total Time (ns),Instances,Avg (ns),Name\n"
+        "25.0,250000000,100,\"2,500,000\",small\n75.0,750000000,300,2500000,moe_gemm\n")
+    (tmp_path / "stats_cuda_gpu_mem_time_sum.csv").write_text(
+        "Time (%),Total Time (ns),Count,Operation\n100.0,100000000,4,[CUDA memcpy Host-to-Device]\n")
+    (tmp_path / "stats_cuda_api_sum.csv").write_text(
+        "Time (%),Total Time (ns),Num Calls,Name\n90.0,900000000,36,cudaStreamSynchronize\n")
+    n = calibrate.calibrate_nsys(tmp_path, ranged=True)
+    assert n["kernel_s"] == pytest.approx(1.0) and n["launches"] == 400 and n["kernel_share_of_window"] == pytest.approx(0.5)
+    assert n["kernels"][0]["name"] == "moe_gemm" and n["kernels"][0]["share_of_kernel_time"] == pytest.approx(0.75)
+    assert n["kernels"][0]["share_of_window"] == pytest.approx(0.375) and n["memcpy_s"] == pytest.approx(0.1)
+    assert n["cuda_api"] == [{"name": "cudaStreamSynchronize", "total_s": pytest.approx(0.9), "count": 36}]
+    assert calibrate.calibrate_nsys(tmp_path, ranged=True)["window_s"] == 2.0
+    free = calibrate.calibrate_nsys(tmp_path, ranged=False)
+    assert free["window_s"] is None and free["kernel_share_of_window"] is None and "capture-range" in free["window_missing"]
+    assert calibrate.calibrate_nsys(tmp_path / "bundle", ranged=True) is None
+
+
+def test_pyspy_samples_per_thread_and_function(tmp_path):
+    (tmp_path / "bundle" / "b1").mkdir(parents=True)
+    frames = [{"name": "run", "file": "s.py", "line": 1}, {"name": "step", "file": "s.py", "line": 9},
+              {"name": "wait", "file": "t.py", "line": 3}]
+    (tmp_path / "bundle" / "b1" / "pyspy.speedscope.json").write_text(json.dumps({"shared": {"frames": frames}, "profiles": [
+        {"type": "sampled", "name": "Thread 1 \"MainThread\"", "samples": [[0, 1], [0, 1], [0, 2]], "weights": [1, 1, 1]},
+        {"type": "sampled", "name": "Thread 2 \"scheduler\"", "samples": [[2]], "weights": [1]}]}))
+    p = calibrate.calibrate_pyspy(tmp_path)
+    assert p["samples"] == 4 and p["threads"][0] == {"name": "Thread 1 \"MainThread\"", "samples": 3, "share": 0.75}
+    assert [(f["function"], f["share"]) for f in p["self"]] == [("step", 0.5), ("wait", 0.5)]
+    assert p["total"][0]["function"] == "run" and p["total"][0]["share"] == 0.75
+    assert calibrate.calibrate_pyspy(tmp_path / "bundle") is None
+
+
 def test_kernel_shares_and_ncu_rates(tmp_path):
     b = tmp_path / "b1"
     b.mkdir()

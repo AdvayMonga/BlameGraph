@@ -27,7 +27,7 @@ from lab import artifacts, calibrate, ledger, live, profiles, serve, target, wor
 from validity.holdout import HoldoutGuard, Refused
 
 HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT = 100, 2.0, 0.5
-BENCH_TIER = "short"          # the seen-split tier submit compares against (base is measured at the same tier)
+BENCH_TIER = "min"            # bench's default tier, which submit compares against (base is measured at the same tier)
 
 
 def _regimes(args: dict, default: tuple[str, ...]) -> list[str]:
@@ -158,8 +158,8 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
         "latency_limits": {"interactive": t.interactive.__dict__, "conversational": t.conversational.__dict__},
         "goodput_attainment": 0.99,
         "tiers": {k: dict(v) for k, v in suite.TIERS.items()},
-        "correctness": {"policy": f"pooled task score >= {t.min_score_ratio} of the reference, length >= {t.min_length_ratio}, "
-                        f"consistent streams; under the line fails only when the net loss is significant",
+        "correctness": {"policy": f"pooled task score >= {t.min_score_ratio} of the reference, length >= {t.min_length_ratio}; "
+                        f"under the line fails only when the net loss is significant",
                         "tasks": list(t.tasks)},
         "noise_bands_pct": {n: noise_band_pct(n, t, ledger_root or ledger.ROOT) for n in suite.REGIMES},
         "noise_bands_measured_on": "the base commit's engine with its general config, repeated unchanged runs "
@@ -283,7 +283,7 @@ class EvalTools:
     def bench(self, args: dict) -> str:
         snap = self._audited("bench", args)
         names = _regimes(args, self.bench_defaults())
-        tier = args.get("tier") or "short"
+        tier = args.get("tier") or BENCH_TIER
         seed = args.get("seed", self.seed)
         if isinstance(seed, bool) or not isinstance(seed, int):
             raise ValueError("seed must be an integer")
@@ -304,13 +304,14 @@ class EvalTools:
                                           "seen", seed)
         failed = {"profiles_failed": r["profiles_failed"]} if r.get("profiles_failed") else {}
         stored = artifacts.store(work, self.s.ledger_root)
-        prof = self._after_bench(tree)
+        prof = self._after_bench(tree) if args.get("profile") else None
         result = {"verdict": "ok", "metrics": headline(r["results"]), "calibrated": cal, "regimes": r["results"],
                   "tier": tier, "seconds": time.monotonic() - t0, "ready_s": r["ready_s"], "gpu": r.get("gpu"),
-                  "artifacts": stored, "profiled": prof, **failed, **_killed(r)}
+                  "artifacts": stored, **({"profiled": prof} if prof else {}), **failed, **_killed(r)}
         self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier, "seed": seed})
         return json.dumps({"snapshot": snap.id, "split": "seen", "tier": tier, "metrics": result["metrics"],
-                           "calibrated": cal, "profiled": _profiled_reply(prof), **failed, **_killed(r)}, indent=1)
+                           "calibrated": cal, **({"profiled": _profiled_reply(prof)} if prof else {}), **failed,
+                           **_killed(r)}, indent=1)
 
     # -- equiv --------------------------------------------------------------------------
     def equiv(self, args: dict) -> str:

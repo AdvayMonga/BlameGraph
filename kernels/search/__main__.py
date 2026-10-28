@@ -5,8 +5,8 @@
                           --parents N --keep N] [--mcts] [--facts FILE]
 
 Our own layer-1 generator on one kernel task: by default the genetic search (kernels/search/generations.py: generations
-of funnel rounds from fitness-sampled parents); with --mcts one funnel round per MCTS-chosen parent, with --no-funnel the
-beam (kernels/search/loop.py). Judged by kernels.evolve's evaluator exactly as `python -m kernels.evolve run` is: the
+of funnel rounds from fitness-sampled parents); with --mcts one funnel round per MCTS-chosen parent (kernels/search/
+loop.py). Judged by kernels.evolve's evaluator exactly as `python -m kernels.evolve run` is: the
 same run dir, selection config (seen shapes only), re-timed promotion and `kernels` ledger record, so the generators
 compare like for like. Model calls cost money; --usd caps them."""
 from __future__ import annotations
@@ -121,7 +121,7 @@ def _funnel(a, task, review):
     models = Models(review, Claude(a.cheap_model, "low"), Claude(a.wide_model, a.effort), Claude(a.model, a.effort), mix)
     return Funnel(models, staged(evaluator.judge_stage), entries, task.name,
                   archive._embedder(ledger.ROOT) if entries else None, Path(a.ptx).read_text() if a.ptx else None,
-                  a.per_call, a.keep, a.parallel, a.max_repairs, a.ncu, a.precheck)
+                  a.per_call, a.keep, a.parallel, a.max_repairs, a.ncu, a.precheck, workers=a.workers)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -153,16 +153,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--uct-c", type=float, default=UCT_C,
                     help="UCT exploration constant on rewards in [0, 1] (KernelPro's sqrt 2 is on ln speedup)")
-    ap.add_argument("--stop-pct", type=float, default=80.0,
-                    help="stop once the best is at this %% of its roofline (MANTIS: within 25%% of speed-of-light)")
     ap.add_argument("--patience", type=int, default=None,
                     help="stop after this many generations (default 3), or with --mcts judged programs (default 16), "
                          "with no new best")
-    ap.add_argument("--beam", type=int, default=4, help="changes the judge names per expansion, each written and judged")
-    ap.add_argument("--max-repairs", type=int, default=3, help="repairs of a failed child, chained")
-    ap.add_argument("--funnel", action=argparse.BooleanOptionalAction, default=True,
-                    help="the funnel's tiers for every round (kernels/search/funnel.py; the default since it won the "
-                         "2026-10-24 A/B); --no-funnel: the beam (--beam changes per MCTS expansion). Off without a judge")
+    ap.add_argument("--max-repairs", type=int, default=3, help="drafts that failed correctness repaired, per round")
     ap.add_argument("--mcts", action="store_true",
                     help="one parent per round, chosen by MCTS (the 2026-10-24 A/B's search), instead of generations")
     ap.add_argument("--generations", type=int, default=10, help="generations after generation 0 (the start alone)")
@@ -170,7 +164,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--parents", type=int, default=4, help="parents per generation, drawn by fitness")
     ap.add_argument("--crossover", type=float, default=0.0,
                     help="fraction of a generation's ideas that combine a parent with another parent's diff (an arm)")
-    ap.add_argument("--gpu-s", type=float, help="stop once judging has taken this many seconds (the GPU host's time)")
+    ap.add_argument("--gpu-s", type=float, help="stop once judging has taken this many seconds, summed over jobs")
+    ap.add_argument("--wall-s", type=float, help="stop starting new work once the search has run this many seconds")
     ap.add_argument("--wide-model", default="claude-sonnet-5-5", help="the funnel's wide coder")
     ap.add_argument("--cheap-model", default="claude-haiku-5-5", help="merges duplicate hypotheses")
     ap.add_argument("--second-judge-model", default="claude-sonnet-5-5",
@@ -181,6 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--facts", help="a text of further facts for every prompt (e.g. the kernel's share of the engine's "
                                     "time and the regimes it is scored under), appended to the system message")
     ap.add_argument("--parallel", type=int, default=4, help="correctness checks run at once")
+    ap.add_argument("--workers", type=int, default=8, help="the funnel's model calls run at once")
     ap.add_argument("--archive", help="an exported idea archive (python -m kernels.archive export)")
     ap.add_argument("--ptx", help="the PTX comparison's feature cards (text)")
     ap.add_argument("--precheck", action=argparse.BooleanOptionalAction, default=True,
@@ -196,20 +192,18 @@ def main(argv: list[str] | None = None) -> int:
     system = (system_message(task) + "\n\n" + setting(task, sets, a.device, tol)
               + ("\n\n" + TUNE_FACT.format(points=a.tune_points) if a.tune_points else "")
               + ("\n\n" + Path(a.facts).read_text().strip() if a.facts else ""))
-    fun = _funnel(a, task, review) if a.funnel and review is not None else None
+    fun = _funnel(a, task, review) if review is not None else None
     gpu_used = lambda: evaluator.seconds(out / "eval_seconds.log")      # noqa: E731
     if fun is not None and not a.mcts:
         from kernels.search.generations import search as evolve
         tree, cost = evolve(program.read_text(), system, fun, judge, out, a.evals, a.usd, a.seed, a.gen_size, a.keep,
-                            a.parents, a.generations, stop_pct=a.stop_pct or None,
+                            a.parents, a.generations,
                             patience=3 if a.patience is None else a.patience or None, gpu_s=a.gpu_s,
-                            gpu_used=gpu_used, crossover=a.crossover)
+                            gpu_used=gpu_used, crossover=a.crossover, wall_s=a.wall_s)
     else:
         tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.usd, a.seed,
-                            review=review, stop_pct=a.stop_pct or None,
                             patience=16 if a.patience is None else a.patience or None,
-                            beam=a.beam, max_repairs=a.max_repairs, uct_c=a.uct_c, funnel=fun, gpu_s=a.gpu_s,
-                            gpu_used=gpu_used)
+                            uct_c=a.uct_c, funnel=fun, gpu_s=a.gpu_s, gpu_used=gpu_used, wall_s=a.wall_s)
     spent: list = []
     exclude = detect.detector(Claude(a.detector_model, a.effort), spent) if a.detector_model != "none" else None
     code, metrics, retimed = (retime(out / "trace.jsonl", a.retime, exclude=exclude) if a.retime

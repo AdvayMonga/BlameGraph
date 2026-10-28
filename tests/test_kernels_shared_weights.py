@@ -227,3 +227,20 @@ def test_an_attached_tensor_stops_counting_once_it_is_freed(tmp_path):
     ptr = got["w"].data_ptr()
     del got, h
     assert not any(r() is not None and r().data_ptr() == ptr for r in sw._ATTACHED)
+
+
+def test_a_holders_ipc_pools_are_linked_under_the_jail_users_name_and_open_to_its_group(tmp_path):
+    import os
+    import pytest
+    from kernels import shared_weights as sw
+    other = next((g for g in os.getgroups() if g != os.getuid()), None)
+    if other is None:
+        pytest.skip("this user has no group other than its uid to stand in for the jail's")
+    me, pid = format(os.getuid(), "x"), format(os.getpid(), "x")
+    pool = tmp_path / f"cuda.shm.{me}.{pid}.1"
+    pool.write_bytes(b"sem")
+    (tmp_path / f"cuda.shm.{me}.{format(os.getpid() + 1, 'x')}.1").write_bytes(b"another process's")
+    links = sw._share_pools(other, tmp_path)
+    assert [x.name for x in links] == [f"cuda.shm.{format(other, 'x')}.{pid}.1"]       # this process's pools only
+    assert links[0].stat().st_ino == pool.stat().st_ino and pool.stat().st_gid == other
+    assert pool.stat().st_mode & 0o777 == 0o660

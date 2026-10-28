@@ -93,7 +93,7 @@ A held-out record (`config.split == "heldout"`) carries no `raw` and one aggrega
     # task.toml: [task] goal; [objective] regimes = [...], combine = "min"|"mean"; [constraints] <regime> = { max_regression_pct }
 
 One loop: once per run, before the first session, the base commit is measured under `bench`'s default regimes
-(seen split, short tier; the same cache `submit` compares against) and recorded as a `baseline` record
+(seen split, min tier; the same cache `submit` compares against) and recorded as a `baseline` record
 (`RunConfig.baseline=False` skips it). Then, while dollars remain, a fresh agent session gets a system prompt
 generated from the target spec and the tool specs (`lab/prompts/objective.md` is its template: target, write surface,
 each tool with what it does, returns and costs, budget mechanics, how a session ends), the brief, and the tools,
@@ -116,9 +116,9 @@ with the referee's rights, snapshot the workspace and write the ledger on every 
 | `note` | a note for the human; recorded, changes nothing |
 | `hypothesis` | the agent's hypothesis, rationale and `layer` (optional `abandon_if`, `from_record`); its id is what every measured tool requires as `hypothesis_id`, with an `expect` (metric, value, unit, why; optional `mechanism`), and optionally further ids as a `bundle` with its `independence`; refused while any measurement of the run has no reflection |
 | `reflect` | the agent's reflection on a measured record (optional `alternative`); a hypothesis is measured again only after one on its last measurement |
-| `bench` | serve the pristine copy and run the load regimes (`regimes/`) on the seen split, short tier; one headline per regime, raw (`args.regimes`, `args.tier`, `args.seed`), each with its context (`lab/calibrate.py`: % of the physical ceiling, % of the reference engine measured the same way; only under a matching config fingerprint). A regime with its own launch profile (`lab/profiles.py`) is measured again in its own engine start and reported from it |
+| `bench` | serve the pristine copy and run the load regimes (`regimes/`) on the seen split, min tier (`args.profile: true` also profiles the tree); one headline per regime, raw (`args.regimes`, `args.tier`, `args.seed`), each with its context (`lab/calibrate.py`: % of the physical ceiling, % of the reference engine measured the same way; only under a matching config fingerprint). A regime with its own launch profile (`lab/profiles.py`) is measured again in its own engine start and reported from it |
 | `equiv` | serve it and run the correctness gate (`correctness/`) against the target's reference outputs; pass, fail or inconclusive with every metric; `tier=full` uses `<reference.dir>-full`; `profile` serves that regime's launch profile |
-| `submit` | the only thing that can produce a win. Needs a passing equiv at the target's `submit_tier` (one per launch profile it measures) and a seen bench on this snapshot. Measures the held-out split at the short tier, each search starting where the base's ended, measures the base commit the same way (once per run, cached outside the jail), and records one aggregate per regime (base, new, delta %, noise band %, verdict improved/regressed/within_band/unknown_band, and the ceiling from the base's seen-split request shape with the base's and new value's % of it) through the Thresholdout guard (`validity/holdout.py`: one per corpus version, its state write-once in the store under `heldout/guard/<version>/`, shared by every run and machine; submit is refused where `LAB_STORE` is unset): the held-out numbers themselves never reach the ledger. Noise bands come from the ledger's `noise` records (`lab.validate`) when measured |
+| `submit` | the only thing that can produce a win. Needs a passing equiv at the target's `submit_tier` (one per launch profile it measures) and a seen bench on this snapshot. Measures the held-out split at the min tier, each search starting where the base's ended, measures the base commit the same way (once per run, cached outside the jail), and records one aggregate per regime (base, new, delta %, noise band %, verdict improved/regressed/within_band/unknown_band, and the ceiling from the base's seen-split request shape with the base's and new value's % of it) through the Thresholdout guard (`validity/holdout.py`: one per corpus version, its state write-once in the store under `heldout/guard/<version>/`, shared by every run and machine; submit is refused where `LAB_STORE` is unset): the held-out numbers themselves never reach the ledger. Noise bands come from the ledger's `noise` records (`lab.validate`) when measured |
 
 `trace`, `kernel` and `hostprof` take integers with a lower bound only, any regex and set, and the instrument's
 own flags as a list of strings; the command line is an argv list, never a shell, and runs in the jail, where the
@@ -145,9 +145,9 @@ Only tool time is charged: the VM also bills while the model thinks between call
 | `trace` | yes | seconds × rate | ~1 min measured (same workload): engine start, workload, report export, `nsys stats` |
 | `kernel` | yes | seconds × rate | ~1.5 min measured at 4-8 launches; each launch is replayed once per metric pass, so it grows with `launch_count` and `full` |
 | `hostprof` | yes | seconds × rate | ~35 s plus `seconds` (measured) |
-| `bench` | yes | seconds × rate | 5-10 min per regime at tier short, 15-25 at full, plus ~2 min engine start |
+| `bench` | yes | seconds × rate | 2-10 min per regime at tier min, 5-10 at short, 15-25 at full, plus ~2 min engine start |
 | `equiv` | yes | seconds × rate | tier dev (~1.6k items): ~10 min on vLLM, ~95 min on the example engine (17 items/min, H200); full is ~12x the items |
-| `submit` | yes | seconds × rate | 5-25 min per regime (held-out, short tier), plus the base commit measured once per run |
+| `submit` | yes | seconds × rate | 2-25 min per regime (held-out, min tier), plus the base commit measured once per run |
 
 The same estimates are in each tool's description, stated as facts about cost, with the configured rate.
 
@@ -225,6 +225,13 @@ created with a `lab` user from cloud-init (Nebius refuses root). Platform `gpu-h
 `1gpu-16vcpu-200gb` (`LAB_VM_PLATFORM`, `LAB_VM_TYPE`), image family `ubuntu24.04-cuda13.0`
 (`LAB_VM_IMAGE`), the project's first subnet unless `LAB_VM_SUBNET` is set, `LAB_VM_PROJECT` for a
 project other than the profile's.
+`LAB_VM_SPOT=1` creates the VM preemptible at the current spot price (H200 from $0.79/h vs $5.40 on-demand,
+Oct 2026; the price moves every few minutes), set to stop, not delete, when Nebius takes it back. Pricing is fixed
+at create: `start` refuses a VM created the other way, running or not, so a spot VM needs its own `LAB_VM` name (and
+its own disk, weights re-downloaded once) and `LAB_VM_SPOT=1` set on every call that touches it. `status` shows `spot`
+or `on-demand`. When ssh drops and the VM is found stopped within a minute, `run` skips the fetch and collect and
+prints the command that restarts it and brings the results home. Set `LAB_GPU_USD_PER_HOUR` to the spot price so run
+budgets are charged what it costs.
 
 Verda's `stop` deletes the instance and its OS volume: Verda's hibernate hides the instance from
 its own API so it cannot be restored, and its shutdown keeps billing the GPU. Each session therefore

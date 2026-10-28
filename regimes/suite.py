@@ -30,7 +30,8 @@ from . import workload as W
 from .client import Request, send, wall_clock
 from .runner import CONVERSATIONAL, INTERACTIVE, Limits, find_goodput, run_closed, run_open, summarize
 
-TIERS = {"short": {"probe_s": 30.0, "final_s": 60.0}, "full": {"probe_s": 60.0, "final_s": 600.0}}
+TIERS = {"min": {"probe_s": 15.0, "final_s": 30.0}, "short": {"probe_s": 30.0, "final_s": 60.0},
+         "full": {"probe_s": 60.0, "final_s": 600.0}}
 MAX_STRETCH = 4.0
 
 
@@ -236,14 +237,14 @@ def saturated(ctx: Ctx, max_concurrency: int = 4096) -> dict:
 
 
 def bursty(ctx: Ctx) -> dict:
-    """The spike trace at `speed` x its real request rate over its own span (burst shape kept, `W.scaled`); short tier
-    crops to the peak window."""
+    """The spike trace at `speed` x its real request rate over its own span (burst shape kept, `W.scaled`); below full,
+    cropped to the peak window."""
     if ctx.workload is not None:
         return {**_result("bursty", "speedup", None, "higher", None),
                 "invalid_reasons": ["a --workload file has no arrival times to replay"]}
     trace = ctx.pool("spike")
     _warmup(ctx, trace)
-    window = W.peak_window(trace) if ctx.tier == "short" else None
+    window = W.peak_window(trace) if ctx.tier != "full" else None
 
     def measure(speed, _final):                     # the trace is its own duration; confirming is a rerun
         return summarize(ctx.run_open(W.scaled(trace, speed, window, ctx.seed)), ctx.conversational)
@@ -380,7 +381,7 @@ FACTS = {
                   "the limits, the highest passing level rerun at full length", "goodput, good requests/s", "conversational"),
     "bursty": ("the spike trace open loop at a searched multiple of its real request rate over its own span, burst "
                "shape kept: each arrival is joined by that many more, spread over the gap to the next and drawn from the "
-               "trace (short tier: its peak window)", "the highest multiple whose requests meet the limits",
+               "trace (tiers min and short: its peak window)", "the highest multiple whose requests meet the limits",
                "conversational"),
     "long_prompt_short_output": ("Poisson arrivals of long_context prompts, max_tokens 64",
                                  "goodput, good requests/s", "conversational"),

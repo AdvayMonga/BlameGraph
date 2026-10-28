@@ -133,7 +133,7 @@ def facts(task, kernel_tasks: dict | None, regimes: tuple[str, ...] = ()) -> str
 
 
 def search(task, caps: list[Path], start: Path, out: Path, usd: float, evals: int, ledger_root: Path, env: dict,
-           funnel: bool = True, device: str = "cuda", facts_text: str | None = None) -> dict:
+           device: str = "cuda", facts_text: str | None = None) -> dict:
     """`python -m kernels.search` on the captures: its last JSON line (best, cost, out, ledger record id)."""
     out.mkdir(parents=True, exist_ok=True)
     if facts_text:
@@ -141,7 +141,7 @@ def search(task, caps: list[Path], start: Path, out: Path, usd: float, evals: in
     argv = [sys.executable, "-m", "kernels.search", "--task", task.name, "--out", str(out), "--usd", str(usd),
             "--evals", str(evals), "--initial", str(start), "--ledger", str(ledger_root), "--equal-captures",
             "--device", device, *(["--facts", str(out / "facts.txt")] if facts_text else []),
-            *[w for c in caps for w in ("--captures", str(c))], *([] if funnel else ["--no-funnel"])]
+            *[w for c in caps for w in ("--captures", str(c))]]
     p = subprocess.run(argv, capture_output=True, text=True, cwd=ROOT, env={**os.environ, **env})
     lines = [x for x in p.stdout.splitlines() if x.startswith("{")]
     if p.returncode != 0 or not lines:

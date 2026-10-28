@@ -1,7 +1,9 @@
-"""Instrumented runs of the agent's pristine tree, one tool per instrument. Each wraps lab.profile's workload inside
-the jail, passes the instrument's own flags through as an argument list, keeps the raw output as a ledger blob and
-returns a short raw summary.
+"""Instrumented runs of the agent's pristine tree, one tool per instrument, all through one path (`instrument` on the
+worker, `run_instrument` here): lab.profile's workload inside the jail, the instrument's own flags passed through as
+an argument list, the GPU watched like a served engine, one record shape (verdict ok | failed | refused |
+contaminated), the raw output kept as a ledger blob and a short raw summary returned.
 
+  profile   torch.profiler: the bundle (event timeline, chrome trace, op and kernel tables, memory) with layer facts
   trace     Nsight Systems: timeline of the measured window (.nsys-rep) plus `nsys stats` CSV tables
   kernel    Nsight Compute: kernels whose name matches a regex (.ncu-rep) plus `ncu --import --csv --page raw`
   hostprof  py-spy: the engine process sampled for D seconds under a sustained workload (speedscope) plus one dump
@@ -15,9 +17,9 @@ import shutil
 import time
 from pathlib import Path
 
-from lab import profiles, target
+from lab import calibrate, layers, profiles, serve, target
 from lab.agent import ToolSpec
-from lab.evaltools import _killed
+from lab.evaltools import _failed, _killed
 
 PROFILE_ARG = " `profile`: run the engine under that regime's launch profile (default the general one)."
 OUT = "_instr"                      # in the pristine tree: writable in the jail, rebuilt on every call
@@ -72,9 +74,14 @@ def _head(path: Path | None) -> str:
 
 
 def instrument(kind: str, args: dict) -> dict:
-    """One instrument from validated args: its binary, `wrap(exe, out)` around lab.profile, lab.profile `flags`,
-    `post(exe, out)` -> (argv, file for its stdout) run after, the `summary` glob, and `extra(exe)` flags."""
+    """One instrument from validated args: its binary (None: torch, in lab.profile itself), `wrap(exe, out)` around
+    lab.profile, lab.profile `flags`, `post(exe, out)` -> (argv, file for its stdout) run after, the `summary` glob,
+    `extra(exe)` flags, and `bundle_only`: the blob is lab.profile's bundle rather than the whole output dir."""
     wl = workload(args)
+    if kind == "profile":
+        capture = [w for f in _flags(args, "capture") for w in ("--capture", f)]
+        return {"binary": None, "flags": wl + ["--profiler", "torch", *capture], "summary": None,
+                "wrap": lambda exe, out: [], "post": None, "extra": lambda exe: [], "bundle_only": True}
     if kind == "trace":
         flags = _flags(args, "nsys_args", NSYS_FLAGS)
         return {"binary": "nsys", "flags": wl + ["--profiler", "cuda-range"], "summary": "stats_cuda_gpu_kern_sum.csv",
@@ -82,7 +89,7 @@ def instrument(kind: str, args: dict) -> dict:
                                           *flags, "--stats", "false"],
                 "post": lambda exe, out: ([exe, "stats", "--report", NSYS_REPORTS, "--format", "csv", "--output",
                                            str(out / "stats"), str(out / "trace.nsys-rep")], None),
-                "extra": lambda exe: []}
+                "extra": lambda exe: [], "bundle_only": False}
     if kind == "kernel":
         rx = kernel_regex(args["kernel_regex"]) if "kernel_regex" in args else None
         skip, count = _int(args, "launch_skip", 0, 0), _int(args, "launch_count", 8, 1)
@@ -97,20 +104,23 @@ def instrument(kind: str, args: dict) -> dict:
                                           "--target-processes", "all", *flags],
                 "post": lambda exe, out: ([exe, "--import", str(out / "kernel.ncu-rep"), "--csv", "--page", "raw"],
                                           out / "metrics.csv"),
-                "extra": lambda exe: []}
+                "extra": lambda exe: [], "bundle_only": False}
     if kind == "hostprof":
         seconds, rate = _int(args, "seconds", 20, 1), _int(args, "rate", 100, 1)
         more = [w for f in _flags(args, "pyspy_args") for w in ("--pyspy-arg", f)]
         return {"binary": "py-spy", "flags": wl, "summary": "bundle/*/pyspy-dump.txt", "wrap": lambda exe, out: [],
                 "post": None,
                 "extra": lambda exe: ["--profiler", "pyspy", "--seconds", str(seconds), "--rate", str(rate),
-                                      "--pyspy-bin", exe, *more]}
+                                      "--pyspy-bin", exe, *more], "bundle_only": False}
     raise ValueError(f"unknown instrument {kind!r}")
 
 
 class ProfTools:
     """Mixin for lab.tools.Toolbox: needs self._audited, self._pristine, self._record, self._keep, self._work,
     self.worker."""
+
+    def profile(self, args: dict) -> str:
+        return self._instrumented("profile", args)
 
     def trace(self, args: dict) -> str:
         return self._instrumented("trace", args)
@@ -122,39 +132,70 @@ class ProfTools:
         return self._instrumented("hostprof", args)
 
     def _instrumented(self, tool: str, args: dict) -> str:
-        """The instrument around lab.profile's workload, then its report step, both jailed on the worker (the report
-        was written by agent code). Kept as one blob; the head of its summary is returned."""
-        instrument(tool, args)                  # refuse bad arguments before anything is snapshotted or run
+        """A profiler tool call: arguments checked before anything is snapshotted, then one run, recorded as `profile`."""
+        instrument(tool, args)
         snap = self._audited(tool, args)
         tree = self._pristine()
         why = profiles.refusal(tree, target.load(), args.get("profile"))
-        if why:
-            self._record("note", tool, args, {"verdict": "refused", "reason": why}, snap)
-            return f"{tool} refused: {why}"
+        result = {"verdict": "refused", "reason": why} if why else self.run_instrument(tool, tree, args)
+        head = result.pop("head", "")
+        self._record("profile", tool, args, result, snap)
+        killed = f"\nkilled in your workbench (held the GPU): {json.dumps(result['workbench_killed'])}" \
+            if result.get("workbench_killed") else ""
+        if result["verdict"] in ("refused", "contaminated"):
+            return f"{tool} {result['verdict']}: {result['reason']}{killed}"
+        if result["verdict"] == "failed":
+            return f"{tool} failed ({result['returncode']}):\n{result['output']}{killed}"
+        if not head:                             # torch's bundle has no one summary file: its file names
+            head = "\n".join(f"  {p.name}" for p in sorted((self.s.workspace.path / result["workspace_copy"]).iterdir()))
+        return f"{tool} output at {result['workspace_copy']} (in your workspace; left out of your change)\n{head}{killed}"
+
+    def run_instrument(self, tool: str, tree: Path, args: dict, timeout_s: int | None = None) -> dict:
+        """One run of `tool`'s instrument on `tree` on the worker, as the result its record keeps: `verdict` ok |
+        failed | refused | contaminated (`reason`, `gpu_processes`, as a bench's), the output as a blob and a
+        workspace copy, `calibrated`, and `head` (the summary returned to the agent, not recorded)."""
         out = self._work(tool)
         t0 = time.monotonic()
+        job = {"kind": tool, "args": args, "workbench": getattr(self.s, "workbench", None),
+               **({"timeout_s": timeout_s} if timeout_s else {})}
         try:
-            r = self.worker.call("profile", {"tree": tree},
-                                 {"kind": tool, "args": args, "workbench": getattr(self.s, "workbench", None)}, out)
+            try:
+                r = self.worker.call("profile", {"tree": tree}, job, out)
+            except (serve.GpuBusy, serve.Contaminated) as e:
+                return {**_failed(e), "seconds": time.monotonic() - t0}
             if r.get("refused"):
-                self._record("note", tool, args, {"verdict": "refused", "reason": r["refused"]}, snap)
-                return f"{tool} refused: {r['refused']}"
+                return {"verdict": "refused", "reason": r["refused"], "seconds": time.monotonic() - t0}
             files = out / "files"
             blob, visible = self._keep(files) if files.is_dir() and any(p.is_file() for p in files.rglob("*")) else ("", "")
         finally:
             shutil.rmtree(out, ignore_errors=True)
-        from lab import calibrate
+        ok = r["returncode"] == 0 and bool(blob)
+        return {"verdict": "ok" if ok else "failed", "returncode": r["returncode"], "bundle": blob,
+                "workspace_copy": visible, "instrument": r.get("instrument"), "argv": r.get("argv"),
+                "seconds": time.monotonic() - t0, "output": r["output"], "gpu": r.get("gpu"),
+                "calibrated": self._calibrated(tool, args, blob, r.get("gpu")) if blob else None,
+                "head": r.get("head", ""), **_killed(r)}
+
+    def _calibrated(self, tool: str, args: dict, blob: str, gpu: dict | None) -> dict | None:
+        """The instrument's numbers in context: torch's kernel time with each layer's facts and each kernel task's
+        share, ncu's metrics against the GPU's peaks, nsys's kernel and API time against the window, py-spy's samples
+        per thread and function; never costs the run it describes."""
+        from lab.tools import task_shares
+        path = self.s.ledger_root / blob
         try:
-            cal = calibrate.calibrate_ncu(self.s.ledger_root / blob / "metrics.csv", r.get("gpu")) if blob and tool == "kernel" else None
+            if tool == "profile":
+                cal = calibrate.calibrate_kernels(path, gpu)
+                if cal is not None:
+                    cal["layers"] = layers.from_bundle(path, target.load(), gpu)
+                    cal["kernel_tasks"] = task_shares(path)
+                return cal
+            if tool == "kernel":
+                return calibrate.calibrate_ncu(path / "metrics.csv", gpu)
+            if tool == "trace":
+                return calibrate.calibrate_nsys(path, any("cudaProfilerApi" in f for f in _flags(args, "nsys_args", NSYS_FLAGS)))
+            return calibrate.calibrate_pyspy(path)
         except Exception as e:                   # noqa: BLE001
-            cal = {"error": f"calibration failed: {type(e).__name__}: {e}"}
-        result = {"calibrated": cal, "returncode": r["returncode"], "bundle": blob, "workspace_copy": visible, "instrument": r["instrument"],
-                  "argv": r["argv"], "seconds": time.monotonic() - t0, "output": r["output"], **_killed(r)}
-        self._record("profile", tool, args, result, snap)
-        killed = f"\nkilled in your workbench (held the GPU): {json.dumps(r['killed'])}" if r.get("killed") else ""
-        if r["returncode"] != 0 or not r["head"]:
-            return f"{tool} failed ({r['returncode']}):\n{result['output']}{killed}"
-        return f"{tool} output at {visible} (in your workspace; left out of your change)\n{r['head']}{killed}"
+            return {"error": f"calibration failed: {type(e).__name__}: {e}"}
 
     def prof_specs(self, gpu) -> list[ToolSpec]:
         """`gpu(time)` renders the cost fact for a description."""
@@ -162,10 +203,21 @@ class ProfTools:
         extra = {"profile": {"type": "string"}} if has else {}
         note = PROFILE_ARG if has else ""
         return [
+            ToolSpec("profile", "Run the engine in process under the profiler, jailed, on `requests` sampled from a seen "
+                     "corpus class (`corpus_class`, default steady_interactive; `seed`) or on synthetic token ids "
+                     "(`synthetic`, `prompt_len`); `max_tokens` default 32. Stores the raw bundle (event timeline, chrome "
+                     "trace, op and kernel tables, memory, GPU samples, provenance) in the ledger and copies it into your "
+                     "workspace under lab/runs/, left out of your change. `capture`: \"module:function\" entry points whose every "
+                     "call's argument shapes (and one whole call per shape) go into the bundle's captures/; it "
+                     "synchronizes, so that bundle's times are not representative. Returns the bundle path and its file names."
+                     + note + gpu("1-7 min measured at 16 requests x 64 tokens on an H200 (7 min when the weights were still loading from disk)"),
+                     _schema(capture=FLAGS, **extra), self.profile),
             ToolSpec("trace", "Run the profile workload of your current workspace under Nsight Systems (nsys). "
                      f"`nsys_args`: the `nsys profile` flags, default {' '.join(NSYS_FLAGS)} (the measured window "
                      "only); output and overwrite are set by the tool. Stores the .nsys-rep and `nsys stats` CSV tables "
-                     "(GPU kernels, CUDA API, memory copies, NVTX) in the ledger; returns the head of the kernel table. "
+                     "(GPU kernels, CUDA API, memory copies, NVTX) in the ledger; returns the head of the kernel table. The "
+                     "record's `calibrated`: kernel time, launches, memory-copy time, the top kernels and CUDA API calls "
+                     "by time, and kernel time's share of the profiled window. "
                      "Refused where nsys is not installed." + note + gpu("about 1 min measured at 16 requests x 64 tokens on an H200 (engine start, workload, report export)"),
                      _schema(nsys_args=FLAGS, **extra), self.trace),
             ToolSpec("kernel", "Run the profile workload under Nsight Compute (ncu) on the kernels whose name "
@@ -180,7 +232,9 @@ class ProfTools:
                              set={"type": "string", "default": "basic"}, ncu_args=FLAGS), self.kernel),
             ToolSpec("hostprof", "Sample the engine process with py-spy for `seconds` while the profile workload "
                      "repeats (scheduler and backend in process, warmup excluded). Stores a speedscope profile and one "
-                     "stack dump taken halfway in the ledger; returns the head of the dump. `pyspy_args` are appended "
+                     "stack dump taken halfway in the ledger; returns the head of the dump. The record's `calibrated`: "
+                     "samples per thread and the functions with the most samples on top of the stack (`self`) and "
+                     "anywhere in it (`total`), as shares of all samples. `pyspy_args` are appended "
                      "to `py-spy record`. Refused where py-spy is "
                      "not installed." + note + gpu("about 35 s plus `seconds`, measured on an H200"),
                      _schema(**extra, seconds={"type": "integer", "minimum": 1, "default": 20},

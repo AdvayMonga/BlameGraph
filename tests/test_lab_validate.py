@@ -51,9 +51,9 @@ bad = {{ wrong4 = "python {FAKE} --port {{port}} --out-tokens 6 --wrong-every 4"
 ''')
     monkeypatch.setenv("LAB_TARGET", str(t)); monkeypatch.setenv("LAB_ENGINE_PYTHON", sys.executable)
     target._cache.clear()
-    saved = dict(suite.TIERS["short"]); suite.TIERS["short"].update(probe_s=1.0, final_s=1.5)
+    saved = dict(suite.TIERS["min"]); suite.TIERS["min"].update(probe_s=1.0, final_s=1.5)
     yield target.load()
-    suite.TIERS["short"].update(saved); target._cache.clear()
+    suite.TIERS["min"].update(saved); target._cache.clear()
 
 
 def test_validate_separates_and_measures_bands(spec, tmp_path, monkeypatch):
@@ -66,7 +66,7 @@ def test_validate_separates_and_measures_bands(spec, tmp_path, monkeypatch):
     rep = validate.validate(spec, noise_runs=2, regimes=["single_stream"], out=tmp_path / "out", encoder=Enc(),
                             root=tmp_path / "ledger")
     ref = json.loads((tmp_path / "reference" / spec.name / "single_stream.json").read_text())
-    assert ref["server"] == "reference" and ref["fingerprint"]["tier"] == "short" and "single_stream" in rep["reference_regimes"]
+    assert ref["server"] == "reference" and ref["fingerprint"]["tier"] == "min" and "single_stream" in rep["reference_regimes"]
     assert ref["value"] is not None and ref["shape"]["prompt_tokens_mean"] > 0
     assert rep["candidates"]["same"]["verdict"] == "pass"
     assert rep["candidates"]["wrong4"]["verdict"] == "fail", rep["candidates"]["wrong4"]

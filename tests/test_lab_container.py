@@ -48,6 +48,14 @@ def test_bridge_wraps_the_command_and_keeps_it_last(docker_named, tmp_path):
     a = container.argv("n", tmp_path, ["python", "-m", "srv"], {}, [tmp_path / "t"], [], sys.executable,
                        bridge_port=8123)
     assert a[-3:] == ["python", "-m", "srv"] and "TCP:127.0.0.1:8123" in a[a.index(container.IMAGE) + 3]
+    assert f"backlog={container.BACKLOG}" in a[a.index(container.IMAGE) + 3]      # socat's default 5 reset a burst
+
+
+def test_the_host_side_of_the_bridge_queues_a_burst_of_connections(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(container.subprocess, "Popen", lambda argv, **kw: seen.append(argv) or object())
+    container.Bridge(8123, tmp_path / "s.sock")
+    assert f"backlog={container.BACKLOG}" in seen[0][1] and container.BACKLOG >= 1024
 
 
 def test_linux_defaults_to_the_container_jail(monkeypatch):

@@ -9,11 +9,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from lab import calibrate, corpus, engine, experiments, layers, ledger, profiles, target
+from lab import corpus, engine, experiments, ledger, target
 from lab.agent import ToolSpec
 from lab.budget import Budget, BudgetExceeded, gpu_rate
-from lab.evaltools import EvalTools, _killed
-from lab.proftools import PROFILE_ARG, ProfTools
+from lab.evaltools import BENCH_TIER, EvalTools
+from lab.proftools import ProfTools
 from lab.safety import grader
 
 # Tools that occupy the GPU: their wall time is charged at the venue's rate. The rest cost $0.
@@ -148,44 +148,6 @@ class Toolbox(EvalTools, ProfTools):
         return f"{head} lint={'ok' if lint.passed else 'fail'} tests={'ok' if tests.passed else 'fail'}\n" \
                f"{lint.output[-1500:]}\n{tests.output[-3000:]}"
 
-    def profile(self, args: dict) -> str:
-        snap = self._audited("profile", args)
-        tree = self._pristine()
-        why = profiles.refusal(tree, target.load(), args.get("profile"))
-        if why:
-            self._record("note", "profile", args, {"verdict": "refused", "reason": why}, snap)
-            return f"profile refused: {why}"
-        t0 = time.monotonic()
-        r, blob, visible, cal = self._profile_job(tree, args)
-        result = {"returncode": r["returncode"], "bundle": blob, "workspace_copy": visible,
-                  "seconds": time.monotonic() - t0, "output": r["output"], "calibrated": cal, **_killed(r)}
-        self._record("profile", "profile", args, result, snap)
-        killed = f"\nkilled in your workbench (held the GPU): {json.dumps(r['killed'])}" if r.get("killed") else ""
-        if r["returncode"] != 0 or not blob:
-            return f"profile failed ({r['returncode']}):\n{result['output']}{killed}"
-        return f"bundle at {visible} (in your workspace; left out of your change)\n" + "\n".join(
-            f"  {p.name}" for p in sorted((self.s.workspace.path / visible).iterdir())) + killed
-
-    def _profile_job(self, tree: Path, args: dict, timeout_s: int | None = None) -> tuple[dict, str, str, dict | None]:
-        """One profile job on `tree`: the worker's reply, the bundle's blob and workspace copy, and its calibration
-        with each layer's facts."""
-        out = self._work("profile")
-        job = {"kind": "profile", "args": args, "workbench": getattr(self.s, "workbench", None)}
-        try:
-            r = self.worker.call("profile", {"tree": tree}, {**job, **({"timeout_s": timeout_s} if timeout_s else {})},
-                                 out)
-            blob, visible = self._keep(out / "files") if (out / "files").is_dir() else ("", "")
-        finally:
-            shutil.rmtree(out, ignore_errors=True)
-        try:                                     # the blob is the bundle itself (worker copies it to `files`)
-            cal = calibrate.calibrate_kernels(self.s.ledger_root / blob, r.get("gpu")) if blob else None
-            if cal is not None:                  # each layer's share of the window and its distance from a ceiling
-                cal["layers"] = layers.from_bundle(self.s.ledger_root / blob, target.load(), r.get("gpu"))
-                cal["kernel_tasks"] = task_shares(self.s.ledger_root / blob)
-        except Exception as e:                   # noqa: BLE001  never costs the measurement it describes
-            cal = {"error": f"calibration failed: {type(e).__name__}: {e}"}
-        return r, blob, visible, cal
-
     def _after_bench(self, tree: Path) -> dict:
         """The profile a completed bench takes of the same tree right after its measurement: its own launch, the
         general config and `profile`'s default workload (8 requests x 32 tokens), so its layer facts describe that load,
@@ -194,14 +156,13 @@ class Toolbox(EvalTools, ProfTools):
         if rate > 0 and self.s.budget.remaining_usd <= 0:
             return {"skipped": "no budget left for GPU time"}
         try:
-            r, blob, visible, cal = self._profile_job(tree, {}, timeout_s=AFTER_BENCH_TIMEOUT_S)
+            r = self.run_instrument("profile", tree, {}, timeout_s=AFTER_BENCH_TIMEOUT_S)
         except Exception as e:                   # noqa: BLE001
             return {"error": f"{type(e).__name__}: {e}"}
-        out = {"launch": "general", "workload": "profile defaults", "returncode": r["returncode"], "bundle": blob,
-               "workspace_copy": visible, "calibrated": cal, **_killed(r)}
-        if r.get("gpu_others"):                  # another process shared the GPU: its numbers are not evidence
-            out.update(contaminated=True, gpu_others=r["gpu_others"])
-        return out if r["returncode"] == 0 and blob else {**out, "output": r["output"][-2000:]}
+        r.pop("head", None)
+        if r["verdict"] == "ok":
+            r.pop("output", None)
+        return {"launch": "general", "workload": "profile defaults", **r}
 
 
     def kernel_search(self, args: dict) -> str:
@@ -237,8 +198,10 @@ class Toolbox(EvalTools, ProfTools):
         out.mkdir(parents=True, exist_ok=True)
 
         def profile(t, a):
-            r, blob, _, _ = self._profile_job(t, a)
-            return self.s.ledger_root / blob if r["returncode"] == 0 and blob else None
+            r = self.run_instrument("profile", t, a)
+            if r["verdict"] in ("refused", "contaminated"):
+                raise RuntimeError(f"a capture was {r['verdict']}: {r['reason']}")
+            return self.s.ledger_root / r["bundle"] if r["verdict"] == "ok" else None
         from lab import worker
         w = self.worker
         remote = isinstance(w, worker.Remote)
@@ -418,10 +381,10 @@ class Toolbox(EvalTools, ProfTools):
             return (f" Costs GPU time: ~{t} per call, charged at ${rate:g}/h." if known else
                     f" Costs GPU time: ~{t} per call; no GPU rate is configured on this host, so it is charged $0."
                     ) + offline + paused
-        short, full = suite.TIERS["short"], suite.TIERS["full"]
-        windows = (f"one engine start plus, per regime, a {short['final_s']:.0f} s measurement window at tier short or "
-                   f"{full['final_s']:.0f} s at full, plus {short['probe_s']:.0f} s / {full['probe_s']:.0f} s probes for "
-                   f"regimes that search for a load")
+        windows = ("one engine start plus, per regime, a measurement window of " +
+                   ", ".join(f"{v['final_s']:.0f} s at tier {k}" for k, v in suite.TIERS.items()) +
+                   ", plus probes of " + " / ".join(f"{v['probe_s']:.0f} s" for v in suite.TIERS.values()) +
+                   " for regimes that search for a load")
         tg = target.load()
         prof = (f" Launch profiles: the engine's {tg.profiles} holds [general] and optional tables named after regimes. "
                 f"Every regime is measured on the general launch; a regime whose table is non-empty is also measured "
@@ -434,22 +397,6 @@ class Toolbox(EvalTools, ProfTools):
                      "referee's jail. Returns PASS or FAIL, lint and test status, and the tail of each output." + offline
                      + free,
                      obj, self.test),
-            ToolSpec("profile", "Run the engine in process under the profiler, jailed, on `requests` sampled from a seen "
-                     "corpus class (`corpus_class`, default steady_interactive; `seed`) or on synthetic token ids "
-                     "(`synthetic`, `prompt_len`); `max_tokens` default 32. Stores the raw bundle (event timeline, chrome "
-                     "trace, op and kernel tables, memory, GPU samples, provenance) in the ledger and copies it into your "
-                     "workspace under lab/runs/, left out of your change. `capture`: \"module:function\" entry points whose every "
-                     "call's argument shapes (and one whole call per shape) go into the bundle's captures/; it "
-                     "synchronizes, so that bundle's times are not representative. Returns the bundle path and its file names."
-                     + (PROFILE_ARG if tg.profiles else "")
-                     + gpu("1-7 min measured at 16 requests x 64 tokens on an H200 (7 min when the weights were still loading from disk)"),
-                     {"type": "object", "properties": {"capture": {"type": "array", "items": {"type": "string"}},
-                                                       "corpus_class": {"type": "string"}, "seed": {"type": "integer"},
-                                                       "synthetic": {"type": "boolean"}, "requests": {"type": "integer"},
-                                                       "prompt_len": {"type": "integer"},
-                                                       "max_tokens": {"type": "integer"},
-                                                       **({"profile": {"type": "string"}} if tg.profiles else {})}},
-                     self.profile),
             ToolSpec("ledger", "Read records of this and earlier runs: every tool call, session and baseline, with "
                      "snapshots and results. Filters: `kind`, `session`, `snapshot`, `tool`. Returns the `last` N "
                      "matches (default 20) as JSON lines." + free,
@@ -461,7 +408,7 @@ class Toolbox(EvalTools, ProfTools):
                      "baseline), heldout_aggregates (each regime of a submit), noise (run-to-run band per regime), "
                      "client_rows (per-request client rows of every bench and equiv, record_id = records.id), "
                      "engine_rows (the engine's per-request telemetry, trace_id = 'bg-' || client_rows.id), "
-                     "device_samples (GPU samples over each served window), kernels and ops (profile bundles). "
+                     "device_samples (GPU samples over each served window), kernels and ops (profile bundles, each bench's `profiled` included). "
                      "`DESCRIBE <table>` lists a table's columns. Returns columns and up to 200 rows as JSON, cut to whole "
                      f"rows under {QUERY_MAX_BYTES // 1000} kB (`truncated` says when rows were dropped)." + free,
                      {"type": "object", "required": ["sql"], "properties": {"sql": {"type": "string"}}}, self.query),
@@ -483,17 +430,18 @@ class Toolbox(EvalTools, ProfTools):
                      {"type": "object", "required": ["text"], "properties": {"text": {"type": "string"}}}, self.note),
             ToolSpec("bench", "Serve a pristine copy of your current workspace (jailed) and measure it under load "
                      f"regimes on the seen split. `regimes`: default {_names(self.bench_defaults())}; 'all'; or "
-                     f"any of {_names(suite.REGIMES)}. `tier`: short (default) or full. `seed`: the seen-split workload sample "
+                     f"any of {_names(suite.REGIMES)}. `tier`: {BENCH_TIER} (default), {_names(t for t in suite.TIERS if t != BENCH_TIER)}. `seed`: the seen-split workload sample "
                      f"(default {self.seed}). Returns one headline per regime "
-                     f"(objective, value, direction, validity), raw. Takes {windows}. At the default seed and tier short, each "
+                     f"(objective, value, direction, validity), raw. Takes {windows}. At the default seed and tier, each "
                      "search starts where the run's base measurement of that regime ended; every search stops once its "
-                     "bracket is within the regime's noise band (10% where none is measured). Then profiles the same tree once "
-                     "with `profile`'s defaults, in its own launch, and keeps it under the result's `profiled` (bundle, "
-                     "calibrated layer facts); a failed profile is recorded there and never fails the bench."
-                     + prof + gpu("5-25 min per regime, plus the profile's 1-7 min"),
+                     "bracket is within the regime's noise band (10% where none is measured). With `profile` true, then profiles "
+                     "the same tree once with `profile`'s defaults, in its own launch, and keeps it under the result's "
+                     "`profiled` (bundle, calibrated layer facts); a failed profile is recorded there and never fails the bench."
+                     + prof + gpu("~2 min engine start plus 2-20 min per regime, plus the profile's 1-7 min when asked"),
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}},
-                                                       "tier": {"type": "string", "enum": ["short", "full"]},
-                                                       "seed": {"type": "integer"}}}, self.bench),
+                                                       "tier": {"type": "string", "enum": list(suite.TIERS)},
+                                                       "seed": {"type": "integer"},
+                                                       "profile": {"type": "boolean"}}}, self.bench),
             ToolSpec("equiv", "Serve your current workspace and run the correctness gate against the reference "
                      "model's outputs at `tier` dev (default) or full. Returns pass, fail or inconclusive with every "
                      "metric. Items are answered in one fixed order and the gate stops at 200, 400, 800, ... items once "
@@ -606,12 +554,13 @@ def task_shares(bundle: Path) -> dict:
 
 
 def default_profile_runner(tree: Path, argv: list[str], read: list[Path] = (), env: dict | None = None,
-                           timeout_s: int = 3600):
+                           timeout_s: int = 3600, on_start=None):
     """lab.profile in the pristine tree as agent code: jailed, with the target's engine env (and `env`: a launch
-    profile's), weights and `read` read-only, harness first on the path."""
+    profile's), weights and `read` read-only, harness first on the path; `on_start` as `grader.jailed`'s."""
     path = os.pathsep.join([str(tree / HARNESS_DIR), str(tree / "src"), str(tree)])
     return grader.jailed(tree, argv, timeout_s=timeout_s,
-                         env_extra={**target.load().engine.env, **(env or {}), "PYTHONPATH": path}, read=read)
+                         env_extra={**target.load().engine.env, **(env or {}), "PYTHONPATH": path}, read=read,
+                         on_start=on_start)
 
 
 def clean_pristine(run_dir: Path) -> None:

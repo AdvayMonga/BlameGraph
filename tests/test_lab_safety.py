@@ -97,6 +97,24 @@ def test_jailed_timeout_is_a_failed_run(tmp_path, monkeypatch):
     assert proc.returncode == -9 and "timed out" in proc.stderr
 
 
+def test_jailed_names_its_processes_to_a_watcher(tmp_path, monkeypatch):
+    import sys
+    from lab import gpu
+    monkeypatch.setenv("LAB_NO_JAIL", "1")
+    repo = make_repo(tmp_path)
+    tree = tmp_path / "t"
+    grader.export(repo, "HEAD", tree)
+    seen = []
+    monkeypatch.setattr(gpu, "descendants", lambda pid: {pid})
+    proc = grader.jailed(tree, [sys.executable, "-c", "print('hi')"], timeout_s=30, on_start=lambda pids: seen.append(pids()))
+    assert proc.returncode == 0 and proc.stdout == "hi\n" and len(seen) == 1 and seen[0]
+    import time
+    child = "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(8)']); time.sleep(8)"
+    t0 = time.monotonic()                           # a child left holding the pipes must not hold up the timeout
+    proc = grader.jailed(tree, [sys.executable, "-c", child], timeout_s=0.5, on_start=lambda pids: None)
+    assert proc.returncode == -9 and "timed out" in proc.stderr and time.monotonic() - t0 < 4
+
+
 def test_pristine_tree_diff_lint_and_tests(tmp_path, monkeypatch):
     monkeypatch.setenv("LAB_NO_JAIL", "1")
     repo = make_repo(tmp_path)
