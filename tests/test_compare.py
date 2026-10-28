@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -10,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from compare import report, run as R  # noqa: E402
 
 FAKE = Path(__file__).resolve().parent / "fake_engine.py"
+os.environ.setdefault("LAB_TARGET", str(FAKE.parent.parent / "targets" / "inference-server.toml"))  # run as a script too
 
 
 def _spec(slots: dict[str, int]) -> dict:
