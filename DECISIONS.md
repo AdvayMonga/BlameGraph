@@ -3,6 +3,19 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-27 — The funnel's model calls run in parallel; the strong coder writes only the programs kept
+Four changes to every funnel round, none to what a round decides. (1) Model calls (judge calls, merges, drafts,
+repairs, rewrites) run 8 at a time (`--workers`), the first of each batch alone so the rest read its prompt cache;
+GPU timings stay one at a time. (2) The strong coder (Opus) rewrites only the programs that pass the quick timing's
+cut, not every correct draft, and a rewrite replaces its draft only when it passes stage 1 and times faster; the
+drafts stay the wide coder's (Sonnet), repairs the strong coder's. (3) Prompts are cached: the task's setting and a
+parent's program and measurements are sent as cached blocks before the per-call part (`llm.CACHE_SPLIT`). (4) ncu
+counters are taken when a program is first chosen as a parent, not at its full exam: they feed only its children's
+prompts, so a child's predicted counter changes are measured only when its parent had them. Why (the user, after the
+first real generations run sat ~1 h in generation 0): the checks took ~10 of its 57 minutes; the rest was ~80 serial
+Opus calls, as the frontier systems avoid by sampling in parallel (AlphaEvolve, OpenEvolve, ShinkaEvolve). Replaces
+the strong coder rewriting every survivor (2026-10-23) and ncu at every full exam (2026-10-17).
+
 
 ## 2026-10-26 — The kernel search runs generations: funnel rounds from fitness-drawn parents
 `kernels.search` becomes a genetic search inside one call (`kernels/search/generations.py`): generation 0 is the funnel

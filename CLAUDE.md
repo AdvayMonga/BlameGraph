@@ -366,10 +366,14 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `--second-judge-share` 4; the past-failure check stays the judge's). Then: same-idea clusters
   merged by `--cheap-model`, ideas like archived ones that never beat their parent kept only when the judge names what
   differs, `--wide-model` writes each, the no-GPU precheck (`--precheck`, default on) drops what fails to build and keeps
-  the compiler's report on the program (the compiler slice of its children), stage 1 in `--parallel` jails, failures repaired once and survivors rewritten by
+  the compiler's report on the program (the compiler slice of its children), stage 1 in `--parallel` jails, failures repaired once by
   the strong coder, a quick timing on the most-called shape (`jailed.QUICK_STAGE`; programs within 5% of the cutoff
-  timed once more and ranked by their mean, `race`), the fastest `--keep` to stage 2
-  (+ncu); only those join the tree (a round that examined nothing is one failure of its parent). Each hypothesis may
+  timed once more and ranked by their mean, `race`), the fastest `--keep` rewritten by the strong coder (the rewrite
+  kept only if it passes stage 1 and times faster, decided 2026-10-27) and sent to stage 2; only those join the tree
+  (a round that examined nothing is one failure of its parent). A parent gets its ncu counters (stage 3) when it is
+  first chosen, not at its full exam. Model calls run `--workers` (8) at a time, the first of each batch alone so the
+  rest read the prompt cache it writes (`kernels/search/llm.py`'s `CACHE_SPLIT`: the stable part of a prompt is sent as
+  cached blocks); GPU timings run one at a time. Each hypothesis may
   predict ncu counter changes (`mechanism`), measured against the parent's. Every idea's fate goes to
   `hypotheses.jsonl` (each idea with its `parent_id`; the row's `parents`, `improved` and the Spearman rank correlation
   between the quick timing and the full exam over the programs that took both, `quick_vs_full_spearman`), which the

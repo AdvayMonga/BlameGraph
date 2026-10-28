@@ -159,7 +159,8 @@ def test_ncu_is_not_asked_for_again_once_the_host_refuses_and_programs_are_never
     t = Tree()
     root = t.add(Node("r", None, START, {"correct": 1.0, "combined_score": 0.1, "stage": 2}, {}, 0))
     kids = expand(f, t, root, "SYS", 1, lambda n, c: t.add(n), [].append)
-    assert calls.count(3) == 1 and not f.ncu and "ncu_missing" in kids[0].artifacts
+    assert calls.count(3) == 1 and not f.ncu and "ncu_missing" in root.artifacts      # the parent's, asked once
+    assert all("ncu" not in k.artifacts and "ncu_missing" not in k.artifacts for k in kids)   # children: as parents
     rows = []
     expand(f, t, root, "SYS", 2, lambda n, c: t.add(n), rows.append)       # the same ideas again, on the same parent
     again = {x["idea"]["modification_plan"]: x["fate"] for x in rows[0]["ideas"]}
@@ -179,6 +180,60 @@ def test_a_malformed_verdict_never_crashes_and_unmeasured_archive_ideas_never_bl
     kept, dropped = past_failures(f, "S", "B", [h(5), h(6)])
     assert [k["modification_plan"] for k in kept] == ["set a = 5", "set a = 6"] and not dropped
     assert kept[0]["differs_from_archive"] == "parent changed"
+
+
+def test_counters_are_taken_when_a_program_first_becomes_a_parent_and_the_strong_coder_writes_only_the_kept():
+    from kernels.search.funnel import Funnel, Models, expand
+    from kernels.search.tree import Node, Tree
+    stages, strong = [], []
+
+    def staged(code, n):
+        stages.append(n)
+        if n == 3:
+            return {"metrics": {}, "artifacts": {"ncu": json.dumps({"shapes": [{"kernels": [{"name": "k", "x": 1}]}]})}}
+        return stage(code, n)
+
+    def strong_coder(system, user):
+        strong.append(user)
+        return coder(system, user)
+    f = Funnel(Models(Judge(), merge, coder, strong_coder), staged, per_call=3, keep=2, parallel=2, ptx="cards",
+               ncu=True, workers=4)
+    t = Tree()
+    root = t.add(Node("r", None, START, {"correct": 1.0, "combined_score": 0.1, "stage": 2}, {}, 0))
+    rows = []
+    kids = expand(f, t, root, "SYS", 1, lambda n, c: t.add(n), rows.append)
+    assert stages.count(3) == 1 and "ncu" in root.artifacts and stages.index(3) == 0     # before any child is made
+    assert all("ncu" not in k.artifacts for k in kids)
+    rewrites = [u for u in strong if "passed correctness" in u]
+    assert len(rewrites) == len(kids) == 2                    # the kept two only, not every correct draft
+    assert rows[0]["rewritten"] == 0 and all(x.get("written_by", "").startswith("draft (rewrite not applied: identical")
+                                               for x in rows[0]["ideas"] if x["fate"] == "full exam")   # same code
+    expand(f, t, kids[0], "SYS", 2, lambda n, c: t.add(n), [].append)
+    assert stages.count(3) == 2 and "ncu" in kids[0].artifacts                  # profiled once chosen as a parent
+
+
+def test_model_calls_run_in_parallel_the_first_alone_and_a_program_written_twice_in_a_batch_is_refused():
+    import threading
+    import time
+    from kernels.search.funnel import Funnel, Models, pmap, written
+    f = Funnel(Models(None, None, None, None), stage, workers=4)
+    live, peak, order = [0], [0], []
+    lock = threading.Lock()
+
+    def slow(x):
+        with lock:
+            live[0] += 1
+            peak[0] = max(peak[0], live[0])
+            order.append(("start", x, live[0]))
+        time.sleep(0.05)
+        with lock:
+            live[0] -= 1
+        return x * 2
+    assert pmap(f, slow, range(9)) == [x * 2 for x in range(9)]
+    assert order[0] == ("start", 0, 1) and order[1][0] == "start" and peak[0] == 4     # the first alone, then 4 at once
+    seen = set()
+    out = written(f, [("a = 1\n", ""), ("a=1\n", ""), (None, "no diff"), ("a = 2\n", "")], seen)
+    assert [c for c, _ in out] == ["a = 1\n", None, None, "a = 2\n"] and "identical" in out[1][1] and len(seen) == 2
 
 
 if __name__ == "__main__":

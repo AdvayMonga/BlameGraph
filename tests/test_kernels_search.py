@@ -564,9 +564,38 @@ def test_the_judge_can_query_the_ledger_and_search_the_web_across_turns():
     finally:
         llm.run_query = orig
     assert text == "[plan]" and len(sent) == 3 and {t["name"] for t in sent[0]["tools"]} == {"web_search", "query"}
-    results = next(m["content"] for m in sent[-1]["messages"] if m["role"] == "user" and isinstance(m["content"], list))
+    results = next(m["content"] for m in sent[-1]["messages"] if m["role"] == "user"
+                   and m["content"][0].get("type") == "tool_result")
     assert results[0]["type"] == "tool_result" and "SELECT 1" in results[0]["content"]
     assert abs(usd - 3 * (1000 * 4 + 100 * 20) / 1e6 - 3 * 2 * llm.WEB_SEARCH_USD) < 1e-9
+
+
+def test_the_stable_parts_of_a_prompt_are_sent_as_cached_blocks_and_the_marker_never_reaches_the_model():
+    from types import SimpleNamespace
+    from kernels.search import llm
+    sent = []
+
+    def stream(client, **kw):
+        sent.append(kw)
+        usage = SimpleNamespace(model_dump=lambda: {"input_tokens": 10, "output_tokens": 1,
+                                                    "cache_read_input_tokens": 1_000_000})
+        return SimpleNamespace(model="claude-opus-5-5", usage=usage, stop_reason="end_turn",
+                               content=[SimpleNamespace(type="text", text="ok")])
+    c = llm.Claude.__new__(llm.Claude)
+    c.client, c.model, c.effort, c.max_tokens, c.tools, c.max_turns, c.ledger_root = None, "claude-opus-5-5", "high", \
+        100, False, 8, None
+    orig, llm._stream = llm._stream, stream
+    try:
+        _, usd = c("SETTING" + llm.CACHE_SPLIT + "ROLE", "PROGRAM" + llm.CACHE_SPLIT + "PLAN")
+        c("SETTING", "PROGRAM ONLY")
+    finally:
+        llm._stream = orig
+    system, user = sent[0]["system"], sent[0]["messages"][0]["content"]
+    assert [b["text"] for b in system] == ["SETTING", "ROLE"] and all(b["cache_control"] for b in system)
+    assert [b["text"] for b in user] == ["PROGRAM", "PLAN"] and "cache_control" in user[0] and "cache_control" not in user[1]
+    assert llm.CACHE_SPLIT not in json.dumps(sent)
+    assert "cache_control" not in sent[1]["messages"][0]["content"][0]        # one part: nothing to share
+    assert 0.2 < usd < 0.3                                    # 1M cache-read tokens at $0.20, not the $4 input rate
 
 
 def test_a_turn_whose_stream_dies_is_sent_again_and_a_real_error_is_not():
