@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import re
 
-from diagnostics.claims_audit import _matches
 from feedback.lab_verdict import metrics, passed, refused
 
 REC_RE = re.compile(r"\bev-\d{8}-[0-9a-f]{12}\b")
@@ -24,6 +23,17 @@ KINDS_OF = {"verified": ("test", "equiv", "bench"), "tested": ("test",), "passes
             "equivalent": ("equiv",), "faster": ("submit",), "speedup": ("submit",)}   # only submit compares
 SHOWS = {"test": "passed lint and tests", "equiv": "passed", "bench": "completed with a valid measurement",
          "submit": "has a regime with verdict 'improved'"}
+
+
+def _matches(claim: float, text: str, seen: list[float]) -> bool:
+    """A seen value rounds to the claim at the claim's own precision (also across s<->ms)."""
+    decimals = len(text.split(".")[1]) if "." in text else 0
+    tol = 0.5 * 10 ** (-decimals) + abs(claim) * 0.005
+    for s in seen:
+        for x in (s, s * 1000.0, s / 1000.0):
+            if abs(x - claim) <= tol:
+                return True
+    return False
 
 
 def _text(c) -> str:

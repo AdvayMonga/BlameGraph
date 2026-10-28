@@ -3,6 +3,12 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-28 — Everything from the InferenceBench era is removed
+`logs/`, the InferenceBench diagnostics (`assertions`, `blame`, `claims_audit`, `exploration`, `inject`, `noise`),
+`feedback/verdict.py`, their tests, and the `research-v1` tag are deleted; `python -m feedback` reads lab ledgers
+only. Why (the user): none of it is used by the lab, and it is not BlameGraph's. The one helper the lab used
+(`claims_audit._matches`) moved into `feedback/claim_facts.py`. Replaces the 2026-10-04 snapshot tag.
+
 ## 2026-10-28 — Minimal gates: a merge is bench + equiv; bench at a `min` tier; equiv is MLPerf's rule only
 A change is merged on a seen-split `bench` and a passing dev-tier `equiv`; `submit` stays as built but is not
 required (the agent's referee still asks for one). `bench` runs at a new tier `min` (15 s probes, 30 s final, still
