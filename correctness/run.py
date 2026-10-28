@@ -3,8 +3,8 @@
   reference   once per model/hardware: the unmodified model (vLLM, BF16, VLLM_BATCH_INVARIANT=1) answers every task
               item and scores its own outputs token by token. Saved to a directory.
   candidate   per change: the optimized server answers the same items; the gate compares accuracy and length
-              (MLPerf's rule only; divergence is `quick`'s). Items go in one fixed order (by id hash, the same for every candidate) and the gate looks at
-              200, 400, 800, ... of them, stopping once the accuracy is clear of the line either way (`_decided`).
+              (MLPerf's rule only; divergence is `quick`'s). Items go in one fixed order (by id hash, the same for
+              every candidate) and the gate looks at 200, 400, 800, ... of them, stopping once the accuracy is clear of the line either way (`_decided`).
               Writes the verdict and an inference-server lab-ledger `equiv` record.
   verdict     re-judge saved candidate results under a policy, without a server.
 """

@@ -13,7 +13,9 @@ consistency probe and no teacher-forced divergence pass (that stays the `quick` 
 early stop at 200, 400, 800, ...) is kept: fewer items would leave a real 1% loss inconclusive. Why (the user): do
 only as much as a merge needs for now; with one session at a time and no noise bands measured, a second held-out
 bench adds little. Replaces, in part, 2026-10-18 (short gates: short-tier bench and submit), 2026-10-22 (every bench
-followed by a profile) and the consistency gate of 2026-10-04.
+followed by a profile) and the consistency gate of 2026-10-04. Consequence: the performance references in
+`knowledge/reference/` were measured at `short`, so a `min` bench shows no `% of reference` (the field says why)
+until `lab.validate` measures them again.
 
 ## 2026-10-27 — No roofline stop: a search runs to its budget
 `kernels.search` no longer stops when the best program reaches a share of its roofline (`--stop-pct`, 80 by
