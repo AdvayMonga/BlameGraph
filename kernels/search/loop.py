@@ -19,7 +19,7 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-from kernels.search import diff
+from kernels.search import diff, tune
 from kernels.search.llm import CACHE_SPLIT
 from kernels.search.tree import UCT_C, Node, Tree, fingerprint
 
@@ -88,7 +88,8 @@ def ncu_facts(node: Node) -> str:
 
 def facts(node: Node) -> str:
     """A node's measurements as the evaluator returned them, compacted: the gates (with reasons when failed), the
-    per-shape timings, the error against the reference, or the error that stopped it."""
+    per-shape timings, its grid points' scores when it was tuned, the error against the reference, or the error that
+    stopped it."""
     a, out = node.artifacts, [f"metrics: {json.dumps(node.metrics)}"]
     if a.get("error"):
         out.append(f"error: {a['error'][-2000:]}")
@@ -99,6 +100,10 @@ def facts(node: Node) -> str:
     if a.get("timings"):
         out.append("timings (per seen shape, paired with the baseline):")
         out += [json.dumps({k: r.get(k) for k in TIMING_KEYS}) for r in json.loads(a["timings"])]
+    if a.get("tune"):
+        out.append("grid points timed before this measurement (config, score, or why it scored 0):")
+        out += [json.dumps({"config": r.get("config"), "score": r.get("score"), **({"error": r["error"]} if
+                            r.get("error") else {})}) for r in json.loads(a["tune"])]
     if a.get("error_vs_reference"):
         out.append(f"error against the reference: {a['error_vs_reference']}")
     if ncu_facts(node):
@@ -142,27 +147,42 @@ def prompt(tree: Tree, node: Node, plan: str = "", coder: bool = True) -> str:
 REFUSED = "ERR_NVGPUCTRPERM"        # ncu: this host does not let the jail read GPU performance counters
 
 
-def cascade(judge_stage: Callable[[str, int], dict], counters: bool = False) -> Callable[[str], dict]:
-    """Stage 1, then stage 2 for a program that passes it, then (counters=True) its ncu counters: {metrics,
-    artifacts}. Once the host refuses counters, they are not asked for again (two jailed runs per program, for an
+def cascade(judge_stage: Callable[[str, int], dict], counters: bool = False, tuned: bool = False,
+            size_expr: str | None = None) -> Callable[[str], dict]:
+    """Stage 1, then (tuned=True) the program's grid tuned on every seen shape (kernels/search/tune.py), then stage 2
+    for a program that passes it, then (counters=True) its ncu counters: {metrics, artifacts, code: the program
+    measured}. Once the host refuses counters, they are not asked for again (two jailed runs per program, for an
     error: every profile of 2026-10-18/19)."""
     on = [counters]
 
-    def judge(code: str) -> dict:
+    def staged(code: str, n: int) -> dict:
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
             f.write(code)
         try:
-            r = judge_stage(f.name, 1)
-            if r["metrics"].get("correct") != 1.0:
-                return r
+            return judge_stage(f.name, n)
+        finally:
+            Path(f.name).unlink()
+
+    def judge(code: str) -> dict:
+        r = staged(code, 1)
+        if r["metrics"].get("correct") != 1.0:
+            return {**r, "code": code}
+        rows = []
+        if tuned:
+            code, rows = tune.tuned(staged, code, quick=False, size_expr=size_expr)
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+            f.write(code)
+        try:
             r = judge_stage(f.name, 2)
+            if rows:
+                r["artifacts"] = {**r["artifacts"], "tune": json.dumps(rows)}
             if on[0] and r["metrics"].get("correct") == 1.0 and r["metrics"].get("combined_score", 0) > 0:
                 a = judge_stage(f.name, 3)["artifacts"]
                 if REFUSED in json.dumps(a):
                     on[0] = False
                     a = {"ncu_missing": f"ncu counters unavailable on this host ({REFUSED}); not collected this run"}
                 r["artifacts"] = {**r["artifacts"], **a}
-            return r
+            return {**r, "code": code}
         finally:
             Path(f.name).unlink()
     return judge
@@ -212,11 +232,11 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
                 return
             r = judge(code)
             judged += 1
-            keep(Node(uuid.uuid4().hex[:8], parent.id, code, r["metrics"], r["artifacts"], it, text), c)
+            keep(Node(uuid.uuid4().hex[:8], parent.id, r.get("code", code), r["metrics"], r["artifacts"], it, text), c)
 
         r = judge(initial)
         judged += 1
-        keep(Node(uuid.uuid4().hex[:8], None, initial, r["metrics"], r["artifacts"], 0), 0.0)
+        keep(Node(uuid.uuid4().hex[:8], None, r.get("code", initial), r["metrics"], r["artifacts"], 0), 0.0)
         best_at, best_score = judged, tree.best().score
         while judged < evals and spent < usd and not gpu_out():
             if tree.best().score > best_score:

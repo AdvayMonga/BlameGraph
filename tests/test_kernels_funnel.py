@@ -242,3 +242,29 @@ if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
             fn(*[Path(tempfile.mkdtemp()) for _ in inspect.signature(fn).parameters]); print("ok", name)
+
+
+def test_every_program_is_tuned_on_its_tiers_shapes_before_it_is_measured():
+    from kernels.search import tune
+    prog = "CONFIG = {'t': 1}\nTUNABLES = {'t': [1, 2, 4]}\n\n\ndef kernel(x):\n    return x\n"
+    calls = []
+
+    def tstage(code, n):
+        calls.append((n, tune.params(code)[0]["t"], "TUNED-DISPATCH-START" in code))
+        if n in (6, 7):                          # point t=2 wins small calls, t=4 large ones
+            rows = [{"config": {"t": t}, "score": s, "timings": [{"shape": [4], "speedup": a, "weight": 0.5},
+                                                                 {"shape": [512], "speedup": b, "weight": 0.5}]}
+                    for t, s, a, b in ((1, 1.0, 1.0, 1.0), (2, 1.3, 2.0, 0.9), (4, 1.2, 0.8, 1.8))]
+            return {"metrics": {"stage": n}, "artifacts": {"tune": json.dumps(rows)}}
+        return {"metrics": {"correct": 1.0, "combined_score": 1.0, "stage": n}, "artifacts": {}}
+    f = Funnel(Models(None, None, None, None), tstage, tune=True, size_expr="args[0].shape[0]")
+    code, r = f.measure(prog, 4)                 # quick: tuned on the most-called shape, then timed
+    assert calls[:2] == [(7, 1, False), (4, 2, False)] and "'t': 2" in code and json.loads(r["artifacts"]["tune"])
+    code2, _ = f.measure(code, 2)                # the full exam: every shape, a dispatcher per size region
+    assert calls[2][0] == 6 and calls[3] == (2, 2, True) and "TUNED-DISPATCH-START" in code2
+    code3, _ = f.measure(code2, 2)               # tuned again: the old dispatcher removed first
+    assert calls[4] == (6, 2, False) and code3.count("TUNED-DISPATCH-START") == 1
+    assert Funnel(Models(None, None, None, None), tstage).measure(prog, 4)[0] == prog     # tuning off
+    from kernels.search.loop import facts
+    shown = facts(Node("n", None, code, r["metrics"], r["artifacts"], 0))
+    assert "grid points timed" in shown and '"config": {"t": 4}, "score": 1.2' in shown       # a fact for the model

@@ -289,12 +289,15 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   (`kernels/evolve/ncu.py`, stage 3 of the jailed evaluator; collected in the jail since 2026-10-27, on a Nebius H200
   whose driver had them open: the earlier refusals, ERR_NVGPUCTRPERM, were on hosts with them closed, which
   `vm-setup.sh` never opened because it grepped the module option's name, not the driver's `RmProfilingAdminOnly`; a
-  run stops asking after the first refusal), and the coder writing it; launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen afterwards by a grid
-  search on each of the top 4 re-timed programs (8 points each, no ncu), written back as constants, the best point
-  promoted only if its re-timed median beats the winner's
-  (`kernels/search/tune.py`), and when different points win in different size regions a dispatcher picks CONFIG per
-  call from the call's size (`Task.size_expr`, tensor shapes only, so CUDA graphs bake it per captured size), promoted
-  on the same rule; the prompt states the best program's % of its call-weighted roofline bound as a fact, and with
+  run stops asking after the first refusal), and the coder writing it; launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen by a measured grid
+  search before every first measurement of the program's speed (decided 2026-10-27; `kernels/search/tune.py` `tuned`,
+  `Funnel.measure`, `cascade(tuned=True)`; `--tune-points` (8), 0: off): the evaluator's tune stage (jailed stage 6,
+  7 on the most-called shape only; `core._tune`) loads each point with CONFIG rewritten, checks it on the most-called
+  shape and times it, on that shape before the quick timing and on every seen shape before the full exam, and the
+  program is measured and kept with the fastest point written in; after the full exam's sweep, where different points
+  win in different size regions, a dispatcher between `# TUNED-DISPATCH-START/END` picks CONFIG per call from the
+  call's size (`Task.size_expr`, tensor shapes only, so CUDA graphs bake it per captured size), removed (`tune.strip`)
+  before the grid is tuned again; the root program too; each point's score is a fact in the prompt; re-timing and the gate measure the tuned program as it is; the prompt states the best program's % of its call-weighted roofline bound as a fact, and with
   `--mcts` the search stops after `--patience` (16) judged programs with no new best (MANTIS; no roofline stop since
   2026-10-27);
   each timed shape carries its bound type (memory or compute) and the achieved % of peak bandwidth and of peak FLOPs,
