@@ -114,9 +114,10 @@ def test_read_samples_parses_dcgm_lines_and_drops_headers(tmp_path):
         (1.0, "#Entity         SMACT        SMOCC        TENSO        DRAMA        PCITX   PCIRX   POWER   SMCLK  MMCLK  DVCCTR"),
         (1.0, "ID                                                                                    W"),
         (1.1, "GPU 0           0.039        0.010        0.008        N/A          1328024 4133503 75.507  345    3201   1"),
-        (1.2, "GPU 0           0.9")])                       # cut off when the sampler stopped: missing fields absent
+        (1.2, "GPU 0           0.9"),
+        (1.3, "GPU 0  0.1  0.1  0.1  0.1  1  1  70.0  345  3201  04")])                       # cut off when the sampler stopped: missing fields absent
     rows = list(gpu.read_samples(d))
-    assert len(rows) == 2
+    assert len(rows) == 3 and rows[2]["throttle_reasons"] == 4
     assert rows[0] == {"epoch_s": 1.1, "source": "dcgm", "sm_active": 0.039, "sm_occupancy": 0.01, "tensor_active": 0.008,
                        "dram_active": None, "pcie_tx_bytes": 1328024.0, "pcie_rx_bytes": 4133503.0, "power_w": 75.507,
                        "sm_clock_mhz": 345.0, "mem_clock_mhz": 3201.0, "throttle_reasons": 1}

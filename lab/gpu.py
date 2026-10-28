@@ -172,7 +172,7 @@ def _value(name: str, v: str):
     if v in MISSING or v == "":
         return None
     if name == "throttle_reasons":
-        return int(v, 0)                         # a bitmask: DCGM prints it decimal, nvidia-smi as 0x...
+        return int(v, 16) if v.lower().startswith("0x") else int(v)   # a bitmask: DCGM prints it decimal, nvidia-smi 0x...
     if name == "timestamp":
         return v
     try:
