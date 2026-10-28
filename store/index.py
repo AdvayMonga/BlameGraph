@@ -8,7 +8,7 @@ blobs are the data, so a new table or column is a rebuild, never a migration.
   client_rows         per-request client rows of every bench and equiv (record_id joins records.id)
   engine_rows         the engine's per-request telemetry rows (trace_id = 'bg-' || client_rows.id)
   device_samples      GPU samples over each served window
-  kernels, ops        profile bundles' CUDA kernel and operator tables
+  kernels, ops        profile bundles' CUDA kernel and operator tables (profile records and each bench's `profiled`)
   heldout_rows        submit's per-request held-out rows: researcher index only, never the agent's
 
 Two files under <ledger>/index/: agent.duckdb (everything but heldout_rows and researcher runs' records) and
@@ -143,9 +143,16 @@ def _passive(root: Path, recs: list[dict], missing: list) -> tuple[Iterator, Ite
     return client(), engine(), device()
 
 
+def _bundle(r: dict) -> str | None:
+    """A profile record's bundle, or the one a bench or baseline took of its tree afterwards (`result.profiled`)."""
+    res = r.get("result") if isinstance(r.get("result"), dict) else {}
+    if r["kind"] == "profile":
+        return res.get("bundle")
+    return res["profiled"].get("bundle") if isinstance(res.get("profiled"), dict) else None
+
+
 def _profiles(root: Path, recs: list[dict], missing: list) -> tuple[Iterator, Iterator]:
-    bundles = [(r, _blob(root, (r.get("result") or {}).get("bundle"), missing))
-               for r in recs if r["kind"] == "profile" and isinstance(r.get("result"), dict)]
+    bundles = [(r, _blob(root, b, missing)) for r in recs if (b := _bundle(r))]
 
     def kernels():
         for r, b in bundles:

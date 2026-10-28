@@ -156,6 +156,21 @@ def test_s3_remote_round_trip(lab, tmp_path, monkeypatch):
         assert len(list((fresh / "blobs").iterdir())) == 3
 
 
+def test_index_kernels_include_each_bench_profile(tmp_path):
+    root = tmp_path / "ledger"
+    bundle = tmp_path / "bundle"; bundle.mkdir()
+    (bundle / "kernels.json").write_text(json.dumps({"kernels": [{"name": "moe", "count": 2, "total_us": 5.0}]}))
+    (bundle / "ops.json").write_text(json.dumps({"top": [{"name": "aten::mm", "count": 2}]}))
+    blob = ledger.put_blob(bundle, root)
+    ledger.append({"kind": "bench", "run": "r1", "result": {"verdict": "ok", "profiled": {"bundle": blob}}}, root)
+    ledger.append({"kind": "baseline", "run": "r1", "result": {"profiled": {"error": "x"}}}, root)
+    ledger.append({"kind": "bench", "run": "r1", "result": {"verdict": "refused"}}, root)
+    out = index.build(root, root / "index" / "all.duckdb")
+    assert out["tables"]["kernels"] == 1 and out["tables"]["ops"] == 1 and not out["missing_blobs"]
+    q = index.query(root / "index" / "all.duckdb", "SELECT record_kind, name FROM kernels")
+    assert q["rows"] == [["bench", "moe"]]
+
+
 def test_index_tables_and_the_agent_never_sees_heldout_rows(lab):
     root, runs = lab
     out = index.build(root, root / "index" / "all.duckdb", heldout_runs=runs)
