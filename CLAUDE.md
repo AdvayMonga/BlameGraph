@@ -167,7 +167,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   corpus.lengths --url URL`, decided 2026-10-25) writes each record's `expected_output_tokens` (and a multi-turn
   record's per-turn `expected_turn_output_tokens`) from a served reference, both splits, resuming from a log in
   `data/`; a new version whose manifest `prompts_version` stays the held-out guard's key (`Manifest.budget_key`); the
-  provenance test rebuilds and applies them; not run yet. The run's base cache is per corpus version. Since 2026-10-09 (version
+  provenance test rebuilds and applies them; run 2026-10-27 against the target's reference (vLLM 0.32.0 bf16, batch
+  invariant, H200): version `7bfae7f7…`, 16,929 answers, p50 525-1,072 tokens per class, ~1% at the 2,048 cap. The run's base cache is per corpus version. Since 2026-10-09 (version
   `131149…`) the held-out traces and the build seed (`corpus/.seed`, which reproduces them) are gitignored and live in
   the store (`python -m store pull --corpus`); the previous version's held-out split was public in git.
 - `lab/search.py` — the `search` tool (2026-10-15): one document per `hypothesis` record across every run, with its
@@ -421,7 +422,11 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `workload.to_request`), `runner.py` (open loop: schedule dealt to 4 client processes on one shared start, each
   request on a thread started 5 ms early, so p99 send lag stays ~1–3 ms; closed loop; `summarize`: p50/p99, failures,
   attainment, valid only if no silent drop/truncation/crash and client lag p99 ≤ 10 ms; `find_goodput`: double then
-  bisect on ≥99% meeting both limits), `workload.py` (reads `corpus/` through `lab.corpus`'s verified loader — hashes checked, a changed trace
+  bisect on ≥99% meeting both limits, up to 40 probes, reporting the lowest failing load `fails_at` and why it stopped,
+  `stopped`; saturated sweeps to 4,096 concurrency; bursty = the spike trace at N x its requests over its own span,
+  `workload.scaled`, decided 2026-10-27; `regimes run --tol` sets the search's resolution; a record reused in one
+  schedule is salted, `to_request(salt=)`; closed loop can split over processes, `--client-procs`, invalid when a client
+  process ran above 80% CPU; `--client-cpus` pins the client), `workload.py` (reads `corpus/` through `lab.corpus`'s verified loader — hashes checked, a changed trace
   refuses — plus Poisson, trace replay with speed-up and peak-window crop, multi-turn
   conversations rebuilt from stored histories under one shared system prompt; synthetic prompts when no corpus),
   `suite.py` (the 8 regimes; probes ≥ `min_requests` (100) and tier length, capped at 4× the tier length, then a
@@ -434,6 +439,15 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `python -m regimes run REGIME[,..]|all --url URL [--corpus DIR | --workload FILE] [--synthetic] [--split] [--tier] [--tokenizer] [--out]`
   (`--workload`: a `workloads/` file is one pool for every regime; bursty is refused, no arrival times),
   `python -m regimes cold-start --url URL --cmd "..."`. Closed-loop runs can't detect a client bottleneck by lag.
+- `compare/` — the engine comparison (decided 2026-10-27): `engines.toml` (ours, vLLM 0.32.0, SGLang 0.5.22,
+  TensorRT-LLM 1.4.0rc1 in their official containers; bf16 and fp8 configurations; shared limits; server cores 0-7,
+  client 8-15), `run.py` (`python -m compare.run --out DIR` on the GPU VM: the client check, then per configuration a
+  launch check, the regimes at `--tol 0.02`, equiv, cold start; repeats rotate the order; each stage one file, skipped
+  when present), `report.py` (`python -m compare.report DIR [--gpu-usd-per-hour P]`: per regime the winner and whether
+  the lead is clear of every spread and of the runner-up's bracket; the saturated curve with $/M output tokens),
+  `vm-setup.sh` (images and checkpoints; its header lists the session's steps). Not run yet.
+- `regimes/clientcheck.py` — `python -m regimes.clientcheck`: the client's own TPOT error at each closed-loop concurrency
+  and open-loop rate, against a fixed-schedule server that logs its true send times.
 - `workloads/` — frontier benchmark request data, researcher-only (never reaches the agent: nothing in `lab/` reads
   it), for manual runs: overfitting checks on data the agent never saw, the corpus's missing shapes, engine vs
   vLLM/SGLang on identical requests. One module per benchmark, docstring = source, sizes, output limit, MLPerf

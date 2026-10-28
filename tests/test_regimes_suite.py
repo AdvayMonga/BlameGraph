@@ -28,6 +28,17 @@ def test_a_hinted_search_starts_at_the_base_and_stops_at_the_band():
         assert far["goodput"] is not None and cap * 0.9 <= far["goodput"] <= cap, (cap, far["probes"])
 
 
+def test_the_search_reports_its_bracket_and_never_stops_on_its_budget_first():
+    probe = lambda x: {"valid": True, "meets_limits": x <= 3000.0}
+    far = find_goodput(probe, 1.0)
+    assert far["stopped"] == "resolved" and far["goodput"] <= 3000.0 < far["fails_at"]
+    assert (far["fails_at"] - far["goodput"]) / far["fails_at"] <= 0.1
+    fine = find_goodput(probe, **suite.Ctx("u", "m", tol=0.02).search("bursty", 1.0))
+    assert (fine["fails_at"] - fine["goodput"]) / fine["fails_at"] <= 0.02
+    client = find_goodput(lambda x: {"valid": x < 8, "meets_limits": True}, 1.0)
+    assert client["stopped"] == "invalid" and client["fails_at"] is None and client["goodput"] == 4.0
+
+
 def _saturated(capacity: int, hints: dict | None = None) -> tuple[dict, list[int]]:
     """saturated() against a server that meets the limits up to `capacity` concurrent requests."""
     calls: list[int] = []
@@ -51,6 +62,9 @@ def test_saturated_starts_at_the_bases_concurrency():
     assert warm_calls == [64, 128, 256, 64] and len(cold_calls) > len(warm_calls)      # probes, then the confirmation
     down, calls = _saturated(16, {"saturated": {"concurrency": 64}})                   # a regression: halve until it holds
     assert down["value"] == 16.0 and calls == [64, 32, 16, 16]
+    assert cold["stopped"] == down["stopped"] == "resolved"
+    capped, calls = _saturated(10 ** 6)
+    assert capped["stopped"] == "max_concurrency" and max(calls) == 4096
 
 
 if __name__ == "__main__":

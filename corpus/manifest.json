@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "corpus_version": "131149836f63fe241a3e2811ab7334dc4ebe64e0597543330efcf1af6925618d",
+  "corpus_version": "7bfae7f7cfc316292d527f7b667f1d375927b7149689c3447e36038fac0ad287",
   "classes": {
     "cold_start": {
       "name": "cold_start",
@@ -67,22 +67,22 @@
     }
   },
   "files": {
-    "cold_start/heldout.jsonl": "a3d08cfdb5896ff11e0bc1ba52fc5c01010a96e5b042330767c217d45bc6c9d0",
-    "cold_start/seen.jsonl": "354b01b314dc9db849f4e0895591b5aee04088db765c2749e29505f7e7c9a3c7",
-    "long_context/heldout.jsonl": "1e193d712312f9ee1c8dcb214604a96a4495dc49338d6f8530dd8631b33951af",
-    "long_context/seen.jsonl": "cfe3cca9dab9fd10b4903640e16ab1f1b7cf8082042f15d491ba2bd23450de17",
-    "mixed_1/heldout.jsonl": "4d37f6f2e4506c4c3ad7eeeda2f24d7c139028b4b365120a65497ad927a147ad",
-    "mixed_1/seen.jsonl": "ca59b58f118a943652cbf7193bfad7529a0bee3e024e13b4eb8a3f9ae766717a",
-    "mixed_2/heldout.jsonl": "c48d438b886f9b63a06e6439ae9743669e8c91f40ac2dfa5637e61a30ed77559",
-    "mixed_2/seen.jsonl": "2407a804e971b55a2a9fac015938fae3de2ae98dce2c92b2a30427d1f4f1a080",
-    "mixed_3/heldout.jsonl": "f9355665ea2386b8ed3d3cc2cb0f10f5dedf509f65577544f0370a51e571e8db",
-    "mixed_3/seen.jsonl": "cafb9d1097978ab2c4bad62416ad5b5e38fbcce2a2cb4aa46ee0f315641c0026",
-    "spike/heldout.jsonl": "a2c1d4c5a0b195c49c3bd45fe3182ca409e47a0ab6e73db2fbb173dc144eeb4f",
-    "spike/seen.jsonl": "6ab64f8150d66286090e05be50334fd95455e9905d2c10f5b64a9ca8609801c7",
-    "steady_interactive/heldout.jsonl": "03109ace58d3b21e1be5ff420486ee4f2f332a842741e6cad8cb0a5e09d481f9",
-    "steady_interactive/seen.jsonl": "fbc629dff9eb9e9e6f844f8b0fce3727706879342e7543d20568193587e8522f"
+    "cold_start/heldout.jsonl": "2c5695072a98e875ff32e91363c1ebb3f26f2678bbd3ac850bec5bb7efa379ae",
+    "cold_start/seen.jsonl": "94c579189fea36d0666b75781f846b1e704567e1b6c3bfc155b227e2ac4173ad",
+    "long_context/heldout.jsonl": "c9b240fddecb83e539d24ba60d7bb05d71747322903d0970d31f3a12e9d1228d",
+    "long_context/seen.jsonl": "9875ce285be0953f7870a3b788aef474887db1b9828b2d4611e1de9d0d148672",
+    "mixed_1/heldout.jsonl": "0b3b7995bc10286f4ddf858251b079aaa6b35d5dfe861a18b57dad9d359967b5",
+    "mixed_1/seen.jsonl": "6116e3a76e851d78e32222bb16274f830d981b0fd1e4b422a47ce8bffba0a754",
+    "mixed_2/heldout.jsonl": "cc3d78859d5ea9e04514eca8916a55136ba6d44e231211a310ba032d5a0f2cae",
+    "mixed_2/seen.jsonl": "400213499d6513740597f93f512d8245dc8d9f17cbffb6afbe7d82b4185029fe",
+    "mixed_3/heldout.jsonl": "f99aa394366eeb41f4333c778135bff0f51cce170a0560381b8fd606f3c6198f",
+    "mixed_3/seen.jsonl": "40d95092ee82c18447d01caf46792070059520d36a0f40bbe6bbdc342fbed8bb",
+    "spike/heldout.jsonl": "361202d207e57b299233e43d398df63829edccdabf20f6be685b77af198ee699",
+    "spike/seen.jsonl": "ab857da551e4a28c3cc54009a3933748e0250ebd06aa1df3a6967e222159aa5b",
+    "steady_interactive/heldout.jsonl": "879b5ab3abcd8157e99aa601cd1ceab91ddbb03ec0ca44972e90256692f4526a",
+    "steady_interactive/seen.jsonl": "4bdca633a6f0027fa994a4946fa9c5545007e22c31e382cecc4a43dfbd7bfa39"
   },
-  "notes": "Real-trace corpus. Timing + sessions: BurstGPT v2.0 BurstGPT_3.csv (HPMLL, CC-BY-4.0); mixed_* also draw on BurstGPT_1.csv and _2.csv (earlier months, no sessions) on _3's clock. Text: WildChat-1M @7d6490e46228 shards 0-1 (allenai, ODC-BY), English, not toxic/flagged/redacted, no conversation containing a credential-like string (SECRET_RE). Azure LLM inference trace 2024 (CC-BY-4.0) is fetched as a cross-source check only, not a split (no sessions; see corpus/README.md). Tokenizer Qwen/Qwen3-30B-A3B@ad44e777bcd1, chat template enable_thinking=False, prompt cap 16384, max_tokens 2048. Seed: secret. Splits: seen = even weeks of the trace, heldout = odd weeks. `dilation` per trace: arrival_s = real offset x dilation; replay with --rate-scale <dilation> for real timing. Each request's build_prompt_tokens is its templated length under this tokenizer. mixed_* requests carry `regime`, the class whose SLO judges them. SLOs proposed 2026-10-01, pending owner confirmation.",
+  "notes": "Real-trace corpus. Timing + sessions: BurstGPT v2.0 BurstGPT_3.csv (HPMLL, CC-BY-4.0); mixed_* also draw on BurstGPT_1.csv and _2.csv (earlier months, no sessions) on _3's clock. Text: WildChat-1M @7d6490e46228 shards 0-1 (allenai, ODC-BY), English, not toxic/flagged/redacted, no conversation containing a credential-like string (SECRET_RE). Azure LLM inference trace 2024 (CC-BY-4.0) is fetched as a cross-source check only, not a split (no sessions; see corpus/README.md). Tokenizer Qwen/Qwen3-30B-A3B@ad44e777bcd1, chat template enable_thinking=False, prompt cap 16384, max_tokens 2048. Seed: secret. Splits: seen = even weeks of the trace, heldout = odd weeks. `dilation` per trace: arrival_s = real offset x dilation; replay with --rate-scale <dilation> for real timing. Each request's build_prompt_tokens is its templated length under this tokenizer. mixed_* requests carry `regime`, the class whose SLO judges them. SLOs proposed 2026-10-01, pending owner confirmation. expected_output_tokens: the reference's answer length per record (corpus/lengths.py).",
   "dilation": {
     "cold_start/heldout.jsonl": 1.0,
     "cold_start/seen.jsonl": 1.0,
@@ -98,5 +98,6 @@
     "spike/seen.jsonl": 1.0,
     "steady_interactive/heldout.jsonl": 1.0,
     "steady_interactive/seen.jsonl": 1.0
-  }
+  },
+  "prompts_version": "131149836f63fe241a3e2811ab7334dc4ebe64e0597543330efcf1af6925618d"
 }

@@ -23,6 +23,37 @@ followed by a profile) and the consistency gate of 2026-10-04. Consequence: the 
 `knowledge/reference/` were measured at `short`, so a `min` bench shows no `% of reference` (the field says why)
 until `lab.validate` measures them again.
 
+## 2026-10-27 — The engine comparison: one GPU, one client, matched precision, a win only beyond noise
+`compare/` runs ours, vLLM 0.32.0, SGLang 0.5.22 and TensorRT-LLM 1.4.0rc1 (each project's newest release; official
+containers) one at a time on one H200, at bf16 (weights, activations, KV) and fp8 (W8A8 + fp8 KV; the others load
+Qwen's FP8 checkpoint, ours quantizes the experts of the bf16 one), each with its own documented settings at the same
+limits (32k context, 1,024 sequences, 90% of HBM), prefix caching at each engine's default (on). The server gets cores
+0-7, the client 8-15. Every configuration passes a launch check (answers 42, a fixed-length answer runs to its
+length), runs the regimes on the seen split at a 2% search resolution, equiv against the same bf16 reference, and
+cold start with emptied page cache and compile caches; repeats rotate the order. A regime's winner is clear only when
+its lead exceeds every contender's run-to-run spread and, for a load search, the runner-up failed at a load the
+winner passed (`compare/report.py`); otherwise the report says why not. Three changes to the measurement itself:
+a corpus record reused within one schedule is salted ("[k] " before its first message), because a pool of 60
+long prompts at 80 req/s let prefix caching carry the long-prompt result; the closed-loop client splits over
+processes and a closed-loop run is invalid when a client process ran above 80% CPU (closed loop has no send schedule
+to lag behind, so this is its bottleneck signal); `python -m regimes.clientcheck` measures the client's own TPOT error
+against a server that logs its true send times, run first on the comparison's VM. Why (the user): a fair eval against
+vLLM, SGLang and TensorRT-LLM with every other variable controlled, and a winner on every regime; the 10-19 comparison
+ran vLLM in bf16 against our fp8.
+
+## 2026-10-27 — No ties at the search's edge: bursty scales its request count, searches run to a break point
+Bursty's load multiple now means that many times the trace's requests over the trace's own span (`W.scaled`: each
+arrival joined by factor - 1 more, spread over the gap to the next, drawn from the trace), not the same requests
+replayed faster. The load searches run until a probe fails (40 probes, was 10; saturated up to 4,096 concurrency, was
+512), and every goodput result carries where the search ended: the lowest failing load (`fails_at`) and why it
+stopped (`stopped`: resolved, invalid, below_min, probe_budget; saturated: max_concurrency). `regimes run --tol` sets
+the search's resolution for an engine comparison. Why (the user: never accept a tie unless a physical ceiling is hit):
+the short tier's spike window holds 158 requests, so at 256x they all arrived within 0.7 s and any engine that could
+batch 158 passed at every speed; 512x was voided by the client's own send lag (32-51 ms), not by an engine. Long
+prompt (80) and shared prefix (0.81) were real break points that both engines reported alike because the search
+stops at a 10% bracket (80 passed, 86.7 failed); the bracket now shows when two results are within it. Replaces the
+time-compressed replay (2026-10-02 eval conventions' bursty).
+
 ## 2026-10-27 — No roofline stop: a search runs to its budget
 `kernels.search` no longer stops when the best program reaches a share of its roofline (`--stop-pct`, 80 by
 default, removed); it stops at its generations, budget, wall-clock or patience. The % of roofline stays a fact in

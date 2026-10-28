@@ -15,6 +15,17 @@ from . import suite
 from .workload import corpus_version
 
 
+def _cpus(spec: str | None) -> list[int] | None:
+    """"8-15" or "0,2,4-7" as a list of cores."""
+    if not spec:
+        return None
+    out = []
+    for part in spec.split(","):
+        lo, _, hi = part.partition("-")
+        out += range(int(lo), int(hi or lo) + 1)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(prog="regimes", description="measure a live server under the eight regimes")
     target.add_argument(ap)
@@ -30,6 +41,9 @@ def main():
     r.add_argument("--tier", choices=tuple(suite.TIERS), default="short")
     r.add_argument("--seed", type=int, default=0); r.add_argument("--timeout", type=float, default=600.0)
     r.add_argument("--tokenizer", help="re-count output tokens with this HF tokenizer (default: server usage)")
+    r.add_argument("--client-procs", type=int, help="client processes (default: 4 open loop, 1 closed loop)")
+    r.add_argument("--client-cpus", help="cores the client runs on, e.g. 8-15 (Linux), apart from the server's")
+    r.add_argument("--tol", type=float, help="the load searches' relative resolution (default: each regime's band, else 0.1)")
     r.add_argument("--out")
     c = sub.add_parser("cold-start")
     c.add_argument("--url", required=True); c.add_argument("--cmd", required=True)
@@ -51,7 +65,8 @@ def main():
             from transformers import AutoTokenizer
             tok = AutoTokenizer.from_pretrained(a.tokenizer)
             count = lambda s: tok.encode(s, add_special_tokens=False)
-        ctx = suite.Ctx.from_target(t, a.url, split=a.split, tier=a.tier, seed=a.seed, timeout=a.timeout, count_tokens=count)
+        ctx = suite.Ctx.from_target(t, a.url, split=a.split, tier=a.tier, seed=a.seed, timeout=a.timeout, count_tokens=count,
+                                     tol=a.tol, client_procs=a.client_procs, client_cpus=_cpus(a.client_cpus))
         if a.corpus:
             ctx.corpus = a.corpus
         ctx.workload = a.workload
