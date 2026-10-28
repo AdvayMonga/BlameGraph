@@ -203,7 +203,7 @@ def test_the_judges_json_is_read_best_effort():
     assert hypotheses("not json", 4) == [{"plan": "not json"}] and hypotheses("", 4) == []
 
 
-def test_the_search_stops_near_the_roofline_and_states_the_gap():
+def test_the_prompt_states_the_roofline_gap_and_the_search_does_not_stop_there():
     from kernels.search.loop import prompt, search
     from kernels.search.tree import Node, Tree
     rows = [{"shape": [1], "weight": 0.75, "pct_of_roofline": 96.0}, {"shape": [2], "weight": 0.25,
@@ -214,10 +214,10 @@ def test_the_search_stops_near_the_roofline_and_states_the_gap():
     t.add(n)
     assert "92.0% of its roofline bound" in prompt(t, n)
     judge = lambda code: {"metrics": n.metrics, "artifacts": n.artifacts}
-    never = lambda system, user: (_ for _ in ()).throw(AssertionError("no model call near the roofline"))
+    silent = lambda system, user: ("", 0.0)
     with tempfile.TemporaryDirectory() as d:
-        _, cost = search("x = 1\n", "S", never, judge, Path(d), evals=5, usd=1.0, stop_pct=90.0)
-    assert cost["stopped_near_roofline"] and cost["model_calls"] == 0
+        _, cost = search("x = 1\n", "S", silent, judge, Path(d), evals=5, usd=1.0)
+    assert cost["model_calls"] > 0 and "stopped_near_roofline" not in cost
 
 
 def test_diagnosis_facts_bound_type_two_shape_counters_ranking_and_patience():

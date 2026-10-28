@@ -153,8 +153,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--uct-c", type=float, default=UCT_C,
                     help="UCT exploration constant on rewards in [0, 1] (KernelPro's sqrt 2 is on ln speedup)")
-    ap.add_argument("--stop-pct", type=float, default=80.0,
-                    help="stop once the best is at this %% of its roofline (MANTIS: within 25%% of speed-of-light)")
     ap.add_argument("--patience", type=int, default=None,
                     help="stop after this many generations (default 3), or with --mcts judged programs (default 16), "
                          "with no new best")
@@ -201,12 +199,12 @@ def main(argv: list[str] | None = None) -> int:
     if fun is not None and not a.mcts:
         from kernels.search.generations import search as evolve
         tree, cost = evolve(program.read_text(), system, fun, judge, out, a.evals, a.usd, a.seed, a.gen_size, a.keep,
-                            a.parents, a.generations, stop_pct=a.stop_pct or None,
+                            a.parents, a.generations,
                             patience=3 if a.patience is None else a.patience or None, gpu_s=a.gpu_s,
                             gpu_used=gpu_used, crossover=a.crossover, ideas=a.ideas, wall_s=a.wall_s)
     else:
         tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.usd, a.seed,
-                            stop_pct=a.stop_pct or None, patience=16 if a.patience is None else a.patience or None,
+                            patience=16 if a.patience is None else a.patience or None,
                             uct_c=a.uct_c, funnel=fun, gpu_s=a.gpu_s, gpu_used=gpu_used, wall_s=a.wall_s)
     spent: list = []
     exclude = detect.detector(Claude(a.detector_model, a.effort), spent) if a.detector_model != "none" else None

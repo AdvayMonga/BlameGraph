@@ -174,13 +174,11 @@ def cascade(judge_stage: Callable[[str, int], dict], counters: bool = False) -> 
 
 def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, float]],
            judge: Callable[[str], dict], out: Path, evals: int, usd: float, seed: int = 0,
-           stop_pct: float | None = None, patience: int | None = None, children: int = 4,
+           patience: int | None = None, children: int = 4,
            uct_c: float = UCT_C, funnel=None, gpu_s: float | None = None,
            gpu_used: Callable[[], float] | None = None, wall_s: float | None = None) -> tuple[Tree, dict]:
-    """Search until `evals` programs are judged, `usd` is spent on model calls, nothing is left to try, or the best
-    program reaches `stop_pct`% of its roofline bound, or `patience` programs have been judged since the best last
-    improved (MANTIS, Hari et al.: within 25% of speed-of-light or 16 attempts without progress kept 96% of the geomean
-    gain for 33% fewer tokens).
+    """Search until `evals` programs are judged, `usd` is spent on model calls, nothing is left to try, or `patience`
+    programs have been judged since the best last improved (MANTIS, Hari et al.: 16 attempts without progress).
 
     Each expansion of an MCTS-chosen parent is one funnel round (kernels/search/funnel.py), every idea and what became
     of it in `<out>/hypotheses.jsonl`; without a funnel (no judge), the coder alone proposes `children` children.
@@ -225,8 +223,6 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
         keep(Node(uuid.uuid4().hex[:8], None, initial, r["metrics"], r["artifacts"], 0), 0.0)
         best_at, best_score = judged, tree.best().score
         while judged < evals and spent < usd and not gpu_out():
-            if stop_pct and (tree.best().pct_of_roofline or 0) >= stop_pct:
-                break
             if tree.best().score > best_score:
                 best_at, best_score = judged, tree.best().score
             if patience and judged - best_at >= patience:
@@ -246,7 +242,5 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
             spent, calls, judged = spent + funnel.spent - before, funnel.calls, judged + len(kids)
             if not kids:                         # a round that examined nothing counts as one failure
                 parent.failures += 1
-    near = bool(stop_pct and (tree.best().pct_of_roofline or 0) >= stop_pct)
-    stalled = bool(patience and not near and judged < evals and spent < usd and judged - best_at >= patience)
-    return tree, {"usd": round(spent, 4), "model_calls": calls, "evals": judged, "stopped_near_roofline": near,
-                  "stopped_no_progress": stalled}
+    stalled = bool(patience and judged < evals and spent < usd and judged - best_at >= patience)
+    return tree, {"usd": round(spent, 4), "model_calls": calls, "evals": judged, "stopped_no_progress": stalled}

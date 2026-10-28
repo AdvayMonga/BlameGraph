@@ -6,8 +6,7 @@ the best always among them, the rest drawn without replacement with weight = per
 program keeps a chance: soft fitness-weighted selection), gives each a quota of `gen_size / parents` ideas, and sends
 the fastest `keep` of the round to the full exam, which join the tree under their own parent. A generation in which
 fewer than SHRINK_BELOW of the examined programs beat their parent makes the next one SHRINK as large (ideas, not
-parents). Stops: `generations` done, `evals` programs judged, `usd` spent on models, the GPU cap, the best program at
-`stop_pct` of its roofline, or `patience` generations with no new best. Why many small generations: Kevin's 16 x 8
+parents). Stops: `generations` done, `evals` programs judged, `usd` spent on models, the GPU cap, or `patience` generations with no new best. Why many small generations: Kevin's 16 x 8
 beat 128 x 1 (1.10x against 0.65x) and ShinkaEvolve's archive of 40 under 150 evaluations; why weighted parents
 rather than MCTS: every tree of the 2026-10-24/25 runs stayed one level deep.
 
@@ -60,7 +59,7 @@ def immigrant(tree: Tree, ps: list[Node], gen: int, rng: random.Random) -> Node:
 
 def search(initial: str, system: str, funnel: Funnel, judge: Callable[[str], dict], out: Path, evals: int,
            usd: float, seed: int = 0, gen_size: int = 24, keep: int = 8, n_parents: int = 4, generations: int = 10,
-           stop_pct: float | None = None, patience: int | None = 3, gpu_s: float | None = None,
+           patience: int | None = 3, gpu_s: float | None = None,
            gpu_used: Callable[[], float] | None = None, crossover: float = 0.0, ideas: bool = False,
            wall_s: float | None = None) -> tuple[Tree, dict]:
     """Returns the tree and the run's cost {usd, model_calls, evals, generations, stopped_*}. `crossover`: the fraction
@@ -76,8 +75,6 @@ def search(initial: str, system: str, funnel: Funnel, judge: Callable[[str], dic
         return bool((gpu_s is not None and gpu_used and gpu_used() >= gpu_s)
                     or (funnel.deadline is not None and time.monotonic() >= funnel.deadline))
 
-    def near() -> bool:
-        return bool(stop_pct and (tree.best().pct_of_roofline or 0) >= stop_pct)
     with open(out / "trace.jsonl", "w") as trace, open(out / "hypotheses.jsonl", "w") as hyplog:
         def keep_node(node: Node, cost: float) -> None:
             tree.add(node)
@@ -93,7 +90,7 @@ def search(initial: str, system: str, funnel: Funnel, judge: Callable[[str], dic
         judged += 1
         keep_node(Node(uuid.uuid4().hex[:8], None, initial, r["metrics"], r["artifacts"], 0), 0.0)
         gen, idle, size, best = 0, 0, gen_size, tree.best().score
-        while gen <= generations and judged < evals and funnel.spent < usd and not out_of_budget() and not near():
+        while gen <= generations and judged < evals and funnel.spent < usd and not out_of_budget():
             given, extra, restructure = [], [], set()
             if gen == 0:
                 ps, quota, k = [tree.root()], GEN0, GEN0_KEEP
@@ -128,7 +125,7 @@ def search(initial: str, system: str, funnel: Funnel, judge: Callable[[str], dic
             gen += 1
             if patience and idle >= patience:
                 break
-    stalled = bool(patience and idle >= patience and not near())
+    stalled = bool(patience and idle >= patience)
     return tree, {"usd": round(funnel.spent, 4), "model_calls": funnel.calls, "evals": judged, "generations": gen,
-                  "stopped_near_roofline": near(), "stopped_no_progress": stalled,
+                  "stopped_no_progress": stalled,
                   "stopped_wall_clock": bool(funnel.deadline is not None and time.monotonic() >= funnel.deadline)}

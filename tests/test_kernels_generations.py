@@ -130,7 +130,7 @@ def test_the_search_stops_after_patience_generations_with_no_new_best(tmp_path):
     flat = {"metrics": {"correct": 1.0, "combined_score": 5.0, "stage": 2}, "artifacts": {}}
     _, cost = G.search(START, "SYS", f, lambda c: flat, tmp_path, evals=1000, usd=50.0, gen_size=4, keep=1,
                        n_parents=2, generations=20, patience=2)
-    assert cost["stopped_no_progress"] and cost["generations"] == 2 and not cost["stopped_near_roofline"]
+    assert cost["stopped_no_progress"] and cost["generations"] == 2
 
 
 def test_racing_times_the_programs_at_the_cutoff_again_and_the_rank_correlation_is_spearman():

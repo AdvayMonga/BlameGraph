@@ -3,6 +3,15 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-27 — No roofline stop: a search runs to its budget
+`kernels.search` no longer stops when the best program reaches a share of its roofline (`--stop-pct`, 80 by
+default, removed); it stops at its generations, budget, wall-clock or patience. The % of roofline stays a fact in
+every prompt and record. Why (the user): within a session the search should go as high as it can; the fixed
+generations already bound it, and the % of roofline is what tells the central agent whether another round on the same
+kernel is worth it. In the 2026-10-27 race on moe_gemm_fp8 the rule ended the generations arm at 83% (1.194x seen,
+1.391x held-out, 33 min) and the ideas arm at 81%, while OpenEvolve, with no such rule, ran its 2.5 h to 87% (1.250x,
+1.478x held-out). Replaces MANTIS's stop rule (2026-10-18, METHOD.md row 13); patience stays.
+
 ## 2026-10-27 — Ideas kept across generations (K-Search's persistence), as an arm; searches capped by wall-clock
 `kernels.search --ideas` (arm `search-ideas`) keeps an idea table: every idea with its measured attempts, so the 4
 best active ideas by measured gain are refined again each generation (2 drafts each, shown their history), an idea

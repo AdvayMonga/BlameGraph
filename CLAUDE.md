@@ -300,8 +300,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   promoted only if its re-timed median beats the winner's
   (`kernels/search/tune.py`), and when different points win in different size regions a dispatcher picks CONFIG per
   call from the call's size (`Task.size_expr`, tensor shapes only, so CUDA graphs bake it per captured size), promoted
-  on the same rule; the search stops once the best program is at `--stop-pct` (80) of its call-weighted
-  roofline bound, a figure the prompt states, or after `--patience` (16) judged programs with no new best (MANTIS);
+  on the same rule; the prompt states the best program's % of its call-weighted roofline bound as a fact, and with
+  `--mcts` the search stops after `--patience` (16) judged programs with no new best (MANTIS; no roofline stop since
+  2026-10-27);
   each timed shape carries its bound type (memory or compute) and the achieved % of peak bandwidth and of peak FLOPs,
   and ncu runs on the smallest and the largest seen shape; before promotion a model (`--detector-model`, Opus 5.5) reads each would-be winner for gaming and a flagged one is
   passed over, recorded with its evidence (`kernels/search/detect.py`, MANTIS; never changes a score);
