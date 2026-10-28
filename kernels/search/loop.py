@@ -44,10 +44,6 @@ MODES = {
                     'words>", "modification_plan": "<max 35 words>", "mechanism": [{{"counter": "<an ncu metric name '
                     'from the measurements>", "change_pct": <predicted % change, summed over the program\'s kernels>}}]}}. '
                     '"mechanism" may be empty. Every one is written and measured.',
-    "restructure": 'The program is correct. Name {n} distinct changes that each replace its algorithm, data layout '
-                   'or implementation as a whole rather than adjusting it, as one JSON array of {n} objects and nothing '
-                   'else, each {{"bottleneck": "<max 30 words>", "optimisation_method": "<max 35 words>", '
-                   '"modification_plan": "<max 35 words>", "mechanism": []}}. Every one is written and measured.',
     "crossover": 'The program is correct. Below it is another program from the same search, as a diff. Name {n} '
                  'change(s) to this program that carry over what the other program does differently, as one JSON '
                  'array of {n} objects and nothing else, each {{"bottleneck": "<max 30 words>", "optimisation_method": '

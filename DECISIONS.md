@@ -12,20 +12,16 @@ kernel is worth it. In the 2026-10-27 race on moe_gemm_fp8 the rule ended the ge
 1.391x held-out, 33 min) and the ideas arm at 81%, while OpenEvolve, with no such rule, ran its 2.5 h to 87% (1.250x,
 1.478x held-out). Replaces MANTIS's stop rule (2026-10-18, METHOD.md row 13); patience stays.
 
-## 2026-10-27 — Ideas kept across generations (K-Search's persistence), as an arm; searches capped by wall-clock
-`kernels.search --ideas` (arm `search-ideas`) keeps an idea table: every idea with its measured attempts, so the 4
-best active ideas by measured gain are refined again each generation (2 drafts each, shown their history), an idea
-closes only after 3 generations without a better measurement (a slower first step does not drop it), one judge call
-per generation closes ideas and adds sub-ideas, and 4 immigrant ideas per generation name whole-program changes on
-the start program or a random program outside the parents. Ideas are ranked by measurement, never by the model's
-score. `--wall-s` caps a search by wall-clock. Why (the user, after the first real generations run): K-Search
-(Berkeley Sky Lab, arXiv 2602.19128) reports 2.1x over OpenEvolve and ShinkaEvolve by keeping ideas and refining them
-until they stagnate, and our generations tried every idea once; a slower first step was dropped; and nothing
-restarted from elsewhere if the first parents were poor. The model's priority score that K-Search ranks by is not
-copied: a text-only ranking did no better than random on our runs (2026-10-20), and K-Search reports no ablation of
-it. The 2,700-s `--gpu-s` cap stopped the 2026-10-27 run after 2 of 10 generations because it sums parallel jobs and
-the no-GPU precheck. It becomes the default only if it wins the A/B against the generations, the real K-Search and
-OpenEvolve on the same task, evaluator, model and wall-clock.
+## 2026-10-27 — Searches capped by wall-clock; K-Search's persistence tested and not adopted
+`--wall-s` caps a kernel search by wall-clock. Why: the 2,700-s `--gpu-s` cap stopped the first real generations run
+(2026-10-27) after 2 of 10 generations because it sums parallel jobs and the no-GPU precheck. Tested the same day and
+removed: an `--ideas` arm after K-Search (Berkeley Sky Lab, arXiv 2602.19128), which kept an idea table so the 4 best
+ideas by measured gain were refined again each generation (an idea closed after 3 generations without a better
+measurement), with a judge call closing ideas and adding sub-ideas and 4 immigrant ideas of whole-program changes per
+generation; and K-Search itself as an arm on our evaluator. On moe_gemm_fp8 (same shapes, start, evaluator, every role
+on Opus 5.5, 2.5 h cap): generations 1.196x seen / 1.391x held-out for $6.95; ideas 1.162x / 1.376x for $14.70;
+K-Search 1.158x / 1.267x for $29.92; OpenEvolve 1.250x / 1.478x for $78.67 (both of ours stopped at the roofline rule,
+removed the same day). The user dropped both arms; one run per arm, one task.
 
 ## 2026-10-27 — The beam is removed
 The beam (each MCTS expansion: the judge names 4 changes, the coder writes all 4, each judged in full, a failed child

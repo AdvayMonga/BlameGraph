@@ -161,11 +161,11 @@ def slices(f: Funnel, tree: Tree, parent: Node) -> dict[str, str]:
 
 
 def generate(f: Funnel, system: str, base: str, facts: dict[str, str], n: int | None = None,
-             only: str | None = None, mode: str = "optimization") -> list[dict]:
+             only: str | None = None) -> list[dict]:
     """One judge call per slice naming `per_call` hypotheses, or (`only`) one call on that slice naming `n`."""
     from kernels.search.loop import JUDGE, MODES, hypotheses
     n = n or f.per_call
-    spec = system + CACHE_SPLIT + "\n\n" + JUDGE.format(mode_spec=MODES[mode].format(n=n))
+    spec = system + CACHE_SPLIT + "\n\n" + JUDGE.format(mode_spec=MODES["optimization"].format(n=n))
     names = [s for s in SLICES if s in facts and (only is None or s == only)]
     texts = pmap(f, lambda s: f._ask(f._judge(), spec, base + (f"{CACHE_SPLIT}\n\n{facts[s]}" if facts[s] else "")), names)
     return [{**h, "slice": s} for s, text in zip(names, texts) for h in hypotheses(text, n)]
@@ -370,25 +370,21 @@ def expand(f: Funnel, tree: Tree, parent: Node, system: str, it: int, keep_node:
 
 def generation(f: Funnel, tree: Tree, parents: list[Node], system: str, it: int,
                keep_node: Callable[[Node, float], None], log: Callable[[dict], None], quota: int, keep: int,
-               rotate: bool = True, crossover: int = 0, spread: bool = False, given: list[dict] = (),
-               restructure: set = frozenset(), extra: list[Node] = ()) -> list[Node]:
+               rotate: bool = True, crossover: int = 0, spread: bool = False) -> list[Node]:
     """One round from `parents`: each parent's judge calls name `quota` ideas (with `rotate`, one call on one slice,
     rotated across the parents; else one call per slice, `quota` each, or with `spread` the parent's `quota` split over
     its slices), `crossover` further ideas each combine a parent with another parent's diff; the fastest `keep` of the
-    whole round go to the full exam and join the tree under their own parent. `given`: ideas already named (each with
-    its `parent_id`, `idea_id` and optional `history`, the text of its earlier attempts), written beside the new ones
-    and never merged or re-checked against the archive; `restructure`: parent ids whose calls name whole-program
-    changes (MODES["restructure"]); `extra`: the given ideas' parents that name no ideas of their own. Every idea
-    carries an `idea_id`. A budget that runs out mid-round (`Spent`) ends
-    the round with what it has; the log says where."""
+    whole round go to the full exam and join the tree under their own parent. Every idea carries an `idea_id`, and its
+    log row the diff its program made. A budget that runs out mid-round (`Spent`) ends the round with what it has; the
+    log says where."""
     from kernels.search.loop import diff_from_root, prompt
     spent0, fates, children = f.spent, [], []
     counts = {"named": 0, "distinct": 0, "after_archive": 0, "written": 0, "correct": 0, "rewritten": 0}
     stopped, pairs, code_of = None, [], {}       # code_of: each written idea's latest program, for the log's diff
-    by_id = {p.id: p for p in (*parents, *extra)}
+    by_id = {p.id: p for p in parents}
 
     def key(h):
-        return h.get("idea_id"), h.get("draft")
+        return h.get("idea_id")
     try:
         profile_parents(f, list(by_id.values()))
         need = [p for p in parents if f.precheck and "compile_report" not in p.artifacts]
@@ -402,8 +398,7 @@ def generation(f: Funnel, tree: Tree, parents: list[Node], system: str, it: int,
             facts = slices(f, tree, p)
             if rotate:                           # one slice per call, every slice read across the generation
                 names = [s for s in SLICES if s in facts]
-                got = generate(f, system, bases[p.id], facts, n=quota, only=names[(it * len(parents) + i) % len(names)],
-                               mode="restructure" if p.id in restructure else "optimization")
+                got = generate(f, system, bases[p.id], facts, n=quota, only=names[(it * len(parents) + i) % len(names)])
             else:
                 got = generate(f, system, bases[p.id], facts,
                                n=max(1, math.ceil(quota / len(facts))) if spread else quota)
@@ -415,21 +410,18 @@ def generation(f: Funnel, tree: Tree, parents: list[Node], system: str, it: int,
                                                                        diff_from_root), pairs_x)):
             ideas += [{**h, "parent_id": p.id, "slice": "crossover", "with": o.id, "idea_id": uuid.uuid4().hex[:8]}
                       for h in got]
-        counts["named"] = len(ideas) + len(given)
+        counts["named"] = len(ideas)
         ideas = merge(f, ideas)
         judged = pmap(f, lambda p: past_failures(f, system, bases[p.id], [h for h in ideas if h.get("parent_id") == p.id]),
                       parents)
         ideas, dropped = [h for k, _ in judged for h in k], [h for _, d in judged for h in d]
-        ideas += [dict(h) for h in given]
         counts["distinct"], counts["after_archive"] = len(ideas) + len(dropped), len(ideas)
         fates += [{"idea": h, "fate": h["dropped"]} for h in dropped]
         seen = set(tree.seen) | f.tried
 
         def plan_of(h):
-            plan = json.dumps({k: v for k, v in h.items() if k in ("bottleneck", "optimisation_method",
+            return json.dumps({k: v for k, v in h.items() if k in ("bottleneck", "optimisation_method",
                                                                    "modification_plan", "mechanism")})
-            return plan + (f"\n\n# This idea's earlier attempts, with their measurements\n{h['history']}"
-                           if h.get("history") else "")
         drafts = written(f, pmap(f, lambda h: write(f, f.models.wide, system, prompt(tree, by_id[h["parent_id"]],
                                                                                      plan_of(h)),
                                                     by_id[h["parent_id"]].code, set(seen)), ideas), seen)
@@ -500,9 +492,8 @@ def generation(f: Funnel, tree: Tree, parents: list[Node], system: str, it: int,
                           **({"mechanism": mechanism(h, p, child)} if h.get("mechanism") else {})})
     except Spent as e:
         stopped = str(e)
-    for x in fates:                              # each written idea's program as a diff from its parent (ideas.py)
+    for x in fates:                              # each written idea's program as a diff from its parent
         c, p = code_of.get(key(x["idea"])), by_id.get(x["idea"].get("parent_id"))
-        x["idea"] = {k: v for k, v in x["idea"].items() if k != "history"}       # in the table, not every log row
         if c and p:
             x["diff"] = "".join(difflib.unified_diff(p.code.splitlines(True), c.splitlines(True), n=2))[:4000]
     one = parents[0] if len(parents) == 1 else None

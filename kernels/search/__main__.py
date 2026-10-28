@@ -166,8 +166,6 @@ def main(argv: list[str] | None = None) -> int:
                     help="fraction of a generation's ideas that combine a parent with another parent's diff (an arm)")
     ap.add_argument("--gpu-s", type=float, help="stop once judging has taken this many seconds, summed over jobs")
     ap.add_argument("--wall-s", type=float, help="stop starting new work once the search has run this many seconds")
-    ap.add_argument("--ideas", action="store_true",
-                    help="generations keep an idea table: persistence, sub-ideas and immigrants (kernels/search/ideas.py)")
     ap.add_argument("--wide-model", default="claude-sonnet-5-5", help="the funnel's wide coder")
     ap.add_argument("--cheap-model", default="claude-haiku-5-5", help="merges duplicate hypotheses")
     ap.add_argument("--second-judge-model", default="claude-sonnet-5-5",
@@ -201,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
         tree, cost = evolve(program.read_text(), system, fun, judge, out, a.evals, a.usd, a.seed, a.gen_size, a.keep,
                             a.parents, a.generations,
                             patience=3 if a.patience is None else a.patience or None, gpu_s=a.gpu_s,
-                            gpu_used=gpu_used, crossover=a.crossover, ideas=a.ideas, wall_s=a.wall_s)
+                            gpu_used=gpu_used, crossover=a.crossover, wall_s=a.wall_s)
     else:
         tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.usd, a.seed,
                             patience=16 if a.patience is None else a.patience or None,
