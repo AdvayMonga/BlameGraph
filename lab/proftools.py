@@ -192,7 +192,7 @@ class ProfTools:
             if tool == "kernel":
                 return calibrate.calibrate_ncu(path / "metrics.csv", gpu)
             if tool == "trace":
-                return calibrate.calibrate_nsys(path, "cudaProfilerApi" in _flags(args, "nsys_args", NSYS_FLAGS))
+                return calibrate.calibrate_nsys(path, any("cudaProfilerApi" in f for f in _flags(args, "nsys_args", NSYS_FLAGS)))
             return calibrate.calibrate_pyspy(path)
         except Exception as e:                   # noqa: BLE001
             return {"error": f"calibration failed: {type(e).__name__}: {e}"}

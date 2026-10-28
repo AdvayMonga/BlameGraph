@@ -343,3 +343,12 @@ def test_a_trace_prediction_is_measured_against_its_numbers(tb):
     e = experiments.outcome("trace", {"hypothesis_id": "h", "expect": {"metric": "calibrated.launches", "value": 5,
                                                                        "unit": "absolute", "why": "w"}}, res)
     assert e["actual"] == 4 and e["gap"] == -1
+
+
+def test_a_trace_limited_to_the_window_by_either_flag_form_gets_its_window(tb, monkeypatch):
+    seen = []
+    monkeypatch.setattr(proftools.calibrate, "calibrate_nsys", lambda path, ranged: seen.append(ranged))
+    tb.trace({"requests": 2})
+    tb.trace({"requests": 2, "nsys_args": ["--trace", "cuda", "--capture-range=cudaProfilerApi"]})
+    tb.trace({"requests": 2, "nsys_args": ["--trace", "cuda"]})
+    assert seen == [True, True, False]

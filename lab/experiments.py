@@ -13,6 +13,7 @@ from lab import ledger
 
 MEASURED = ("bench", "equiv", "submit", "profile", "trace", "kernel", "hostprof", "kernel_search")
 PROFILERS = ("profile", "trace", "kernel", "hostprof")      # results with no `metrics`: predictions name a path
+PROFILE_WORKLOAD = ("requests", "max_tokens", "prompt_len", "synthetic", "corpus_class", "seed", "capture", "profile")
 UNITS = ("absolute", "change_pct")
 LAYERS = ("kernels", "model_execution", "runtime", "serving")      # lab/layers.py's four layers
 # Runs made outside the lab by a researcher (`python -m lab.experiment`): their text is a person's, so no agent view
@@ -28,7 +29,7 @@ EXPECT_SCHEMA = {
     "properties": {
         "metric": {"type": "string", "description": "a key of this tool's result metrics (a regime for bench and "
                    "submit); for profile, trace, kernel and hostprof, which have none, a dotted path to a number in "
-                   "the result, e.g. calibrated.kernel_share_of_window"},
+                   "the result, a row of a list named by its name, e.g. calibrated.kernels.<kernel name>.total_s"},
         "value": {"type": "number"},
         "unit": {"type": "string", "enum": list(UNITS),
                  "description": "absolute: the metric's own value; change_pct: % change from the run's baseline"},
@@ -38,7 +39,8 @@ EXPECT_SCHEMA = {
                       "items": {"type": "object", "required": ["metric", "value", "unit", "why"],
                                 "properties": {
                                     "metric": {"type": "string", "description": "a dotted path to a number in this "
-                                               "tool's result, e.g. calibrated.layers.runtime.gpu_idle_share"},
+                                               "tool's result (a row of a list named by its name), e.g. "
+                                               "calibrated.layers.runtime.gpu_idle_share"},
                                     "value": {"type": "number"},
                                     "unit": {"type": "string", "enum": list(UNITS),
                                              "description": "absolute: the number itself; change_pct: % change from "
@@ -185,11 +187,11 @@ def new_reflection(root: Path, run: str, args: dict) -> dict:
 
 # -- outcome --------------------------------------------------------------------------------
 def _actual(tool: str, expect: dict, result: dict | None, metrics: dict | None, baseline: dict | None,
-            base_result: dict | None) -> tuple:
+            base_result: dict | None, base: str | None) -> tuple:
     """(actual, missing): the measured counterpart of `expect` in this tool's result, or why there is none."""
     name, unit = expect["metric"], expect["unit"]
     if tool in PROFILERS:
-        m = _mechanism(expect, result, base_result)
+        m = _mechanism(expect, result, base_result, base)
         return m["actual"], m.get("actual_missing")
     if tool == "submit":
         m = (metrics or {}).get(name)
@@ -210,18 +212,35 @@ def _actual(tool: str, expect: dict, result: dict | None, metrics: dict | None, 
 
 
 def _number(obj, path: str):
+    """The number at a dotted path; in a list of rows a step is a row's `name` (or `function`), else its position."""
     for k in path.split("."):
-        if not isinstance(obj, dict) or k not in obj:
+        if isinstance(obj, list):
+            obj = (obj[int(k)] if k.isdigit() and int(k) < len(obj) else
+                   next((r for r in obj if isinstance(r, dict) and k in (r.get("name"), r.get("function"))), None))
+        elif isinstance(obj, dict) and k in obj:
+            obj = obj[k]
+        else:
             return None
-        obj = obj[k]
     return obj if isinstance(obj, (int, float)) and not isinstance(obj, bool) and math.isfinite(obj) else None
 
 
-def _mechanism(p: dict, result: dict | None, base_result: dict | None) -> dict:
+def _base(tool: str, args: dict) -> str | None:
+    """Where a change_pct prediction finds its baseline in the run's baseline record: the same path for a measured
+    tool; under `profiled` (torch at profile's defaults, general launch) for a profile measured the same way; none
+    for another instrument or workload."""
+    if tool not in PROFILERS:
+        return ""
+    return "profiled." if tool == "profile" and not any(k in args for k in PROFILE_WORKLOAD) else None
+
+
+def _mechanism(p: dict, result: dict | None, base_result: dict | None, base: str | None) -> dict:
     """One mechanism prediction with the number at its path in this result (or why there is none) and the gap."""
     v = _number(result, p["metric"])
-    if v is not None and p["unit"] == "change_pct":     # a profile's own path, else the baseline's after-profile
-        b = _number(base_result, p["metric"]) or _number(base_result, f"profiled.{p['metric']}")
+    if v is not None and p["unit"] == "change_pct":
+        if base is None:
+            return {**p, "actual": None, "actual_missing": "the run's baseline was not measured with this instrument "
+                    "and workload (its after-profile is torch at profile's defaults)"}
+        b = _number(base_result, f"{base}{p['metric']}")
         if not b:
             return {**p, "actual": None, "actual_missing": f"no baseline value at `{p['metric']}` in this run"}
         v = (v - b) / b * 100
@@ -234,7 +253,8 @@ def outcome(tool: str, args: dict, result: dict | None = None, metrics: dict | N
             baseline: dict | None = None, band_pct: float | None = None, base_result: dict | None = None) -> dict:
     """The experiment block a measured record carries: hypothesis id, the predictions, and the computed gaps."""
     e = {k: v for k, v in args["expect"].items() if k != "mechanism"}
-    actual, missing = _actual(tool, e, result, metrics, baseline, base_result)
+    base = _base(tool, args)
+    actual, missing = _actual(tool, e, result, metrics, baseline, base_result, base)
     out = {"hypothesis": args["hypothesis_id"], "expect": e, "actual": actual}
     if args.get("bundle"):
         out["bundle"], out["independence"] = list(args["bundle"]), args["independence"].strip()
@@ -246,7 +266,7 @@ def outcome(tool: str, args: dict, result: dict | None = None, metrics: dict | N
     if band_pct is not None:
         out["noise_band_pct"] = band_pct
     if args["expect"].get("mechanism"):
-        out["mechanism"] = [_mechanism(p, result, base_result) for p in args["expect"]["mechanism"]]
+        out["mechanism"] = [_mechanism(p, result, base_result, base) for p in args["expect"]["mechanism"]]
     return out
 
 

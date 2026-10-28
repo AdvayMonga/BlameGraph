@@ -78,6 +78,7 @@ def test_nsys_kernel_and_api_time_against_the_window(tmp_path):
     assert n["kernels"][0]["name"] == "moe_gemm" and n["kernels"][0]["share_of_kernel_time"] == pytest.approx(0.75)
     assert n["kernels"][0]["share_of_window"] == pytest.approx(0.375) and n["memcpy_s"] == pytest.approx(0.1)
     assert n["cuda_api"] == [{"name": "cudaStreamSynchronize", "total_s": pytest.approx(0.9), "count": 36}]
+    assert calibrate.calibrate_nsys(tmp_path, ranged=True)["window_s"] == 2.0
     free = calibrate.calibrate_nsys(tmp_path, ranged=False)
     assert free["window_s"] is None and free["kernel_share_of_window"] is None and "capture-range" in free["window_missing"]
     assert calibrate.calibrate_nsys(tmp_path / "bundle", ranged=True) is None

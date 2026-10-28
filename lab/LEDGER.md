@@ -27,7 +27,9 @@ Every measured record (`bench`, `equiv`, `submit`, `profile`, including `trace`/
 agent carries `experiment: {hypothesis, expect: {metric, value, unit: absolute|change_pct, why}, actual, gap,
 gap_pct_of_expected, noise_band_pct}`, or `actual_missing` saying why the lab could not compute the measured
 counterpart (`lab/experiments.py`). The profilers' results have no `metrics`, so their `expect.metric` is a dotted
-path into `result` like a mechanism's (e.g. `calibrated.kernel_share_of_window`). An `expect` may carry `mechanism`, a list of further predictions on other numbers
+path into `result` like a mechanism's (e.g. `calibrated.kernel_share_of_window`; a list's row is named by its
+`name` or `function`, e.g. `calibrated.kernels.<kernel>.total_s`), and their `change_pct` has a baseline only for a
+`profile` at its default workload and launch (the baseline record's `profiled`). An `expect` may carry `mechanism`, a list of further predictions on other numbers
 in the same result (`metric` = a dotted path into `result`, e.g. `calibrated.layers.runtime.gpu_idle_share`;
 `change_pct` against the same path in the run's `baseline` record); the record keeps them as `experiment.mechanism`,
 each with its `actual` and `gap` or `actual_missing`. `submit` takes none: its held-out record is aggregates only. An `expect` and each mechanism prediction take only their own keys
