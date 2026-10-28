@@ -3,6 +3,18 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-27 — Every program is tuned before it is measured
+`kernels.search` grid-searches a program's declared launch parameters (`CONFIG` + `TUNABLES`, 8 points) before each
+first measurement of its speed: on the most-called shape before the quick timing, on every seen shape before the full
+exam (with a per-size dispatcher where different points win in different regions), and for the root program. Each
+point is loaded with CONFIG rewritten, checked on one shape and timed in the evaluator's own jailed stage; the program
+is measured and kept with the fastest point written in, so its children start from it. Re-timing and the gate
+measure the tuned program as it is; every point's score is shown to the model as a fact. Why (the user: the search space must be unrestricted, nothing that is a lever for
+speed fixed): programs were ranked at the tile sizes the model guessed, and tuning ran only on the top 4 after the
+search (off in the 2026-10-27 race), while OpenEvolve's winner autotuned inside its own program; structure goes to
+the model, numeric knobs to a measured grid. Replaces post-search tuning (2026-10-18, "the top 4 are tuned"); the A/B
+promotion (`ab.SAME_PROMOTION`) no longer sets tuning, which is now part of the search.
+
 ## 2026-10-27 — No roofline stop: a search runs to its budget
 `kernels.search` no longer stops when the best program reaches a share of its roofline (`--stop-pct`, 80 by
 default, removed); it stops at its generations, budget, wall-clock or patience. The % of roofline stays a fact in

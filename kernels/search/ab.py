@@ -3,8 +3,9 @@
 
 OpenEvolve against kernels.search on one task, everything else equal: the same shapes, starting program, evaluator,
 model (OpenEvolve given the same single model, so the search and prompting are what differ), number of programs judged
-and post-search pipeline: the top 3 re-timed 3x, highest median promoted, no grid tuning or gaming detector for any
-arm (`SAME_PROMOTION`; on 2026-10-18 only the kernels.search arms got them, and the win came from the tuning). Each arm and seed runs in its own dir; each winner then goes through `gate` (all seen shapes
+and post-search pipeline: the top 3 re-timed 3x, highest median promoted, no gaming detector for any arm
+(`SAME_PROMOTION`). Grid tuning is part of kernels.search's search since 2026-10-27 (every program tuned before it is
+measured), not a post-search step; OpenEvolve's programs tune only if they do it themselves (e.g. triton.autotune). Each arm and seed runs in its own dir; each winner then goes through `gate` (all seen shapes
 plus the held-out ones, jailed). The summary, per arm: re-timed seen score, held-out speedup, whether every gate
 passed, model $ and calls, programs judged; written to <out>/ab.json. An arm dir holding a result.json is reused, so
 an interrupted A/B resumes. With $KERNEL_EVAL_SSH the gate runs on that host, like the evaluator. Model calls and GPU
@@ -46,7 +47,7 @@ def _openevolve(a, out: Path, seed: int) -> dict:
     return _last_json(buf.getvalue())
 
 
-SAME_PROMOTION = ("--retime", "3", "--tune-points", "0", "--detector-model", "none")   # what OpenEvolve's run does
+SAME_PROMOTION = ("--retime", "3", "--detector-model", "none")   # what OpenEvolve's run does
 
 
 def _search(a, out: Path, seed: int, extra: tuple = ()) -> dict:

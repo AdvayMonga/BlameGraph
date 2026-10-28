@@ -41,7 +41,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable
 
-from kernels.search import diff
+from kernels.search import diff, tune
 from kernels.search.llm import CACHE_SPLIT
 from kernels.search.tree import Node, Tree, fingerprint
 
@@ -70,7 +70,7 @@ class Models:
 @dataclass
 class Funnel:
     models: Models
-    stage: Callable[[str, int], dict]       # (code, stage) -> {metrics, artifacts}; stage 1, 2, 3 (ncu), 4 (quick)
+    stage: Callable[[str, int], dict]       # (code, stage) -> {metrics, artifacts}; 1, 2, 3 (ncu), 4 (quick), 6/7 (tune)
     archive: list = field(default_factory=list)            # kernels.archive entries for this task
     task: str | None = None
     embedder: object | None = None
@@ -85,6 +85,8 @@ class Funnel:
     gpu_s_cap: float | None = None           # GPU seconds at which a round stops (`gpu_used` reads the spend)
     gpu_used: Callable[[], float] | None = None
     workers: int = 8                         # model calls at once
+    tune: bool = False                       # each program's grid tuned before its quick timing and its full exam
+    size_expr: str | None = None             # the task's call size: the full exam's tuning may dispatch on it
     deadline: float | None = None            # time.monotonic() at which a round stops (the search's wall-clock cap)
     spent: float = 0.0
     calls: int = 0
@@ -116,6 +118,17 @@ class Funnel:
         if stage != PRECHECK and self.gpu_s_cap is not None and self.gpu_used and self.gpu_used() >= self.gpu_s_cap:
             raise Spent("GPU budget")
         return self.stage(code, stage)
+
+    def measure(self, code: str, stage: int) -> tuple[str, dict]:
+        """A program's first measurement at a tier (4: the quick timing, 2: the full exam), its grid tuned on that tier's
+        shapes first (kernels/search/tune.py): (the program measured, its result, with every grid point's row)."""
+        rows = []
+        if self.tune:
+            code, rows = tune.tuned(self.run, code, quick=stage == 4, size_expr=self.size_expr)
+        r = self.run(code, stage)
+        if rows:
+            r = {**r, "artifacts": {**r["artifacts"], "tune": json.dumps(rows)}}
+        return code, r
 
 
 class Spent(Exception):
@@ -465,7 +478,9 @@ def generation(f: Funnel, tree: Tree, parents: list[Node], system: str, it: int,
             else:
                 fates.append({"idea": h, "fate": "failed correctness, and its repair",
                               "error": str(r["artifacts"])[:300]})
-        quick = [(h, plan, c, f.run(c, 4)) for h, plan, c, _ in survivors]   # GPU timings: one at a time
+        quick = [(h, plan, *f.measure(c, 4)) for h, plan, c, _ in survivors]   # GPU timings: one at a time
+        for h, _, c, _ in quick:
+            code_of[key(h)] = c
         quick.sort(key=lambda x: -_score(x[3]))
         quick = race(f, quick, keep)
         finalists = []
@@ -479,8 +494,8 @@ def generation(f: Funnel, tree: Tree, parents: list[Node], system: str, it: int,
         finalists = rewrite(f, tree, system, by_id, finalists, seen, reports, counts)
         for h, plan, code, q, how in finalists:
             p = by_id[h["parent_id"]]
+            code, r = f.measure(code, 2)
             code_of[key(h)] = code
-            r = f.run(code, 2)
             if reports.get(code):
                 r["artifacts"] = {**r["artifacts"], "compile_report": reports[code]}
             child = Node(uuid.uuid4().hex[:8], p.id, code, r["metrics"], r["artifacts"], it, "", plan, "optimization")
@@ -539,7 +554,7 @@ def rewrite(f: Funnel, tree: Tree, system: str, by_id: dict, finalists: list, se
             out.append((h, plan, code, q, "draft (rewrite failed " + ("the precheck)" if c2 in ok and ok[c2] is False
                                                                      and c2 not in todo else "stage 1)")))
         else:
-            q2 = f.run(c2, 4)
+            c2, q2 = f.measure(c2, 4)
             if _score(q2) > _score(q):
                 counts["rewritten"] += 1
                 out.append((h, plan, c2, q2, "rewrite"))

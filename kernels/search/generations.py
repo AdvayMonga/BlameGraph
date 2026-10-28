@@ -73,7 +73,7 @@ def search(initial: str, system: str, funnel: Funnel, judge: Callable[[str], dic
             hyplog.flush()
         r = judge(initial)
         judged += 1
-        keep_node(Node(uuid.uuid4().hex[:8], None, initial, r["metrics"], r["artifacts"], 0), 0.0)
+        keep_node(Node(uuid.uuid4().hex[:8], None, r.get("code", initial), r["metrics"], r["artifacts"], 0), 0.0)
         gen, idle, size, best = 0, 0, gen_size, tree.best().score
         while gen <= generations and judged < evals and funnel.spent < usd and not out_of_budget():
             if gen == 0:

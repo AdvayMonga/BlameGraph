@@ -1,8 +1,13 @@
-"""Launch parameters chosen by a grid search, not by the model (KernelEvolve, AlphaEvolve's tiling heuristic; also the
-2026-10-16 moe_gemm win, mostly tile sizes and stages). A program may define, at module level, `CONFIG` (a dict of the
-launch parameters its kernel uses) and `TUNABLES` (for each key, the values to try). The sweep judges points of that
-grid like any program, with `CONFIG` rewritten in the source, so the chosen values ship as plain constants and the
-engine pays no autotuning at startup."""
+"""Launch parameters chosen by a measured grid search, not guessed by the model (KernelEvolve, AlphaEvolve's tiling
+heuristic; also the 2026-10-16 moe_gemm win, mostly tile sizes and stages). A program may define, at module level,
+`CONFIG` (a dict of the launch parameters its kernel uses) and `TUNABLES` (for each key, the values to try).
+
+Decided 2026-10-27: every program is tuned before each first measurement of its speed (`tuned`): the quick timing on
+the most-called shape, the full exam on every seen shape. The evaluator's tune stage (kernels/evolve/core.py
+`TUNE_STAGE`) loads each point with CONFIG rewritten in the source, checks it on the most-called shape and times it;
+the program goes on with the fastest point written in, or, after the full exam's sweep, a per-size dispatcher where
+different points win in different regions. The chosen values ship as plain constants: the engine pays no autotuning
+at startup."""
 from __future__ import annotations
 
 import ast
@@ -57,25 +62,6 @@ def grid(config: dict, tunables: dict, points: int, seed: int = 0) -> list[dict]
     return [config] + combos[: max(0, points - 1)]
 
 
-def sweep(code: str, judge: Callable[[str], dict], points: int = 16, seed: int = 0) -> tuple[str, dict, list]:
-    """(the best point's code, its result, every point's {config, score}); the program unchanged when it declares no
-    grid. Each point is one judgment; the caller re-times the winner before promoting it."""
-    p = params(code)
-    if p is None:
-        return code, {}, []
-    rows, best = [], (None, None, -1.0)
-    for cfg in grid(*p, points, seed):
-        variant = with_config(code, cfg)
-        r = judge(variant)
-        s = float(r["metrics"].get("combined_score") or 0.0)
-        timed = json.loads(r["artifacts"].get("timings") or "[]") if s > 0 else []
-        rows.append({"config": cfg, "score": s, "timings": [{k: t.get(k) for k in ("shape", "speedup", "weight")}
-                                                            for t in timed]})
-        if s > best[2]:
-            best = (variant, r, s)
-    return best[0], best[1], rows
-
-
 def regions(rows: list, bins: int = 4) -> list | None:
     """Per size region (quantile bins of the seen shapes' first axis), the grid point with the best call-weighted
     log-speedup there: [(upper bound or None, config)], or None when one point wins everywhere."""
@@ -99,7 +85,8 @@ def regions(rows: list, bins: int = 4) -> list | None:
     return table
 
 
-DISPATCH = """
+DISPATCH_START, DISPATCH_END = "# TUNED-DISPATCH-START\n", "# TUNED-DISPATCH-END\n"
+DISPATCH = DISPATCH_START + """
 _CONFIG_BY_SIZE = {table!r}
 _dispatch_impl = {target}
 
@@ -109,7 +96,7 @@ def _dispatched(*args, **kwargs):
     n = {size}
     CONFIG = next(c for ub, c in _CONFIG_BY_SIZE if ub is None or n <= ub)
     return _dispatch_impl(*args, **kwargs)
-"""
+""" + DISPATCH_END
 
 
 def dispatch(code: str, size_expr: str, table: list) -> str:
@@ -124,3 +111,37 @@ def dispatch(code: str, size_expr: str, table: list) -> str:
             return body + DISPATCH.format(table=table, target=m.group(1), size=size_expr) + end + tail
         return body + DISPATCH.format(table=table, target="kernel", size=size_expr) + "kernel = _dispatched\n" + end + tail
     return code + DISPATCH.format(table=table, target="kernel", size=size_expr) + "kernel = _dispatched\n"
+
+
+def strip(code: str) -> str:
+    """The program without a dispatcher `dispatch` added (its entry bound back), so its grid can be tuned again."""
+    i, j = code.find(DISPATCH_START), code.find(DISPATCH_END)
+    if i < 0 or j < i:
+        return code
+    m = re.search(r"^_dispatch_impl = (\w+)$", code[i:j], re.M)
+    out = code[:i] + code[j + len(DISPATCH_END):]
+    if m and m.group(1) != "kernel":
+        out = re.sub(r"^kernel = _dispatched$", f"kernel = {m.group(1)}", out, count=1, flags=re.M)
+        return out if out.endswith("\n") else out + "\n"         # `dispatch` took the binding's line ending
+    return re.sub(r"^kernel = _dispatched\n", "", out, count=1, flags=re.M)
+
+
+def tuned(stage: Callable[[str, int], dict], code: str, quick: bool, size_expr: str | None = None) -> tuple[str, list]:
+    """(the program with its grid's fastest point written in, every point's row): `stage(code, n)` runs the evaluator's
+    tune stage, 7 on the most-called seen shape (`quick`), else 6 on every seen shape, where a per-size dispatcher over
+    `size_expr` replaces one point when different points win in different regions. The program unchanged when it
+    declares no grid or no point passed."""
+    base = strip(code)
+    if params(base) is None:
+        return code, []
+    r = stage(base, 7 if quick else 6)
+    try:
+        rows = json.loads((r.get("artifacts") or {}).get("tune") or "[]")
+    except ValueError:
+        rows = []
+    ok = [x for x in rows if (x.get("score") or 0) > 0]
+    if not ok:
+        return code, rows
+    new = with_config(base, max(ok, key=lambda x: x["score"])["config"])
+    table = regions(ok) if size_expr and not quick else None
+    return (dispatch(new, size_expr, table) if table else new), rows
