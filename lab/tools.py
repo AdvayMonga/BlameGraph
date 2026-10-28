@@ -199,6 +199,8 @@ class Toolbox(EvalTools, ProfTools):
 
         def profile(t, a):
             r = self.run_instrument("profile", t, a)
+            if r["verdict"] in ("refused", "contaminated"):
+                raise RuntimeError(f"a capture was {r['verdict']}: {r['reason']}")
             return self.s.ledger_root / r["bundle"] if r["verdict"] == "ok" else None
         from lab import worker
         w = self.worker

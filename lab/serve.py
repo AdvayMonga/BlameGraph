@@ -74,6 +74,7 @@ class Watch:
             raise GpuBusy(busy)
         self.on = busy is not None
         self.foreign: dict[int, dict] = {}
+        self._own: set[int] = set()             # every pid ever seen as the job's: gone from pids() at teardown
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -84,11 +85,12 @@ class Watch:
 
     def _run(self, pids) -> None:
         while True:
-            before = pids()
+            self._own |= pids()
             apps = gpu.compute_apps() or []
-            mine = before | (pids() if apps else set())     # a process the job starts meanwhile is its own
+            if apps:
+                self._own |= pids()                          # a process the job starts meanwhile is its own
             for a in apps:
-                if a["pid"] not in mine:
+                if a["pid"] not in self._own:
                     self.foreign.setdefault(a["pid"], a)
             if self._stop.wait(POLL_S):
                 return

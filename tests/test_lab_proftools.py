@@ -300,3 +300,34 @@ def test_every_instrument_records_the_same_shape(tb, monkeypatch, tool, args):
     assert {"returncode", "bundle", "workspace_copy", "instrument", "argv", "seconds", "output", "gpu",
             "calibrated"} <= set(rec["result"]) and "head" not in rec["result"]
     assert_charged(tb, rec)
+
+
+def test_a_watch_never_counts_the_jobs_own_exiting_process_as_another(monkeypatch):
+    monkeypatch.setattr(serve, "POLL_S", 0.01)
+    n = {"apps": 0}
+
+    def apps():                                     # free at the start, then the job's own pid 7 on the GPU
+        n["apps"] += 1
+        return [] if n["apps"] == 1 else [{"pid": 7, "used_mib": 1, "name": "engine"}]
+    monkeypatch.setattr(gpu, "compute_apps", apps)
+    own = iter([{7}, {7}])
+    w = serve.Watch()
+    w.start(lambda: next(own, set()))               # the jail tears down: its pids are gone, the GPU still lists 7
+    time.sleep(0.1)
+    assert w.stop() == []
+
+
+def test_the_runner_gets_the_jobs_timeout_for_the_run_and_its_report(tb, monkeypatch):
+    from lab import worker
+    seen = []
+    monkeypatch.setattr(labtools, "stage_harness", lambda tree: tree)
+    monkeypatch.setattr(labtools, "workload_flags", lambda a, h, n: [])
+
+    def runner(tree, argv, read=(), timeout_s=None, **_):
+        seen.append(timeout_s)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    tree = tb.s.run_dir / "t"
+    tree.mkdir()
+    worker._profile({"tree": tree}, tb.s.run_dir / "out", {"kind": "trace", "args": {}, "timeout_s": 900},
+                    {"profile_runner": runner})
+    assert seen == [900, 900]

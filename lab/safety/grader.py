@@ -266,17 +266,22 @@ def jailed(tree: Path, argv: list[str], *, timeout_s: float, env_extra: dict | N
     wrapped, env, tmp, name = _jail_argv(tree, argv, env_extra, domains, read=read, memory=memory, gpu=gpu,
                                          ipc_host=ipc_host)
     try:
+        if on_start is None:
+            return subprocess.run(wrapped, cwd=tree, env=env, capture_output=True, text=True, timeout=timeout_s)
         proc = subprocess.Popen(wrapped, cwd=tree, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if on_start:
-            from lab.gpu import descendants     # the `gpu` argument shadows the module here
-            on_start((lambda: container.pids(name)) if name else (lambda: descendants(proc.pid)))
+        from lab.gpu import descendants         # the `gpu` argument shadows the module here
+        on_start((lambda: container.pids(name)) if name else (lambda: descendants(proc.pid)))
         try:
             out, err = proc.communicate(timeout=timeout_s)
-        except subprocess.TimeoutExpired:      # a hung suite is a failed run, recorded like any other
-            proc.kill()
-            out, _ = proc.communicate()
-            return subprocess.CompletedProcess(argv, -9, out or "", f"timed out after {timeout_s:.0f}s")
+        except subprocess.TimeoutExpired:
+            proc.kill()                         # wait, not communicate: a left-behind child may hold the pipes
+            proc.wait()
+            raise
         return subprocess.CompletedProcess(wrapped, proc.returncode, out, err)
+    except subprocess.TimeoutExpired as e:     # a hung suite is a failed run, recorded like any other
+        out = (e.stdout or b"")
+        return subprocess.CompletedProcess(argv, -9, out.decode(errors="replace") if isinstance(out, bytes) else out,
+                                           f"timed out after {timeout_s:.0f}s")
     finally:
         if name:
             container.remove(name)
