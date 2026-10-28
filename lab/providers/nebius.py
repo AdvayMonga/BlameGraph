@@ -91,7 +91,8 @@ class Nebius:
                   "--boot-disk-managed-disk-source-image-family-image-family", self.image,
                   "--boot-disk-attach-mode", "READ_WRITE",
                   "--network-interfaces", nics, "--cloud-init-user-data", user_data,
-                  *(("--follows-spot-price", "--preemptible-on-preemption", "stop") if self.spot else ()))
+                  *(("--follows-spot-price", "--preemptible-on-preemption", "stop", "--recovery-policy", "fail")
+                    if self.spot else ()))    # a preemptible instance takes only "fail" (the CLI's default: "recover")
 
     def _id(self, name: str) -> str:
         raw = self._raw(name)

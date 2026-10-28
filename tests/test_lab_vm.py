@@ -290,8 +290,8 @@ def test_nebius_spot_creates_a_preemptible_vm_that_stops(tmp_path, monkeypatch):
         p, seen = _nebius(monkeypatch, [], spot)
         p.create("n1", str(key))
         create = next(a for a in seen if a[:3] == ("compute", "instance", "create"))
-        flags = ("--follows-spot-price", "--preemptible-on-preemption", "stop")
-        assert (create[-3:] == flags) is spot and ("--follows-spot-price" in create) is spot
+        flags = ("--follows-spot-price", "--preemptible-on-preemption", "stop", "--recovery-policy", "fail")
+        assert (create[-5:] == flags) is spot and ("--follows-spot-price" in create) is spot   # Nebius: "fail" only
 
 
 def test_start_refuses_the_other_pricing_running_or_not(monkeypatch):
