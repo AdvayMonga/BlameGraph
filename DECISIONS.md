@@ -202,6 +202,17 @@ low in every launch measured (5.37 vs 8.74 on the same seed in one launch), and 
 requests at `min`. The raw results are archived in the store, not merged into the ledger. Amends 2026-10-18
 (short gates: searches resolved to the band).
 
+## 2026-10-28 — The kernel search competes on KernelBench, under the benchmark's own rules
+Every KernelBench problem (ScalingIntelligence/KernelBench, pinned commit, fetched on demand with sha256s) is a kernel
+task `kb:LEVEL:ID` (`kernels/kernelbench.py`), and winners are scored by the benchmark's own evaluation code, jailed:
+correctness at the pinned tolerance (fp32 1e-4) and at v0/v0.1's 1e-2 (most published numbers), speedup over its own
+eager timing and over torch.compile, its static checker, fast_p per arm. The search's checks follow the benchmark's
+contract (contiguous inputs, no value scalings, no NaN/Inf or edge shapes, no roofline, which an algorithmic rewrite
+beats), and keep our anti-gaming gates; a held-out size (the first size constant the inputs read, doubled) is ours,
+reported beside the official score. Arms run through `kernels.search.ab` on the same shapes, start, evaluator, model
+and budget. Why (the user): to compete fairly on a reputable public benchmark, against OpenEvolve and the published
+methods, rather than only on our engine's tasks. fp32 and levels 1-2 first.
+
 ## 2026-10-28 — Everything from the InferenceBench era is removed
 `logs/`, the InferenceBench diagnostics (`assertions`, `blame`, `claims_audit`, `exploration`, `inject`, `noise`),
 `feedback/verdict.py`, their tests, and the `research-v1` tag are deleted; `python -m feedback` reads lab ledgers
