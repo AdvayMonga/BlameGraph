@@ -34,6 +34,7 @@ checkpoint = "Qwen/Qwen3-30B-A3B"            # both precisions load the bf16 che
 [engines.vllm]
 kind = "docker"
 image = "vllm/vllm-openai:v0.32.0"
+entrypoint = "vllm serve"                    # the image's own, named for a profiler that runs in front of it
 version = "0.32.0"
 api = "vllm"
 health = "/health"

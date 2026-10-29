@@ -116,7 +116,8 @@ def render(d: Path, gpu_usd_per_hour: float | None = None, tol_pct: float = 2.0)
     if check.exists():
         c = json.loads(check.read_text())
         lines += ["", f"Client check: clean up to concurrency {c['max_clean_concurrency']} closed loop and "
-                  f"{c['max_clean_rate']} req/s open loop."]
+                  f"{c['max_clean_rate']} req/s open loop" + (f", bursts of {c['max_clean_burst']} requests in 50 ms"
+                  if c.get("max_clean_burst") else "") + "."]
     return "\n".join(lines) + "\n"
 
 

@@ -420,7 +420,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   X-Turn-Index, X-Trace-Id; a record with `expected_output_tokens` is sent at that length, or the regime's
   `max_tokens`, with `ignore_eos` and `skip_special_tokens: false`, and one that ends earlier is `truncated`:
   `workload.to_request`), `runner.py` (open loop: schedule dealt to 4 client processes on one shared start, each
-  request on a thread started 5 ms early, so p99 send lag stays ~1–3 ms; closed loop; `summarize`: p50/p99, failures,
+  process one event loop (`client.asend`: body encoded and connection opened 100 ms early, only the write at the send
+  time; a thread per request queued a burst's sends, 14 ms p99 lag at bursty 16x), so p99 send lag stays ~0.5–1.5 ms
+  even for 800 arrivals in 50 ms; closed loop: a thread per client; `summarize`: p50/p99, failures,
   attainment, valid only if no silent drop/truncation/crash and client lag p99 ≤ 10 ms; `find_goodput`: double then
   bisect on ≥99% meeting both limits, up to 40 probes, reporting the lowest failing load `fails_at` and why it stopped,
   `stopped`; saturated sweeps to 4,096 concurrency; bursty = the spike trace at N x its requests over its own span,
@@ -430,8 +432,11 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   refuses — plus Poisson, trace replay with speed-up and peak-window crop, multi-turn
   conversations rebuilt from stored histories under one shared system prompt; synthetic prompts when no corpus),
   `suite.py` (the 8 regimes; probes ≥ `min_requests` (100) and tier length, capped at 4× the tier length, then a
-  confirmation at `final_s` backing off 15% up to 5 times; the load search stops below start/16; closed-loop
-  schedules are generated lazily; shared-prefix runs score only the steady-state window; cold start launches a command with
+  confirmation at `final_s` backing off by the search's resolution up to 5 times, a failed confirmation counting as
+  a failing load; the load search stops below start/16; closed-loop schedules are generated lazily; open-loop probes
+  (and overload's) score only requests sent under steady load: arrivals start one request's time at the limits
+  (`_settle_s`: TTFT limit + p90 length x TPOT limit, 104 s for a 1,024-token answer) before the scored window and run
+  as long after it, decided 2026-10-29; shared prefix adds its think-time ramp; cold start launches a command with
   fresh VLLM/inductor/Triton cache dirs, polls until "17 + 25" is answered "42", then relaunches for the warm figure).
   Tiers: min (15 s probes, 30 s final; bursty cropped to its peak window like short), short (30 s probes, 60 s final),
   full (60 s probes, 600 s final). Probes must last well beyond the TTFT limit
@@ -445,9 +450,17 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   launch check, the regimes at `--tol 0.02`, equiv, cold start; repeats rotate the order; each stage one file, skipped
   when present), `report.py` (`python -m compare.report DIR [--gpu-usd-per-hour P]`: per regime the winner and whether
   the lead is clear of every spread and of the runner-up's bracket; the saturated curve with $/M output tokens),
-  `vm-setup.sh` (images and checkpoints; its header lists the session's steps). Not run yet.
+  `vm-setup.sh` (images and checkpoints; its header lists the session's steps), `profile.py` (`python -m
+  compare.profile --out DIR`: each engine under `nsys launch` with the comparison's settings, at fixed load points
+  (`POINTS`: single stream, saturated mix at 256, 1,024-token answers at 512, long prompts at 8 req/s), a 10 s nsys
+  window once steady, then 10 s of py-spy over the server's processes), `gap.py` (`python -m compare.gap DIR`: per
+  point each engine's client numbers, GPU busy share, kernel launches, top kernels, top Python frames). First run
+  2026-10-28 (spot, `data/compare-20261028/`): vLLM bf16/fp8 and SGLang bf16 measured; ours hung at saturated
+  (inference-server#137, a lock-order deadlock); long-output/long-prompt values were 30 s probes shorter than one
+  request, and bursty stopped on client lag: both fixed 2026-10-29.
 - `regimes/clientcheck.py` — `python -m regimes.clientcheck`: the client's own TPOT error at each closed-loop concurrency
-  and open-loop rate, against a fixed-schedule server that logs its true send times.
+  and open-loop rate and burst size (`BURST`: N arrivals within 50 ms), against a fixed-schedule server that logs its
+  true send times.
 - `workloads/` — frontier benchmark request data, researcher-only (never reaches the agent: nothing in `lab/` reads
   it), for manual runs: overfitting checks on data the agent never saw, the corpus's missing shapes, engine vs
   vLLM/SGLang on identical requests. One module per benchmark, docstring = source, sizes, output limit, MLPerf

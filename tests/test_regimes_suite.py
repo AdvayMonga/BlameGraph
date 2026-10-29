@@ -39,6 +39,33 @@ def test_the_search_reports_its_bracket_and_never_stops_on_its_budget_first():
     assert client["stopped"] == "invalid" and client["fails_at"] is None and client["goodput"] == 4.0
 
 
+def test_open_loop_probes_are_scored_under_steady_load_and_a_failed_confirmation_backs_off_by_the_resolution():
+    """Arrivals start one request's time at the limits before the scored window and run as long after it; a load that
+    passes its probe but fails the confirmation steps down by the search's resolution and counts as failing."""
+    from regimes.client import Request, Row
+    from regimes.runner import Limits
+    load, _, found = suite._search_and_confirm(lambda x, final: {"valid": True, "meets_limits": x <= (7.0 if final else 8.0)},
+                                               {"start": 1.0, "rel_tol": 0.05})
+    assert 7.0 * 0.95 <= load <= 7.0 and found["fails_at"] <= 8.0
+
+    built, scored = [], []
+    ctx = suite.Ctx("u", "m", tol=0.05, min_requests=10)
+    limits = Limits(ttft_s=2.0, tpot_s=0.1)
+    build = lambda load, dur: built.append(dur) or [Request(f"r{k}", [], 100, k * 0.5) for k in range(int(dur * 2))]
+    ctx.run_open = lambda reqs: [Row(r.id, "ok", r.at_s, 0.0) for r in reqs]
+    real = suite.summarize
+    suite.summarize = lambda rows, lim, dur: scored.append([r.scheduled_s for r in rows]) or {
+        "valid": True, "meets_limits": len(scored) == 1, "invalid_reasons": []}
+    try:
+        suite._goodput_regime(ctx, "x", "y", build, limits)
+    finally:
+        suite.summarize = real
+    settle = 2.0 + 100 * 0.1
+    assert suite._settle_s([Request("a", [], 100, 0.0)], limits) == settle
+    assert built[1] == settle + ctx.probe_s + settle                   # built[0] sized the settle time
+    assert min(scored[0]) >= settle and max(scored[0]) < settle + ctx.probe_s
+
+
 def _saturated(capacity: int, hints: dict | None = None) -> tuple[dict, list[int]]:
     """saturated() against a server that meets the limits up to `capacity` concurrent requests."""
     calls: list[int] = []
