@@ -448,6 +448,15 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `vm-setup.sh` (images and checkpoints; its header lists the session's steps). Not run yet.
 - `regimes/clientcheck.py` — `python -m regimes.clientcheck`: the client's own TPOT error at each closed-loop concurrency
   and open-loop rate, against a fixed-schedule server that logs its true send times.
+- `kernels/kernelbench.py` — KernelBench as kernel tasks, researcher-only (2026-10-28): `python -m kernels.kernelbench
+  fetch|list|score|run`; the repo at a pinned commit into `data/kernelbench/<commit>/` (problems + the benchmark's own
+  eval package, sha256 manifest); `kb:LEVEL:ID` tasks (`kernels.tasks.load`; the eval config carries the problem's
+  source into the jail): inputs from its get_inputs on the device, weights under a fixed seed, fp32, reference and
+  baseline its eager forward, its tolerance (Task.tolerances), the benchmark's contract (no layouts, scalings, NaN/Inf
+  (Task.nonfinite) or edge shapes, no roofline), a held-out size; start program = problem + `ModelNew(Model)` + `kernel`.
+  `score`: the benchmark's `eval_kernel_against_ref` jailed (its package imported without the LLM clients), both
+  tolerances, static checker, torch.compile time; `run`: problems through `kernels.search.ab` arms then `score`,
+  fast_p per arm in `kernelbench.json`. Level 3 problems 48-49 need einops.
 - `workloads/` — frontier benchmark request data, researcher-only (never reaches the agent: nothing in `lab/` reads
   it), for manual runs: overfitting checks on data the agent never saw, the corpus's missing shapes, engine vs
   vLLM/SGLang on identical requests. One module per benchmark, docstring = source, sizes, output limit, MLPerf
