@@ -692,3 +692,20 @@ def test_a_query_tool_that_cannot_run_answers_the_model_instead_of_crashing_the_
     with mock.patch.dict(sys.modules, {"store.index": None, "store": None}):
         out = llm.run_query("SELECT 1")
     assert out.startswith("query failed: ") and "Error" in out
+
+
+def test_the_cli_builds_its_funnel_with_every_task_in_the_memory_and_this_task_in_the_archive(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from kernels import archive
+    from kernels.search import __main__ as cli
+    monkeypatch.setattr(cli, "Claude", lambda *a, **k: (lambda s, u: ("", 0.0)))
+    path = archive.export([archive.Entry("i1", "toy", "t", {}), archive.Entry("i2", "other", "u", {})],
+                          tmp_path / "archive.jsonl")
+    a = SimpleNamespace(archive=str(path), second_judge_model="none", second_judge_share=4, effort="high",
+                        judge_tools=False, cheap_model="c", wide_model="w", model="m", ptx=None, per_call=20, keep=8,
+                        parallel=4, max_repairs=3, ncu=False, precheck=True, workers=8, tune_points=8)
+    monkeypatch.setattr(archive, "_embedder", lambda root: None)
+    f = cli._funnel(a, SimpleNamespace(name="toy", size_expr=None), lambda s, u: ("", 0.0))
+    assert [e.id for e in f.archive] == ["i1"] and [e.id for e in f.library] == ["i1", "i2"]
+    assert f.task == "toy" and f.tune and f.keep == 8 and f.precheck and f.workers == 8

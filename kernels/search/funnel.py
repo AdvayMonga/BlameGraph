@@ -74,8 +74,6 @@ class Funnel:
     stage: Callable[[str, int], dict]       # (code, stage) -> {metrics, artifacts}; 1, 2, 3 (ncu), 4 (quick), 6/7 (tune)
     archive: list = field(default_factory=list)            # kernels.archive entries for this task
     task: str | None = None
-    library: list = field(default_factory=list)            # kernels.archive entries for every task (the memory's)
-    memory: tuple = ("", "")                 # (general table, task table) in every judge call, kernels/search/memory.py
     embedder: object | None = None
     ptx: str | None = None                   # the PTX comparison's feature cards, when built
     per_call: int = 20
@@ -95,6 +93,8 @@ class Funnel:
     calls: int = 0
     judge_calls: int = 0                     # hypothesis-naming calls so far: picks the judge from the mix
     tried: set = field(default_factory=set)  # every program written this run, judged or not: never written again
+    library: list = field(default_factory=list)            # kernels.archive entries for every task (the memory's)
+    memory: tuple = ("", "")                 # (general table, task table) in every judge call, kernels/search/memory.py
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def _ask(self, model, system: str, user: str) -> str:
