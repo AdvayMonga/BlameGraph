@@ -2,7 +2,7 @@
                           [--samples DIR --shared-weights FILE]   (T = region:FIRST:LAST: its captures, its holder)
                           [--model CODER] [--judge-model JUDGE|none] [--effort E] [--[no-]ncu] [--device cuda]
                           [--initial PROGRAM.py] [--retime K] [--tune-points N] [--generations N --gen-size N
-                          --parents N --keep N] [--mcts] [--facts FILE]
+                          --parents N --keep N] [--no-types] [--mcts] [--facts FILE] [--archive FILE]
 
 Our own layer-1 generator on one kernel task: by default the genetic search (kernels/search/generations.py: generations
 of funnel rounds from fitness-sampled parents); with --mcts one funnel round per MCTS-chosen parent (kernels/search/
@@ -67,14 +67,15 @@ def _funnel(a, task, review):
     from lab import ledger
     if review is None:
         raise SystemExit("--funnel needs a judge (--judge-model)")
-    entries = [e for e in archive.load(Path(a.archive)) if e.task == task.name] if a.archive else []
+    library = archive.load(Path(a.archive)) if a.archive else []      # every task's ideas: the judge's memory
+    entries = [e for e in library if e.task == task.name]
     second = Claude(a.second_judge_model, a.effort, tools=a.judge_tools) if a.second_judge_model != "none" else None
     mix = (review,) * (a.second_judge_share - 1) + (second,) if second and a.second_judge_share > 1 else ()
     models = Models(review, Claude(a.cheap_model, "low"), Claude(a.wide_model, a.effort), Claude(a.model, a.effort), mix)
     return Funnel(models, staged(evaluator.judge_stage), entries, task.name,
                   archive._embedder(ledger.ROOT) if entries else None, Path(a.ptx).read_text() if a.ptx else None,
                   a.per_call, a.keep, a.parallel, a.max_repairs, a.ncu, a.precheck, workers=a.workers,
-                  tune=bool(a.tune_points), size_expr=task.size_expr)
+                  tune=bool(a.tune_points), size_expr=task.size_expr, library=library)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -115,8 +116,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--generations", type=int, default=10, help="generations after generation 0 (the start alone)")
     ap.add_argument("--gen-size", type=int, default=24, help="ideas written per generation, over its parents")
     ap.add_argument("--parents", type=int, default=4, help="parents per generation, drawn by fitness")
-    ap.add_argument("--crossover", type=float, default=0.0,
-                    help="fraction of a generation's ideas that combine a parent with another parent's diff (an arm)")
+    ap.add_argument("--types", action=argparse.BooleanOptionalAction, default=True,
+                    help="split each generation's ideas over refine, persist, fresh and crossover (kernels/search/"
+                         "generations.py); --no-types: refine only")
     ap.add_argument("--gpu-s", type=float, help="stop once judging has taken this many seconds, summed over jobs")
     ap.add_argument("--wall-s", type=float, help="stop starting new work once the search has run this many seconds")
     ap.add_argument("--wide-model", default="claude-sonnet-5-5", help="the funnel's wide coder")
@@ -155,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         tree, cost = evolve(program.read_text(), system, fun, judge, out, a.evals, a.usd, a.seed, a.gen_size, a.keep,
                             a.parents, a.generations,
                             patience=3 if a.patience is None else a.patience or None, gpu_s=a.gpu_s,
-                            gpu_used=gpu_used, crossover=a.crossover, wall_s=a.wall_s)
+                            gpu_used=gpu_used, types=a.types, wall_s=a.wall_s)
     else:
         tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.usd, a.seed,
                             patience=16 if a.patience is None else a.patience or None,

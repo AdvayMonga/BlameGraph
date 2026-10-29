@@ -412,13 +412,13 @@ def test_every_arm_differs_from_kernels_search_in_one_flag():
         from types import SimpleNamespace
         a = SimpleNamespace(task="t", shapes="s", evals=3, usd=1.0, model="m", device="cpu", initial=None)
         assert "search-beam" not in ab.ARMS                       # the beam was removed (2026-10-27)
-        for arm in ("kernels.search", "search-no-tools", "search-mcts", "search-gen20", "search-crossover"):
+        for arm in ("kernels.search", "search-no-tools", "search-mcts", "search-gen20", "search-untyped"):
             ab.ARMS[arm](a, Path("/tmp/x"), 0)
     finally:
         cli.main = orig
     base = seen[0]
     extras = [argv[len(base):] for argv in seen[1:]]
-    assert extras == [["--no-judge-tools"], ["--mcts"], ["--gen-size", "20", "--keep", "12"], ["--crossover", "0.1"]]
+    assert extras == [["--no-judge-tools"], ["--mcts"], ["--gen-size", "20", "--keep", "12"], ["--no-types"]]
     assert "--second-judge-model" in base            # every arm names hypotheses with the one model
     assert all(argv[:len(base)] == base for argv in seen)
     try:

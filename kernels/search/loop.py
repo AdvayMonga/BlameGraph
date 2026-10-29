@@ -36,18 +36,20 @@ TIMING_KEYS = ("shape", "candidate_ms", "baseline_ms", "speedup", "speedup_p25",
                "pct_of_roofline", "bound", "pct_of_peak_bandwidth", "pct_of_peak_flops")
 
 
-JUDGE = """You are the judge in a search over GPU kernel programs. You are shown one program and its measurements.
-{mode_spec}"""
-MODES = {
-    "optimization": 'The program is correct. Name {n} distinct changes a coder could make, as one JSON array of {n} '
-                    'objects and nothing else, each {{"bottleneck": "<max 30 words>", "optimisation_method": "<max 35 '
-                    'words>", "modification_plan": "<max 35 words>", "mechanism": [{{"counter": "<an ncu metric name '
-                    'from the measurements>", "change_pct": <predicted % change, summed over the program\'s kernels>}}]}}. '
-                    '"mechanism" may be empty. Every one is written and measured.',
-    "crossover": 'The program is correct. Below it is another program from the same search, as a diff. Name {n} '
-                 'change(s) to this program that carry over what the other program does differently, as one JSON '
-                 'array of {n} objects and nothing else, each {{"bottleneck": "<max 30 words>", "optimisation_method": '
-                 '"<max 35 words>", "modification_plan": "<max 35 words>", "mechanism": []}}.',
+JUDGE = "You are the judge in a search over GPU kernel programs. You are shown one program and its measurements."
+SHAPE = ('{{"bottleneck": "<max 30 words>", "optimisation_method": "<max 35 words>", "modification_plan": "<max 35 '
+         'words>", "mechanism": [{{"counter": "<an ncu metric name from the measurements>", "change_pct": <predicted % '
+         'change, summed over the program\'s kernels>}}]}}')
+ARRAY = 'as one JSON array of {n} objects and nothing else, each ' + SHAPE + '. "mechanism" may be empty. Every one is ' \
+        'written and measured.'
+MODES = {           # the request that ends a judge call's prompt, by idea type (kernels/search/generations.py)
+    "optimization": "The program is correct. Name {n} distinct changes a coder could make, " + ARRAY,
+    "persistence": "The program is correct. Its last change, shown above, took its parent from {before:.4f} to "
+                   "{after:.4f}. Name {n} distinct changes that take that same change further, " + ARRAY,
+    "fresh": "The program is correct. Name {n} distinct changes, each giving the kernel an overall structure that "
+             "differs from this program's and from every idea in the table of ideas tried on this task, " + ARRAY,
+    "crossover": "The program is correct. Another program from the same search is shown after it, as a diff. Name {n} "
+                 "change(s) to this program that carry over what the other program does differently, " + ARRAY,
 }
 
 
@@ -55,7 +57,7 @@ def trace_row(node: Node, cost: float) -> dict:
     """A node as `<out>/trace.jsonl` keeps it (the fields `kernels.evolve.run.record` and `retime` read)."""
     return {"iteration": node.iteration, "parent_id": node.parent, "child_id": node.id, "child_metrics": node.metrics,
             "child_code": node.code, "mode": node.mode, "artifacts": node.artifacts, "judge": node.judge,
-            "proposal": node.proposal, "cost_usd": cost}
+            "proposal": node.proposal, "kind": node.kind, "cost_usd": cost}
 
 
 def hypotheses(text: str, n: int) -> list[dict]:
@@ -200,7 +202,7 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
     of it in `<out>/hypotheses.jsonl`; without a funnel (no judge), the coder alone proposes `children` children.
     Returns the tree and the run's cost {usd, model_calls, evals, ...}."""
     out.mkdir(parents=True, exist_ok=True)
-    tree, spent, calls, judged, it = Tree(seed, c=uct_c), 0.0, 0, 0, 0
+    tree, spent, calls, judged, it, rows = Tree(seed, c=uct_c), 0.0, 0, 0, 0, []
 
     deadline = time.monotonic() + wall_s if wall_s else None
 
@@ -251,10 +253,13 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
                 for _ in range(children):
                     attempt(parent)
                 continue
+            from kernels.search import memory
             from kernels.search.funnel import expand
-            before = funnel.spent
+            before, library = funnel.spent, funnel.library or funnel.archive
+            funnel.memory = (memory.general(library, funnel.task), memory.task(library, funnel.task, rows))
             kids = expand(funnel, tree, parent, system, it, keep,
-                          lambda row: (hyplog.write(json.dumps(row, default=str) + "\n"), hyplog.flush()))
+                          lambda row: (rows.append(row), hyplog.write(json.dumps(row, default=str) + "\n"),
+                                       hyplog.flush()))
             spent, calls, judged = spent + funnel.spent - before, funnel.calls, judged + len(kids)
             if not kids:                         # a round that examined nothing counts as one failure
                 parent.failures += 1

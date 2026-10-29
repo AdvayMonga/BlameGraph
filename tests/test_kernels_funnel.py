@@ -79,7 +79,7 @@ def test_an_idea_like_an_archived_failure_is_dropped_unless_a_difference_is_name
     expand(f, t, root, "SYS", 1, lambda n, c: t.add(n), rows.append)
     fates = {x["idea"]["modification_plan"]: x["fate"] for x in rows[0]["ideas"]}
     assert fates["set a = 5"].startswith("like archived ideas") and rows[0]["after_archive"] == rows[0]["distinct"] - 1
-    assert any("ideas in the archive" in u for u in f.models.judge.calls)              # the archive slice ran
+    assert not any("ideas in the archive" in u for u in f.models.judge.calls)          # no archive slice: the memory
 
 
 def test_the_search_runs_funnel_rounds_and_the_archive_reads_them_back(tmp_path):

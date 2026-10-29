@@ -68,12 +68,12 @@ def _variant(*extra: str):
 
 # Each arm differs from `kernels.search` (the genetic search over funnel rounds, judge tools on) in one thing, so a
 # difference in the summary is that thing's: the judge's web search and ledger SQL, one MCTS-chosen parent per round
-# (the 2026-10-25 default), KernelPro's literal UCT constant under it, fewer and larger generations, a share of
-# explicit crossover, or the whole generator.
+# (the 2026-10-25 default), KernelPro's literal UCT constant under it, fewer and larger generations, refine ideas
+# only (no persist, fresh or crossover types: the search before 2026-10-29), or the whole generator.
 ARMS = {"openevolve": _openevolve, "kernels.search": _search, "search-no-tools": _variant("--no-judge-tools"),
         "search-mcts": _variant("--mcts"), "search-c1.41": _variant("--mcts", "--uct-c", "1.4142"),
         "search-gen20": _variant("--gen-size", "20", "--keep", "12"),
-        "search-crossover": _variant("--crossover", "0.1")}
+        "search-untyped": _variant("--no-types")}
 
 
 def _gate(a, program: Path) -> dict:

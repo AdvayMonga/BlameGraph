@@ -3,6 +3,25 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-29 — Four idea types per generation; the judge remembers every measured idea
+Each generation after the first splits its 24 ideas over four types, each with its own judge calls: refine (new ideas on
+the fitness-drawn parents, as before), persist (a line's last change taken further; every child that beat its parent
+heads a line, which moves to a persist child that beats it and closes after 3 generations without one), fresh (a
+different overall structure, half from the start program and half from a random program) and crossover (one parent
+shown another's diff). The split starts at 8/6/6/4 and adapts each generation to each type's measured rate of new
+bests (Laplace-smoothed, at least 2 each); each type gets its share of the 8 full exams, so a type is judged on its own
+fastest, and every idea is tagged with its type. Every judge call also gets the memory as two cached prompt blocks: the
+general table (ideas that beat their parent on other kernel tasks, best measured gain, the task and its bound type)
+and the task table (every idea tried on this task in earlier runs and so far in this run, with how far it got and its
+measured gains); it replaces the archive slice, which showed only the ideas most like one parent's to one call in five.
+Why (the user): a search should explore new ideas, push the ones that show an improvement and combine branches in
+every generation, and, like an expert who remembers thousands of experiments, know what was already tried rather than
+start from square one and be deduplicated afterwards. The tables are measurements, not lessons (the no-beliefs rule,
+2026-10-09); the model draws its own conclusions inside each call. The 2026-10-27 persistence arm bundled persistence
+with an idea table, immigrants and an extra judge call, so its loss did not measure persistence alone; this costs no
+extra model calls. Arm `search-untyped` keeps the search before this (refine only); `--crossover`/`search-crossover`
+are replaced by the crossover type. Found the same day: no search so far passed `--archive`, so none read past ideas.
+
 ## 2026-10-28 — Everything from the InferenceBench era is removed
 `logs/`, the InferenceBench diagnostics (`assertions`, `blame`, `claims_audit`, `exploration`, `inject`, `noise`),
 `feedback/verdict.py`, their tests, and the `research-v1` tag are deleted; `python -m feedback` reads lab ledgers

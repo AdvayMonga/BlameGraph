@@ -5,11 +5,12 @@ kernels/search/generations.py; decided 2026-10-26).
 From the parents:
   0. a parent with no ncu counters yet is profiled (stage 3): counters feed only the prompts of a parent's children,
      so a program is profiled when it is first chosen as a parent, not when it is examined (decided 2026-10-27)
-  1. generate: for one parent, one judge call per slice of the facts (the measurements; archive matches; measured
-     winners elsewhere in the tree; the compiler's report; the PTX comparison); for several, one call per parent with
-     the slices rotated across the generation's parents, so every call reads one slice and every slice is read. Each
-     call names the parent's quota of hypotheses. The judge calls cycle through `Models.judges` (3 Opus : 1 Sonnet
-     by default), for diversity.
+  1. generate: for one parent, one judge call per slice of the facts (the measurements; measured winners elsewhere
+     in the tree; the compiler's report; the PTX comparison); for several, one call per slot (a parent, an idea type
+     and a quota, kernels/search/generations.py), a refine slot's slice rotated across the generation's parents, so
+     every call reads one slice and every slice is read. Every judge call also gets the memory
+     (kernels/search/memory.py: ideas that won on other tasks, every idea tried on this one). The judge calls cycle
+     through `Models.judges` (3 Opus : 1 Sonnet by default), for diversity.
   2. dedup / merge: hypotheses within `SAME` cosine are one idea, merged by a cheap model keeping every detail
   3. past failures: an idea like an archived one that never beat its parent goes back to the judge with those records
      and survives only if the judge names what differs now
@@ -18,7 +19,7 @@ From the parents:
   5. correctness on the GPU (stage 1), `parallel` at a time; failures go to the repair queue (the strong coder)
   6. the quick speed test (the most-called shape only); programs within `RACE` of the cutoff are timed once more and
      ranked by their mean (successive halving's racing: repeats only where one timing cannot separate them); the
-     fastest `keep` go on
+     fastest `keep` go on (with `keep_by`, the fastest of each idea type, so each type gets its share of full exams)
   7. the strong coder rewrites each of those from the idea and the passing version; the rewrite replaces the draft
      only if it builds, passes stage 1 and its quick time is faster (decided 2026-10-27: the strong model on the
      programs that reach the full exam, not on every correct draft)
@@ -46,7 +47,7 @@ from kernels.search.llm import CACHE_SPLIT
 from kernels.search.tree import Node, Tree, fingerprint
 
 SAME = 0.92                  # cosine above which two hypotheses are one idea (as the archive's DISTINCT)
-SLICES = ("measurements", "archive", "winners", "compiler", "ptx")
+SLICES = ("measurements", "winners", "compiler", "ptx")
 RACE = 0.05                  # quick scores within this fraction of the cutoff are timed once more before the cut
 
 MERGE = """These hypotheses about one GPU kernel program say the same thing in different words. Answer with one JSON
@@ -73,6 +74,8 @@ class Funnel:
     stage: Callable[[str, int], dict]       # (code, stage) -> {metrics, artifacts}; 1, 2, 3 (ncu), 4 (quick), 6/7 (tune)
     archive: list = field(default_factory=list)            # kernels.archive entries for this task
     task: str | None = None
+    library: list = field(default_factory=list)            # kernels.archive entries for every task (the memory's)
+    memory: tuple = ("", "")                 # (general table, task table) in every judge call, kernels/search/memory.py
     embedder: object | None = None
     ptx: str | None = None                   # the PTX comparison's feature cards, when built
     per_call: int = 20
@@ -147,19 +150,10 @@ def pmap(f: Funnel, fn: Callable, items) -> list:
 
 
 def slices(f: Funnel, tree: Tree, parent: Node) -> dict[str, str]:
-    """The facts each generator call gets beyond the program and its measurements; a slice with no facts is skipped."""
-    from kernels import archive
+    """The facts each generator call gets beyond the program, its measurements and the memory; a slice with no facts is
+    skipped."""
     from kernels.search.loop import diff_from_root
     out = {"measurements": ""}
-    q = parent.judge or (f.task or "")
-    found = archive.matches(f.archive, str(q), f.task, k=8, embedder=f.embedder) if f.archive else []
-    head = "# Similar ideas in the archive, with their measured outcomes"
-    if f.archive and not found:                  # nothing like this program's idea: the task's best-measured ideas
-        mine = [e for e in f.archive if e.task == f.task or f.task is None]
-        found = [(None, e) for e in sorted(mine, key=lambda e: -((e.best() and e.best().child_score) or 0))[:8]]
-        head = "# The task's best-measured ideas in the archive, with their measured outcomes"
-    if found:
-        out["archive"] = head + "\n" + "\n".join(json.dumps(archive.facts(e, s)) for s, e in found)
     mine = {n.id for n in tree.lineage(parent)}
     wins = sorted((n for n in tree.nodes.values() if n.id not in mine and n.parent and n.score > 0
                    and n.score > tree.nodes[n.parent].score), key=lambda n: -n.score)[:4]
@@ -173,14 +167,24 @@ def slices(f: Funnel, tree: Tree, parent: Node) -> dict[str, str]:
     return out
 
 
+def judging(f: Funnel, system: str) -> str:
+    """A judge call's system prompt: the setting with the general table, then the task table and the judge's role, each
+    part cached on its own (the general table changes least, so it comes first)."""
+    from kernels.search.loop import JUDGE
+    general, mine = f.memory
+    return system + (f"\n\n{general}" if general else "") + CACHE_SPLIT + "\n\n" + (f"{mine}\n\n" if mine else "") + JUDGE
+
+
 def generate(f: Funnel, system: str, base: str, facts: dict[str, str], n: int | None = None,
-             only: str | None = None) -> list[dict]:
-    """One judge call per slice naming `per_call` hypotheses, or (`only`) one call on that slice naming `n`."""
-    from kernels.search.loop import JUDGE, MODES, hypotheses
+             only: str | None = None, mode: str = "optimization", note: str = "", **kw) -> list[dict]:
+    """One judge call per slice naming `per_call` hypotheses, or (`only`) one call on that slice naming `n`; `mode`
+    (loop.MODES, formatted with `kw`) is the request that ends the prompt, after the slice and `note`."""
+    from kernels.search.loop import MODES, hypotheses
     n = n or f.per_call
-    spec = system + CACHE_SPLIT + "\n\n" + JUDGE.format(mode_spec=MODES["optimization"].format(n=n))
+    spec, ask = judging(f, system), MODES[mode].format(n=n, **kw)
     names = [s for s in SLICES if s in facts and (only is None or s == only)]
-    texts = pmap(f, lambda s: f._ask(f._judge(), spec, base + (f"{CACHE_SPLIT}\n\n{facts[s]}" if facts[s] else "")), names)
+    texts = pmap(f, lambda s: f._ask(f._judge(), spec, base + CACHE_SPLIT + "".join(
+        f"\n\n{t}" for t in (facts[s], note, ask) if t)), names)
     return [{**h, "slice": s} for s, text in zip(names, texts) for h in hypotheses(text, n)]
 
 
@@ -205,7 +209,7 @@ def merge(f: Funnel, ideas: list[dict]) -> list[dict]:
         if len(g) == 1:
             return {**ideas[g[0]], "merged_from": 1}
         got = hypotheses(f._ask(f.models.cheap, MERGE, "\n\n".join(json.dumps(ideas[i]) for i in g)), 1)
-        tags = {k: ideas[g[0]][k] for k in ("slice", "parent_id", "idea_id") if k in ideas[g[0]]}
+        tags = {k: ideas[g[0]][k] for k in ("slice", "parent_id", "idea_id", "type", "with") if k in ideas[g[0]]}
         return {**(got[0] if got else ideas[g[0]]), **tags, "merged_from": len(g)}
     return pmap(f, one, groups)
 
@@ -381,48 +385,72 @@ def expand(f: Funnel, tree: Tree, parent: Node, system: str, it: int, keep_node:
     return generation(f, tree, [parent], system, it, keep_node, log, quota=f.per_call, keep=f.keep, rotate=False)
 
 
+@dataclass
+class Slot:
+    """One judge call's assignment in a generation: name `n` ideas of type `kind` from `parent`."""
+    parent: Node
+    kind: str = "refine"         # start, refine, persist, fresh or crossover (kernels/search/generations.py)
+    n: int = 1
+    other: Node | None = None    # crossover: the other parent, shown as its diff from the start
+
+
 def generation(f: Funnel, tree: Tree, parents: list[Node], system: str, it: int,
                keep_node: Callable[[Node, float], None], log: Callable[[dict], None], quota: int, keep: int,
-               rotate: bool = True, crossover: int = 0, spread: bool = False) -> list[Node]:
-    """One round from `parents`: each parent's judge calls name `quota` ideas (with `rotate`, one call on one slice,
-    rotated across the parents; else one call per slice, `quota` each, or with `spread` the parent's `quota` split over
-    its slices), `crossover` further ideas each combine a parent with another parent's diff; the fastest `keep` of the
-    whole round go to the full exam and join the tree under their own parent. Every idea carries an `idea_id`, and its
-    log row the diff its program made. A budget that runs out mid-round (`Spent`) ends the round with what it has; the
-    log says where."""
+               rotate: bool = True, crossover: int = 0, spread: bool = False, slots: list[Slot] | None = None,
+               keep_by: dict[str, int] | None = None, extra: dict | None = None) -> list[Node]:
+    """One round: each slot's judge call names its ideas. Without `slots`, each of `parents` is a refine slot of `quota`
+    ideas (with `rotate`, one call on one slice, rotated across the parents; else one call per slice, `quota` each, or
+    with `spread` the parent's `quota` split over its slices) and `crossover` slots of one idea each combine a parent
+    with another parent's diff. A refine (or start) slot reads its slices as above; persist, fresh and crossover slots
+    read the measurements. The fastest `keep` of the whole round (with `keep_by`, of each idea type) go to the full
+    exam and join the tree under their own parent, each child's `kind` its idea's type. Every idea carries an
+    `idea_id` and its `type`, and its log row the diff its program made. A budget that runs out mid-round (`Spent`)
+    ends the round with what it has; the log says where. `extra` goes into the round's log row."""
     from kernels.search.loop import diff_from_root, prompt
     spent0, fates, children = f.spent, [], []
     counts = {"named": 0, "distinct": 0, "after_archive": 0, "written": 0, "correct": 0, "rewritten": 0}
     stopped, pairs, code_of = None, [], {}       # code_of: each written idea's latest program, for the log's diff
-    by_id = {p.id: p for p in parents}
+    if slots is None:
+        slots = [Slot(p, "refine", quota) for p in parents] + [
+            Slot(parents[k % len(parents)], "crossover", 1, parents[(k + 1) % len(parents)])
+            for k in range(crossover if len(parents) > 1 else 0)]
+    by_id = {s.parent.id: s.parent for s in slots}
+    parents = list(by_id.values())
 
     def key(h):
         return h.get("idea_id")
     try:
-        profile_parents(f, list(by_id.values()))
+        profile_parents(f, parents)
         need = [p for p in parents if f.precheck and "compile_report" not in p.artifacts]
         for p, r in zip(need, correct(f, [p.code for p in need], PRECHECK)):    # for the compiler slice
             if r["artifacts"].get("compile_report"):
                 p.artifacts["compile_report"] = r["artifacts"]["compile_report"]
         bases = {p.id: prompt(tree, p, coder=False) for p in parents}
+        refine = [s for s in slots if s.kind in ("start", "refine")]
 
-        def name(ip):
-            i, p = ip
-            facts = slices(f, tree, p)
-            if rotate:                           # one slice per call, every slice read across the generation
-                names = [s for s in SLICES if s in facts]
-                got = generate(f, system, bases[p.id], facts, n=quota, only=names[(it * len(parents) + i) % len(names)])
+        def name(s: Slot) -> list[dict]:
+            p = s.parent
+            if s.kind == "crossover":
+                got = [{**h, "slice": "crossover", "with": s.other.id}
+                       for h in _crossover(f, system, bases[p.id], tree, s.other, diff_from_root)]
+            elif s.kind == "persist":            # the program's last change, to be taken further
+                before = tree.nodes[p.parent].score if p.parent else 0.0
+                got = generate(f, system, bases[p.id], {"measurements": ""}, n=s.n, mode="persistence",
+                               note=f"# Its last change (from the judge)\n{p.judge}", before=before, after=p.score)
+            elif s.kind == "fresh":
+                got = generate(f, system, bases[p.id], {"measurements": ""}, n=s.n, mode="fresh")
             else:
-                got = generate(f, system, bases[p.id], facts,
-                               n=max(1, math.ceil(quota / len(facts))) if spread else quota)
-            return [{**h, "parent_id": p.id, "idea_id": uuid.uuid4().hex[:8]} for h in got]
-        ideas = [h for got in pmap(f, name, list(enumerate(parents))) for h in got]
-        pairs_x = [(parents[k % len(parents)], parents[(k + 1) % len(parents)])
-                   for k in range(crossover if len(parents) > 1 else 0)]       # a parent shown another parent's diff
-        for (p, o), got in zip(pairs_x, pmap(f, lambda po: _crossover(f, system, bases[po[0].id], tree, po[1],
-                                                                       diff_from_root), pairs_x)):
-            ideas += [{**h, "parent_id": p.id, "slice": "crossover", "with": o.id, "idea_id": uuid.uuid4().hex[:8]}
-                      for h in got]
+                facts = slices(f, tree, p)
+                if rotate:                       # one slice per call, every slice read across the generation
+                    names = [x for x in SLICES if x in facts]
+                    i = refine.index(s)
+                    got = generate(f, system, bases[p.id], facts, n=s.n,
+                                   only=names[(it * len(refine) + i) % len(names)])
+                else:
+                    got = generate(f, system, bases[p.id], facts,
+                                   n=max(1, math.ceil(s.n / len(facts))) if spread else s.n)
+            return [{**h, "parent_id": p.id, "type": s.kind, "idea_id": uuid.uuid4().hex[:8]} for h in got]
+        ideas = [h for got in pmap(f, name, slots) for h in got]
         counts["named"] = len(ideas)
         ideas = merge(f, ideas)
         judged = pmap(f, lambda p: past_failures(f, system, bases[p.id], [h for h in ideas if h.get("parent_id") == p.id]),
@@ -482,15 +510,20 @@ def generation(f: Funnel, tree: Tree, parents: list[Node], system: str, it: int,
         for h, _, c, _ in quick:
             code_of[key(h)] = c
         quick.sort(key=lambda x: -_score(x[3]))
-        quick = race(f, quick, keep)
+        groups: dict = {}                        # with keep_by, each idea type is cut on its own
+        for row in quick:
+            groups.setdefault(row[0].get("type") if keep_by else None, []).append(row)
         finalists = []
-        for h, plan, code, q in quick:
-            if _score(q) <= 0:
-                fates.append({"idea": h, "fate": "quick speed test: scored 0", "quick": q["metrics"]})
-            elif len(finalists) >= keep:
-                fates.append({"idea": h, "fate": "quick speed test: not among the fastest", "quick": q["metrics"]})
-            else:
-                finalists.append((h, plan, code, q))
+        for t, rows in groups.items():
+            k, n = (keep_by.get(t, 0) if keep_by else keep), 0
+            for h, plan, code, q in race(f, rows, k):
+                if _score(q) <= 0:
+                    fates.append({"idea": h, "fate": "quick speed test: scored 0", "quick": q["metrics"]})
+                elif n >= k:
+                    fates.append({"idea": h, "fate": "quick speed test: not among the fastest", "quick": q["metrics"]})
+                else:
+                    finalists.append((h, plan, code, q))
+                    n += 1
         finalists = rewrite(f, tree, system, by_id, finalists, seen, reports, counts)
         for h, plan, code, q, how in finalists:
             p = by_id[h["parent_id"]]
@@ -498,7 +531,8 @@ def generation(f: Funnel, tree: Tree, parents: list[Node], system: str, it: int,
             code_of[key(h)] = code
             if reports.get(code):
                 r["artifacts"] = {**r["artifacts"], "compile_report": reports[code]}
-            child = Node(uuid.uuid4().hex[:8], p.id, code, r["metrics"], r["artifacts"], it, "", plan, "optimization")
+            child = Node(uuid.uuid4().hex[:8], p.id, code, r["metrics"], r["artifacts"], it, "", plan, "optimization",
+                         h.get("type", ""))
             keep_node(child, 0.0)
             children.append(child)
             pairs.append((_score(q), child.score))
@@ -516,7 +550,8 @@ def generation(f: Funnel, tree: Tree, parents: list[Node], system: str, it: int,
          "parents": [{"id": p.id, "score": p.score} for p in by_id.values()], **counts, "examined": len(children),
          "improved": sum(c.score > by_id[c.parent].score for c in children),
          "quick_vs_full_spearman": spearman([a for a, _ in pairs], [b for _, b in pairs]) if children else None,
-         "usd": round(f.spent - spent0, 4), **({"stopped": stopped} if stopped else {}), "ideas": fates})
+         "usd": round(f.spent - spent0, 4), **(extra or {}), **({"stopped": stopped} if stopped else {}),
+         "ideas": fates})
     return children
 
 
@@ -566,8 +601,8 @@ def rewrite(f: Funnel, tree: Tree, system: str, by_id: dict, finalists: list, se
 def _crossover(f: Funnel, system: str, base: str, tree: Tree, other: Node, diff_from_root) -> list[dict]:
     """One judge call: this program beside another parent's diff from the start, naming one change that carries what
     the other does differently into this program."""
-    from kernels.search.loop import JUDGE, MODES, hypotheses
-    spec = system + CACHE_SPLIT + "\n\n" + JUDGE.format(mode_spec=MODES["crossover"].format(n=1))
-    text = f._ask(f._judge(), spec, base + f"{CACHE_SPLIT}\n\n# Another program in this generation, {other.id} (score "
-                  f"{other.score:.4f}), as a diff from the starting program\n```diff\n{diff_from_root(tree, other)}```")
+    from kernels.search.loop import MODES, hypotheses
+    text = f._ask(f._judge(), judging(f, system), base + f"{CACHE_SPLIT}\n\n# Another program in this generation, "
+                  f"{other.id} (score {other.score:.4f}), as a diff from the starting program\n```diff\n"
+                  f"{diff_from_root(tree, other)}```\n\n" + MODES["crossover"].format(n=1))
     return hypotheses(text, 1)
