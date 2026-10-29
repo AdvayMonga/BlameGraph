@@ -138,7 +138,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
 - `lab/validate.py` — `python -m lab.validate --target T`: serves the target's reference and writes its outputs, judges
   each `[validation]` good/bad launch (good must pass, bad must fail: the gate separates on *this* model and GPU), and
   measures each regime's run-to-run band from repeated runs of the engine into `noise` ledger records tagged with
-  its commit (which `submit` reads for runs on that base commit only). Exit 0 only if both hold. Needs a GPU for a real target; tested on fakes. `lab/LEDGER.md` is the
+  its commit (which `submit` reads for runs on that base commit only), its load searches resolved to
+  `RESOLUTION_PCT` (5%), below which a searched regime's band is never reported. Exit 0 only if both hold. Needs a GPU for a real target; tested on fakes. `lab/LEDGER.md` is the
   record-format spec: the environment's public interface.
 - `lab/RUNTIME.md` — design (2026-10-08): controller (laptop: ledger, referee, secrets) and worker (GPU VM: jails,
   clients, profilers) behind a job interface; trust zones and rules; why srt cannot jail GPU code on Linux.
@@ -168,7 +169,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   record's per-turn `expected_turn_output_tokens`) from a served reference, both splits, resuming from a log in
   `data/`; a new version whose manifest `prompts_version` stays the held-out guard's key (`Manifest.budget_key`); the
   provenance test rebuilds and applies them; run 2026-10-27 against the target's reference (vLLM 0.32.0 bf16, batch
-  invariant, H200): version `7bfae7f7…`, 16,929 answers, p50 525-1,072 tokens per class, ~1% at the 2,048 cap. The run's base cache is per corpus version. Since 2026-10-09 (version
+  invariant, H200): version `7bfae7f7…`, 16,929 answers, p50 525-1,072 tokens per class, ~1% at the 2,048 cap; 300
+  sampled jobs re-measured on the reference 2026-10-28 all came back the same length. The run's base cache is per corpus version. Since 2026-10-09 (version
   `131149…`) the held-out traces and the build seed (`corpus/.seed`, which reproduces them) are gitignored and live in
   the store (`python -m store pull --corpus`); the previous version's held-out split was public in git.
 - `lab/search.py` — the `search` tool (2026-10-15): one document per `hypothesis` record across every run, with its
@@ -430,7 +432,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   refuses — plus Poisson, trace replay with speed-up and peak-window crop, multi-turn
   conversations rebuilt from stored histories under one shared system prompt; synthetic prompts when no corpus),
   `suite.py` (the 8 regimes; probes ≥ `min_requests` (100) and tier length, capped at 4× the tier length, then a
-  confirmation at `final_s` backing off 15% up to 5 times; the load search stops below start/16; closed-loop
+  confirmation at `final_s` backing off 15% up to 5 times; the load search stops below start/16; saturated doubles
+  concurrency, then bisects between the last passing and the lowest failing level to the band (else 10%); closed-loop
   schedules are generated lazily; shared-prefix runs score only the steady-state window; cold start launches a command with
   fresh VLLM/inductor/Triton cache dirs, polls until "17 + 25" is answered "42", then relaunches for the warm figure).
   Tiers: min (15 s probes, 30 s final; bursty cropped to its peak window like short), short (30 s probes, 60 s final),

@@ -3,6 +3,18 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-28 — Saturated bisects its concurrency; a searched band is never below the search's resolution
+`saturated` doubles concurrency as before, then bisects between the last level that meets the limits and the lowest
+that does not, to the regime's band (else 10%); `lab.validate` runs its searches to 5% (`RESOLUTION_PCT`) and never
+reports a searched regime's band below that. Why: the first calibration on fixed lengths (2026-10-28, H200 spot)
+gave saturated a 53% band (5.37, 9.19, 8.65 req/s) because 256 sat on the 2 s TTFT limit (p99 1.0-2.09 s) and one
+failure there dropped the result to 128; long_prompt read 80, 80, 80 (a 0% band) because every search stopped on
+the same bisection point. Rerun with the fix: saturated 8.57, 10.48, 10.72 (23.7%), long_prompt 83.3, 83.3, 70.8
+(18.2%), single_stream 5.0, 4.7, 3.8 ms (26.7%). Not adopted as bands: the first saturated run after a launch reads
+low in every launch measured (5.37 vs 8.74 on the same seed in one launch), and single_stream's p99 is over 14
+requests at `min`. The raw results are archived in the store, not merged into the ledger. Amends 2026-10-18
+(short gates: searches resolved to the band).
+
 ## 2026-10-28 — Everything from the InferenceBench era is removed
 `logs/`, the InferenceBench diagnostics (`assertions`, `blame`, `claims_audit`, `exploration`, `inject`, `noise`),
 `feedback/verdict.py`, their tests, and the `research-v1` tag are deleted; `python -m feedback` reads lab ledgers

@@ -59,12 +59,18 @@ def test_saturated_starts_at_the_bases_concurrency():
     cold, cold_calls = _saturated(64)
     warm, warm_calls = _saturated(64, {"saturated": {"concurrency": 64}})
     assert cold["value"] == warm["value"] == 64.0 and cold["concurrency"] == warm["concurrency"] == 64
-    assert warm_calls == [64, 128, 256, 64] and len(cold_calls) > len(warm_calls)      # probes, then the confirmation
+    assert warm_calls == [64, 128, 256, 96, 80, 72, 68, 64] and len(cold_calls) > len(warm_calls)   # then bisected
     down, calls = _saturated(16, {"saturated": {"concurrency": 64}})                   # a regression: halve until it holds
-    assert down["value"] == 16.0 and calls == [64, 32, 16, 16]
+    assert down["value"] == 16.0 and calls == [64, 32, 16, 24, 20, 18, 17, 16]
     assert cold["stopped"] == down["stopped"] == "resolved"
     capped, calls = _saturated(10 ** 6)
     assert capped["stopped"] == "max_concurrency" and max(calls) == 4096
+
+
+def test_saturated_bisects_between_the_doubling_levels():
+    res, calls = _saturated(200)                       # 128 passes, 256 fails: the result is within 10% of 200, not 128
+    assert 200 * 0.9 <= res["value"] <= 200 and res["concurrency"] == res["value"]
+    assert calls[-1] == res["concurrency"]             # the confirmation reran the best bisected level
 
 
 if __name__ == "__main__":

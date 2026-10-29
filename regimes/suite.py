@@ -188,9 +188,10 @@ def single_stream(ctx: Ctx) -> dict:
 
 
 def saturated(ctx: Ctx, max_concurrency: int = 4096) -> dict:
-    """Doubling concurrency; goodput = good req/s at the best level whose requests meet the limits. With a hint the
-    sweep starts at the base's concurrency, halving first while that level fails. `stopped` says why the sweep ended
-    (two failing levels, an invalid level, or `max_concurrency` reached while still passing)."""
+    """Doubling concurrency, then bisecting between the last level that meets the limits and the lowest that does not,
+    to the regime's noise band (else 10%); goodput = good req/s at the best level whose requests meet the limits. With
+    a hint the sweep starts at the base's concurrency, halving first while that level fails. `stopped` says why the
+    sweep ended (two failing levels, an invalid level, or `max_concurrency` reached while still passing)."""
     pool = ctx.pool(None)
     _warmup(ctx, pool)
     order = random.Random(ctx.seed).sample(pool, len(pool))
@@ -222,6 +223,16 @@ def saturated(ctx: Ctx, max_concurrency: int = 4096) -> dict:
         c *= 2
     stopped = ("invalid" if not s["valid"] else "max_concurrency" if c > max_concurrency and s["meets_limits"]
                else "resolved")
+    tol = ctx.search("saturated", 1.0)["rel_tol"]
+    while s["valid"]:                              # bisect between the best passing level and the next failing one
+        lo = max((lv["concurrency"] for lv in levels if lv["meets_limits"]), default=None)
+        hi = min((lv["concurrency"] for lv in levels if not lv["meets_limits"] and lo and lv["concurrency"] > lo),
+                 default=None)
+        if lo is None or hi is None or (hi - lo) / hi <= tol or hi - lo < 2:
+            break
+        s = probe((lo + hi) // 2)
+    if not s["valid"]:
+        stopped = "invalid"
     final, best = None, None
     passing = sorted((lv for lv in levels if lv["meets_limits"]), key=lambda lv: -lv["good_req_per_s"])
     for cand in passing[:3]:                       # confirm at full length; a short probe can flatter a level
@@ -377,8 +388,9 @@ def _launch_once(url, model, cmd, env, expect, timeout_s, poll_s, log_dir, label
 FACTS = {
     "single_stream": ("one request at a time (closed loop, concurrency 1) on steady_interactive prompts",
                       "p99 time per output token, seconds", "interactive"),
-    "saturated": ("closed loop at doubling concurrency over every corpus class; each level's requests judged against "
-                  "the limits, the highest passing level rerun at full length", "goodput, good requests/s", "conversational"),
+    "saturated": ("closed loop at doubling concurrency over every corpus class, then bisected between the last "
+                  "passing and the lowest failing level to the regime's noise band; each level's requests judged "
+                  "against the limits, the highest passing level rerun at full length", "goodput, good requests/s", "conversational"),
     "bursty": ("the spike trace open loop at a searched multiple of its real request rate over its own span, burst "
                "shape kept: each arrival is joined by that many more, spread over the gap to the next and drawn from the "
                "trace (tiers min and short: its peak window)", "the highest multiple whose requests meet the limits",
