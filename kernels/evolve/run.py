@@ -32,10 +32,10 @@ HERE = Path(__file__).resolve().parent
 
 def initial_program(task) -> str:
     """The engine's module source with `kernel` bound to the entry point, all of it open to evolution."""
-    if task.entry is None:
-        return (HERE / "seeds" / f"{task.name}.py").read_text()
     if task.start_program is not None:
         return task.start_program()
+    if task.entry is None:
+        return (HERE / "seeds" / f"{task.name}.py").read_text()
     if task.name.startswith("region:"):              # its entry is the stations tuple, not a function
         raise ValueError(f"{task.name}: a region's starting program needs its holder (`shared_weights`: the layer "
                          "config and the weights' constants are written into it)")
@@ -65,7 +65,12 @@ def initial_program_at(task, repo: Path, ref: str) -> str:
 def system_message(task) -> str:
     """What the program is and how it is judged, from the evaluator's own constants: facts, never advice."""
     from kernels.evolve import core
-    base = f"the engine's current `{task.entry}`" if task.entry else "the task's reference"
+    base = f"the engine's current `{task.entry}`" if task.entry else \
+        "the problem's eager PyTorch `Model`" if task.name.startswith("kb:") else "the task's reference"
+    scales = core.SCALES if task.scales is None else task.scales
+    cases = ", ".join(["three seeds"] + (["edge shapes"] if task.edge_shapes is None else [])
+                      + (["NaN/Inf inputs"] if task.nonfinite else [])
+                      + ([f"inputs scaled by {', '.join(f'{k:g}' for k in scales)}"] if scales else []))
     refused = "; ".join(dict.fromkeys(core.FORBIDDEN.values()))
     graphs = (", both captured in CUDA graphs and timed as graph replays, as the engine runs them (a kernel that "
               "cannot be captured scores 0)") if task.graphs else ""
@@ -74,14 +79,13 @@ def system_message(task) -> str:
             "evaluation host's CUDA toolkit at $CUDA_HOME, ninja on PATH, the GPU's own architecture unless the program "
             f"passes flags). The build is not timed; it counts against each stage's {TIMEOUT_S:.0f} s limit and is kept "
             "per program source across its stages and re-timings. Its C++ is screened like the Python.") \
-        if task.entry else ""
+        if task.entry or task.start_program else ""
     return f"""The program defines `kernel`, a replacement for {base}. It must compute what the task's reference \
 computes, on the same inputs, within dtype tolerance ({', '.join(str(d).removeprefix('torch.') for d in task.dtypes)}).
 
 How a program is judged:
-- Stage 1: correctness on the two most-called seen shapes, one seed. Stage 2: correctness on every seen shape (three \
-seeds, edge shapes, NaN/Inf inputs, inputs scaled by {', '.join(f'{k:g}' for k in core.SCALES)}), inputs left \
-unchanged, no output aliasing, no answers kept across calls; then peak memory at most {core.MEMORY_FACTOR}x the \
+- Stage 1: correctness on the two most-called seen shapes, one seed. Stage 2: correctness on every seen shape \
+({cases}), inputs left unchanged, no output aliasing, no answers kept across calls; then peak memory at most {core.MEMORY_FACTOR}x the \
 baseline's + {core.MEMORY_SLACK // 2**20} MiB; then timing against {base}{graphs}.
 - Score: the call-weighted geometric mean of the speedup over the seen shapes, the program and the baseline timed \
 in pairs on the same inputs; a shape where the middle half of the paired ratios includes 1 counts as 1.0. A failed gate scores 0; so does a time at which the kernel would run at \
@@ -165,10 +169,10 @@ def tolerances(target_tol: dict | None) -> dict:
 
 
 def task_name(s: str) -> str:
-    """--task: a named task or `region:FIRST:LAST`."""
-    if s in TASKS or re.fullmatch(r"region:\w+:\w+", s):
+    """--task: a named task, `region:FIRST:LAST` or `kb:LEVEL:ID`."""
+    if s in TASKS or re.fullmatch(r"region:\w+:\w+", s) or re.fullmatch(r"kb:\d+:\d+", s):
         return s
-    raise argparse.ArgumentTypeError(f"{s!r} is none of {', '.join(TASKS)}, nor region:FIRST:LAST")
+    raise argparse.ArgumentTypeError(f"{s!r} is none of {', '.join(TASKS)}, nor region:FIRST:LAST, nor kb:LEVEL:ID")
 
 
 def task_args(p) -> None:
@@ -179,7 +183,11 @@ def task_args(p) -> None:
 
 
 def region_args(a) -> dict:
-    """A region task's `samples` and `shared_weights`, absolute: what `load` and the eval config take."""
+    """A region task's `samples` and `shared_weights`, absolute, or a KernelBench problem's `source` (the jail and a
+    remote evaluator get it in the eval config): what `load` and the eval config take."""
+    if a.task.startswith("kb:"):
+        from kernels.kernelbench import problem_source
+        return {"source": problem_source(a.task)}
     if not a.task.startswith("region:"):
         return {}
     if os.environ.get("KERNEL_EVAL_SSH"):        # this process attaches the holder and reads the samples itself
@@ -263,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     task = load(a.task, **region_args(a))
     sets = _shapes(task, a)
-    tol = tolerances(_target_tolerances())
+    tol = tolerances(_target_tolerances(task))
     if a.cmd == "split":
         print(shapes_mod.write(a.write, sets))
         return 0
@@ -400,7 +408,9 @@ def record(task, sets: dict, models: list[dict], iterations: int, device: str, t
         **({"cost": cost} if cost else {})}, root)
 
 
-def _target_tolerances() -> dict | None:
+def _target_tolerances(task=None) -> dict | None:
+    if task is not None and task.tolerances:     # a public benchmark's own, never the engine target's
+        return task.tolerances
     try:
         from lab import target
         return (target.load().raw.get("kernels") or {}).get("tolerances")

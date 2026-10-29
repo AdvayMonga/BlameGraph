@@ -100,10 +100,12 @@ def _summary(cases) -> tuple[bool, str, dict]:
 
 def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes, dtypes=(torch.float32,),
                  device="cpu", seeds=(0, 1, 2), tolerances=None, edge_shapes=None, require_deterministic=False,
-                 repeats=3, layouts=("strided", "transposed"), record=None, baseline=None, budget=None) -> dict:
+                 repeats=3, layouts=("strided", "transposed"), record=None, baseline=None, budget=None,
+                 nonfinite=True) -> dict:
     """Return {"passed", "reasons", "gates": {name: {passed, reason, evidence}}} for candidate vs reference.
     make_inputs(shape, dtype, device, generator) -> tuple of tensors; generator is a seeded CPU torch.Generator.
     `layouts`: the non-contiguous input variants to test, for a kernel whose callers pass such inputs.
+    `nonfinite`: whether NaN/Inf inputs are a case (off for a public benchmark whose contract has none).
     `record(case, outputs)` is called with each plain case's outputs (inputs straight from make_inputs and the seed),
     so they can be checked again outside this process (kernels/evolve/verify.py).
     `budget` (with `baseline`): each element may also differ from the reference by `budget` times the baseline's own
@@ -158,9 +160,10 @@ def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes,
             if name not in layouts:
                 continue
             edge.append(run(s0, dt, sd0, tuple(f(t) for t in make_inputs(s0, dt, device, _gen(sd0))), name))
-        inputs = make_inputs(s0, dt, device, _gen(sd0))
-        _poison(inputs)
-        edge.append(run(s0, dt, sd0, inputs, "nonfinite"))
+        if nonfinite:
+            inputs = make_inputs(s0, dt, device, _gen(sd0))
+            _poison(inputs)
+            edge.append(run(s0, dt, sd0, inputs, "nonfinite"))
         inputs = make_inputs(s0, dt, device, _gen(sd0))
         run(s0, dt, sd0, inputs)
         for t, n in zip(inputs, make_inputs(s0, dt, device, _gen(sd0 + 1000))):

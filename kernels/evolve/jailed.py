@@ -186,7 +186,7 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
         if stage == 2:                           # outputs to verify outside the jail
             cfg = {**cfg, "record": str(tree / "outputs.pt")}
         (tree / "eval_config.json").write_text(json.dumps(cfg))
-        src = _engine_src(load(cfg["task"]))
+        src = _engine_src(load(cfg["task"], **({"source": cfg["source"]} if cfg.get("source") else {})))
         path = os.pathsep.join(str(p) for p in (harness, src) if p)
         read = [harness] + ([src] if src else [])
         gpu = None

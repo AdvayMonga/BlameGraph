@@ -53,6 +53,8 @@ class Task:
                                             # calls are "region:FIRST:LAST")
     seen_default: tuple = field(default_factory=tuple)      # shapes to use with no capture (tests, toys)
     heldout_default: tuple = field(default_factory=tuple)
+    tolerances: dict | None = None          # {dtype: [atol, rtol]} in place of the target's (a public benchmark's own)
+    nonfinite: bool = True                  # NaN/Inf inputs must give the reference's NaN/Inf positions
 
     def bind(self, fn: Callable) -> Callable:
         """fn as the checker and the timer call it: tensors in, the task's scalars added."""
@@ -96,8 +98,12 @@ def randn(size, g, device, dtype, scale: float = 1.0) -> torch.Tensor:
 
 
 def load(name: str, **region) -> Task:
-    """A named task, or a region of the engine's decode stations (`region:FIRST:LAST`; `region` may give its
-    captured `samples` dir and its `shared_weights` holder file)."""
+    """A named task, a region of the engine's decode stations (`region:FIRST:LAST`; `region` may give its
+    captured `samples` dir and its `shared_weights` holder file), or a KernelBench problem (`kb:LEVEL:ID`; `region` may
+    give its `source`)."""
+    if name.startswith("kb:"):
+        from kernels.kernelbench import task
+        return task(name, region.get("source"))
     if name.startswith("region:"):
         from kernels.regions import from_engine
         _, first, last = name.split(":")
@@ -111,8 +117,8 @@ TASKS = ("toy_rmsnorm", "paged_decode", "paged_decode_fp8", "moe_gemm", "moe_gem
 
 def from_config(cfg: dict) -> Task:
     """The task an evaluation config names, with its deployment options and captured ints: what every judge uses."""
-    region = {k: cfg[k] for k in ("samples", "shared_weights") if cfg.get(k)} \
-        if cfg["task"].startswith("region:") else {}
+    region = {k: cfg[k] for k in ("samples", "shared_weights", "source") if cfg.get(k)} \
+        if cfg["task"].startswith(("region:", "kb:")) else {}
     return load(cfg["task"], **region).with_options(cfg.get("options")).with_ints(cfg.get("ints"))
 
 
