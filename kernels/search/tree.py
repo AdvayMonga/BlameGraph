@@ -24,6 +24,7 @@ class Node:
     proposal: str = ""                       # the model text that produced it (empty for the root)
     judge: str = ""                          # the judge's plan it was written from (empty without a judge)
     mode: str = "optimization"               # kept in the trace; "correction" only in runs before 2026-10-27
+    kind: str = ""                           # the idea type it came from: start, refine, persist, fresh, crossover
     visits: int = 0                          # MCTS: judged programs in its subtree, itself included
     children: list[str] = field(default_factory=list)
     failures: int = 0                        # judged children that failed

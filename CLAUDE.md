@@ -270,13 +270,20 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `[kernels]`). `kernels/search/` (extra `kernel-search`; our own layer-1 generator, replacing OpenEvolve, which stays as the A/B baseline: `python -m
   kernels.search`; by default the genetic search (`kernels/search/generations.py`, decided 2026-10-26): generation 0 is
   one funnel round from the start program (40 ideas, the fastest 12 to the full exam), then up to `--generations` (10)
-  generations, each a funnel round from `--parents` (4) programs drawn from the population (the 32 best open programs;
-  the best always, the rest by percentile reward + 0.05 without replacement) with `--gen-size` (24) ideas split among
-  them and the fastest `--keep` (8) to the full exam, children under their own parent; a generation where under 1/5 of
+  generations, each a funnel round whose `--gen-size` (24) ideas are split over four idea types (decided 2026-10-29;
+  `--no-types` = refine only, arm `search-untyped`): refine (new ideas on `--parents` (4) programs drawn from the
+  population: the 32 best open programs, the best always, the rest by percentile reward + 0.05 without replacement),
+  persist (a line's last change taken further; every child that beat its parent heads a line, which moves to a persist
+  child that beats it and closes after 3 generations without one), fresh (a different overall structure, half from the
+  start, half from a random program) and crossover (a parent shown another parent's diff), 8/6/6/4 adapted each
+  generation by each type's Laplace-smoothed rate of new bests (floor 2); the fastest `--keep` (8) to the full exam,
+  shared out by type the same way, children under their own parent with their type (`Node.kind`); every judge call gets
+  the memory (`kernels/search/memory.py`, cached blocks: ideas that beat their parent on other tasks with their best gain
+  and bound type, then every idea tried on this task, earlier runs from `--archive` and this run so far, with measured
+  gains; archived ideas naming a program of their own run left out); a generation where under 1/5 of
   the examined beat their parent makes the next 2/3 as large; stops after `--patience` (3) generations with
   no new best, the budget or `--wall-s` (wall-clock; `--gpu-s` sums every evaluator job's seconds, parallel ones and
-  the no-GPU precheck included); `--crossover F` (an arm) gives that fraction of a generation's ideas to a judge call
-  shown another parent's diff; with `--mcts` instead a tree of refinement chains, one parent per round chosen by MCTS (UCT with
+  the no-GPU precheck included); with `--mcts` instead a tree of refinement chains, one parent per round chosen by MCTS (UCT with
   C = 0.6 on percentile rewards and max backup,
   KernelPro's progressive widening and virtual-child rule), a node closed after 3 judged failed children or 3 edits
   that never reached the GPU; in every mode the model is shown only the
@@ -289,12 +296,15 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   (`kernels/evolve/ncu.py`, stage 3 of the jailed evaluator; collected in the jail since 2026-10-27, on a Nebius H200
   whose driver had them open: the earlier refusals, ERR_NVGPUCTRPERM, were on hosts with them closed, which
   `vm-setup.sh` never opened because it grepped the module option's name, not the driver's `RmProfilingAdminOnly`; a
-  run stops asking after the first refusal), and the coder writing it; launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen afterwards by a grid
-  search on each of the top 4 re-timed programs (8 points each, no ncu), written back as constants, the best point
-  promoted only if its re-timed median beats the winner's
-  (`kernels/search/tune.py`), and when different points win in different size regions a dispatcher picks CONFIG per
-  call from the call's size (`Task.size_expr`, tensor shapes only, so CUDA graphs bake it per captured size), promoted
-  on the same rule; the prompt states the best program's % of its call-weighted roofline bound as a fact, and with
+  run stops asking after the first refusal), and the coder writing it; launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen by a measured grid
+  search before every first measurement of the program's speed (decided 2026-10-27; `kernels/search/tune.py` `tuned`,
+  `Funnel.measure`, `cascade(tuned=True)`; `--tune-points` (8), 0: off): the evaluator's tune stage (jailed stage 6,
+  7 on the most-called shape only; `core._tune`) loads each point with CONFIG rewritten, checks it on the most-called
+  shape and times it, on that shape before the quick timing and on every seen shape before the full exam, and the
+  program is measured and kept with the fastest point written in; after the full exam's sweep, where different points
+  win in different size regions, a dispatcher between `# TUNED-DISPATCH-START/END` picks CONFIG per call from the
+  call's size (`Task.size_expr`, tensor shapes only, so CUDA graphs bake it per captured size), removed (`tune.strip`)
+  before the grid is tuned again; the root program too; each point's score is a fact in the prompt; re-timing and the gate measure the tuned program as it is; the prompt states the best program's % of its call-weighted roofline bound as a fact, and with
   `--mcts` the search stops after `--patience` (16) judged programs with no new best (MANTIS; no roofline stop since
   2026-10-27);
   each timed shape carries its bound type (memory or compute) and the achieved % of peak bandwidth and of peak FLOPs,
@@ -302,7 +312,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   passed over, recorded with its evidence (`kernels/search/detect.py`, MANTIS; never changes a score);
   every call priced (OpenEvolve's too, via a usage log);
   `python -m kernels.search.ab --arms ...` runs OpenEvolve and kernels.search (and variants differing in one flag:
-  `search-no-tools`, `search-mcts`, `search-c1.41`, `search-gen20`, `search-crossover`) on one task with the same shapes, start, evaluator,
+  `search-no-tools`, `search-mcts`, `search-c1.41`, `search-gen20`, `search-untyped`) on one task with the same shapes, start, evaluator,
   the same post-search promotion for every arm (`ab.SAME_PROMOTION`: top 3 re-timed, no tuning, no detector), single model
   and judged-program budget, gates each winner on held-out shapes, and writes `ab.json`; `kernels/METHOD.md` maps
   every component to its published source and number, or says why ours; same evaluator, run dir, re-timed promotion and `kernels` record as `kernels.evolve run`). `kernels/evolve/ship.py` (`python -m kernels.evolve ship`: a program with a passing held-out gate becomes a
@@ -360,10 +370,11 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
 - `kernels/search/funnel.py` — one funnel round (decided 2026-10-22; `kernels.search`'s tiers since 2026-10-25, when
   it beat the beam on moe_gemm_fp8 1.161x to 1.026x seen, 1.284x to 1.096x held-out; the beam was removed
   2026-10-27), from one parent (`expand`, an MCTS expansion: one judge call per slice of facts x `--per-call`
-  hypotheses) or several (`generation`: one call per parent naming its quota, the slices rotated across the parents so
-  each call reads one slice and every slice is read; generation 0 splits its 40 over the start's slices). The slices:
-  measurements, archive matches, winners elsewhere in the tree, compiler report, PTX comparison; a slice with no facts
-  is skipped. Hypothesis calls cycle through the judge mix (`--second-judge-model` Sonnet 5.5 one call in
+  hypotheses) or several (`generation`: one call per slot, a parent with an idea type and its quota, `Slot`; a refine
+  slot's slice rotated across the parents so each call reads one slice and every slice is read; persist, fresh and
+  crossover slots read the measurements; generation 0 splits its 40 over the start's slices). The slices:
+  measurements, winners elsewhere in the tree, compiler report, PTX comparison (the archive slice became the memory,
+  2026-10-29); a slice with no facts is skipped; the type's request ends the prompt (`loop.MODES`). Hypothesis calls cycle through the judge mix (`--second-judge-model` Sonnet 5.5 one call in
   `--second-judge-share` 4; the past-failure check stays the judge's). Then: same-idea clusters
   merged by `--cheap-model`, ideas like archived ones that never beat their parent kept only when the judge names what
   differs, `--wide-model` writes each, the no-GPU precheck (`--precheck`, default on) drops what fails to build and keeps
@@ -384,7 +395,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   hypothesis logs and traces, with each outcome (run, parent and its score, child and its score, improved, stage
   reached, error); an idea within cosine 0.92 of an earlier one on the same task is folded into it (identical texts only
   without fastembed); `matches` (similarity, else BM25), `retry` (never beat its parent, tried only on parents other
-  than the task's current best), `facts` (what the judge sees). `python -m kernels.archive export --out F` on the
+  than the task's current best), `facts` (what the past-failure check sees); each outcome keeps the bound type of
+  the child's seen shapes; `kernels/search/memory.py` turns it into the judge's memory tables. `python -m kernels.archive export --out F` on the
   controller (the GPU host reads the file), `query --archive F TEXT`. Measurements only.
 - `lab/layers.py` — each layer's share of a profiled window and its distance from a ceiling, as facts (2026-10-18):
   kernels = CUDA kernel time / window; model execution = prefill + decode phase wall time beyond kernel time;

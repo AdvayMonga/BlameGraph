@@ -3,6 +3,25 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-29 — Four idea types per generation; the judge remembers every measured idea
+Each generation after the first splits its 24 ideas over four types, each with its own judge calls: refine (new ideas on
+the fitness-drawn parents, as before), persist (a line's last change taken further; every child that beat its parent
+heads a line, which moves to a persist child that beats it and closes after 3 generations without one), fresh (a
+different overall structure, half from the start program and half from a random program) and crossover (one parent
+shown another's diff). The split starts at 8/6/6/4 and adapts each generation to each type's measured rate of new
+bests (Laplace-smoothed, at least 2 each); each type gets its share of the 8 full exams, so a type is judged on its own
+fastest, and every idea is tagged with its type. Every judge call also gets the memory as two cached prompt blocks: the
+general table (ideas that beat their parent on other kernel tasks, best measured gain, the task and its bound type)
+and the task table (every idea tried on this task in earlier runs and so far in this run, with how far it got and its
+measured gains); it replaces the archive slice, which showed only the ideas most like one parent's to one call in five.
+Why (the user): a search should explore new ideas, push the ones that show an improvement and combine branches in
+every generation, and, like an expert who remembers thousands of experiments, know what was already tried rather than
+start from square one and be deduplicated afterwards. The tables are measurements, not lessons (the no-beliefs rule,
+2026-10-09); the model draws its own conclusions inside each call. The 2026-10-27 persistence arm bundled persistence
+with an idea table, immigrants and an extra judge call, so its loss did not measure persistence alone; this costs no
+extra model calls. Arm `search-untyped` keeps the search before this (refine only); `--crossover`/`search-crossover`
+are replaced by the crossover type. Found the same day: no search so far passed `--archive`, so none read past ideas.
+
 ## 2026-10-28 — Everything from the InferenceBench era is removed
 `logs/`, the InferenceBench diagnostics (`assertions`, `blame`, `claims_audit`, `exploration`, `inject`, `noise`),
 `feedback/verdict.py`, their tests, and the `research-v1` tag are deleted; `python -m feedback` reads lab ledgers
@@ -53,6 +72,17 @@ batch 158 passed at every speed; 512x was voided by the client's own send lag (3
 prompt (80) and shared prefix (0.81) were real break points that both engines reported alike because the search
 stops at a 10% bracket (80 passed, 86.7 failed); the bracket now shows when two results are within it. Replaces the
 time-compressed replay (2026-10-02 eval conventions' bursty).
+## 2026-10-27 — Every program is tuned before it is measured
+`kernels.search` grid-searches a program's declared launch parameters (`CONFIG` + `TUNABLES`, 8 points) before each
+first measurement of its speed: on the most-called shape before the quick timing, on every seen shape before the full
+exam (with a per-size dispatcher where different points win in different regions), and for the root program. Each
+point is loaded with CONFIG rewritten, checked on one shape and timed in the evaluator's own jailed stage; the program
+is measured and kept with the fastest point written in, so its children start from it. Re-timing and the gate
+measure the tuned program as it is; every point's score is shown to the model as a fact. Why (the user: the search space must be unrestricted, nothing that is a lever for
+speed fixed): programs were ranked at the tile sizes the model guessed, and tuning ran only on the top 4 after the
+search (off in the 2026-10-27 race), while OpenEvolve's winner autotuned inside its own program; structure goes to
+the model, numeric knobs to a measured grid. Replaces post-search tuning (2026-10-18, "the top 4 are tuned"); the A/B
+promotion (`ab.SAME_PROMOTION`) no longer sets tuning, which is now part of the search.
 
 ## 2026-10-27 — No roofline stop: a search runs to its budget
 `kernels.search` no longer stops when the best program reaches a share of its roofline (`--stop-pct`, 80 by

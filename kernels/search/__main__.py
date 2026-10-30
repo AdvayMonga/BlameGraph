@@ -2,7 +2,7 @@
                           [--samples DIR --shared-weights FILE]   (T = region:FIRST:LAST: its captures, its holder)
                           [--model CODER] [--judge-model JUDGE|none] [--effort E] [--[no-]ncu] [--device cuda]
                           [--initial PROGRAM.py] [--retime K] [--tune-points N] [--generations N --gen-size N
-                          --parents N --keep N] [--mcts] [--facts FILE]
+                          --parents N --keep N] [--no-types] [--mcts] [--facts FILE] [--archive FILE]
 
 Our own layer-1 generator on one kernel task: by default the genetic search (kernels/search/generations.py: generations
 of funnel rounds from fitness-sampled parents); with --mcts one funnel round per MCTS-chosen parent (kernels/search/
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -23,7 +24,7 @@ import torch
 from kernels.evolve import evaluator
 from kernels.evolve.run import (_shapes, _target_tolerances, prepare, record, region_args, retime, setting,
                                system_message, task_args, tolerances)
-from kernels.search import detect, tune
+from kernels.search import detect
 from kernels.search.llm import Claude
 from kernels.search.loop import cascade, search
 from kernels.search.tree import UCT_C
@@ -31,63 +32,14 @@ from kernels.tasks import load
 
 
 TUNE_FACT = ("A program may define, at module level, `CONFIG` (a dict of the launch parameters its kernel uses) and "
-             "`TUNABLES` (for each CONFIG key, a list of values). After the search, each of the top re-timed programs "
-             "that declares a grid has up to {points} points of it judged, CONFIG rewritten in its source; the best "
-             "point overall is re-timed and replaces the winner if its median score is higher.")
-
-
-def _median(code: str, judge, n: int = 3) -> tuple[float, dict]:
-    """The median of n judgments; 0 when any of them scored 0 (a gate failed once: not promoted)."""
-    runs = [judge(code)["metrics"] for _ in range(n)]
-    scores = sorted(float(m.get("combined_score") or 0.0) for m in runs)
-    med = scores[n // 2] if scores[0] > 0 else 0.0
-    return med, min(runs, key=lambda m: abs(float(m.get("combined_score") or 0.0) - med))
-
-
-def _tune(cands: list[tuple[str, dict, float | None]], judge, points: int,
-          size_expr: str | None = None, margin: float = 0.0) -> tuple[str, dict, dict]:
-    """`cands`: (code, metrics, re-timed median or None), the winner first. Every candidate that declares a grid is
-    swept at `points` points (KernelEvolve tunes every candidate; tuning only the winner picks the program before its
-    parameters are known); the best point overall, then a per-size-region dispatch over that candidate's grid, replace
-    the winner only if their median beats the incumbent's by more than `margin` (the spread of the winner's own
-    re-timings: a gain inside it is noise): (code, metrics, a record of the sweeps)."""
-    code, metrics, base = cands[0]
-    swept = [(i, c) + tune.sweep(c, judge, points)[::2] for i, (c, _, _) in enumerate(cands)
-             if points and tune.params(c) is not None]
-    if not swept:
-        return code, metrics, {}
-    rec = {"candidates": [{"index": i, "points": [{k: r[k] for k in ("config", "score")} for r in rows]}
-                          for i, _, _, rows in swept], "promoted": False}
-    i, src, variant, rows = max(swept, key=lambda x: max((r["score"] for r in x[3]), default=0.0))
-    rec["from"] = i
-    table = tune.regions(rows) if size_expr else None
-    if variant == code and not table:
-        return code, metrics, rec
-    if base is None:
-        base, _ = _median(code, judge)
-    best, best_m = code, metrics
-    if variant != code:
-        med, m = _median(variant, judge)
-        rec.update(median=med, base_median=base, margin=margin)
-        if med > base + margin:
-            best, best_m, base, rec["promoted"] = variant, m, med, True
-    if table:
-        regional = tune.dispatch(variant, size_expr, table)
-        med, m = _median(regional, judge)
-        rec["regions"] = {"table": table, "median": med, "promoted": med > base + margin}
-        if med > base + margin:
-            best, best_m, rec["promoted"] = regional, m, True
-    return best, best_m, rec
-
-
-def _top(trace: Path, retimed: list, code: str | None, metrics: dict | None, best, k: int) -> list:
-    """The candidates to tune: the re-timed ones by median (flagged ones never re-timed), else the tree's best."""
-    timed = sorted((r for r in retimed if "median" in r), key=lambda r: -r["median"])
-    if code is None or not timed:
-        return [(best.code, best.metrics, None)]
-    codes = {r["child_id"]: r["child_code"] for r in map(json.loads, trace.read_text().splitlines()) if r.get("child_code")}
-    return [(code, metrics, timed[0]["median"])] + [(codes[r["id"]], None, r["median"]) for r in timed[1:k]
-                                                     if r["id"] in codes]
+             "`TUNABLES` (for each CONFIG key, a list of values). Before a program's quick timing and before its full "
+             "exam, up to {points} points of that grid (its current CONFIG first, the rest a seeded sample) are each "
+             "loaded with CONFIG rewritten in its source, checked on the most-called seen shape and timed: on that "
+             "shape for the quick timing, on every seen shape for the full exam. The program is measured with the "
+             "fastest point written into CONFIG; after the full exam's sweep, where different points are fastest in "
+             "different size regions, a dispatcher (between `# TUNED-DISPATCH-START` and `# TUNED-DISPATCH-END`) "
+             "sets CONFIG per call from the call's size instead, and is removed before the grid is tuned again. "
+             "Children start from the tuned program.")
 
 
 def _blob(path: Path, root: str | None = None) -> str | None:
@@ -115,13 +67,15 @@ def _funnel(a, task, review):
     from lab import ledger
     if review is None:
         raise SystemExit("--funnel needs a judge (--judge-model)")
-    entries = [e for e in archive.load(Path(a.archive)) if e.task == task.name] if a.archive else []
+    library = archive.load(Path(a.archive)) if a.archive else []      # every task's ideas: the judge's memory
+    entries = [e for e in library if e.task == task.name]
     second = Claude(a.second_judge_model, a.effort, tools=a.judge_tools) if a.second_judge_model != "none" else None
     mix = (review,) * (a.second_judge_share - 1) + (second,) if second and a.second_judge_share > 1 else ()
     models = Models(review, Claude(a.cheap_model, "low"), Claude(a.wide_model, a.effort), Claude(a.model, a.effort), mix)
     return Funnel(models, staged(evaluator.judge_stage), entries, task.name,
                   archive._embedder(ledger.ROOT) if entries else None, Path(a.ptx).read_text() if a.ptx else None,
-                  a.per_call, a.keep, a.parallel, a.max_repairs, a.ncu, a.precheck, workers=a.workers)
+                  a.per_call, a.keep, a.parallel, a.max_repairs, a.ncu, a.precheck, workers=a.workers,
+                  tune=bool(a.tune_points), size_expr=task.size_expr, library=library)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -149,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--detector-model", default="claude-opus-5-5",
                     help="reads each would-be winner for gaming before promotion; `none`: off")
     ap.add_argument("--tune-points", type=int, default=8,
-                    help="grid points tried on each re-timed candidate's TUNABLES; 0: none")
+                    help="grid points of a program's TUNABLES timed before each of its measurements; 0: none")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--uct-c", type=float, default=UCT_C,
                     help="UCT exploration constant on rewards in [0, 1] (KernelPro's sqrt 2 is on ln speedup)")
@@ -162,8 +116,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--generations", type=int, default=10, help="generations after generation 0 (the start alone)")
     ap.add_argument("--gen-size", type=int, default=24, help="ideas written per generation, over its parents")
     ap.add_argument("--parents", type=int, default=4, help="parents per generation, drawn by fitness")
-    ap.add_argument("--crossover", type=float, default=0.0,
-                    help="fraction of a generation's ideas that combine a parent with another parent's diff (an arm)")
+    ap.add_argument("--types", action=argparse.BooleanOptionalAction, default=True,
+                    help="split each generation's ideas over refine, persist, fresh and crossover (kernels/search/"
+                         "generations.py); --no-types: refine only")
     ap.add_argument("--gpu-s", type=float, help="stop once judging has taken this many seconds, summed over jobs")
     ap.add_argument("--wall-s", type=float, help="stop starting new work once the search has run this many seconds")
     ap.add_argument("--wide-model", default="claude-sonnet-5-5", help="the funnel's wide coder")
@@ -188,7 +143,10 @@ def main(argv: list[str] | None = None) -> int:
     tol = tolerances(_target_tolerances())
     sets, program = prepare(task, _shapes(task, a), out, a.device, tol, a.timing_shapes, a.initial, region_args(a))
     review = None if a.judge_model == "none" else Claude(a.judge_model, a.effort, tools=a.judge_tools)
-    judge = cascade(evaluator.judge_stage, counters=a.ncu)
+    if a.tune_points:                            # the evaluator's tune stage reads its grid size from the config
+        cfg = json.loads(Path(os.environ["KERNEL_EVAL_CONFIG"]).read_text())
+        Path(os.environ["KERNEL_EVAL_CONFIG"]).write_text(json.dumps({**cfg, "tune_points": a.tune_points}))
+    judge = cascade(evaluator.judge_stage, counters=a.ncu, tuned=bool(a.tune_points), size_expr=task.size_expr)
     system = (system_message(task) + "\n\n" + setting(task, sets, a.device, tol)
               + ("\n\n" + TUNE_FACT.format(points=a.tune_points) if a.tune_points else "")
               + ("\n\n" + Path(a.facts).read_text().strip() if a.facts else ""))
@@ -199,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         tree, cost = evolve(program.read_text(), system, fun, judge, out, a.evals, a.usd, a.seed, a.gen_size, a.keep,
                             a.parents, a.generations,
                             patience=3 if a.patience is None else a.patience or None, gpu_s=a.gpu_s,
-                            gpu_used=gpu_used, crossover=a.crossover, wall_s=a.wall_s)
+                            gpu_used=gpu_used, types=a.types, wall_s=a.wall_s)
     else:
         tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.usd, a.seed,
                             patience=16 if a.patience is None else a.patience or None,
@@ -214,11 +172,6 @@ def main(argv: list[str] | None = None) -> int:
     if code is None and (any("excluded" in r for r in retimed) or (exclude and exclude(best.code, {
             "child_metrics": best.metrics}))):
         best = tree.root()                       # every candidate flagged: nothing is promoted over the engine's kernel
-    plain = cascade(evaluator.judge_stage)       # tuning reads scores only: no ncu per grid point
-    won = max((r for r in retimed if "median" in r), key=lambda r: r["median"], default=None)
-    margin = max(won["scores"]) - min(won["scores"]) if won and code is not None else 0.0
-    code, metrics, tuned = _tune(_top(out / "trace.jsonl", retimed, code, metrics, best, a.retime), plain,
-                                 a.tune_points, task.size_expr, margin)
     cost["eval_s"] = evaluator.seconds(out / "eval_seconds.log")
     (out / "best_program.py").write_text(code or best.code)
     (out / "best_metrics.json").write_text(json.dumps(metrics or best.metrics, indent=1))
@@ -229,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
     rec = record(task, sets, models, a.evals, a.device,
                  out / "trace.jsonl", out / "best_program.py", metrics or best.metrics, retimed=retimed,
                  tool="kernels.search", cost=cost, root=Path(a.ledger) if a.ledger else None,
-                 extra={"tuned": tuned, "hypotheses": _blob(out / "hypotheses.jsonl", a.ledger)})
+                 extra={"hypotheses": _blob(out / "hypotheses.jsonl", a.ledger)})
     print(json.dumps({"best": metrics or best.metrics, "cost": cost, "nodes": len(tree.nodes), "out": str(out),
                       "ledger": rec["id"]}))
     return 0

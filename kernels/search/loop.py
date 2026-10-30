@@ -19,7 +19,7 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-from kernels.search import diff
+from kernels.search import diff, tune
 from kernels.search.llm import CACHE_SPLIT
 from kernels.search.tree import UCT_C, Node, Tree, fingerprint
 
@@ -36,18 +36,20 @@ TIMING_KEYS = ("shape", "candidate_ms", "baseline_ms", "speedup", "speedup_p25",
                "pct_of_roofline", "bound", "pct_of_peak_bandwidth", "pct_of_peak_flops")
 
 
-JUDGE = """You are the judge in a search over GPU kernel programs. You are shown one program and its measurements.
-{mode_spec}"""
-MODES = {
-    "optimization": 'The program is correct. Name {n} distinct changes a coder could make, as one JSON array of {n} '
-                    'objects and nothing else, each {{"bottleneck": "<max 30 words>", "optimisation_method": "<max 35 '
-                    'words>", "modification_plan": "<max 35 words>", "mechanism": [{{"counter": "<an ncu metric name '
-                    'from the measurements>", "change_pct": <predicted % change, summed over the program\'s kernels>}}]}}. '
-                    '"mechanism" may be empty. Every one is written and measured.',
-    "crossover": 'The program is correct. Below it is another program from the same search, as a diff. Name {n} '
-                 'change(s) to this program that carry over what the other program does differently, as one JSON '
-                 'array of {n} objects and nothing else, each {{"bottleneck": "<max 30 words>", "optimisation_method": '
-                 '"<max 35 words>", "modification_plan": "<max 35 words>", "mechanism": []}}.',
+JUDGE = "You are the judge in a search over GPU kernel programs. You are shown one program and its measurements."
+SHAPE = ('{{"bottleneck": "<max 30 words>", "optimisation_method": "<max 35 words>", "modification_plan": "<max 35 '
+         'words>", "mechanism": [{{"counter": "<an ncu metric name from the measurements>", "change_pct": <predicted % '
+         'change, summed over the program\'s kernels>}}]}}')
+ARRAY = 'as one JSON array of {n} objects and nothing else, each ' + SHAPE + '. "mechanism" may be empty. Every one is ' \
+        'written and measured.'
+MODES = {           # the request that ends a judge call's prompt, by idea type (kernels/search/generations.py)
+    "optimization": "The program is correct. Name {n} distinct changes a coder could make, " + ARRAY,
+    "persistence": "The program is correct. Its last change, shown above, took its parent from {before:.4f} to "
+                   "{after:.4f}. Name {n} distinct changes that take that same change further, " + ARRAY,
+    "fresh": "The program is correct. Name {n} distinct changes, each giving the kernel an overall structure that "
+             "differs from this program's and from every idea in the table of ideas tried on this task, " + ARRAY,
+    "crossover": "The program is correct. Another program from the same search is shown after it, as a diff. Name {n} "
+                 "change(s) to this program that carry over what the other program does differently, " + ARRAY,
 }
 
 
@@ -55,7 +57,7 @@ def trace_row(node: Node, cost: float) -> dict:
     """A node as `<out>/trace.jsonl` keeps it (the fields `kernels.evolve.run.record` and `retime` read)."""
     return {"iteration": node.iteration, "parent_id": node.parent, "child_id": node.id, "child_metrics": node.metrics,
             "child_code": node.code, "mode": node.mode, "artifacts": node.artifacts, "judge": node.judge,
-            "proposal": node.proposal, "cost_usd": cost}
+            "proposal": node.proposal, "kind": node.kind, "cost_usd": cost}
 
 
 def hypotheses(text: str, n: int) -> list[dict]:
@@ -88,7 +90,8 @@ def ncu_facts(node: Node) -> str:
 
 def facts(node: Node) -> str:
     """A node's measurements as the evaluator returned them, compacted: the gates (with reasons when failed), the
-    per-shape timings, the error against the reference, or the error that stopped it."""
+    per-shape timings, its grid points' scores when it was tuned, the error against the reference, or the error that
+    stopped it."""
     a, out = node.artifacts, [f"metrics: {json.dumps(node.metrics)}"]
     if a.get("error"):
         out.append(f"error: {a['error'][-2000:]}")
@@ -99,6 +102,10 @@ def facts(node: Node) -> str:
     if a.get("timings"):
         out.append("timings (per seen shape, paired with the baseline):")
         out += [json.dumps({k: r.get(k) for k in TIMING_KEYS}) for r in json.loads(a["timings"])]
+    if a.get("tune"):
+        out.append("grid points timed before this measurement (config, score, or why it scored 0):")
+        out += [json.dumps({"config": r.get("config"), "score": r.get("score"), **({"error": r["error"]} if
+                            r.get("error") else {})}) for r in json.loads(a["tune"])]
     if a.get("error_vs_reference"):
         out.append(f"error against the reference: {a['error_vs_reference']}")
     if ncu_facts(node):
@@ -142,27 +149,42 @@ def prompt(tree: Tree, node: Node, plan: str = "", coder: bool = True) -> str:
 REFUSED = "ERR_NVGPUCTRPERM"        # ncu: this host does not let the jail read GPU performance counters
 
 
-def cascade(judge_stage: Callable[[str, int], dict], counters: bool = False) -> Callable[[str], dict]:
-    """Stage 1, then stage 2 for a program that passes it, then (counters=True) its ncu counters: {metrics,
-    artifacts}. Once the host refuses counters, they are not asked for again (two jailed runs per program, for an
+def cascade(judge_stage: Callable[[str, int], dict], counters: bool = False, tuned: bool = False,
+            size_expr: str | None = None) -> Callable[[str], dict]:
+    """Stage 1, then (tuned=True) the program's grid tuned on every seen shape (kernels/search/tune.py), then stage 2
+    for a program that passes it, then (counters=True) its ncu counters: {metrics, artifacts, code: the program
+    measured}. Once the host refuses counters, they are not asked for again (two jailed runs per program, for an
     error: every profile of 2026-10-18/19)."""
     on = [counters]
 
-    def judge(code: str) -> dict:
+    def staged(code: str, n: int) -> dict:
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
             f.write(code)
         try:
-            r = judge_stage(f.name, 1)
-            if r["metrics"].get("correct") != 1.0:
-                return r
+            return judge_stage(f.name, n)
+        finally:
+            Path(f.name).unlink()
+
+    def judge(code: str) -> dict:
+        r = staged(code, 1)
+        if r["metrics"].get("correct") != 1.0:
+            return {**r, "code": code}
+        rows = []
+        if tuned:
+            code, rows = tune.tuned(staged, code, quick=False, size_expr=size_expr)
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+            f.write(code)
+        try:
             r = judge_stage(f.name, 2)
+            if rows:
+                r["artifacts"] = {**r["artifacts"], "tune": json.dumps(rows)}
             if on[0] and r["metrics"].get("correct") == 1.0 and r["metrics"].get("combined_score", 0) > 0:
                 a = judge_stage(f.name, 3)["artifacts"]
                 if REFUSED in json.dumps(a):
                     on[0] = False
                     a = {"ncu_missing": f"ncu counters unavailable on this host ({REFUSED}); not collected this run"}
                 r["artifacts"] = {**r["artifacts"], **a}
-            return r
+            return {**r, "code": code}
         finally:
             Path(f.name).unlink()
     return judge
@@ -180,7 +202,7 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
     of it in `<out>/hypotheses.jsonl`; without a funnel (no judge), the coder alone proposes `children` children.
     Returns the tree and the run's cost {usd, model_calls, evals, ...}."""
     out.mkdir(parents=True, exist_ok=True)
-    tree, spent, calls, judged, it = Tree(seed, c=uct_c), 0.0, 0, 0, 0
+    tree, spent, calls, judged, it, rows = Tree(seed, c=uct_c), 0.0, 0, 0, 0, []
 
     deadline = time.monotonic() + wall_s if wall_s else None
 
@@ -212,11 +234,11 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
                 return
             r = judge(code)
             judged += 1
-            keep(Node(uuid.uuid4().hex[:8], parent.id, code, r["metrics"], r["artifacts"], it, text), c)
+            keep(Node(uuid.uuid4().hex[:8], parent.id, r.get("code", code), r["metrics"], r["artifacts"], it, text), c)
 
         r = judge(initial)
         judged += 1
-        keep(Node(uuid.uuid4().hex[:8], None, initial, r["metrics"], r["artifacts"], 0), 0.0)
+        keep(Node(uuid.uuid4().hex[:8], None, r.get("code", initial), r["metrics"], r["artifacts"], 0), 0.0)
         best_at, best_score = judged, tree.best().score
         while judged < evals and spent < usd and not gpu_out():
             if tree.best().score > best_score:
@@ -231,10 +253,13 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
                 for _ in range(children):
                     attempt(parent)
                 continue
+            from kernels.search import memory
             from kernels.search.funnel import expand
-            before = funnel.spent
+            before, library = funnel.spent, funnel.library or funnel.archive
+            funnel.memory = (memory.general(library, funnel.task), memory.task(library, funnel.task, rows))
             kids = expand(funnel, tree, parent, system, it, keep,
-                          lambda row: (hyplog.write(json.dumps(row, default=str) + "\n"), hyplog.flush()))
+                          lambda row: (rows.append(row), hyplog.write(json.dumps(row, default=str) + "\n"),
+                                       hyplog.flush()))
             spent, calls, judged = spent + funnel.spent - before, funnel.calls, judged + len(kids)
             if not kids:                         # a round that examined nothing counts as one failure
                 parent.failures += 1

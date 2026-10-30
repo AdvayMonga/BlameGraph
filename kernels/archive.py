@@ -38,6 +38,7 @@ class Outcome:
     improved: bool | None = None
     stage: int | None = None
     error: str | None = None
+    bound: str | None = None  # memory or compute: the child's seen shapes' most common bound type
 
 
 @dataclass
@@ -87,7 +88,7 @@ def ideas(root: Path) -> list[tuple[str, dict, Outcome]]:
                         r["id"], pid, scores.get(pid, row.get("parent_score")), x.get("child_id"),
                         x.get("child_score"), x.get("improved"), c.get("stage"),
                         c.get("error") if x.get("child_id") else
-                        (x.get("fate", "") + (": " + x["error"] if x.get("error") else ""))[:300])))
+                        (x.get("fate", "") + (": " + x["error"] if x.get("error") else ""))[:300], c.get("bound"))))
                 continue
             got = {m["index"]: m for m in row.get("measured") or []}
             for i, h in enumerate(row.get("hypotheses") or []):
@@ -95,12 +96,13 @@ def ideas(root: Path) -> list[tuple[str, dict, Outcome]]:
                 c = children.get(m["child_id"], {}) if m else {}
                 out.append((task, idea, Outcome(r["id"], row.get("parent_id"), row.get("parent_score"),
                                                 m["child_id"] if m else None, m.get("child_score") if m else None,
-                                                m.get("improved") if m else None, c.get("stage"), c.get("error"))))
+                                                m.get("improved") if m else None, c.get("stage"), c.get("error"),
+                                                c.get("bound"))))
     return out
 
 
 def _children(trace: Path) -> dict:
-    """child id -> {stage, error} from a run's trace."""
+    """child id -> {stage, error, bound} from a run's trace."""
     out = {}
     if not trace.exists():
         return out
@@ -112,7 +114,12 @@ def _children(trace: Path) -> dict:
         m, a = r.get("child_metrics") or {}, r.get("artifacts") or {}
         m = json.loads(m) if isinstance(m, str) else m
         a = json.loads(a) if isinstance(a, str) else a
-        out[r.get("child_id")] = {"stage": m.get("stage"), "error": (a.get("error") or "")[:300] or None}
+        try:
+            bounds = [t.get("bound") for t in json.loads(a.get("timings") or "[]") if t.get("bound")]
+        except (ValueError, AttributeError):
+            bounds = []
+        out[r.get("child_id")] = {"stage": m.get("stage"), "error": (a.get("error") or "")[:300] or None,
+                                  "bound": max(set(bounds), key=bounds.count) if bounds else None}
     return out
 
 
