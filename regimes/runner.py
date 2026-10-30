@@ -6,6 +6,7 @@ goodput      the highest load at which >= 99% of requests meet both the TTFT and
 """
 from __future__ import annotations
 
+import asyncio
 import math
 import multiprocessing as mp
 import os
@@ -15,7 +16,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-from .client import Request, Row, recount, send
+from .client import Request, Row, asend, recount, send
 
 MAX_CLIENT_LAG_S = 0.010     # p99 send lag above this means the client, not the server, was the bottleneck
 MAX_CLIENT_CPU = 0.8         # a closed-loop client process busier than this (CPU / wall) may have read streams late
@@ -96,35 +97,20 @@ def _worker(k, job, cpus, ready, go, t0, results):
     results.put((k, fn(*args, t0.value, **kw)))
 
 
-def _fire_all(url, model, reqs: list[Request], timeout: float, t0: float, lead_s: float = 0.005,
-              chat_kwargs: dict | None = None) -> list[Row]:
-    """reqs in schedule order, each on its own thread started `lead_s` early so it is awake at its send time.
-    t0 is the shared perf_counter start (CLOCK_MONOTONIC is system-wide, so processes agree on it)."""
+def _fire_all(url, model, reqs: list[Request], timeout: float, t0: float, chat_kwargs: dict | None = None) -> list[Row]:
+    """reqs sent at their `at_s` from one event loop (`client.asend`). t0 is the shared perf_counter start
+    (CLOCK_MONOTONIC is system-wide, so processes agree on it)."""
     clock = lambda: time.perf_counter() - t0
-    rows: list[Row | None] = [None] * len(reqs)
 
-    def fire(i):
-        _wait_until(clock, reqs[i].at_s)
+    async def one(req):
         try:
-            rows[i] = send(url, model, reqs[i], reqs[i].at_s, clock, timeout, chat_kwargs=chat_kwargs)
+            return await asend(url, model, req, clock, timeout, chat_kwargs=chat_kwargs)
         except Exception as e:                    # the client itself failed: still one row, never a lost request
-            rows[i] = Row(reqs[i].id, "crash", reqs[i].at_s, 0.0, detail=f"client {type(e).__name__}: {e}"[:200])
+            return Row(req.id, "crash", req.at_s, 0.0, detail=f"client {type(e).__name__}: {e}"[:200])
 
-    threads = []
-    for i, req in enumerate(reqs):
-        _wait_until(clock, req.at_s - lead_s)
-        t = threading.Thread(target=fire, args=(i,), daemon=True)
-        t.start()
-        threads.append(t)
-    for t in threads:
-        t.join()
-    return rows
-
-
-def _wait_until(clock, t: float, spin_s: float = 0.002):
-    """Sleep until `spin_s` before t, then yield-spin: OS sleeps overshoot by milliseconds, which would show up as lag."""
-    while (d := t - clock()) > 0:
-        time.sleep(d - spin_s if d > spin_s + 0.001 else 0)
+    async def every():
+        return await asyncio.gather(*(one(r) for r in reqs))
+    return list(asyncio.run(every()))
 
 
 def run_closed(url: str, model: str, requests, concurrency: int, duration_s: float | None = None,

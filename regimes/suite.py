@@ -142,17 +142,19 @@ def _result(name, objective, value, direction, summary, **extra) -> dict:
 
 
 def _search_and_confirm(measure, search_args: dict) -> tuple[float | None, dict | None, dict]:
-    """find_goodput with measure(load, final=False), then confirm with measure(load, final=True), backing off 15%
-    up to 5 times. Returns (confirmed load or None, final summary, the search's bracket and probes)."""
+    """find_goodput with measure(load, final=False), then confirm with measure(load, final=True), backing off by the
+    search's resolution up to 5 times; a load that fails its confirmation is a failing load. Returns (confirmed load or
+    None, final summary, the search's bracket and probes)."""
     search = find_goodput(lambda x: measure(x, False), **search_args)
-    load, final = search["goodput"], None
+    load, final, step = search["goodput"], None, 1 - search_args.get("rel_tol", 0.1)
     for _ in range(6):
         if load is None:
             break
         final = measure(load, True)
         if final["meets_limits"] or not final["valid"]:
             break
-        load *= 0.85
+        search["fails_at"] = min(search["fails_at"] or load, load)
+        load *= step
     ok = final is not None and final["meets_limits"] and final["valid"]
     if final is None and search["probes"]:
         final = search["probes"][-1]
@@ -164,18 +166,29 @@ def _bracket(search: dict) -> dict:
     return {"fails_at": search["fails_at"], "stopped": search["stopped"], "probes": search["probes"]}
 
 
+def _settle_s(reqs: list, limits: Limits) -> float:
+    """How long a request may take at the limits: the TTFT limit + its p90 length x the TPOT limit."""
+    n = sorted(r.max_tokens for r in reqs)
+    return limits.ttft_s + n[int(0.9 * (len(n) - 1))] * limits.tpot_s if n else 0.0
+
+
 def _goodput_regime(ctx: Ctx, name: str, objective: str, build, limits: Limits, per_unit: float = 1.0,
                     ramp_s: float = 0.0) -> dict:
     """Open-loop goodput: `build(load, duration)` makes the schedule; `per_unit` = requests per unit of load (turns
     per session for sessions/s). Probes last ctx.probe_s, or longer when needed to hold ctx.min_requests; the search
-    starts at the load that fills one probe. With `ramp_s`, the schedule starts that much early and only requests
-    scheduled inside [ramp_s, ramp_s + duration] are scored, so multi-turn load is at steady state."""
+    starts at the load that fills one probe. Only requests scheduled in the probe's window are scored, and arrivals
+    run for `ramp_s` + one request's time at the limits (`_settle_s`) before it and that time after it, so every scored
+    request runs under steady load (a 1,024-token answer outlasts a 30 s probe)."""
+    start = ctx.min_requests / (ctx.probe_s * per_unit)
+    settle = _settle_s(build(start, ctx.probe_s), limits)
+    lead = ramp_s + settle
+
     def measure(load, final):
         duration = ctx.duration(load * per_unit, final)
-        rows = ctx.run_open(build(load, duration + ramp_s))
-        return summarize([r for r in rows if ramp_s <= r.scheduled_s < ramp_s + duration], limits, duration)
-    load, final, found = _search_and_confirm(measure, ctx.search(name, ctx.min_requests / (ctx.probe_s * per_unit)))
-    return _result(name, objective, load, "higher", final, **found)
+        rows = ctx.run_open(build(load, lead + duration + settle))
+        return summarize([r for r in rows if lead <= r.scheduled_s < lead + duration], limits, duration)
+    load, final, found = _search_and_confirm(measure, ctx.search(name, start))
+    return _result(name, objective, load, "higher", final, settle_s=settle, **found)
 
 
 def single_stream(ctx: Ctx) -> dict:
@@ -298,9 +311,12 @@ def overload(ctx: Ctx, factor: float = 2.0, rate: float | None = None) -> dict:
     request either completes or is explicitly rejected: silent drops, truncated streams and no-response are invalid."""
     pool = ctx.pool("steady_interactive")
     _warmup(ctx, pool)
-    def measure(r, final):
+    settle = _settle_s(W.poisson(pool, ctx.min_requests / ctx.probe_s, ctx.probe_s, ctx.seed), ctx.conversational)
+
+    def measure(r, final):                          # scored under steady load, as in _goodput_regime
         duration = ctx.duration(r, final)
-        return summarize(ctx.run_open(W.poisson(pool, r, duration, ctx.seed)), ctx.conversational, duration)
+        rows = ctx.run_open(W.poisson(pool, r, 2 * settle + duration, ctx.seed))
+        return summarize([x for x in rows if settle <= x.scheduled_s < settle + duration], ctx.conversational, duration)
     found = None
     if rate is None:
         found = find_goodput(lambda r: measure(r, False), **ctx.search("overload", ctx.min_requests / ctx.probe_s))
@@ -309,7 +325,7 @@ def overload(ctx: Ctx, factor: float = 2.0, rate: float | None = None) -> dict:
         return _result("overload", "good_req_per_s", None, "higher", found["probes"][-1] if found else None)
     s = measure(rate * factor, True)
     return _result("overload", "good_req_per_s", s["good_req_per_s"], "higher", s, offered_req_per_s=rate * factor,
-                   explicit_rejections=s["error"], base_goodput_req_per_s=rate)
+                   explicit_rejections=s["error"], base_goodput_req_per_s=rate, settle_s=settle)
 
 
 PROBE = [{"role": "user", "content": "What is 17 + 25? Reply with the number only."}]

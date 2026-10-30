@@ -3,6 +3,21 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-29 — Open-loop probes are scored under steady load; the open-loop client runs on an event loop
+An open-loop probe (and overload's search and its 2x run) scores only requests scheduled inside its window, and
+arrivals start one request's time at the limits before the window (TTFT limit + the schedule's p90 answer length x
+TPOT limit; 104 s for a 1,024-token answer) and run as long after it. A confirmation that fails steps down by the
+search's resolution (was 15%) and is a failing load in `fails_at`. The open-loop client sends from one event loop per
+process, with each request's body encoded and its connection opened 100 ms ahead (was a thread per request, woken 5
+ms ahead); the client check adds bursts (100 to 800 arrivals within 50 ms). Why (the 2026-10-28 comparison, vLLM
+bf16): long output's 30 s probes ended before a 60 s request did, so the engine never filled; probes passed 35 req/s,
+the 60 s confirmations failed and backed off to 18.3 (35 x 0.85^4) against a failing load of 36.7; long prompt the
+same (7.1 against 8.75). Bursty at 16x stopped on the client's own send lag (10-11 ms p99 on the VM, 14 ms against
+an ideal server on the laptop), because a burst's sends queued behind thread starts and the interpreter lock; on an
+event loop 16x is 3.3 ms and 800 arrivals in 50 ms 1.4 ms, TPOT error unchanged (~1 us). Cost: an open-loop probe
+lasts its window plus twice the settle time (a long-output probe ~4 min, was 30 s). Replaces the 15% back-off and the
+unramped probes (2026-10-18 short gates; shared prefix kept its ramp and adds this one).
+
 ## 2026-10-28 — Everything from the InferenceBench era is removed
 `logs/`, the InferenceBench diagnostics (`assertions`, `blame`, `claims_audit`, `exploration`, `inject`, `noise`),
 `feedback/verdict.py`, their tests, and the `research-v1` tag are deleted; `python -m feedback` reads lab ledgers

@@ -142,7 +142,8 @@ def test_workload_builders():
 
 def test_every_regime_runs_on_a_fake_engine():
     proc, url = spawn(slots=2, token_s=0.005, out_tokens=10)       # ~40 req/s capacity
-    saved, think, lag = dict(suite.TIERS["short"]), suite.THINK_S, runner.MAX_CLIENT_LAG_S
+    saved, think, lag, settle = dict(suite.TIERS["short"]), suite.THINK_S, runner.MAX_CLIENT_LAG_S, suite._settle_s
+    suite._settle_s = lambda reqs, limits: 0.3     # the limits' bound is 51 s for a 1,024-token answer
     suite.TIERS["short"].update(probe_s=1.0, final_s=2.0)
     suite.THINK_S = 0.3
     runner.MAX_CLIENT_LAG_S = 0.05      # wiring test; client precision is test_open_loop_keeps_its_schedule's job
@@ -155,7 +156,7 @@ def test_every_regime_runs_on_a_fake_engine():
             assert res["value"] is not None, (name, res)
     finally:
         suite.TIERS["short"].update(saved)
-        suite.THINK_S, runner.MAX_CLIENT_LAG_S = think, lag
+        suite.THINK_S, runner.MAX_CLIENT_LAG_S, suite._settle_s = think, lag, settle
         proc.kill()
 
 
@@ -169,7 +170,8 @@ def test_every_regime_runs_from_a_workload_file():
     path = Path(tempfile.mkdtemp()) / "w.jsonl"
     path.write_text("".join(json.dumps(r) + "\n" for r in recs))
     proc, url = spawn(slots=2, token_s=0.005, out_tokens=10)
-    saved, think, lag = dict(suite.TIERS["short"]), suite.THINK_S, runner.MAX_CLIENT_LAG_S
+    saved, think, lag, settle = dict(suite.TIERS["short"]), suite.THINK_S, runner.MAX_CLIENT_LAG_S, suite._settle_s
+    suite._settle_s = lambda reqs, limits: 0.3     # the limits' bound is 51 s for a 1,024-token answer
     suite.TIERS["short"].update(probe_s=1.0, final_s=2.0)
     suite.THINK_S = 0.3
     runner.MAX_CLIENT_LAG_S = 0.05
@@ -189,7 +191,7 @@ def test_every_regime_runs_from_a_workload_file():
         assert not res["valid"] and "multi-turn" in res["invalid_reasons"][0], res
     finally:
         suite.TIERS["short"].update(saved)
-        suite.THINK_S, runner.MAX_CLIENT_LAG_S = think, lag
+        suite.THINK_S, runner.MAX_CLIENT_LAG_S, suite._settle_s = think, lag, settle
         proc.kill()
 
 
