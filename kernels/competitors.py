@@ -15,8 +15,9 @@ call-weighted summaries; `fastest`: a competitor only when its weighted p25 is a
 "ours") and one text file of compiled code per implementation: Triton kernels' PTX from Triton's cache by kernel name
 (a competitor's: the files new since its first call), a library's SASS from `cuobjdump -sass` of its extension, the
 running GPU's code filtered to the kernels that ran. `--start` also writes `start-<competitor>.py` for each timed
-competitor that has a port (vLLM's fused_moe as Triton source, vLLM's topk_softmax as CUDA C++ built at import), the
-search's starting program for `kernels.search --initial`; the score stays relative to the engine's kernel."""
+competitor that has a port, the search's starting program for `kernels.search --initial`. `starts` gives every port of
+a task from vendored source (kernels/vllm_sources.py), which `kernels.search` judges at generation 0; the score stays
+relative to the engine's kernel."""
 from __future__ import annotations
 
 import argparse
@@ -276,9 +277,11 @@ _moe_gemm_engine = moe_gemm
 
 
 def moe_gemm(a, tok, w, sorted_ids, expert_ids, M, block_m=16, split_k=None, w_scale=None, a_scale=None, tile=None):
-    """fp8 weights with bf16 rows on vLLM's kernel at its tuned config for the token count (block rows: ours); the
-    engine's kernel for the other paths."""
-    if w.dtype != torch.float8_e4m3fn or a_scale is not None or tile is not None:
+    """bf16 or fp8 weights with bf16 rows on vLLM's kernel at its tuned config for the token count (block rows: ours);
+    the engine's kernel for the other paths."""
+    fp8 = w.dtype == torch.float8_e4m3fn
+    if a.dtype != torch.bfloat16 or w.dtype not in (a.dtype, torch.float8_e4m3fn) or a_scale is not None \
+            or tile is not None:
         return _moe_gemm_engine(a, tok, w, sorted_ids, expert_ids, M, block_m, split_k, w_scale, a_scale, tile)
     E, N, K = w.shape
     cfg = _VLLM_CONFIGS[min(_VLLM_CONFIGS, key=lambda t: abs(t - a.shape[0]))]
@@ -290,27 +293,30 @@ def moe_gemm(a, tok, w, sorted_ids, expert_ids, M, block_m=16, split_k=None, w_s
         b_scale_ptr=w_scale, topk_weights_ptr=None, sorted_token_ids_ptr=sorted_ids, expert_ids_ptr=expert_ids,
         num_tokens_post_padded_ptr=None, N=N, K=K, EM=EM, num_valid_tokens=M, stride_am=a.stride(0),
         stride_ak=a.stride(1), stride_be=w.stride(0), stride_bk=w.stride(2), stride_bn=w.stride(1),
-        stride_cm=C.stride(0), stride_cn=C.stride(1), stride_asm=0, stride_ask=0, stride_bse=w_scale.stride(0),
-        stride_bsk=0, stride_bsn=w_scale.stride(1), stride_bbe=0, stride_bbn=0, group_n=0, group_k=0,
+        stride_cm=C.stride(0), stride_cn=C.stride(1), stride_asm=0, stride_ask=0,
+        stride_bse=w_scale.stride(0) if fp8 else 0, stride_bsk=0, stride_bsn=w_scale.stride(1) if fp8 else 0,
+        stride_bbe=0, stride_bbn=0, group_n=0, group_k=0,
         naive_block_assignment=False, BLOCK_SIZE_M=block_m, BLOCK_SIZE_N=cfg["BLOCK_SIZE_N"],
         BLOCK_SIZE_K=cfg["BLOCK_SIZE_K"], GROUP_SIZE_M=cfg["GROUP_SIZE_M"], SPLIT_K=1, MUL_ROUTED_WEIGHT=False,
-        top_k=1, compute_type=tl.bfloat16, use_fp8_w8a8=False, use_int8_w8a8=False, use_int8_w8a16=True,
+        top_k=1, compute_type=tl.bfloat16, use_fp8_w8a8=False, use_int8_w8a8=False, use_int8_w8a16=fp8,
         per_channel_quant=False, HAS_BIAS=False, SWAP_AB=False, HAS_TOK=tok is not None, NUM_EXPERTS=E,
         num_warps=cfg.get("num_warps", 4), num_stages=cfg.get("num_stages", 3))
     return C
 '''
 
 
-def port_fused_moe(program: str, kernel_src: str, zeros_src: str, configs: dict, version: str) -> str:
-    """The starting program `program` (the engine module) with vLLM's fused_moe kernel ported in and `moe_gemm`
-    routed to it for the decode path's fp8 weights; `configs` = vLLM's tuned configs {tokens: config}."""
+def port_fused_moe(program: str, kernel_src: str, zeros_src: str, configs: dict, version: str,
+                   wrapper: str = FUSED_MOE_WRAPPER) -> str:
+    """The starting program `program` (the engine module) with vLLM's fused_moe kernel ported in and `wrapper`'s entry
+    point (by default `moe_gemm`, for bf16 and fp8 weights) routed to it; `configs` = vLLM's tuned configs {tokens:
+    config}."""
     for old, new in FUSED_MOE_EDITS:
         if kernel_src.count(old) != 1:
             raise ValueError(f"vLLM's fused_moe_kernel changed: an edit no longer applies once: {old[:60]!r}")
         kernel_src = kernel_src.replace(old, new)
     block = (f"\n\n# vLLM {version} fused_moe_kernel (Apache-2.0), ported: rows through tok, our block layout.\n"
              f"_VLLM_CONFIGS = {repr({int(k): v for k, v in configs.items()})}\n\n\n"
-             f"{zeros_src}\n\n{kernel_src}{FUSED_MOE_WRAPPER}")
+             f"{zeros_src}\n\n{kernel_src}{wrapper}")
     return _before_end(program, block)
 
 
@@ -798,14 +804,33 @@ def vllm_configs(fm, shapes, dtype: str | None) -> dict:
         T: fm.get_default_config(T, E, N // 2, K, max(1, M // T), dtype) for M, K, N, E, T, ft in shapes}
 
 
+def starts(task: str, program: str) -> dict[str, str]:
+    """Every competitor port for `task` as a starting program built on `program` (the engine module, as the search
+    starts from it), {competitor: program}, from the sources vendored in kernels/vllm_sources.py: no competitor library
+    is needed. Empty when no competitor's kernel is ported for the task."""
+    from kernels import vllm_sources as v
+
+    def moe(wrapper: str) -> str:
+        return port_fused_moe(program, v.FUSED_MOE_KERNEL, v.WRITE_ZEROS, v.FUSED_MOE_CONFIGS, v.VERSION, wrapper)
+    decode = ("vllm.decode_attention", lambda: _before_end(program, "\n\n" + v.DECODE_ATTENTION + v.DECODE_WRAPPER))
+    port = {"rmsnorm": ("vllm.rms_norm", lambda: _before_end(program, v.RMS_NORM_WRAPPER)),
+            "add_rmsnorm": ("vllm.fused_add_rms_norm", lambda: _before_end(program, v.FUSED_ADD_RMS_NORM_WRAPPER)),
+            "silu_mul": ("vllm.silu_and_mul", lambda: _before_end(program, v.SILU_AND_MUL_WRAPPER)),
+            "topk_softmax": ("vllm.topk_softmax", lambda: port_topk_softmax(program)),
+            "moe_gemm": ("vllm.fused_moe", lambda: moe(FUSED_MOE_WRAPPER)),
+            "moe_gemm_fp8": ("vllm.fused_moe", lambda: moe(FUSED_MOE_WRAPPER)),
+            "moe_gemm_scatter_fp8": ("vllm.fused_moe", lambda: moe(v.FUSED_MOE_SCATTER_WRAPPER)),
+            "paged_decode": decode, "paged_decode_fp8": decode}.get(task)
+    return {port[0]: port[1]()} if port else {}
+
+
 def start_program(task, name: str, shapes) -> str | None:
-    """The starting program built on competitor `name`'s kernel at vLLM's configs for `shapes`, or None when it has
-    no port (a library's compiled code cannot be evolved as source)."""
+    """The starting program built on competitor `name`'s kernel, or None when it has no port (a library's compiled code
+    cannot be evolved as source): vLLM's fused_moe on moe_gemm_fp8 from the installed vLLM at its configs for
+    `shapes`, every other port from `starts`."""
     from kernels.evolve.run import initial_program
-    if name == "vllm.topk_softmax" and task.name == "topk_softmax":
-        return port_topk_softmax(initial_program(task))
     if name != "vllm.fused_moe" or task.name != "moe_gemm_fp8":
-        return None
+        return starts(task.name, initial_program(task)).get(name)
     import vllm
     fm = importlib.import_module("vllm.model_executor.layers.fused_moe.fused_moe")
     src = inspect.getsource(fm.fused_moe_kernel.fn)
