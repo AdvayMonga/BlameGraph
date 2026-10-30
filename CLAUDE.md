@@ -269,39 +269,37 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `tests/test_kernels_evolve.py` must all score 0; selection never sees held-out shapes, `gate` judges them (correctness, and their speedup as a fact); `validate_gpu.sh` = the GPU validation (shapes captured under real corpus traffic at several concurrencies, `CAPTURE_SPECS`; never synthetic prompts, whose batches have uniform lengths); tolerances from the target's
   `[kernels]`). `kernels/search/` (extra `kernel-search`; our own layer-1 generator, replacing OpenEvolve, which stays as the A/B baseline: `python -m
   kernels.search`; by default the genetic search (`kernels/search/generations.py`, decided 2026-10-26): generation 0 is
-  one funnel round from the start program (40 ideas, the fastest 12 to the full exam), then up to `--generations` (10)
-  generations, each a funnel round whose `--gen-size` (24) ideas are split over four idea types (decided 2026-10-29;
+  one round from the start program (40 changes), then exactly `--generations` (10) generations (decided 2026-10-30:
+  nothing stops it sooner but the model budget `--usd`), each a round whose `--gen-size` (24) changes are split over
+  four idea types (decided 2026-10-29;
   `--no-types` = refine only, arm `search-untyped`): refine (new ideas on `--parents` (4) programs drawn from the
   population: the 32 best open programs, the best always, the rest by percentile reward + 0.05 without replacement),
   persist (a line's last change taken further; every child that beat its parent heads a line, which moves to a persist
   child that beats it and closes after 3 generations without one), fresh (a different overall structure, half from the
-  start, half from a random program) and crossover (a parent shown another parent's diff), 8/6/6/4 adapted each
-  generation by each type's Laplace-smoothed rate of new bests (floor 2); the fastest `--keep` (8) to the full exam,
-  shared out by type the same way, children under their own parent with their type (`Node.kind`); every judge call gets
+  start, half from a random program) and crossover (a parent shown another parent's full code), 8/6/6/4 adapted each
+  generation by each type's Laplace-smoothed rate of new bests (floor 2); every correct program takes the full exam,
+  children under their own parent with their type (`Node.kind`); every call gets
   the memory (`kernels/search/memory.py`, cached blocks: ideas that beat their parent on other tasks with their best gain
   and bound type, then every idea tried on this task, earlier runs from `--archive` and this run so far, with measured
-  gains; archived ideas naming a program of their own run left out); a generation where under 1/5 of
-  the examined beat their parent makes the next 2/3 as large; stops after `--patience` (3) generations with
-  no new best, the budget or `--wall-s` (wall-clock; `--gpu-s` sums every evaluator job's seconds, parallel ones and
-  the no-GPU precheck included); with `--mcts` instead a tree of refinement chains, one parent per round chosen by MCTS (UCT with
+  gains; archived ideas naming a program of their own run left out); with `--mcts` instead a tree of refinement chains, one parent per round chosen by MCTS (UCT with
   C = 0.6 on percentile rewards and max backup,
   KernelPro's progressive widening and virtual-child rule), a node closed after 3 judged failed children or 3 edits
-  that never reached the GPU; in every mode the model is shown only the
-  parent program, its measurements and its lineage, SEARCH/REPLACE answers, duplicates refused before any GPU time,
-  each round one funnel round (`kernels/search/funnel.py`, since it won the 2026-10-24 A/B; the beam it replaced was
-  removed 2026-10-27), its judge (Opus 5.5) naming changes as JSON, each written and judged
-  (each and its fate in `hypotheses.jsonl`), from the facts (and, its choice when, Anthropic's web search
-  and read-only SQL over the agent's view of the ledger index, `--judge-tools`; the harness pastes no research), with
-  up to 2 better programs from other branches as diffs (CodeEvolve's inspirations), including CudaForge's 24 ncu counters
+  that never reached the GPU; in every mode the model is shown the
+  parent program, its measurements, its lineage, the starting program and up to 2 better programs from other branches,
+  all as full code (CodeEvolve's inspirations; decided 2026-10-30), one call per change answering with its hypothesis as
+  JSON and the change as SEARCH/REPLACE blocks (`kernels/search/funnel.py`; each and its fate in `hypotheses.jsonl`),
+  duplicates refused before any GPU time, from the facts (and, its choice when, Anthropic's web search
+  and read-only SQL over the agent's view of the ledger index, `--judge-tools`; the harness pastes no research),
+  including CudaForge's 24 ncu counters
   (`kernels/evolve/ncu.py`, stage 3 of the jailed evaluator; collected in the jail since 2026-10-27, on a Nebius H200
   whose driver had them open: the earlier refusals, ERR_NVGPUCTRPERM, were on hosts with them closed, which
   `vm-setup.sh` never opened because it grepped the module option's name, not the driver's `RmProfilingAdminOnly`; a
-  run stops asking after the first refusal), and the coder writing it; launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen by a measured grid
-  search before every first measurement of the program's speed (decided 2026-10-27; `kernels/search/tune.py` `tuned`,
-  `Funnel.measure`, `cascade(tuned=True)`; `--tune-points` (8), 0: off): the evaluator's tune stage (jailed stage 6,
-  7 on the most-called shape only; `core._tune`) loads each point with CONFIG rewritten, checks it on the most-called
-  shape and times it, on that shape before the quick timing and on every seen shape before the full exam, and the
-  program is measured and kept with the fastest point written in; after the full exam's sweep, where different points
+  run stops asking after the first refusal); launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen by a measured grid
+  search before every full exam (decided 2026-10-27; `kernels/search/tune.py` `tuned`,
+  `Funnel.measure`, `cascade(tuned=True)`; `--tune-points` (8), 0: off): the evaluator's tune stage (jailed stage 6;
+  `core._tune`) loads each point with CONFIG rewritten, checks it on the most-called
+  shape and times it on every seen shape, and the
+  program is measured and kept with the fastest point written in; where different points
   win in different size regions, a dispatcher between `# TUNED-DISPATCH-START/END` picks CONFIG per call from the
   call's size (`Task.size_expr`, tensor shapes only, so CUDA graphs bake it per captured size), removed (`tune.strip`)
   before the grid is tuned again; the root program too; each point's score is a fact in the prompt; re-timing and the gate measure the tuned program as it is; the prompt states the best program's % of its call-weighted roofline bound as a fact, and with
@@ -367,30 +365,22 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   setmaxnreg, mbarrier, cp.async, mma, ldmatrix), with a measured time beside it when given; fastest first.
   `python -m kernels.ptx card --name N PTX ... [--timing N=MS] --out F`, read by `kernels.search --ptx F`. Producing
   competitors' PTX and timings on our shapes needs their libraries on the GPU host (not built yet).
-- `kernels/search/funnel.py` — one funnel round (decided 2026-10-22; `kernels.search`'s tiers since 2026-10-25, when
-  it beat the beam on moe_gemm_fp8 1.161x to 1.026x seen, 1.284x to 1.096x held-out; the beam was removed
-  2026-10-27), from one parent (`expand`, an MCTS expansion: one judge call per slice of facts x `--per-call`
-  hypotheses) or several (`generation`: one call per slot, a parent with an idea type and its quota, `Slot`; a refine
-  slot's slice rotated across the parents so each call reads one slice and every slice is read; persist, fresh and
-  crossover slots read the measurements; generation 0 splits its 40 over the start's slices). The slices:
-  measurements, winners elsewhere in the tree, compiler report, PTX comparison (the archive slice became the memory,
-  2026-10-29); a slice with no facts is skipped; the type's request ends the prompt (`loop.MODES`). Hypothesis calls cycle through the judge mix (`--second-judge-model` Sonnet 5.5 one call in
-  `--second-judge-share` 4; the past-failure check stays the judge's). Then: same-idea clusters
-  merged by `--cheap-model`, ideas like archived ones that never beat their parent kept only when the judge names what
-  differs, `--wide-model` writes each, the no-GPU precheck (`--precheck`, default on) drops what fails to build and keeps
-  the compiler's report on the program (the compiler slice of its children), stage 1 in `--parallel` jails, failures repaired once by
-  the strong coder, a quick timing on the most-called shape (`jailed.QUICK_STAGE`; programs within 5% of the cutoff
-  timed once more and ranked by their mean, `race`), the fastest `--keep` rewritten by the strong coder (the rewrite
-  kept only if it passes stage 1 and times faster, decided 2026-10-27) and sent to stage 2; only those join the tree
-  (a round that examined nothing is one failure of its parent). A parent gets its ncu counters (stage 3) when it is
-  first chosen, not at its full exam. Model calls run `--workers` (8) at a time, the first of each batch alone so the
-  rest read the prompt cache it writes (`kernels/search/llm.py`'s `CACHE_SPLIT`: the stable part of a prompt is sent as
-  cached blocks); GPU timings run one at a time. Each hypothesis may
-  predict ncu counter changes (`mechanism`), measured against the parent's. Every idea's fate goes to
-  `hypotheses.jsonl` (each idea with its `parent_id`; the row's `parents`, `improved` and the Spearman rank correlation
-  between the quick timing and the full exam over the programs that took both, `quick_vs_full_spearman`), which the
-  archive reads. `--facts FILE` adds facts to every prompt; the `kernel_search` tool passes the scored regimes and the
-  task's share of the latest profiled window (`pipeline.facts`).
+- `kernels/search/funnel.py` — one round (decided 2026-10-22; one call per change and every correct program measured
+  since 2026-10-30, replacing the funnel's tiers: named ideas, merge, past-failure check, wide coder, repairs, quick
+  timing, strong rewrite), from one parent (`expand`, an MCTS expansion: `--per-call` changes) or several
+  (`generation`: one `Slot` per parent and idea type with its count; a refine slot's calls read the slices in turn;
+  persist, fresh and crossover calls read the measurements). The slices: measurements, winners elsewhere in the tree,
+  compiler report, PTX comparison; a slice with no facts is skipped; the type's request ends the prompt (`loop.MODES`).
+  Calls cycle through the mix (`--second-judge-model` Sonnet 5.5 one call in `--second-judge-share` 4). Then edits that
+  do not apply or repeat a program are dropped, the no-GPU precheck (`--precheck`, default on) drops what fails to
+  build and keeps the compiler's report on the program (the compiler slice of its children), stage 1 in `--parallel`
+  jails, and every correct program takes the full exam (tuned first) and joins the tree. A parent gets its ncu
+  counters (stage 3) when it is first chosen. Model calls run `--workers` (8) at a time, the first of each batch alone
+  so the rest read the prompt cache it writes (`kernels/search/llm.py`'s `CACHE_SPLIT`: the stable part of a prompt is
+  sent as cached blocks); GPU timings run one at a time. Each hypothesis may predict ncu counter changes (`mechanism`),
+  measured against the parent's. Every idea's fate goes to `hypotheses.jsonl` (each idea with its `parent_id`; the
+  row's `parents` and `improved`), which the archive reads. `--facts FILE` adds facts to every prompt; the
+  `kernel_search` tool passes the scored regimes and the task's share of the latest profiled window (`pipeline.facts`).
 - `kernels/archive.py` — the idea archive (decided 2026-10-22): every distinct kernel idea from the `kernels` records'
   hypothesis logs and traces, with each outcome (run, parent and its score, child and its score, improved, stage
   reached, error); an idea within cosine 0.92 of an earlier one on the same task is folded into it (identical texts only

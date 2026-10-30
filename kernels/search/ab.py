@@ -55,9 +55,8 @@ def _search(a, out: Path, seed: int, extra: tuple = ()) -> dict:
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         main(["--task", a.task, "--shapes", a.shapes, "--out", str(out), "--evals", str(a.evals), "--usd", str(a.usd),
-              "--model", a.model, "--judge-model", a.model, "--wide-model", a.model, "--cheap-model", a.model,
-              "--second-judge-model", a.model, "--device", a.device, "--seed", str(seed),
-              *(["--gpu-s", str(a.gpu_s)] if getattr(a, "gpu_s", None) else []),
+              "--model", a.model, "--judge-model", a.model, "--second-judge-model", a.model, "--device", a.device,
+              "--seed", str(seed),
               *(["--initial", a.initial] if a.initial else []), *SAME_PROMOTION, *extra])
     return _last_json(buf.getvalue())
 
@@ -66,13 +65,12 @@ def _variant(*extra: str):
     return lambda a, out, seed: _search(a, out, seed, extra)
 
 
-# Each arm differs from `kernels.search` (the genetic search over funnel rounds, judge tools on) in one thing, so a
-# difference in the summary is that thing's: the judge's web search and ledger SQL, one MCTS-chosen parent per round
-# (the 2026-10-25 default), KernelPro's literal UCT constant under it, fewer and larger generations, refine ideas
-# only (no persist, fresh or crossover types: the search before 2026-10-29), or the whole generator.
+# Each arm differs from `kernels.search` (the genetic search, judge tools on) in one thing, so a difference in the
+# summary is that thing's: the judge's web search and ledger SQL, one MCTS-chosen parent per round (the 2026-10-25
+# default), KernelPro's literal UCT constant under it, refine ideas only (no persist, fresh or crossover types: the
+# search before 2026-10-29), or the whole generator.
 ARMS = {"openevolve": _openevolve, "kernels.search": _search, "search-no-tools": _variant("--no-judge-tools"),
         "search-mcts": _variant("--mcts"), "search-c1.41": _variant("--mcts", "--uct-c", "1.4142"),
-        "search-gen20": _variant("--gen-size", "20", "--keep", "12"),
         "search-untyped": _variant("--no-types")}
 
 
@@ -113,8 +111,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--initial")
     ap.add_argument("--evals", type=int, default=30)
     ap.add_argument("--usd", type=float, default=10.0, help="kernels.search's cap; OpenEvolve has none (measured)")
-    ap.add_argument("--gpu-s", type=float, help="kernels.search arms stop at this many judging seconds (the funnel's "
-                    "rounds judge many more programs per evaluation counted, so compare at equal GPU time)")
     ap.add_argument("--model", default="claude-opus-5-5")
     ap.add_argument("--seeds", type=int, default=1)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")

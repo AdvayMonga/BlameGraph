@@ -3,6 +3,30 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-30 — The kernel search: 10 generations always, one call per change, every correct program measured
+Three changes to `kernels.search`'s genetic search:
+1. It runs exactly 10 generations after generation 0. Only the model budget stops it sooner. Removed: patience,
+   shrinking a generation that improved little, the wall-clock cap, the GPU-seconds cap, and the evals count.
+2. Every program that builds and passes correctness takes the full exam and joins the population. Removed: the quick
+   timing on one shape, racing at the cutoff, the 8 kept per generation, and the cut per idea type.
+3. One call makes each change: it states the hypothesis and writes the SEARCH/REPLACE edit in one answer, as
+   OpenEvolve's calls do. The call is shown the parent, the starting program and up to 2 better programs from other
+   branches, all as full code, plus its slice of facts and the memory tables.
+
+Removed with change 3, as orphans: the named-ideas step, merging duplicate ideas (`--cheap-model`), the past-failure
+check, the wide coder (`--wide-model`), repairs (`--max-repairs`), the strong coder's rewrite of kept programs, and
+arm `search-gen20` (it varied `--keep`).
+
+Why (the user, comparing with OpenEvolve on moe_gemm_fp8): OpenEvolve fully measured 130 programs from 140 calls in
+2.5 h; our typed run fully measured 34 of about 100 correct programs from 206 calls, and stopped at the wall-clock cap
+after 5 generations. Our calls never saw the starting program, only diffs against it, and the coder never saw the
+judge's reasoning. "No cap" (the user) means no target number for the task, never a cut in the generation count.
+
+Replaces, in part:
+- 2026-10-23 (the funnel's tiers)
+- 2026-10-26 (patience 3, the shrink rule, the fastest 8 to the full exam)
+- 2026-10-27 (the wall-clock cap; the strong coder writing only the kept programs)
+
 ## 2026-10-29 — Four idea types per generation; the judge remembers every measured idea
 Each generation after the first splits its 24 ideas over four types, each with its own judge calls: refine (new ideas on
 the fitness-drawn parents, as before), persist (a line's last change taken further; every child that beat its parent

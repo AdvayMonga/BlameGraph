@@ -1,7 +1,7 @@
 """The genetic search (decided 2026-10-26): generations inside one call, each a funnel round from several parents.
 
-Generation 0 is the funnel from the start program alone (GEN0 ideas written, GEN0_KEEP to the full exam). Every later
-generation splits its `gen_size` ideas over four idea types (decided 2026-10-29), each with its own judge calls:
+Generation 0 is a round from the start program alone (GEN0 changes). Every later generation splits its `gen_size`
+changes over four idea types (decided 2026-10-29), one call each:
   refine     new ideas on `parents` programs drawn from the population (the POPULATION best correct, scored programs
              still open; the best always among them, the rest drawn without replacement with weight = percentile
              reward + FLOOR, so a weaker program keeps a chance: soft fitness-weighted selection)
@@ -10,16 +10,15 @@ generation splits its `gen_size` ideas over four idea types (decided 2026-10-29)
              (K-Search's persistence); the best-scoring open lines get the slots
   fresh      a different overall structure, half from the start program and half from a random program of the
              population
-  crossover  one parent shown another parent's diff, one idea per call
+  crossover  one parent shown another parent's full code
 The split starts at TYPES and adapts: TYPE_FLOOR ideas each, the rest by each type's base share times its rate of
 children that beat the best score their generation started from (Laplace-smoothed over the run); a type with nothing
-to work on (no open line, one parent) gives its ideas to the others. The `keep` full exams are shared out the same
-way, so each type is cut on its own fastest. Every judge call gets the memory (kernels/search/memory.py), rebuilt
-before each generation. A generation in which fewer than SHRINK_BELOW of the examined programs beat their parent
-makes the next one SHRINK as large (ideas, not parents). Stops: `generations` done, `evals` programs judged, `usd`
-spent on models, the GPU cap, the wall-clock cap (`wall_s`), or `patience` generations with no new best. Why many
-small generations: Kevin's 16 x 8 beat 128 x 1 (1.10x against 0.65x) and ShinkaEvolve's archive of 40 under 150
-evaluations; why weighted parents rather than MCTS: every tree of the 2026-10-24/25 runs stayed one level deep.
+to work on (no open line, one parent) gives its ideas to the others. Every correct program takes the full exam and
+joins the population. Every call gets the memory (kernels/search/memory.py), rebuilt before each generation. The search
+runs `generations` generations after generation 0, and only the model budget `usd` stops it sooner (decided
+2026-10-30). Why many small generations: Kevin's 16 x 8 beat 128 x 1 (1.10x against 0.65x) and ShinkaEvolve's archive
+of 40 under 150 evaluations; why weighted parents rather than MCTS: every tree of the 2026-10-24/25 runs stayed one
+level deep.
 
 Same trace.jsonl and hypotheses.jsonl as kernels/search/loop.py's search, so retime, record and the archive read it."""
 from __future__ import annotations
@@ -27,7 +26,6 @@ from __future__ import annotations
 import json
 import math
 import random
-import time
 import uuid
 from pathlib import Path
 from typing import Callable
@@ -37,10 +35,9 @@ from kernels.search.funnel import Funnel, Slot, generation
 from kernels.search.loop import trace_row
 from kernels.search.tree import Node, Tree
 
-GEN0, GEN0_KEEP = 40, 12     # the first generation, from the start program alone
+GEN0 = 40                    # the first generation's changes, from the start program alone
 POPULATION = 32              # programs parents are drawn from
 FLOOR = 0.05                 # added to each percentile reward: the weakest still has a chance
-SHRINK, SHRINK_BELOW = 2 / 3, 0.2   # the next generation's size when fewer than this fraction beat their parent
 TYPES = {"refine": 8, "persist": 6, "fresh": 6, "crossover": 4}   # a generation's ideas by type, before adapting
 TYPE_FLOOR = 2               # ideas every available type keeps, however it has done
 LINE_MISSES = 3              # generations of persist children without a better one before a line closes
@@ -112,26 +109,17 @@ def advance(tree: Tree, lines: dict[str, int], plan: list[Slot], kids: list[Node
     return lines | {c.id: 0 for c in kids if c.score > tree.nodes[c.parent].score}
 
 
-def search(initial: str, system: str, funnel: Funnel, judge: Callable[[str], dict], out: Path, evals: int,
-           usd: float, seed: int = 0, gen_size: int = 24, keep: int = 8, n_parents: int = 4, generations: int = 10,
-           patience: int | None = 3, gpu_s: float | None = None,
-           gpu_used: Callable[[], float] | None = None, types: bool = True,
-           wall_s: float | None = None) -> tuple[Tree, dict]:
-    """Returns the tree and the run's cost {usd, model_calls, evals, generations, types, stopped_*}. `types=False`:
-    every idea is a refine idea (the search before 2026-10-29; an A/B arm)."""
+def search(initial: str, system: str, funnel: Funnel, judge: Callable[[str], dict], out: Path, usd: float,
+           seed: int = 0, gen_size: int = 24, n_parents: int = 4, generations: int = 10,
+           types: bool = True) -> tuple[Tree, dict]:
+    """Returns the tree and the run's cost {usd, model_calls, evals, generations, types}. `types=False`: every idea is
+    a refine idea (the search before 2026-10-29; an A/B arm)."""
     out.mkdir(parents=True, exist_ok=True)
     tree, rng, judged = Tree(seed), random.Random(seed), 0
     funnel.usd_cap = usd if funnel.usd_cap is None else funnel.usd_cap
-    funnel.gpu_s_cap, funnel.gpu_used = gpu_s, gpu_used
-    funnel.deadline = time.monotonic() + wall_s if wall_s else None
-    library = funnel.library or funnel.archive
-    general, rows = memory.general(library, funnel.task), []
+    general, rows = memory.general(funnel.library, funnel.task), []
     stats = {t: [0, 0] for t in TYPES}           # per type: children examined, children that beat their generation's start
     lines: dict[str, int] = {}                   # each open line's head -> generations of persist children with no better
-
-    def out_of_budget() -> bool:
-        return bool((gpu_s is not None and gpu_used and gpu_used() >= gpu_s)
-                    or (funnel.deadline is not None and time.monotonic() >= funnel.deadline))
 
     with open(out / "trace.jsonl", "w") as trace, open(out / "hypotheses.jsonl", "w") as hyplog:
         def keep_node(node: Node, cost: float) -> None:
@@ -146,42 +134,31 @@ def search(initial: str, system: str, funnel: Funnel, judge: Callable[[str], dic
         r = judge(initial)
         judged += 1
         keep_node(Node(uuid.uuid4().hex[:8], None, r.get("code", initial), r["metrics"], r["artifacts"], 0), 0.0)
-        gen, idle, size, best = 0, 0, gen_size, tree.best().score
-        while gen <= generations and judged < evals and funnel.spent < usd and not out_of_budget():
-            funnel.memory = (general, memory.task(library, funnel.task, rows))
-            extra, keep_by, ps = {}, None, [tree.root()] if gen == 0 else parents(tree, n_parents, rng)
+        gen = 0
+        while gen <= generations and funnel.spent < usd:
+            funnel.memory = (general, memory.task(funnel.library, funnel.task, rows))
+            extra, ps = {}, [tree.root()] if gen == 0 else parents(tree, n_parents, rng)
             lines = {h: m for h, m in lines.items() if tree.expandable(tree.nodes[h])}
             if not ps:
                 break
             if gen == 0:
-                plan, kw = [Slot(ps[0], "start", GEN0)], {"keep": GEN0_KEEP, "rotate": False, "spread": True}
+                plan = [Slot(ps[0], "start", GEN0)]
             elif types:
                 available = {"refine", "fresh"} | ({"persist"} if lines else set()) | ({"crossover"} if len(ps) > 1
                                                                                       else set())
-                q = split(size, stats, available)
-                plan, keep_by = slots(tree, ps, q, lines, rng), shares(keep, {t: n for t, n in q.items() if n})
-                kw, extra = {"keep": keep}, {"types": q, "keep_by": keep_by, "open_lines": len(lines)}
+                q = split(gen_size, stats, available)
+                plan, extra = slots(tree, ps, q, lines, rng), {"types": q, "open_lines": len(lines)}
             else:
-                quota = max(1, math.ceil(size / n_parents))
-                plan, kw = [Slot(p, "refine", quota) for p in ps], {"keep": keep}
+                quota = max(1, math.ceil(gen_size / n_parents))
+                plan = [Slot(p, "refine", quota) for p in ps]
             start = tree.best().score
-            kids = generation(funnel, tree, ps, system, gen, keep_node, log, quota=0, slots=plan, keep_by=keep_by,
-                              extra=extra, **kw)
+            kids = generation(funnel, tree, plan, system, gen, keep_node, log, extra=extra)
             judged += len(kids)
             for c in kids:
                 if c.kind in stats:
                     stats[c.kind][0] += 1
                     stats[c.kind][1] += c.score > start
             lines = advance(tree, lines, plan, kids)
-            improved = sum(c.score > tree.nodes[c.parent].score for c in kids)
-            size = max(n_parents, round(gen_size * SHRINK)) if kids and improved / len(kids) < SHRINK_BELOW else gen_size
-            idle = 0 if tree.best().score > best else idle + 1
-            best = max(best, tree.best().score)
             gen += 1
-            if patience and idle >= patience:
-                break
-    stalled = bool(patience and idle >= patience)
     return tree, {"usd": round(funnel.spent, 4), "model_calls": funnel.calls, "evals": judged, "generations": gen,
-                  "types": {t: {"examined": e, "new_best": b} for t, (e, b) in stats.items()},
-                  "stopped_no_progress": stalled,
-                  "stopped_wall_clock": bool(funnel.deadline is not None and time.monotonic() >= funnel.deadline)}
+                  "types": {t: {"examined": e, "new_best": b} for t, (e, b) in stats.items()}}

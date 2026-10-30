@@ -1,7 +1,6 @@
-"""The funnel (kernels/search/funnel.py): one round from named hypotheses to the full exam, with fake models and a
-fake evaluator: duplicates merged, an idea like an archived failure dropped unless the judge names a difference, edits
-that do not apply dropped, correctness failures repaired once, the quick test keeping the fastest, only fully examined
-programs in the tree, and every idea's fate in the log (which the archive reads back)."""
+"""One round (kernels/search/funnel.py) with a fake model and a fake evaluator: one call per change, its hypothesis
+and its SEARCH/REPLACE blocks in one answer, edits that do not apply or repeat a program dropped, every correct program
+measured and in the tree, and every idea's fate in the log (which the archive reads back)."""
 from __future__ import annotations
 
 import sys
@@ -24,23 +23,17 @@ def h(n):
     return {"bottleneck": f"b{n}", "optimisation_method": f"m{n}", "modification_plan": f"set a = {n}"}
 
 
-class Judge:
-    """Names three ideas per slice (one shared by every slice); for the past-failure check keeps nothing."""
-    def __init__(self):
-        self.calls = []
+class Model:
+    """The k-th call sets `a` to the k-th of `values` and says so in its hypothesis; its code has braces in it."""
+    def __init__(self, values=(5, 13, 22, 7)):
+        self.values, self.calls, self.systems = values, [], []
 
     def __call__(self, system, user):
         self.calls.append(user)
-        if "archived records" in system:
-            return json.dumps([{"index": i, "keep": False, "differs": ""} for i in range(20)]), 0.1
-        k = len(self.calls)
-        return json.dumps([h(5), h(10 + k), h(13 if k == 1 else 20 + k)]), 0.1
-
-
-def coder(system, user):
-    """Writes the plan's `set a = N` (the last one in the prompt)."""
-    n = re.findall(r"set a = (\d+)", user)
-    return (f"<<<<<<< SEARCH\na = 1\n=======\na = {n[-1]}\n>>>>>>> REPLACE", 0.01) if n else ("", 0.01)
+        self.systems.append(system)
+        n = self.values[(len(self.calls) - 1) % len(self.values)]
+        return (json.dumps(h(n)) + f"\n<<<<<<< SEARCH\na = 1\n=======\na = {n}  # {{x: [1]}}\n>>>>>>> REPLACE",
+                0.1)
 
 
 def stage(code, n):
@@ -50,43 +43,42 @@ def stage(code, n):
     return {"metrics": {"correct": 1.0, "combined_score": a / 10, "stage": n}, "artifacts": {}}
 
 
-def merge(system, user):
-    return json.dumps({"bottleneck": "b5", "optimisation_method": "m5", "modification_plan": "set a = 5"}), 0.001
+def funnel(model=None, **kw):
+    return Funnel(Models(model or Model()), stage, per_call=4, parallel=2, **kw)
 
 
-def funnel(**kw):
-    return Funnel(Models(Judge(), merge, coder, coder), stage, per_call=3, keep=2, parallel=2, **kw)
+def root_of(t):
+    return t.add(Node("r", None, START, {"correct": 1.0, "combined_score": 0.1, "stage": 2}, {}, 0))
 
 
-def test_one_round_keeps_the_fastest_in_the_tree_and_logs_every_idea():
+def test_one_call_per_change_and_every_correct_program_joins_the_tree():
     f, t, rows, kept = funnel(ptx="cards"), Tree(), [], []           # two slices: measurements, ptx
-    root = t.add(Node("r", None, START, {"correct": 1.0, "combined_score": 0.1, "stage": 2}, {}, 0))
-    kids = expand(f, t, root, "SYS", 1, lambda n, c: kept.append(t.add(n)), rows.append)
+    kids = expand(f, t, root_of(t), "SYS", 1, lambda n, c: kept.append(t.add(n)), rows.append)
     row = rows[0]
-    assert row["named"] == 6 and row["distinct"] == 5          # h(5) named by both slices, merged
-    assert [k.score for k in kids] == [2.2, 1.2] and kept == kids        # the two fastest only
-    fates = {f2["idea"]["modification_plan"]: f2["fate"] for f2 in row["ideas"]}
-    assert fates["set a = 13"] == "failed correctness, and its repair"   # repaired once, still wrong
-    assert fates["set a = 5"].startswith("quick speed test") and fates["set a = 22"] == "full exam"
-    assert len(t.nodes) == 3 and f.spent > 0
+    assert row["named"] == 4 and f.calls == 4 and row["correct"] == 3
+    assert sorted(k.score for k in kids) == [0.5, 0.7, 2.2] and kept == kids and len(t.nodes) == 4
+    fates = {x["idea"]["modification_plan"]: x["fate"] for x in row["ideas"]}
+    assert fates["set a = 13"] == "failed correctness" and fates["set a = 22"] == "full exam"
+    assert all(json.loads(k.judge)["bottleneck"] for k in kids)     # the hypothesis, braces in code
+    assert sum("feature cards" in u for u in f.models.judge.calls) == 2                 # slices rotated over the calls
 
 
-def test_an_idea_like_an_archived_failure_is_dropped_unless_a_difference_is_named():
-    e = archive.Entry("idea-1", "toy", "b5\nm5\nset a = 5", h(5),
-                      outcomes=[archive.Outcome("k", "p", 1.0, "c", 0.5, False)])
-    f, t, rows = funnel(archive=[e], task="toy"), Tree(), []
-    root = t.add(Node("r", None, START, {"correct": 1.0, "combined_score": 0.1, "stage": 2}, {}, 0))
-    expand(f, t, root, "SYS", 1, lambda n, c: t.add(n), rows.append)
-    fates = {x["idea"]["modification_plan"]: x["fate"] for x in rows[0]["ideas"]}
-    assert fates["set a = 5"].startswith("like archived ideas") and rows[0]["after_archive"] == rows[0]["distinct"] - 1
-    assert not any("ideas in the archive" in u for u in f.models.judge.calls)          # no archive slice: the memory
+def test_a_call_sees_the_starting_program_other_programs_as_full_code_the_memory_and_the_format():
+    f, t = funnel(Model((5,))), Tree()
+    root = root_of(t)
+    t.add(Node("x", "r", "a = 2\nb = 1\n", {"correct": 1.0, "combined_score": 1.5, "stage": 2}, {}, 1))
+    y = t.add(Node("y", "r", "a = 1\nb = 2\n", {"correct": 1.0, "combined_score": 1.3, "stage": 2}, {}, 1))
+    f.memory = ("# GENERAL", "# TASK")
+    expand(f, t, y, "SYS", 1, lambda n, c: t.add(n), [].append)
+    user, system = f.models.judge.calls[0], f.models.judge.systems[0]
+    assert f"# The starting program {root.id}" in user and "```python\na = 1\nb = 0\n" in user
+    assert "## Program x (score 1.5000)\n```python\na = 2\nb = 1\n" in user                # full code, not a diff
+    assert "# GENERAL" in system and "# TASK" in system and "SEARCH/REPLACE" in system
 
 
-def test_the_search_runs_funnel_rounds_and_the_archive_reads_them_back(tmp_path):
+def test_the_search_runs_rounds_and_the_archive_reads_them_back(tmp_path):
     from lab import ledger
-    f = funnel()
-    tree, cost = search(START, "SYS", coder, lambda c: stage(c, 2), tmp_path, evals=5, usd=50.0,
-                        funnel=f)
+    tree, cost = search(START, "SYS", Model(), lambda c: stage(c, 2), tmp_path, evals=5, usd=50.0, funnel=funnel())
     assert tree.best().score >= 2.2 and cost["usd"] > 0
     root = tmp_path / "ledger"
     root.mkdir()
@@ -113,39 +105,26 @@ def test_the_precheck_drops_what_does_not_build_and_feeds_the_compiler_slice():
 
     def staged(code, n):
         if n == 5:
-            ok = "a = 12" not in code                                   # one idea does not build
+            ok = "a = 22" not in code                                   # one change does not build
             return {"metrics": {"stage": 5, "correct": float(ok)},
                     "artifacts": {"precheck": "imported" if ok else "the CUDA C++ build failed: k.cu(3): error",
                                   **({"compile_report": report} if ok else {})}}
         return stage(code, n)
-    f = Funnel(Models(Judge(), merge, coder, coder), staged, per_call=3, keep=2, parallel=2, ptx="cards", precheck=True)
+    f = Funnel(Models(Model()), staged, per_call=4, parallel=2, precheck=True)
     t, rows = Tree(), []
-    root = t.add(Node("r", None, START, {"correct": 1.0, "combined_score": 0.1, "stage": 2}, {}, 0))
+    root = root_of(t)
     kids = expand(f, t, root, "SYS", 1, lambda n, c: t.add(n), rows.append)
     fates = {x["idea"]["modification_plan"]: x["fate"] for x in rows[0]["ideas"]}
-    assert fates["set a = 12"].startswith("precheck: the CUDA C++ build failed")
+    assert fates["set a = 22"].startswith("precheck: the CUDA C++ build failed")
     assert root.artifacts["compile_report"] == report and all(k.artifacts["compile_report"] == report for k in kids)
     assert any("The compiler's report for this program" in u for u in f.models.judge.calls)
 
 
-def test_a_round_stops_mid_way_when_a_budget_runs_out_and_says_so():
-    f, t, rows = funnel(ptx="cards"), Tree(), []
-    f.usd_cap = 0.05                                      # the first judge call costs 0.1: the second is refused
-    root = t.add(Node("r", None, START, {"correct": 1.0, "combined_score": 0.1, "stage": 2}, {}, 0))
-    assert expand(f, t, root, "SYS", 1, lambda n, c: t.add(n), rows.append) == []
-    assert rows[0]["stopped"] == "model budget" and rows[0]["named"] == 0
-    used = [0.0]
-    g = funnel(ptx="cards")
-    g.gpu_s_cap, g.gpu_used = 2.0, lambda: used[0]
-
-    def staged(code, n):
-        used[0] += 1.0
-        return stage(code, n)
-    g.stage = staged
-    rows2, t2 = [], Tree()
-    expand(g, t2, t2.add(Node("r", None, START, {"correct": 1.0, "combined_score": 0.1, "stage": 2}, {}, 0)),
-           "SYS", 1, lambda n, c: None, rows2.append)
-    assert rows2[0]["stopped"] == "GPU budget" and used[0] == 2.0
+def test_a_round_stops_mid_way_when_the_model_budget_runs_out_and_says_so():
+    f, t, rows = funnel(workers=1), Tree(), []
+    f.usd_cap = 0.15                                      # each call costs 0.1: the third is refused
+    assert expand(f, t, root_of(t), "SYS", 1, lambda n, c: t.add(n), rows.append) == []
+    assert rows[0]["stopped"] == "model budget" and f.calls == 2
 
 
 def test_ncu_is_not_asked_for_again_once_the_host_refuses_and_programs_are_never_written_twice():
@@ -155,59 +134,32 @@ def test_ncu_is_not_asked_for_again_once_the_host_refuses_and_programs_are_never
     def staged(code, n):
         calls.append(n)
         return {"metrics": {"stage": 3}, "artifacts": {"ncu_error": REFUSED}} if n == 3 else stage(code, n)
-    f = Funnel(Models(Judge(), merge, coder, coder), staged, per_call=3, keep=2, parallel=1, ptx="cards", ncu=True)
+    f = Funnel(Models(Model()), staged, per_call=4, parallel=1, ncu=True)
     t = Tree()
-    root = t.add(Node("r", None, START, {"correct": 1.0, "combined_score": 0.1, "stage": 2}, {}, 0))
+    root = root_of(t)
     kids = expand(f, t, root, "SYS", 1, lambda n, c: t.add(n), [].append)
     assert calls.count(3) == 1 and not f.ncu and "ncu_missing" in root.artifacts      # the parent's, asked once
     assert all("ncu" not in k.artifacts and "ncu_missing" not in k.artifacts for k in kids)   # children: as parents
     rows = []
-    expand(f, t, root, "SYS", 2, lambda n, c: t.add(n), rows.append)       # the same ideas again, on the same parent
+    expand(f, t, root, "SYS", 2, lambda n, c: t.add(n), rows.append)       # the same changes again, on the same parent
     again = {x["idea"]["modification_plan"]: x["fate"] for x in rows[0]["ideas"]}
     assert again["set a = 5"].startswith("not applied: identical")      # written in round 1, never written again
 
 
-def test_a_malformed_verdict_never_crashes_and_unmeasured_archive_ideas_never_block():
-    from kernels.search.funnel import past_failures
-    measured = archive.Entry("i1", "toy", "b5\nm5\nset a = 5", h(5),
-                             outcomes=[archive.Outcome("k", "p", 1.0, "c", 0.5, False)])
-    unmeasured = archive.Entry("i2", "toy", "b6\nm6\nset a = 6", h(6), outcomes=[archive.Outcome("k", "p", 1.0, None)])
-
-    class Bad:
-        def __call__(self, system, user):
-            return json.dumps([{"keep": True, "differs": "x"}, {"index": "0", "keep": True, "differs": "parent changed"}]), 0
-    f = Funnel(Models(Bad(), merge, coder, coder), stage, archive=[measured, unmeasured], task="toy")
-    kept, dropped = past_failures(f, "S", "B", [h(5), h(6)])
-    assert [k["modification_plan"] for k in kept] == ["set a = 5", "set a = 6"] and not dropped
-    assert kept[0]["differs_from_archive"] == "parent changed"
-
-
-def test_counters_are_taken_when_a_program_first_becomes_a_parent_and_the_strong_coder_writes_only_the_kept():
-    from kernels.search.funnel import Funnel, Models, expand
-    from kernels.search.tree import Node, Tree
-    stages, strong = [], []
+def test_counters_are_taken_when_a_program_first_becomes_a_parent():
+    stages = []
 
     def staged(code, n):
         stages.append(n)
         if n == 3:
             return {"metrics": {}, "artifacts": {"ncu": json.dumps({"shapes": [{"kernels": [{"name": "k", "x": 1}]}]})}}
         return stage(code, n)
-
-    def strong_coder(system, user):
-        strong.append(user)
-        return coder(system, user)
-    f = Funnel(Models(Judge(), merge, coder, strong_coder), staged, per_call=3, keep=2, parallel=2, ptx="cards",
-               ncu=True, workers=4)
+    f = Funnel(Models(Model()), staged, per_call=4, parallel=2, ncu=True, workers=4)
     t = Tree()
-    root = t.add(Node("r", None, START, {"correct": 1.0, "combined_score": 0.1, "stage": 2}, {}, 0))
-    rows = []
-    kids = expand(f, t, root, "SYS", 1, lambda n, c: t.add(n), rows.append)
+    root = root_of(t)
+    kids = expand(f, t, root, "SYS", 1, lambda n, c: t.add(n), [].append)
     assert stages.count(3) == 1 and "ncu" in root.artifacts and stages.index(3) == 0     # before any child is made
     assert all("ncu" not in k.artifacts for k in kids)
-    rewrites = [u for u in strong if "passed correctness" in u]
-    assert len(rewrites) == len(kids) == 2                    # the kept two only, not every correct draft
-    assert rows[0]["rewritten"] == 0 and all(x.get("written_by", "").startswith("draft (rewrite not applied: identical")
-                                               for x in rows[0]["ideas"] if x["fate"] == "full exam")   # same code
     expand(f, t, kids[0], "SYS", 2, lambda n, c: t.add(n), [].append)
     assert stages.count(3) == 2 and "ncu" in kids[0].artifacts                  # profiled once chosen as a parent
 
@@ -215,8 +167,8 @@ def test_counters_are_taken_when_a_program_first_becomes_a_parent_and_the_strong
 def test_model_calls_run_in_parallel_the_first_alone_and_a_program_written_twice_in_a_batch_is_refused():
     import threading
     import time
-    from kernels.search.funnel import Funnel, Models, pmap, written
-    f = Funnel(Models(None, None, None, None), stage, workers=4)
+    from kernels.search.funnel import pmap, written
+    f = Funnel(Models(None), stage, workers=4)
     live, peak, order = [0], [0], []
     lock = threading.Lock()
 
@@ -236,35 +188,33 @@ def test_model_calls_run_in_parallel_the_first_alone_and_a_program_written_twice
     assert [c for c, _ in out] == ["a = 1\n", None, None, "a = 2\n"] and "identical" in out[1][1] and len(seen) == 2
 
 
-if __name__ == "__main__":
-    import inspect
-    import tempfile
-    for name, fn in list(globals().items()):
-        if name.startswith("test_"):
-            fn(*[Path(tempfile.mkdtemp()) for _ in inspect.signature(fn).parameters]); print("ok", name)
-
-
-def test_every_program_is_tuned_on_its_tiers_shapes_before_it_is_measured():
+def test_every_program_is_tuned_on_every_seen_shape_before_its_full_exam():
     from kernels.search import tune
     prog = "CONFIG = {'t': 1}\nTUNABLES = {'t': [1, 2, 4]}\n\n\ndef kernel(x):\n    return x\n"
     calls = []
 
     def tstage(code, n):
         calls.append((n, tune.params(code)[0]["t"], "TUNED-DISPATCH-START" in code))
-        if n in (6, 7):                          # point t=2 wins small calls, t=4 large ones
+        if n == 6:                               # point t=2 wins small calls, t=4 large ones
             rows = [{"config": {"t": t}, "score": s, "timings": [{"shape": [4], "speedup": a, "weight": 0.5},
                                                                  {"shape": [512], "speedup": b, "weight": 0.5}]}
                     for t, s, a, b in ((1, 1.0, 1.0, 1.0), (2, 1.3, 2.0, 0.9), (4, 1.2, 0.8, 1.8))]
             return {"metrics": {"stage": n}, "artifacts": {"tune": json.dumps(rows)}}
         return {"metrics": {"correct": 1.0, "combined_score": 1.0, "stage": n}, "artifacts": {}}
-    f = Funnel(Models(None, None, None, None), tstage, tune=True, size_expr="args[0].shape[0]")
-    code, r = f.measure(prog, 4)                 # quick: tuned on the most-called shape, then timed
-    assert calls[:2] == [(7, 1, False), (4, 2, False)] and "'t': 2" in code and json.loads(r["artifacts"]["tune"])
-    code2, _ = f.measure(code, 2)                # the full exam: every shape, a dispatcher per size region
-    assert calls[2][0] == 6 and calls[3] == (2, 2, True) and "TUNED-DISPATCH-START" in code2
-    code3, _ = f.measure(code2, 2)               # tuned again: the old dispatcher removed first
-    assert calls[4] == (6, 2, False) and code3.count("TUNED-DISPATCH-START") == 1
-    assert Funnel(Models(None, None, None, None), tstage).measure(prog, 4)[0] == prog     # tuning off
+    f = Funnel(Models(None), tstage, tune=True, size_expr="args[0].shape[0]")
+    code, r = f.measure(prog)                    # every shape, a dispatcher per size region
+    assert calls[0][0] == 6 and calls[1] == (2, 2, True) and "TUNED-DISPATCH-START" in code
+    code2, _ = f.measure(code)                   # tuned again: the old dispatcher removed first
+    assert calls[2] == (6, 2, False) and code2.count("TUNED-DISPATCH-START") == 1
+    assert Funnel(Models(None), tstage).measure(prog)[0] == prog          # tuning off
     from kernels.search.loop import facts
     shown = facts(Node("n", None, code, r["metrics"], r["artifacts"], 0))
     assert "grid points timed" in shown and '"config": {"t": 4}, "score": 1.2' in shown       # a fact for the model
+
+
+if __name__ == "__main__":
+    import inspect
+    import tempfile
+    for name, fn in list(globals().items()):
+        if name.startswith("test_"):
+            fn(*[Path(tempfile.mkdtemp()) for _ in inspect.signature(fn).parameters]); print("ok", name)

@@ -412,14 +412,14 @@ def test_every_arm_differs_from_kernels_search_in_one_flag():
         from types import SimpleNamespace
         a = SimpleNamespace(task="t", shapes="s", evals=3, usd=1.0, model="m", device="cpu", initial=None)
         assert "search-beam" not in ab.ARMS                       # the beam was removed (2026-10-27)
-        for arm in ("kernels.search", "search-no-tools", "search-mcts", "search-gen20", "search-untyped"):
+        for arm in ("kernels.search", "search-no-tools", "search-mcts", "search-untyped"):
             ab.ARMS[arm](a, Path("/tmp/x"), 0)
     finally:
         cli.main = orig
     base = seen[0]
     extras = [argv[len(base):] for argv in seen[1:]]
-    assert extras == [["--no-judge-tools"], ["--mcts"], ["--gen-size", "20", "--keep", "12"], ["--no-types"]]
-    assert "--second-judge-model" in base            # every arm names hypotheses with the one model
+    assert extras == [["--no-judge-tools"], ["--mcts"], ["--no-types"]]
+    assert "--second-judge-model" in base            # every arm makes changes with the one model
     assert all(argv[:len(base)] == base for argv in seen)
     try:
         ab.main(["--task", "t", "--shapes", "s", "--out", "/tmp/x", "--arms", "nope"])
@@ -578,18 +578,18 @@ def test_a_turn_whose_stream_dies_is_sent_again_and_a_real_error_is_not():
         llm._stream, time.sleep = orig, real_sleep
 
 
-def test_inspirations_show_other_branches_to_the_judge_only():
+def test_the_prompt_shows_other_branches_and_the_start_as_full_code():
     from kernels.search.loop import prompt
     t = Tree()
     ok = lambda sc: {"combined_score": sc, "correct": 1.0, "stage": 2}        # noqa: E731
     t.add(Node("r", None, "a = 1\nb = 1\n", ok(1.0), {}, 0))
     t.add(Node("x", "r", "a = 2\nb = 1\n", ok(1.5), {}, 1))
     t.add(Node("y", "r", "a = 1\nb = 2\n", ok(1.3), {}, 1))
-    judge_view = prompt(t, t.nodes["y"], coder=False)
-    assert "# Other programs in the tree" in judge_view and "+a = 2" in judge_view and "Program r" not in \
-        judge_view.split("# Other programs")[1]
-    assert "+a = 2" not in prompt(t, t.nodes["y"], '{"modification_plan": "p"}')         # the coder: its plan only
-    assert "Hypotheses already measured" not in judge_view          # dropped: the archive lookup does this by similarity
+    view = prompt(t, t.nodes["y"])
+    assert "## Program x (score 1.5000)\n```python\na = 2\nb = 1\n" in view          # full code, not a diff
+    assert "# The starting program r" in view and "# The starting program" not in prompt(t, t.nodes["r"])
+    assert "Hypotheses already measured" not in view
+
 
 def test_a_flagged_candidate_is_passed_over_at_promotion():
     from kernels.evolve.run import retime
@@ -694,7 +694,7 @@ def test_a_query_tool_that_cannot_run_answers_the_model_instead_of_crashing_the_
     assert out.startswith("query failed: ") and "Error" in out
 
 
-def test_the_cli_builds_its_funnel_with_every_task_in_the_memory_and_this_task_in_the_archive(monkeypatch, tmp_path):
+def test_the_cli_builds_its_funnel_with_every_task_in_the_memory(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     from kernels import archive
@@ -703,9 +703,8 @@ def test_the_cli_builds_its_funnel_with_every_task_in_the_memory_and_this_task_i
     path = archive.export([archive.Entry("i1", "toy", "t", {}), archive.Entry("i2", "other", "u", {})],
                           tmp_path / "archive.jsonl")
     a = SimpleNamespace(archive=str(path), second_judge_model="none", second_judge_share=4, effort="high",
-                        judge_tools=False, cheap_model="c", wide_model="w", model="m", ptx=None, per_call=20, keep=8,
-                        parallel=4, max_repairs=3, ncu=False, precheck=True, workers=8, tune_points=8)
-    monkeypatch.setattr(archive, "_embedder", lambda root: None)
+                        judge_tools=False, model="m", ptx=None, per_call=20, parallel=4, ncu=False, precheck=True,
+                        workers=8, tune_points=8)
     f = cli._funnel(a, SimpleNamespace(name="toy", size_expr=None), lambda s, u: ("", 0.0))
-    assert [e.id for e in f.archive] == ["i1"] and [e.id for e in f.library] == ["i1", "i2"]
-    assert f.task == "toy" and f.tune and f.keep == 8 and f.precheck and f.workers == 8
+    assert [e.id for e in f.library] == ["i1", "i2"]
+    assert f.task == "toy" and f.tune and f.precheck and f.workers == 8 and f.parallel == 4
