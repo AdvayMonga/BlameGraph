@@ -167,14 +167,17 @@ class Toolbox(EvalTools, ProfTools):
 
     def kernel_search(self, args: dict) -> str:
         """The kernel layer in one blocking call (kernels/pipeline.py): capture the task's calls under real traffic,
-        search, gate the winner on the held-out shapes; the winner comes back as a patch of the engine module, saved
-        in the workspace (left out of your change) for you to apply."""
+        search, gate the winner on the held-out shapes; the winner comes back as a patch of the engine module (a
+        region's: its override module), saved in the workspace (left out of your change) for you to apply."""
+        import argparse
+        import contextlib
         from kernels import pipeline
+        from kernels.evolve.run import task_name
         from kernels.tasks import TASKS, load
-        if str(args.get("task")).startswith("region:"):    # a region's entry is the stations tuple, not a function
-            raise ValueError("`task`: regions (region:FIRST:LAST) are not wired into kernel_search yet")
-        if args.get("task") not in TASKS:
-            raise ValueError(f"`task` must be one of {list(TASKS)}")
+        try:
+            task_name(str(args.get("task")))
+        except argparse.ArgumentTypeError:
+            raise ValueError(f"`task` must be one of {list(TASKS)} or region:FIRST:LAST") from None
         usd = args.get("budget_usd")
         if isinstance(usd, bool) or not isinstance(usd, (int, float)) or usd <= 0:
             raise ValueError("`budget_usd` must be a positive number")
@@ -214,15 +217,18 @@ class Toolbox(EvalTools, ProfTools):
             caps = pipeline.captures(task, tree, profile, scored, self.s.run_dir / "kernel_search" / "captures.json")
             if not caps:
                 raise RuntimeError("no capture traffic produced calls to the task's entry point")
-            start = out / "start.py"
-            start.write_text(pipeline.start_program(task, tree))
-            from lab.evaltools import _layer_facts
-            found = pipeline.search(task, caps, start, out / "search", evals, self.s.ledger_root, env,
-                                    device=device,
-                                    facts_text=pipeline.facts(task, _layer_facts(self.s.ledger_root, "kernel_tasks"),
-                                                              scored))
-            best = out / "search" / "best_program.py"
-            g = pipeline.gate(task, caps, best, out, env)
+            region = task.name.startswith("region:")     # loads where the GPU is: held and described there
+            with pipeline.hold(task, caps, out, env, w if remote else None) if region else \
+                    contextlib.nullcontext() as held:
+                start = out / "start.py"
+                start.write_text(held["start"] if held else pipeline.start_program(task, tree))
+                from lab.evaltools import _layer_facts
+                found = pipeline.search(task, caps, start, out / "search", evals, self.s.ledger_root, env,
+                                        device=device, held=held,
+                                        facts_text=pipeline.facts(task, _layer_facts(self.s.ledger_root,
+                                                                                     "kernel_tasks"), scored))
+                best = out / "search" / "best_program.py"
+                g = pipeline.gate(task, caps, best, out, env, held)
         except Exception as e:                   # noqa: BLE001  a tool never crashes the session
             model_cost = self._charge_models(pipeline.spent(out / "search"))
             result = {"verdict": "error", "reason": f"{type(e).__name__}: {e}"[-2000:], "model_usd": model_cost}
@@ -230,9 +236,12 @@ class Toolbox(EvalTools, ProfTools):
             return f"kernel_search failed: {result['reason']}"
         from kernels.evolve.ship import gate_passed
         passed = gate_passed(g)
-        rel = None
-        if passed:
-            text = pipeline.patch(task, tree, best.read_text())
+        rel, refused = None, None
+        try:
+            text = pipeline.patch(task, tree, best.read_text(), held) if passed else None
+        except ValueError as e:                  # e.g. the whole step: the engine has no hook to install it
+            text, refused = None, str(e)
+        if text:
             dest = self.s.workspace.path / "lab" / "runs" / "kernel_search" / f"{task.name}-{snap.id}.patch"
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(text)
@@ -246,10 +255,10 @@ class Toolbox(EvalTools, ProfTools):
                                                     "gates": json.loads((g.get("artifacts") or {}).get("gates") or "{}"),
                                                     **({"error": g["artifacts"]["error"][-1500:]}
                                                        if (g.get("artifacts") or {}).get("error") else {})},
-                  "patch": rel, "captures": len(caps)}
+                  "patch": rel, **({"patch_refused": refused} if refused else {}), "captures": len(caps)}
         self._record("kernels", "kernel_search", args, result, snap)
-        return json.dumps({k: result[k] for k in ("metrics", "gate", "patch", "search_record", "model_usd")}, indent=1,
-                          default=str)
+        return json.dumps({k: result[k] for k in ("metrics", "gate", "patch", "patch_refused", "search_record",
+                                                  "model_usd") if k in result}, indent=1, default=str)
 
     def _charge_models(self, usd: float) -> float:
         """Model dollars charged to the run; spent already, so an exhausted budget records them and refuses what's next."""

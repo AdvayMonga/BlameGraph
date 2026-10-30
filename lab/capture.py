@@ -99,3 +99,65 @@ def capture(targets: list[str], out: Path, sample_bytes: int = 64 * 2**20):
 def load(out: Path) -> list[dict]:
     p = Path(out) / "calls.jsonl"
     return [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
+
+
+STEP = "region:embed:argmax"     # the whole decode step as one region: the engine's decode-step megakernel
+STEP_ENTRY = "inference_server.models.megakernel:decode_step"
+STEP_SAMPLE_BYTES = 256 * 2**20  # a step whose reads and writes are larger is logged, not sampled (as region_capture)
+
+
+def _renumber(table: torch.Tensor, blocks: torch.Tensor) -> torch.Tensor:
+    """Block ids as positions in sorted `blocks`; an id not in it (a column past the row's end) becomes 0."""
+    pos = torch.searchsorted(blocks, table.long().clamp_min(0)).clamp_max(blocks.numel() - 1)
+    return torch.where(blocks[pos] == table, pos, 0).to(table.dtype)
+
+
+@contextlib.contextmanager
+def step(pools: list, out: Path, sample_bytes: int = STEP_SAMPLE_BYTES):
+    """Every decode-step megakernel call (STEP_ENTRY: mdl, tokens, pos, bt) while the block runs, as `STEP` calls in
+    <out>/calls.jsonl; the first per (rows, block-table width) whole in samples/<n>.pt: {"reads": tokens, pos, bt and
+    every layer's K/V of the blocks its rows touch, stacked [layers, blocks, ...], bt renumbered to them; "writes":
+    logits, next tokens and those blocks after the step}. `pools`: the engine's per-layer K/V pools (`.k`, `.v`)."""
+    out = Path(out)
+    (out / "samples").mkdir(parents=True, exist_ok=True)
+    log = open(out / "calls.jsonl", "a")
+    seen: set = set()
+    mod, attr = _resolve(STEP_ENTRY)
+    orig = getattr(mod, attr)
+
+    def kv(blocks):
+        return torch.stack([p.k[blocks] for p in pools]), torch.stack([p.v[blocks] for p in pools])
+
+    @functools.wraps(orig)
+    def traced(mdl, tokens, pos, bt, *args, **kwargs):
+        bs = pools[0].k.shape[2]
+        key = (tokens.shape[0], bt.shape[1])
+        call = {"fn": STEP, "reads": {"tokens": _describe(tokens), "pos": _describe(pos), "bt": _describe(bt)}}
+        blocks = None
+        if key not in seen:
+            seen.add(key)
+            used = torch.arange(bt.shape[1], device=bt.device)[None, :] < ((pos + bs) // bs)[:, None]   # new token's too
+            blocks = bt[used].long().unique()
+            k, v = kv(blocks)
+            reads = {"tokens": tokens, "pos": pos, "bt": _renumber(bt, blocks), "k_cache": k, "v_cache": v}
+        res = orig(mdl, tokens, pos, bt, *args, **kwargs)
+        if blocks is not None:
+            k, v = kv(blocks)
+            sample = {"reads": reads, "writes": {"logits": res[0], "next": res[1], "k_cache": k, "v_cache": v}}
+            size = sum(t.numel() * t.element_size() for part in sample.values() for t in part.values())
+            if size <= sample_bytes:
+                name = f"step-{len(seen)}.pt"
+                torch.save({p: {n: t.detach().cpu() for n, t in d.items()} for p, d in sample.items()},
+                           out / "samples" / name)
+                call["sample"] = name
+            else:
+                call["sample_skipped_bytes"] = size
+        log.write(json.dumps(call) + "\n")
+        return res
+
+    setattr(mod, attr, traced)                   # callers reach it as `mk.decode_step`
+    try:
+        yield out
+    finally:
+        setattr(mod, attr, orig)
+        log.close()

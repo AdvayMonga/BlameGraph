@@ -22,13 +22,12 @@ from typing import Callable
 import torch
 
 from kernels.evolve import evaluator
-from kernels.evolve.run import (_shapes, _target_tolerances, prepare, record, region_args, retime, setting,
-                               system_message, task_args, tolerances)
+from kernels.evolve.run import (_shapes, _target_tolerances, load_task, prepare, record, region_args, retime,
+                               setting, system_message, task_args, tolerances)
 from kernels.search import detect
 from kernels.search.llm import Claude
 from kernels.search.loop import cascade, search
 from kernels.search.tree import UCT_C
-from kernels.tasks import load
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -134,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="the funnel's no-GPU build check and compiler report before stage 1")
     a = ap.parse_args(argv)
     a.ncu = a.device.startswith("cuda") if a.ncu is None else a.ncu
-    task = load(a.task, **region_args(a))
+    task = load_task(a)
     out = Path(a.out)
     tol = tolerances(_target_tolerances())
     sets, program = prepare(task, _shapes(task, a), out, a.device, tol, a.timing_shapes, a.initial, region_args(a))

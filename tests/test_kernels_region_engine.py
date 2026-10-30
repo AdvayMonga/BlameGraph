@@ -220,7 +220,7 @@ def test_a_region_ships_as_an_override_module_never_through_the_entry_path(tmp_p
     assert program == regions.start_program("norm", "add", shared_weights=str(h.path))
     with pytest.raises(ValueError, match="holder"):
         initial_program(regions.from_engine("norm", "add"))
-    for f in (pipeline.module_file, lambda t, d: pipeline.start_program(t, d), lambda t, d: pipeline.patch(t, d, "")):
+    for f in (pipeline.module_file, lambda t, d: pipeline.start_program(t, d)):    # the patch: its override module
         with pytest.raises(ValueError, match="region"):
             f(t, tmp_path)
     monkeypatch.setattr(ship_mod, "unstart", lambda *a: pytest.fail("the entry path was used for a region"))
@@ -295,12 +295,27 @@ def test_the_search_cli_takes_a_region_with_its_samples_and_holder(tmp_path, mon
         run.task_name("region:norm")
 
 
-def test_a_region_task_with_a_remote_evaluator_is_refused(monkeypatch):
-    from types import SimpleNamespace
-    from kernels.evolve.run import region_args
-    monkeypatch.setenv("KERNEL_EVAL_SSH", '["ssh", "host"]')
-    try:
-        region_args(SimpleNamespace(task="region:norm:add", samples="s", shared_weights="w"))
-        raise AssertionError("a remote region search was not refused")
-    except SystemExit as e:
-        assert "GPU host" in str(e)
+def test_a_region_judged_on_a_remote_worker_is_described_here_from_its_shapes_file(tmp_path, monkeypatch):
+    import pytest
+    from kernels.search import __main__ as cli
+    from kernels import regions
+    monkeypatch.setattr(regions, "ENGINE", "no_engine_here.stations")       # nothing of the engine loads here
+    monkeypatch.setenv("KERNEL_EVAL_SSH", '["ssh", "gpu"]')
+    for k in ("KERNEL_EVAL_CONFIG", "KERNELS_EVAL_LOG"):
+        monkeypatch.setenv(k, "")
+    shapes = tmp_path / "shapes.json"
+    shapes.write_text(json.dumps({"seen": [[4, 64], [16, 64]], "heldout": [[64, 64]], "heldout_axes": [0],
+                                  "calls": {"[4, 64]": 3, "[16, 64]": 2}}))
+    start = tmp_path / "start.py"
+    start.write_text("# EVOLVE-BLOCK-START\ndef kernel(*xs):\n    return xs\n# EVOLVE-BLOCK-END\n")
+    monkeypatch.setattr(cli, "Claude", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "search", lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
+    argv = ["--task", "region:norm:add", "--samples", "/gpu/s", "--shared-weights", "/gpu/w.pkl", "--out",
+            str(tmp_path / "out"), "--judge-model", "none", "--device", "cuda", "--no-ncu"]
+    with pytest.raises(SystemExit, match="--shapes and --initial"):
+        cli.main(argv)
+    with pytest.raises(KeyboardInterrupt):
+        cli.main(argv + ["--shapes", str(shapes), "--initial", str(start)])
+    cfg = json.loads((tmp_path / "out" / "eval_config.json").read_text())
+    assert cfg["samples"] == "/gpu/s" and cfg["shared_weights"] == "/gpu/w.pkl"       # paths on the worker, as given
+    assert cfg["task"] == "region:norm:add" and cfg["seen"] == [[4, 64], [16, 64]]
