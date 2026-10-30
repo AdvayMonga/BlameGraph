@@ -339,6 +339,114 @@ def test_crossover_reruns_on_a_changed_setting_and_marks_a_megakernel_that_never
     assert len(ran) == 8
 
 
+# The engine's entry points with their signatures (inference_server.models.*), each returning a marker, per module.
+FAKE_ENGINE = {
+    "fused": ("import torch\n\n\ndef rmsnorm(x, weight, eps):\n    return 'engine'\n\n\n"
+              "def add_rmsnorm(h, a, weight, eps):\n    return 'engine'\n\n\ndef silu_mul(x):\n    return 'engine'\n\n\n"
+              "def topk_softmax(logits, k, renorm, fp32=False):\n    return 'engine'\n"),
+    "moe_kernel": ("from __future__ import annotations\n\nimport torch\nimport triton\nimport triton.language as tl\n\n\n"
+                   "def moe_gemm(a, tok, w, sorted_ids, expert_ids, M, block_m=16, split_k=None, w_scale=None, "
+                   "a_scale=None, tile=None):\n    return 'engine'\n\n\n"
+                   "def moe_gemm_scatter(a, w, sorted_ids, expert_ids, M, tok, pair_w, out, block_m=16, w_scale=None, "
+                   "a_scale=None, tile=None):\n    return 'engine'\n"),
+    "paged_attention_kernel": ("from __future__ import annotations\n\nimport torch\nimport triton\n"
+                               "import triton.language as tl\n\n\ndef paged_decode_attention(q, k_pool, v_pool, "
+                               "block_tables, seq_lens, scale=1.0):\n    return 'engine'\n"),
+}
+PORTED = {"rmsnorm": "vllm.rms_norm", "add_rmsnorm": "vllm.fused_add_rms_norm", "silu_mul": "vllm.silu_and_mul",
+          "topk_softmax": "vllm.topk_softmax", "moe_gemm": "vllm.fused_moe", "moe_gemm_fp8": "vllm.fused_moe",
+          "moe_gemm_scatter_fp8": "vllm.fused_moe", "paged_decode": "vllm.decode_attention",
+          "paged_decode_fp8": "vllm.decode_attention"}
+
+
+def _program(task, src=None):
+    """The search's starting program for `task` (its entry bound to `kernel`) from the fake engine module or `src`."""
+    from kernels.evolve import run
+    mod, _, attr = task.entry.partition(":")
+    if src is None:
+        return run._start(types.SimpleNamespace(start_edits=()), FAKE_ENGINE[mod.rsplit(".", 1)[1]], attr)
+    return run._start(task, src, attr)
+
+
+def _signature(program, name):
+    import ast
+    defs = [n for n in ast.parse(program).body if isinstance(n, ast.FunctionDef) and n.name == name]
+    return [([x.arg for x in d.args.args + d.args.kwonlyargs], [ast.unparse(x) for x in d.args.defaults]) for d in defs]
+
+
+def _check_ports(task, program):
+    from kernels.evolve import core
+    attr = task.entry.partition(":")[2]
+    got = competitors.starts(task.name, program)
+    assert list(got) == [PORTED[task.name]], task.name
+    port = got[PORTED[task.name]]
+    compile(port, task.name, "exec")
+    assert core.screen(port) == [], (task.name, core.screen(port))
+    first, *_, last = _signature(port, attr)
+    assert first == last and port.rstrip().endswith(f"kernel = {attr}")          # the engine's signature, still bound
+    assert port.index(f"_{attr}_engine = {attr}") < port.index("# EVOLVE-BLOCK-END")     # open to the search
+
+
+def test_every_ported_task_starts_from_its_competitor_with_the_engines_signature_and_passes_the_screen():
+    from kernels import vllm_sources
+    from kernels.tasks import TASKS
+    for name in TASKS:
+        t = load(name)
+        if name in PORTED:
+            _check_ports(t, _program(t))
+        else:
+            assert competitors.starts(name, "# EVOLVE-BLOCK-START\n# EVOLVE-BLOCK-END\n") == {}
+    for s in (vllm_sources.FUSED_MOE_KERNEL, vllm_sources.WRITE_ZEROS, vllm_sources.DECODE_ATTENTION,
+              vllm_sources.RMS_NORM_CUDA, vllm_sources.FUSED_ADD_RMS_NORM_CUDA, vllm_sources.SILU_AND_MUL_CUDA):
+        assert "SPDX-License-Identifier: Apache-2.0" in s or "Apache License, Version 2.0" in s   # the notice kept
+    assert not any(m.split(".")[0] == "vllm" for m in sys.modules)                             # no vLLM needed
+
+
+def test_the_ports_apply_to_the_engines_own_modules_when_it_is_here():
+    import pytest
+
+    from lab import engine
+    src = engine.repo() / "src"
+    if not src.is_dir():
+        pytest.skip("the engine repo is not here")
+    for name in PORTED:
+        t = load(name)
+        mod = t.entry.partition(":")[0]
+        _check_ports(t, _program(t, (src / (mod.replace(".", "/") + ".py")).read_text()))
+
+
+def test_a_port_routes_what_its_competitor_does_not_support_to_the_engines_kernel(monkeypatch):
+    import torch.utils.cpp_extension as cpp
+    built = []
+    monkeypatch.setattr(cpp, "load_inline", lambda **k: built.append(k["name"]))
+    tl = types.SimpleNamespace(constexpr=object, bfloat16="bf16")
+    monkeypatch.setitem(sys.modules, "triton", types.SimpleNamespace(jit=lambda f: f, language=tl))
+    monkeypatch.setitem(sys.modules, "triton.language", tl)
+
+    def entry(name):
+        t = load(name)
+        ns = {}
+        exec(compile(competitors.starts(name, _program(t))[PORTED[name]], name, "exec"), ns)
+        return ns[t.entry.partition(":")[2]]
+    bf, x = torch.bfloat16, torch.zeros(4, 16, dtype=torch.bfloat16)
+    assert entry("rmsnorm")(x.float(), torch.ones(16), 1e-6) == "engine"                # fp32, and on the CPU
+    assert entry("add_rmsnorm")(x, x, torch.ones(16, dtype=bf), 1e-6) == "engine"       # not on CUDA
+    assert entry("silu_mul")(x.float()) == "engine"                                       # the fp32 split-K output
+    assert entry("topk_softmax")(torch.zeros(4, 128, dtype=bf), 8, True, True) == "engine"
+    assert built == ["vllm_rms_norm", "vllm_fused_add_rms_norm", "vllm_silu_and_mul", "vllm_topk_softmax"]
+    w8, scale = torch.zeros(2, 8, 16).to(torch.float8_e4m3fn), torch.ones(2, 8)
+    moe = entry("moe_gemm_fp8")
+    assert moe(x, None, w8, None, None, 4, w_scale=scale, a_scale=torch.ones(4)) == "engine"   # W8A8 rows
+    assert moe(x.half(), None, w8.half(), None, None, 4) == "engine"                            # fp16
+    scatter = entry("moe_gemm_scatter_fp8")
+    assert scatter(x, w8, None, None, 4, None, None, None, w_scale=scale, tile=(64, 128, 4, 4)) == "engine"
+    assert scatter(x, w8.to(bf), None, None, 4, None, None, None) == "engine"                    # bf16 weights
+    q, pool = torch.zeros(2, 8, 16, dtype=bf), torch.zeros(4, 2, 16, 16, dtype=bf)
+    assert entry("paged_decode")(q, pool, pool, None, None, 0.25) == "engine"                    # on the CPU
+    assert entry("paged_decode_fp8")(q, pool.to(torch.float8_e4m3fn), pool.to(torch.float8_e4m3fn), None, None) \
+        == "engine"
+
+
 if __name__ == "__main__":
     import inspect
     import tempfile

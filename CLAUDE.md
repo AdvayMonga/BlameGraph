@@ -367,6 +367,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `python -m kernels.ptx card --name N PTX ... [--timing N=MS] --out F`, read by `kernels.search` from `knowledge/ptx/<task>.txt` (no timings in them: no target numbers in prompts; only
   moe_gemm_fp8 has a competitor card, the 2026-10-25 SASS of the others came out empty). Producing
   competitors' PTX and timings on our shapes needs their libraries on the GPU host (not built yet).
+- `kernels/competitors.py` — competitors timed on our shapes (`python -m kernels.competitors`, libraries installed) and
+  `starts(task, program)`: each task's vLLM v0.32.0 port as a starting program from source vendored in
+  `kernels/vllm_sources.py` (no library needed; rmsnorm, add_rmsnorm, silu_mul, topk_softmax as CUDA C++ built at import,
+  moe_gemm(_fp8), moe_gemm_scatter_fp8 and paged_decode(_fp8) as Triton), routed to the engine's kernel where unsupported.
 - `kernels/search/funnel.py` — one round (decided 2026-10-22; one call per change and every correct program measured
   since 2026-10-30, replacing the funnel's tiers: named ideas, merge, past-failure check, wide coder, repairs, quick
   timing, strong rewrite), from one parent (`expand`, an MCTS expansion: `--per-call` changes) or several
