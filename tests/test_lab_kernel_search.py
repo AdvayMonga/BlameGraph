@@ -87,7 +87,7 @@ def test_one_call_records_the_search_and_saves_a_patch_when_the_gate_passes(tb, 
     caps.mkdir()
     monkeypatch.setattr(pipeline, "captures", lambda t, tree, profile, *a: [caps])
 
-    def search(t, cs, start, out, usd, evals, root, env, device="cuda", facts_text=None):
+    def search(t, cs, start, out, evals, root, env, device="cuda", facts_text=None):
         assert "No profile of the engine" in facts_text                 # the bigger picture, as facts, for every prompt
         out.mkdir(parents=True)
         (out / "best_program.py").write_text(start.read_text().replace("return 1", "return 2"))
