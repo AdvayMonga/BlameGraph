@@ -166,7 +166,10 @@ def start_program() -> str:
     """The starting program: the engine's megakernel source as a literal (its debug timer stamped 0: the source screen
     refuses the clock), built with load_inline under the engine's own build flags, called as the baseline calls it."""
     mk = importlib.import_module(MODULE)
-    src = (Path(importlib.util.find_spec(MODULE).origin).parent / "decode_step.cu").read_text()
+    d = Path(importlib.util.find_spec(MODULE).origin).parent
+    src = (d / "decode_step.cu").read_text()
+    if (d / "common.cuh").exists():              # the framework branch's shared header, inlined: one self-contained file
+        src = src.replace('#include "common.cuh"', (d / "common.cuh").read_text().replace("#pragma once", ""), 1)
     for old, new in START_EDITS:
         if src.count(old) != 1:
             raise ValueError(f"{STEP}: a start edit no longer matches decode_step.cu: {old[:60]!r}")
