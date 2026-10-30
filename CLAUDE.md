@@ -453,7 +453,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `vm-setup.sh` (images and checkpoints; its header lists the session's steps), `profile.py` (`python -m
   compare.profile --out DIR`: each engine under `nsys launch` with the comparison's settings, at fixed load points
   (`POINTS`: single stream, saturated mix at 256, 1,024-token answers at 512, long prompts at 8 req/s), a 10 s nsys
-  window once steady, then 10 s of py-spy over the server's processes), `gap.py` (`python -m compare.gap DIR`: per
+  window once steady, then 10 s of py-spy over the server's processes; `--plain`: no profiler, the client's numbers
+  only, the engine's env from the caller's, for A/B runs of engine trees), `gap.py` (`python -m compare.gap DIR`: per
   point each engine's client numbers, GPU busy share, kernel launches, top kernels, top Python frames). First run
   2026-10-28 (spot, `data/compare-20261028/`): vLLM bf16/fp8 and SGLang bf16 measured; ours hung at saturated
   (inference-server#137, a lock-order deadlock); long-output/long-prompt values were 30 s probes shorter than one
