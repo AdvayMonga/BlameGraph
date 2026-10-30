@@ -67,7 +67,7 @@ def test_refused_off_the_kernels_layer_and_beyond_the_budget(tb, monkeypatch):
         spec(tb).fn({"hypothesis_id": rt, "expect": EXPECT, "task": "silu_mul", "budget_usd": 1})
     k = h({"hypothesis": "k", "rationale": "r", "layer": "kernels"}).split()[1]
     for bad, why in (({"task": "nope", "budget_usd": 1}, "task"),
-                     ({"task": "region:norm:add", "budget_usd": 1}, "regions .* are not wired"),
+                     ({"task": "region:norm", "budget_usd": 1}, "region:FIRST:LAST"),
                      ({"task": "silu_mul", "budget_usd": 0}, "budget_usd"),
                      ({"task": "silu_mul", "budget_usd": 10_000}, "more than the run has left"),
                      ({"task": "silu_mul", "budget_usd": 0.5}, "a search needs at least"),
@@ -87,7 +87,7 @@ def test_one_call_records_the_search_and_saves_a_patch_when_the_gate_passes(tb, 
     caps.mkdir()
     monkeypatch.setattr(pipeline, "captures", lambda t, tree, profile, *a: [caps])
 
-    def search(t, cs, start, out, evals, root, env, device="cuda", facts_text=None):
+    def search(t, cs, start, out, evals, root, env, device="cuda", facts_text=None, held=None):
         assert "No profile of the engine" in facts_text                 # the bigger picture, as facts, for every prompt
         out.mkdir(parents=True)
         (out / "best_program.py").write_text(start.read_text().replace("return 1", "return 2"))

@@ -225,7 +225,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--pyspy-arg", action="append", default=[], help="pyspy: extra `py-spy record` flag (repeatable)")
     ap.add_argument("--capture", action="append", default=[], metavar="MODULE:FUNCTION",
                     help="record every call's argument shapes and the first call per shape whole (repeatable); "
-                         "it synchronizes, so the window's times are not representative")
+                         "region:FIRST:LAST records that stretch of the engine's decode stations (its CAPTURE_REGION), "
+                         f"{capture.STEP} the decode-step megakernel; it synchronizes, so the window's times are not "
+                         "representative")
     ap.add_argument("--capture-bytes", type=int, default=64 * 2**20, help="largest call kept whole as a sample")
     args = ap.parse_args(argv)
 
@@ -233,6 +235,11 @@ def main(argv: list[str] | None = None) -> int:
     settings = load_settings()
     overrides = {k: v for k, v in (("backend_name", args.backend), ("model_name", args.model)) if v}
     settings = dataclasses.replace(settings, **overrides)
+    staged = Path(tempfile.mkdtemp(prefix="capture-", dir=Path(args.out).parent if Path(args.out).parent.exists() else None))
+    entries = [c for c in args.capture if not c.startswith("region:")]
+    for c in args.capture:                       # the engine's own region capture, read at its first decode step
+        if c.startswith("region:") and c != capture.STEP:
+            os.environ.update(CAPTURE_REGION=c.removeprefix("region:"), CAPTURE_REGION_DIR=str(staged))
     backend = build_backend(settings)
     if args.synthetic:
         prompts = synthetic_prompts(args.requests, args.prompt_len, seed=args.seed)
@@ -252,8 +259,11 @@ def main(argv: list[str] | None = None) -> int:
                                   Path(args.corpus_dir) if args.corpus_dir else corpus.CORPUS_DIR)
             prompts = [tok.encode_messages(m, thinking=args.enable_thinking) for m in w["messages"]]
             source = {**w["source"], "thinking": args.enable_thinking}
-    staged = Path(tempfile.mkdtemp(prefix="capture-", dir=Path(args.out).parent if Path(args.out).parent.exists() else None))
-    with (capture.capture(args.capture, staged, args.capture_bytes) if args.capture else contextlib.nullcontext()):
+    with contextlib.ExitStack() as stack:
+        if entries:
+            stack.enter_context(capture.capture(entries, staged, args.capture_bytes))
+        if capture.STEP in args.capture:
+            stack.enter_context(capture.step(backend.pools, staged))
         out = asyncio.run(run(backend, settings, prompts, args.max_tokens, Path(args.out), warmup=args.warmup,
                               source=source, profiler=args.profiler, pyspy=(args.pyspy_bin, args.seconds, args.rate, args.pyspy_arg)))
     if args.capture:

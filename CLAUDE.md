@@ -327,7 +327,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   reference, `bytes_moved` (fused vs one-by-one), and the error budget: `Task.error_budget` (2) lets each element differ from the reference by
   that many times the baseline's own error there, on top of the dtype's tolerance (`check._compare(base=, k=)`), in the
   checker, the timed outputs and `verify.py`; the baseline is bound before the candidate loads and its modules (`Task.watch`) are watched for
-  patches. The engine's stations (`models/stations.py`) and region capture are on engine branches, not merged; the
+  patches. The engine's stations (`models/stations.py`) and region capture are merged in the engine (main 0a00b0c); the
   tests use fake stations. `from_engine(first, last, samples, shared_weights)` binds a region to the engine's
   `inference_server.models.stations.DECODE` (as `functional(DECODE)`, which copies what kv_append writes in place, so a
   region including an `IN_PLACE` writer is refused): inputs from a CAPTURE_REGION dir's samples of the holder's `layer`
@@ -337,7 +337,19 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   (`region:F:L`); `load("region:FIRST:LAST")` and `from_config` (keys `samples`, `shared_weights`) take it, and so do
   `kernels.search` and `kernels.evolve run|gate|split|ship` (`--task region:F:L --samples DIR --shared-weights FILE`;
   the samples are the captures unless `--captures` is given; both keys go into `eval_config.json` and the gate's
-  config); kernel_search refuses regions until the pipeline takes them. The jail mounts the samples and the holder
+  config). `load` with neither key gives `regions.light`: name, entry, capture env (`CAPTURE_REGION_LAYERS` =
+  `regions.LAYER` 0, `MEGAKERNEL=0`) and held-out axes, no engine import: what the controller knows. kernel_search takes
+  `region:F:L` end to end (`kernels/pipeline.py`): captured with `lab.profile --capture region:F:L` (sets the engine's
+  CAPTURE_REGION/_DIR before the backend is built) under the scored regimes' traffic, `pipeline.pack` merges the
+  captures into one samples dir (each traffic's calls kept apart under traffic<i>/profile-<source>/captures, so each
+  weighs the same), pushed to a remote worker, and `pipeline.hold` runs `python -m kernels.hold` where the evaluator
+  runs (over the evaluator's ssh env, or locally with the engine's python): it loads the engine (target env, 16 K/V
+  blocks, no graphs, no megakernel), shares the region's weights (`Holder(jail_uid=)`), describes the region (shapes
+  split with `heldout_axes`, ints, sources, the start program, the engine's station names) on one JSON line, and holds
+  until its stdin closes. The search runs on `--shapes --initial --samples --shared-weights` (paths on the worker;
+  with KERNEL_EVAL_SSH `run.load_task` describes the region by `regions.light` from the shapes file, never loading it
+  on the controller), the gate on the described shapes, and the winner comes back as a patch adding the override
+  module (`ship.region_files`, git-free, overlap checked against the overrides in the agent's tree). The jail mounts the samples and the holder
   file with its `.pristine` and `.constants` sidecars read-only and shares the host's IPC
   namespace (root lab only, never at the precheck); afterwards every /dev/shm entry of the jail's uid is removed.
   `kernels/shared_weights.py`: a holder shares tensors by reference (CUDA IPC, or shared memory on the CPU) and writes
@@ -358,8 +370,21 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   stations call (`STATION_MODULES`) are watched; the K/V pool's shape is not part of a shape. First run on the H200
   2026-10-27 (engine branch engine/region-capture): router..down of layer 0 captured under mixed_1 and mixed_3, held,
   split and gated jailed with the weights attached over IPC: the start program passed every gate, 1.0x seen, 1.001x
-  held-out. A region search from the controller (the evaluator over ssh) is still refused: the task loads where
-  the engine and the holder are.
+  held-out. Not yet run through kernel_search or over ssh on a GPU.
+- `kernels/step.py` — the whole decode step as one region, `region:embed:argmax` (`lab.capture.STEP`): the engine's
+  megakernel (`megakernel.decode_step`) as a kernel task. Captured by `lab.capture.step` (`lab.profile --capture
+  region:embed:argmax`: wraps decode_step; the first call per (rows, block-table width) kept whole up to 256 MiB:
+  tokens, pos, bt renumbered to the blocks its rows touch, every layer's K/V of those blocks stacked [layers, blocks,
+  ...], and logits, next tokens and those blocks after). Inputs (tokens, pos, bt, k_cache, v_cache), outputs (logits,
+  next, K/V): pure, so baseline and programs copy the K/V per call. The weights are not inputs: `Task.call` passes the
+  holder's dict (`step.weights`: every layer's `<i>.w.*`, embed, final norm, lm_head, inv_freq; cfg, n_layers) after
+  the inputs, so the checker never clones them; attached over IPC only (no copy fallback). Baseline: the engine's
+  decode_step on a Model namespace built from the held weights; reference: the engine's `stations.reference()` in
+  fp32 over every layer, error budget 2x; bytes bound: every non-expert weight + top-k experts per layer + lm_head + the
+  K/V. Start program: decode_step.cu as a raw literal (its globaltimer stamp edited to 0, `START_EDITS`) built with
+  load_inline under the engine's build flags. Shapes (rows, bt width), both held-out axes. A winner does not ship: the
+  engine has no hook for a whole-step override (`ship.region_files` refuses it, kernel_search reports `patch_refused`).
+  Tested on the CPU with a fake megakernel and the engine's stations; never run on a GPU.
 - `kernels/ptx.py` — the PTX comparison's cards (decided 2026-10-22, after Standard Kernel): each implementation's
   kernels counted from its PTX (or `cuobjdump -sass` output, for libraries that ship no PTX): instruction classes,
   widest vector access, declared registers, static shared memory, and the Hopper features in use (wgmma, TMA,
