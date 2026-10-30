@@ -711,3 +711,31 @@ def test_the_cli_builds_its_funnel_with_every_task_in_the_memory(monkeypatch, tm
     assert [e.id for e in f.library] == ["i1", "i2"] and f.embedder == "EMBEDDER"
     assert "vllm.fused_moe" in f.ptx and cli.ptx_cards("toy") is None       # the task's cards, read by its name
     assert f.task == "moe_gemm_fp8" and f.tune and f.precheck and f.workers == 8 and f.parallel == 4
+
+
+def test_the_cli_starts_the_generations_from_every_competitor_port_of_its_task(monkeypatch, tmp_path):
+    from kernels.search import __main__ as cli
+    from kernels.search import generations
+    program = tmp_path / "start.py"
+    program.write_text("# EVOLVE-BLOCK-START\nimport torch\n\n\ndef silu_mul(x):\n    return x\n"
+                       "# EVOLVE-BLOCK-END\n\nkernel = silu_mul\n")
+    config = tmp_path / "eval_config.json"
+    config.write_text("{}")
+    monkeypatch.setenv("KERNEL_EVAL_CONFIG", str(config))
+    monkeypatch.setattr(cli, "_shapes", lambda task, a: {})
+    monkeypatch.setattr(cli, "prepare", lambda *a, **k: ({}, program))
+    monkeypatch.setattr(cli, "setting", lambda *a, **k: "")
+    monkeypatch.setattr(cli, "Claude", lambda *a, **k: "JUDGE")
+    monkeypatch.setattr(cli, "_funnel", lambda *a, **k: "FUNNEL")
+    seen = {}
+
+    def evolve(initial, *a, starts=None, **k):
+        seen.update(starts=starts)
+        raise SystemExit("judged")
+    monkeypatch.setattr(generations, "search", evolve)
+    try:
+        cli.main(["--task", "silu_mul", "--shapes", "s.json", "--out", str(tmp_path / "out"), "--device", "cpu"])
+    except SystemExit as e:
+        assert str(e) == "judged"
+    assert list(seen["starts"]) == ["vllm.silu_and_mul"] and "_silu_mul_engine = silu_mul" in seen["starts"][
+        "vllm.silu_and_mul"]
