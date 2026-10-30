@@ -1,8 +1,8 @@
-"""The genetic search (kernels/search/generations.py) with fake models and a fake evaluator: generation 0 from the
-start alone, parents drawn by fitness with the best always among them, one rotated slice per parent call, the judge mix
-cycling, children under their own parent, the shrink rule, racing at the quick cutoff, the quick-vs-full rank
-correlation, patience in generations, the four idea types and their adaptive split, persistence lines, the memory in
-every judge call, and the archive reading each idea's own parent back."""
+"""The genetic search (kernels/search/generations.py) with a fake model and a fake evaluator: generation 0 from the
+start alone, parents drawn by fitness with the best always among them, one slice per call rotated, the model mix
+cycling, children under their own parent, exactly `generations` generations whatever they score, the four idea types
+and their adaptive split, persistence lines, the memory in every call, and the archive reading each idea's own parent
+back."""
 from __future__ import annotations
 
 import json
@@ -15,84 +15,82 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from kernels import archive  # noqa: E402
 from kernels.search import generations as G  # noqa: E402
-from kernels.search.funnel import Funnel, Models, generation, race, spearman  # noqa: E402
+from kernels.search.funnel import Funnel, Models, generation  # noqa: E402
 from kernels.search.llm import CACHE_SPLIT  # noqa: E402
 from kernels.search.tree import Node, Tree  # noqa: E402
 
 START = "a = 1\n"
-NAMED = [0]                  # ideas named so far, so every idea of a round is distinct: `a = <parent's a>*100 + k`
+MADE = [0]                   # changes made so far, so every program is distinct: `a = <parent's a>*100 + k`
 
 
-class Judge:
-    """Names `n` ideas per call, each `set a = <parent's a>*100 + k` (k counting on within the round); records which
-    model and slice each call used."""
+class Model:
+    """Each call makes one change, `a = <parent's a>*100 + k` (k counting on); records which model, slice and parent
+    each call used."""
     def __init__(self, tag):
-        self.tag, self.calls = tag, []
+        self.tag, self.calls, self.systems = tag, [], []
 
     def __call__(self, system, user):
-        n = int(re.search(r"Name (\d+)", user).group(1))
         cur = int(re.search(r"```python\na = (\d+)", user).group(1))
         sl = next((s for s, m in (("ptx", "PTX comparison"), ("winners", "winners elsewhere"), ("compiler", "compiler's"),
                                   ("crossover", "Another program")) if m in user), "measurements")
         self.calls.append((self.tag, sl, cur))
-        ks = range(NAMED[0] % 90, NAMED[0] % 90 + n)
-        NAMED[0] += n
-        return json.dumps([{"bottleneck": "b", "optimisation_method": "m",
-                            "modification_plan": f"set a = {cur * 100 + k + 1}"} for k in ks]), 0.1
-
-
-def coder(system, user):
-    n, cur = re.findall(r"set a = (\d+)", user), re.search(r"```python\na = (\d+)", user).group(1)
-    return (f"<<<<<<< SEARCH\na = {cur}\n=======\na = {n[-1]}\n>>>>>>> REPLACE", 0.01) if n else ("", 0.01)
+        self.systems.append(system)
+        k = MADE[0] % 90
+        MADE[0] += 1
+        return (json.dumps({"bottleneck": "b", "optimisation_method": "m", "modification_plan": f"k {k}"})
+                + f"\n<<<<<<< SEARCH\na = {cur}\n=======\na = {cur * 100 + k + 1}\n>>>>>>> REPLACE", 0.1)
 
 
 def stage(code, n):
     a = int(re.search(r"a = (\d+)", code).group(1))
     if n == 1:
         return {"metrics": {"correct": 1.0, "stage": 1}, "artifacts": {}}
-    score = (a % 100) / 10 + (a // 100) / 1000          # the k-th idea scores k/10: later ideas faster, parents' a adds
+    score = (a % 100) / 10 + (a // 100) / 1000          # the k-th change scores k/10: later ones faster, parents' a adds
     return {"metrics": {"correct": 1.0, "combined_score": score, "stage": n}, "artifacts": {}}
 
 
 def funnel(ptx="cards", **kw):
-    NAMED[0] = 0
-    opus, sonnet = Judge("opus"), Judge("sonnet")
-    first = lambda s, u: (u.split("\n\n")[0], 0.0)          # noqa: E731  a merge keeps the first idea
-    return Funnel(Models(opus, first, coder, coder, (opus, opus, opus, sonnet)), stage, ptx=ptx, keep=2, parallel=2,
-                  **kw)
+    MADE[0] = 0
+    opus, sonnet = Model("opus"), Model("sonnet")
+    return Funnel(Models(opus, (opus, opus, opus, sonnet)), stage, ptx=ptx, parallel=2, **kw)
+
+
+def calls(f):
+    return f.models.judge.calls + f.models.judges[-1].calls
+
+
+def rows_of(d):
+    return [json.loads(x) for x in (d / "hypotheses.jsonl").read_text().splitlines()]
 
 
 def test_generation_zero_is_the_start_alone_and_later_ones_draw_parents_by_fitness(tmp_path):
     f = funnel()
-    tree, cost = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, evals=100, usd=50.0, gen_size=8, keep=3,
-                          n_parents=2, generations=2, patience=None, types=False)
-    rows = [json.loads(x) for x in (tmp_path / "hypotheses.jsonl").read_text().splitlines()]
+    tree, cost = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, usd=50.0, gen_size=8, n_parents=2,
+                          generations=2, types=False)
+    rows = rows_of(tmp_path)
     assert [r["iteration"] for r in rows] == [0, 1, 2] and cost["generations"] == 3
     g0 = rows[0]
-    assert g0["parent_id"] == tree.root().id and g0["named"] == G.GEN0 and g0["examined"] == G.GEN0_KEEP
-    j = f.models.judge
-    gen0_calls = [c for c in j.calls + f.models.judges[-1].calls if c[2] == 1]
-    assert {c[1] for c in gen0_calls} == {"measurements", "ptx"}        # one call per slice, GEN0 split over them
+    assert g0["parent_id"] == tree.root().id and g0["named"] == G.GEN0 and g0["examined"] == G.GEN0   # all correct
+    assert {c[1] for c in calls(f) if c[2] == 1} == {"measurements", "ptx"}         # slices rotated over the calls
     for r in rows[1:]:
-        assert r["parent_id"] is None and len(r["parents"]) == 2 and r["examined"] == 3 and r["named"] == 8
+        assert r["parent_id"] is None and len(r["parents"]) == 2 and r["examined"] == r["named"] == 8
         assert r["parents"][0]["score"] == max(p["score"] for p in r["parents"])      # the best is always a parent
         kids = [n for n in tree.nodes.values() if n.iteration == r["iteration"]]
         assert {k.parent for k in kids} <= {p["id"] for p in r["parents"]}             # each under its own parent
         assert all(x["idea"]["parent_id"] in {p["id"] for p in r["parents"]} for x in r["ideas"])
-        assert r["quick_vs_full_spearman"] is not None and r["improved"] >= 0
-    assert cost["evals"] == 1 + G.GEN0_KEEP + 2 * 3 and len(tree.nodes) == cost["evals"]
+    assert cost["evals"] == 1 + G.GEN0 + 2 * 8 and len(tree.nodes) == cost["evals"] and f.calls == G.GEN0 + 16
     trace = [json.loads(x) for x in (tmp_path / "trace.jsonl").read_text().splitlines()]
     assert len(trace) == len(tree.nodes) and trace[0]["parent_id"] is None
 
 
-def test_each_parent_call_reads_one_rotated_slice_and_every_fourth_call_goes_to_the_second_judge():
+def test_each_call_reads_one_rotated_slice_and_every_fourth_call_goes_to_the_second_model():
     f, t = funnel(), Tree()
     ok = lambda sc: {"correct": 1.0, "combined_score": sc, "stage": 2}      # noqa: E731
     ps = [t.add(Node(f"p{i}", None, f"a = {i + 1}\n", ok(1.0 + i), {}, 0)) for i in range(4)]
-    generation(f, t, ps, "SYS", 1, lambda n, c: t.add(n), [].append, quota=3, keep=2)
-    calls = sorted(f.models.judge.calls + f.models.judges[-1].calls, key=lambda c: c[2])
-    assert [c[1] for c in calls] == ["measurements", "ptx", "measurements", "ptx"]   # rotated across the parents
-    assert [c[0] for c in calls].count("sonnet") == 1 and len(calls) == 4             # 3 : 1
+    generation(f, t, [G.Slot(p, "refine", 1) for p in ps], "SYS", 1, lambda n, c: t.add(n), [].append)
+    got = sorted(calls(f), key=lambda c: c[2])
+    assert [c[1] for c in got] == ["ptx", "measurements", "ptx", "measurements"]     # rotated across the calls
+    assert [c[0] for c in got].count("sonnet") == 1 and len(got) == 4               # 3 : 1
 
 
 def test_parents_are_drawn_without_replacement_with_a_floor_so_the_weakest_can_be_picked():
@@ -109,87 +107,58 @@ def test_parents_are_drawn_without_replacement_with_a_floor_so_the_weakest_can_b
     assert G.parents(Tree(), 2, rng) == []
 
 
-def test_a_generation_with_few_improvements_shrinks_the_next_one(tmp_path):
+def test_the_search_runs_every_generation_however_little_improves(tmp_path):
     f = funnel()
     orig = f.stage
 
     def worse(code, n):                               # every child scores below its parent
         r = orig(code, n)
-        if n in (2, 4):
+        if n == 2:
             r = {**r, "metrics": {**r["metrics"], "combined_score": 0.001}}
         return r
     f.stage = worse
     _, cost = G.search(START, "SYS", f, lambda c: {"metrics": {"correct": 1.0, "combined_score": 1.0, "stage": 2},
                                                    "artifacts": {}},
-                       tmp_path, evals=100, usd=50.0, gen_size=12, keep=2, n_parents=2, generations=2, patience=None, types=False)
-    rows = [json.loads(x) for x in (tmp_path / "hypotheses.jsonl").read_text().splitlines()]
-    assert rows[0]["improved"] == 0 and [r["named"] for r in rows[1:]] == [8, 8]        # 2/3 of 12, from generation 0 on
-    assert cost["evals"] == 1 + G.GEN0_KEEP + 2 + 2 and not cost["stopped_no_progress"]
+                       tmp_path, usd=1000.0, gen_size=6, n_parents=2, generations=5, types=False)
+    rows = rows_of(tmp_path)
+    assert all(r["improved"] == 0 for r in rows) and [r["named"] for r in rows[1:]] == [6] * 5
+    assert cost["generations"] == 6 and set(cost) == {"usd", "model_calls", "evals", "generations", "types"}
 
 
-def test_the_search_stops_after_patience_generations_with_no_new_best(tmp_path):
+def test_each_generation_splits_its_ideas_over_the_four_types(tmp_path):
     f = funnel()
-    flat = {"metrics": {"correct": 1.0, "combined_score": 5.0, "stage": 2}, "artifacts": {}}
-    _, cost = G.search(START, "SYS", f, lambda c: flat, tmp_path, evals=1000, usd=50.0, gen_size=4, keep=1,
-                       n_parents=2, generations=20, patience=2, types=False)
-    assert cost["stopped_no_progress"] and cost["generations"] == 2
-
-
-def test_racing_times_the_programs_at_the_cutoff_again_and_the_rank_correlation_is_spearman():
-    timed = []
-
-    def st(code, n):
-        timed.append(code)
-        return {"metrics": {"combined_score": 1.0 + 0.5 * (code == "x")}, "artifacts": {}}
-    f = Funnel(Models(None, None, None, None), st)
-    quick = [(None, None, c, {"metrics": {"combined_score": s}, "artifacts": {}})
-             for c, s in (("a", 2.0), ("b", 1.02), ("c", 1.0), ("x", 0.99), ("d", 0.5))]
-    out = race(f, quick, keep=2)
-    assert sorted(timed) == ["b", "c", "x"]                              # within 5% of the cutoff only
-    assert [r[2] for r in out][:2] == ["a", "x"] and out[1][3]["metrics"]["raced"] == [0.99, 1.5]
-    assert race(f, quick[:2], keep=2) == quick[:2]
-    assert abs(spearman([1, 2, 3, 4], [10, 20, 30, 40]) - 1) < 1e-9 and abs(spearman([1, 2, 3], [3, 2, 1]) + 1) < 1e-9
-    assert spearman([1, 2], [1, 2]) is None and spearman([1, 1, 1], [1, 2, 3]) is None
-    assert abs(spearman([1, 2, 2, 4], [1, 2, 3, 4]) - 0.9486832980505138) < 1e-6
-
-
-def test_each_generation_splits_its_ideas_over_the_four_types_and_cuts_each_on_its_own(tmp_path):
-    f = funnel()
-    tree, cost = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, evals=100, usd=50.0, gen_size=12, keep=4,
-                          n_parents=2, generations=2, patience=None)
-    rows = [json.loads(x) for x in (tmp_path / "hypotheses.jsonl").read_text().splitlines()]
+    tree, cost = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, usd=50.0, gen_size=12, n_parents=2,
+                          generations=2)
+    rows = rows_of(tmp_path)
     assert {x["idea"]["type"] for x in rows[0]["ideas"]} == {"start"} and "types" not in rows[0]
     for r in rows[1:]:
         q = r["types"]
         assert set(q) == {"refine", "persist", "fresh", "crossover"} and sum(q.values()) == 12   # generation 0 opened lines
-        assert all(n >= G.TYPE_FLOOR for n in q.values()) and sum(r["keep_by"].values()) == 4
+        assert all(n >= G.TYPE_FLOOR for n in q.values())
         named = {t: sum(x["idea"]["type"] == t for x in r["ideas"]) for t in q}
-        assert named == q                                          # every idea tagged with the type it was named for
+        assert named == q                                          # every idea tagged with the type it was made for
         kids = [n for n in tree.nodes.values() if n.iteration == r["iteration"]]
-        assert all(sum(k.kind == t for k in kids) <= r["keep_by"][t] for t in q)          # each type cut on its own
-    calls = f.models.judge.calls + f.models.judges[-1].calls
-    assert any(c[1] == "crossover" for c in calls)
-    assert set(cost["types"]) == set(G.TYPES) and sum(v["examined"] for v in cost["types"].values()) == \
-        cost["evals"] - 1 - G.GEN0_KEEP
+        assert {t: sum(k.kind == t for k in kids) for t in q} == q                  # every correct one measured
+    assert any(c[1] == "crossover" for c in calls(f))
+    assert set(cost["types"]) == set(G.TYPES) and sum(v["examined"] for v in cost["types"].values()) == 24
     xs = [x for r in rows[1:] for x in r["ideas"] if x["idea"]["type"] == "crossover"]
-    assert xs and all(x["idea"]["with"] in {p["id"] for p in rows[1]["parents"]} | {n for n in tree.nodes} for x in xs)
+    assert xs and all(x["idea"]["with"] in tree.nodes for x in xs)
 
 
 def test_persist_fresh_and_crossover_calls_ask_for_their_own_kind_of_change():
-    seen = []
-
-    def judge(system, user):
-        seen.append(user)
-        return json.dumps([{"bottleneck": "b", "optimisation_method": "m", "modification_plan": "set a = 7"}]), 0.0
-    f = Funnel(Models(judge, lambda s, u: ("", 0.0), coder, coder), stage, keep=2, parallel=2)
+    m = Model("opus")
+    f = Funnel(Models(m), stage, parallel=2)
     t, ok = Tree(), (lambda sc: {"correct": 1.0, "combined_score": sc, "stage": 2})
     root = t.add(Node("r", None, "a = 1\n", ok(1.0), {}, 0))
     head = t.add(Node("h", "r", "a = 2\n", ok(1.5), {}, 1, judge='{"optimisation_method": "wider tiles"}'))
+    seen = []
+    f.models.judge = lambda s, u: (seen.append(u), m(s, u))[1]
     plan = [G.Slot(head, "persist", 1), G.Slot(root, "fresh", 1), G.Slot(root, "crossover", 1, head)]
-    generation(f, t, [root, head], "SYS", 2, lambda n, c: t.add(n), [].append, quota=0, keep=3, slots=plan)
+    generation(f, t, plan, "SYS", 2, lambda n, c: t.add(n), [].append)
     persist, fresh, cross = seen
     assert "from 1.0000 to 1.5000" in persist and "wider tiles" in persist and "same change further" in persist
-    assert "overall structure" in fresh and "Another program" in cross and "Another program" not in fresh
+    assert "overall structure" in fresh and "Another program" not in fresh
+    assert "Another program in this generation, h" in cross and "```python\na = 2\n" in cross     # its full code
 
 
 def test_the_split_adapts_to_each_types_rate_of_new_bests_with_a_floor():
@@ -220,39 +189,27 @@ def test_a_line_moves_to_a_better_persist_child_and_closes_after_three_misses():
     assert lines == {}                                             # three generations without a better child
 
 
-def test_every_judge_call_gets_the_memory_and_no_coder_call_does(tmp_path):
+def test_every_call_gets_the_memory(tmp_path):
     other = archive.Entry("i1", "other_task", "split k", {"optimisation_method": "split k"}, outcomes=[
         archive.Outcome("k", "p", 1.0, "c", 1.3, True, 2, bound="memory")])
     lost = archive.Entry("i2", "toy", "bigger tiles", {"optimisation_method": "bigger tiles"}, outcomes=[
         archive.Outcome("k", "p", 1.0, "c", 0.8, False, 2), archive.Outcome("k", "p", 1.0, None, error="precheck")])
-    systems = []
-
-    def judge(system, user):
-        systems.append(("judge", system))
-        return Judge("opus")(system, user)
-
-    def code(system, user):
-        systems.append(("coder", system))
-        return coder(system, user)
-    NAMED[0] = 0
-    f = Funnel(Models(judge, lambda s, u: (u.split("\n\n")[0], 0.0), code, code), stage, keep=2, parallel=2,
-               task="toy", library=[other, lost])
-    G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, evals=100, usd=50.0, gen_size=8, keep=2, n_parents=2,
-             generations=1, patience=None)
-    judged = [s for who, s in systems if who == "judge"]
-    assert judged and all("split k" in s and '"best_gain": 1.3' in s and '"bound": "memory"' in s for s in judged)
-    assert all("bigger tiles" in s and '"worst_gain": 0.8' in s for s in judged)
-    first = judged[0]
+    MADE[0] = 0
+    m = Model("opus")
+    f = Funnel(Models(m), stage, parallel=2, task="toy", library=[other, lost])
+    G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, usd=50.0, gen_size=8, n_parents=2, generations=1)
+    assert m.systems and all("split k" in s and '"best_gain": 1.3' in s and '"bound": "memory"' in s for s in m.systems)
+    assert all("bigger tiles" in s and '"worst_gain": 0.8' in s for s in m.systems)
+    first = m.systems[0]
     assert first.index("split k") < first.index(CACHE_SPLIT) < first.index("bigger tiles")    # general part first
-    assert any("## This run so far" in s for s in judged[1:]) and "## This run so far" not in judged[0]
-    assert not any("split k" in s or "bigger tiles" in s for who, s in systems if who == "coder")
+    assert "## This run so far" in m.systems[-1] and "## This run so far" not in first
 
 
 def test_the_archive_reads_each_ideas_own_parent_from_a_generation(tmp_path):
     from lab import ledger
     f = funnel()
-    tree, _ = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, evals=100, usd=50.0, gen_size=6, keep=2,
-                       n_parents=2, generations=1, patience=None)
+    tree, _ = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, usd=50.0, gen_size=6, n_parents=2,
+                       generations=1)
     root = tmp_path / "ledger"
     root.mkdir()
     ledger.append({"kind": "kernels", "config": {"task": "toy"}, "result": {
@@ -270,21 +227,3 @@ if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
             fn(*[Path(tempfile.mkdtemp()) for _ in inspect.signature(fn).parameters]); print("ok", name)
-
-
-def test_a_search_stops_starting_work_at_its_wall_clock(tmp_path, monkeypatch):
-    clock = [0.0]
-    monkeypatch.setattr(G.time, "monotonic", lambda: clock[0])
-    import kernels.search.funnel as F
-    monkeypatch.setattr(F.time, "monotonic", lambda: clock[0])
-    f = funnel()
-    orig = f.stage
-
-    def slow(code, n):
-        clock[0] += 10.0                                  # every evaluator job takes 10 s of wall-clock
-        return orig(code, n)
-    f.stage = slow
-    _, cost = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, evals=10**6, usd=10**6, gen_size=8, keep=2,
-                       n_parents=2, generations=50, patience=None, wall_s=300)
-    rows = [json.loads(x) for x in (tmp_path / "hypotheses.jsonl").read_text().splitlines()]
-    assert cost["stopped_wall_clock"] and rows[-1].get("stopped") == "wall-clock" and clock[0] < 400

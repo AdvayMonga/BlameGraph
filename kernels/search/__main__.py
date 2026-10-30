@@ -2,10 +2,10 @@
                           [--samples DIR --shared-weights FILE]   (T = region:FIRST:LAST: its captures, its holder)
                           [--model CODER] [--judge-model JUDGE|none] [--effort E] [--[no-]ncu] [--device cuda]
                           [--initial PROGRAM.py] [--retime K] [--tune-points N] [--generations N --gen-size N
-                          --parents N --keep N] [--no-types] [--mcts] [--facts FILE] [--archive FILE]
+                          --parents N] [--no-types] [--mcts] [--facts FILE] [--archive FILE]
 
 Our own layer-1 generator on one kernel task: by default the genetic search (kernels/search/generations.py: generations
-of funnel rounds from fitness-sampled parents); with --mcts one funnel round per MCTS-chosen parent (kernels/search/
+of rounds from fitness-sampled parents); with --mcts one round per MCTS-chosen parent (kernels/search/
 loop.py). Judged by kernels.evolve's evaluator exactly as `python -m kernels.evolve run` is: the
 same run dir, selection config (seen shapes only), re-timed promotion and `kernels` ledger record, so the generators
 compare like for like. Model calls cost money; --usd caps them."""
@@ -32,14 +32,13 @@ from kernels.tasks import load
 
 
 TUNE_FACT = ("A program may define, at module level, `CONFIG` (a dict of the launch parameters its kernel uses) and "
-             "`TUNABLES` (for each CONFIG key, a list of values). Before a program's quick timing and before its full "
-             "exam, up to {points} points of that grid (its current CONFIG first, the rest a seeded sample) are each "
-             "loaded with CONFIG rewritten in its source, checked on the most-called seen shape and timed: on that "
-             "shape for the quick timing, on every seen shape for the full exam. The program is measured with the "
-             "fastest point written into CONFIG; after the full exam's sweep, where different points are fastest in "
-             "different size regions, a dispatcher (between `# TUNED-DISPATCH-START` and `# TUNED-DISPATCH-END`) "
-             "sets CONFIG per call from the call's size instead, and is removed before the grid is tuned again. "
-             "Children start from the tuned program.")
+             "`TUNABLES` (for each CONFIG key, a list of values). Before a program's full exam, up to {points} points "
+             "of that grid (its current CONFIG first, the rest a seeded sample) are each loaded with CONFIG rewritten "
+             "in its source, checked on the most-called seen shape and timed on every seen shape. The program is "
+             "measured with the fastest point written into CONFIG; where different points are fastest in different "
+             "size regions, a dispatcher (between `# TUNED-DISPATCH-START` and `# TUNED-DISPATCH-END`) sets CONFIG per "
+             "call from the call's size instead, and is removed before the grid is tuned again. Children start from "
+             "the tuned program.")
 
 
 def _blob(path: Path, root: str | None = None) -> str | None:
@@ -64,18 +63,14 @@ def staged(judge_stage) -> Callable[[str, int], dict]:
 def _funnel(a, task, review):
     from kernels import archive
     from kernels.search.funnel import Funnel, Models
-    from lab import ledger
     if review is None:
         raise SystemExit("--funnel needs a judge (--judge-model)")
-    library = archive.load(Path(a.archive)) if a.archive else []      # every task's ideas: the judge's memory
-    entries = [e for e in library if e.task == task.name]
+    library = archive.load(Path(a.archive)) if a.archive else []      # every task's ideas: the memory
     second = Claude(a.second_judge_model, a.effort, tools=a.judge_tools) if a.second_judge_model != "none" else None
     mix = (review,) * (a.second_judge_share - 1) + (second,) if second and a.second_judge_share > 1 else ()
-    models = Models(review, Claude(a.cheap_model, "low"), Claude(a.wide_model, a.effort), Claude(a.model, a.effort), mix)
-    return Funnel(models, staged(evaluator.judge_stage), entries, task.name,
-                  archive._embedder(ledger.ROOT) if entries else None, Path(a.ptx).read_text() if a.ptx else None,
-                  a.per_call, a.keep, a.parallel, a.max_repairs, a.ncu, a.precheck, workers=a.workers,
-                  tune=bool(a.tune_points), size_expr=task.size_expr, library=library)
+    return Funnel(Models(review, mix), staged(evaluator.judge_stage), task.name,
+                  Path(a.ptx).read_text() if a.ptx else None, a.per_call, a.parallel, a.ncu, a.precheck,
+                  workers=a.workers, tune=bool(a.tune_points), size_expr=task.size_expr, library=library)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -87,10 +82,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--ledger", help="the ledger the run's `kernels` record goes to (default: this repo's)")
     ap.add_argument("--equal-captures", action="store_true",
                     help="each --captures dir (one traffic, e.g. a scored regime) weighs the same in the shape counts")
-    ap.add_argument("--evals", type=int, default=30, help="programs judged, the root included")
+    ap.add_argument("--evals", type=int, default=30, help="with --mcts or no judge: programs judged, the root included")
     ap.add_argument("--usd", type=float, default=10.0, help="cap on model spend")
-    ap.add_argument("--model", default="claude-opus-5-5", help="the coder")
-    ap.add_argument("--judge-model", default="claude-opus-5-5", help="the judge; `none`: the coder alone")
+    ap.add_argument("--model", default="claude-opus-5-5", help="the model alone, with --judge-model none")
+    ap.add_argument("--judge-model", default="claude-opus-5-5", help="the model making each change; `none`: --model alone")
     ap.add_argument("--judge-tools", action=argparse.BooleanOptionalAction, default=True,
                     help="the judge may search the web and query the ledger (its choice when)")
     ap.add_argument("--ncu", action=argparse.BooleanOptionalAction, default=None,
@@ -107,10 +102,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--uct-c", type=float, default=UCT_C,
                     help="UCT exploration constant on rewards in [0, 1] (KernelPro's sqrt 2 is on ln speedup)")
-    ap.add_argument("--patience", type=int, default=None,
-                    help="stop after this many generations (default 3), or with --mcts judged programs (default 16), "
-                         "with no new best")
-    ap.add_argument("--max-repairs", type=int, default=3, help="drafts that failed correctness repaired, per round")
+    ap.add_argument("--patience", type=int, default=16,
+                    help="with --mcts: stop after this many judged programs with no new best; 0: never")
     ap.add_argument("--mcts", action="store_true",
                     help="one parent per round, chosen by MCTS (the 2026-10-24 A/B's search), instead of generations")
     ap.add_argument("--generations", type=int, default=10, help="generations after generation 0 (the start alone)")
@@ -119,15 +112,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--types", action=argparse.BooleanOptionalAction, default=True,
                     help="split each generation's ideas over refine, persist, fresh and crossover (kernels/search/"
                          "generations.py); --no-types: refine only")
-    ap.add_argument("--gpu-s", type=float, help="stop once judging has taken this many seconds, summed over jobs")
-    ap.add_argument("--wall-s", type=float, help="stop starting new work once the search has run this many seconds")
-    ap.add_argument("--wide-model", default="claude-sonnet-5-5", help="the funnel's wide coder")
-    ap.add_argument("--cheap-model", default="claude-haiku-5-5", help="merges duplicate hypotheses")
     ap.add_argument("--second-judge-model", default="claude-sonnet-5-5",
-                    help="a second model naming hypotheses, one call in --second-judge-share; `none`: the judge alone")
-    ap.add_argument("--second-judge-share", type=int, default=4, help="every nth hypothesis call goes to the second judge")
-    ap.add_argument("--per-call", type=int, default=20, help="hypotheses per generator call with --mcts (one per slice)")
-    ap.add_argument("--keep", type=int, default=8, help="programs past the quick speed test to the full exam, per round")
+                    help="a second model making changes, one call in --second-judge-share; `none`: the judge alone")
+    ap.add_argument("--second-judge-share", type=int, default=4, help="every nth call goes to the second judge")
+    ap.add_argument("--per-call", type=int, default=20, help="changes per expansion with --mcts")
     ap.add_argument("--facts", help="a text of further facts for every prompt (e.g. the kernel's share of the engine's "
                                     "time and the regimes it is scored under), appended to the system message")
     ap.add_argument("--parallel", type=int, default=4, help="correctness checks run at once")
@@ -151,17 +139,13 @@ def main(argv: list[str] | None = None) -> int:
               + ("\n\n" + TUNE_FACT.format(points=a.tune_points) if a.tune_points else "")
               + ("\n\n" + Path(a.facts).read_text().strip() if a.facts else ""))
     fun = _funnel(a, task, review) if review is not None else None
-    gpu_used = lambda: evaluator.seconds(out / "eval_seconds.log")      # noqa: E731
     if fun is not None and not a.mcts:
         from kernels.search.generations import search as evolve
-        tree, cost = evolve(program.read_text(), system, fun, judge, out, a.evals, a.usd, a.seed, a.gen_size, a.keep,
-                            a.parents, a.generations,
-                            patience=3 if a.patience is None else a.patience or None, gpu_s=a.gpu_s,
-                            gpu_used=gpu_used, types=a.types, wall_s=a.wall_s)
+        tree, cost = evolve(program.read_text(), system, fun, judge, out, a.usd, a.seed, a.gen_size, a.parents,
+                            a.generations, types=a.types)
     else:
         tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.usd, a.seed,
-                            patience=16 if a.patience is None else a.patience or None,
-                            uct_c=a.uct_c, funnel=fun, gpu_s=a.gpu_s, gpu_used=gpu_used, wall_s=a.wall_s)
+                            patience=a.patience or None, uct_c=a.uct_c, funnel=fun)
     spent: list = []
     exclude = detect.detector(Claude(a.detector_model, a.effort), spent) if a.detector_model != "none" else None
     code, metrics, retimed = (retime(out / "trace.jsonl", a.retime, exclude=exclude) if a.retime
@@ -175,8 +159,8 @@ def main(argv: list[str] | None = None) -> int:
     cost["eval_s"] = evaluator.seconds(out / "eval_seconds.log")
     (out / "best_program.py").write_text(code or best.code)
     (out / "best_metrics.json").write_text(json.dumps(metrics or best.metrics, indent=1))
-    models = [{"name": a.model, "role": "coder", "effort": a.effort}] + (
-        [{"name": a.judge_model, "role": "judge", "effort": a.effort}] if review else []) + (
+    models = ([{"name": a.judge_model, "role": "judge", "effort": a.effort}] if review else
+              [{"name": a.model, "role": "coder", "effort": a.effort}]) + (
         [{"name": a.second_judge_model, "role": "judge", "effort": a.effort, "share": f"1/{a.second_judge_share}"}]
         if fun is not None and fun.models.judges else [])
     rec = record(task, sets, models, a.evals, a.device,
