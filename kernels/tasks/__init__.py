@@ -96,12 +96,19 @@ def randn(size, g, device, dtype, scale: float = 1.0) -> torch.Tensor:
 
 
 def load(name: str, **region) -> Task:
-    """A named task, or a region of the engine's decode stations (`region:FIRST:LAST`; `region` may give its
-    captured `samples` dir and its `shared_weights` holder file)."""
+    """A named task, or a region of the engine's decode stations (`region:FIRST:LAST`, or the whole decode step
+    `region:embed:argmax`; `region` gives its captured `samples` dir and its `shared_weights` holder file, without
+    which it is `regions.light`)."""
     if name.startswith("region:"):
-        from kernels.regions import from_engine
+        from kernels import regions
+        from lab.capture import STEP
+        if not region:                           # no samples or holder here: what the controller knows of it
+            return regions.light(name)
+        if name == STEP:
+            from kernels import step
+            return step.task(**region)
         _, first, last = name.split(":")
-        return from_engine(first, last, **region)
+        return regions.from_engine(first, last, **region)
     return importlib.import_module(f"kernels.tasks.{name}").TASK
 
 
