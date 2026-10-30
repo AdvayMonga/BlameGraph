@@ -21,6 +21,7 @@ from typing import Callable
 
 import torch
 
+from kernels import competitors
 from kernels.evolve import evaluator
 from kernels.evolve.run import (_shapes, _target_tolerances, prepare, record, region_args, retime, setting,
                                system_message, task_args, tolerances)
@@ -150,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
     if fun is not None and not a.mcts:
         from kernels.search.generations import search as evolve
         tree, cost = evolve(program.read_text(), system, fun, judge, out, a.seed, a.gen_size, a.parents,
-                            a.generations, types=a.types)
+                            a.generations, types=a.types, starts=competitors.starts(task.name, program.read_text()))
     else:
         tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.seed,
                             patience=a.patience or None, uct_c=a.uct_c, funnel=fun)
