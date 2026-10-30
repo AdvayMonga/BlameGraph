@@ -2,9 +2,10 @@
 under nsys (`nsys launch`, kernels inside CUDA graphs traced), driven by the comparison's client at each point of
 POINTS; at each point a WINDOW_S nsys capture once the load is steady, then WINDOW_S of py-spy over the server's
 processes, then the client's own numbers for the point. Run on the GPU VM, from the BlameGraph checkout with the
-engine's python, with nothing else on the GPU; `python -m compare.gap DIR` reads the result.
+engine's python, with nothing else on the GPU; `python -m compare.gap DIR` reads the result. `--plain`: no profiler,
+the client's numbers over the same windows (for A/B runs; the engine's environment is this process's).
 
-    python -m compare.profile --out ~/gap [--engines ours,vllm,trtllm] [--precision fp8] [--points decode1,sat256]
+    python -m compare.profile --out ~/gap [--engines ours,vllm,trtllm] [--precision fp8] [--points decode1,sat256] [--plain]
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ from pathlib import Path
 from compare import run as R
 
 WARM_S, WINDOW_S = 30.0, 10.0
-NSYS_TRACE = "--trace=cuda,nvtx --sample=none --cpuctxsw=none --cuda-graph-trace=node"
+NSYS_TRACE = "--trace=cuda,nvtx --cuda-graph-trace=node"          # at launch; sampling is chosen at start
 
 # name: (loop, pool class or None for every class, concurrency or req/s, fixed answer length or None for the corpus's)
 POINTS = {
@@ -55,8 +56,10 @@ def _drive(ctx, point, duration_s: float, rows: list):
 
 
 def _nsys() -> tuple[str, str]:
-    """The host's nsys and the install dir that holds it (mounted at the same path into a container)."""
-    exe = os.path.realpath(shutil.which("nsys") or "/usr/local/cuda/bin/nsys")
+    """The host's nsys binary and the install dir that holds it (mounted at the same path into a container). Not
+    CUDA's bin/nsys: that is a wrapper that runs only beside the host's toolkit."""
+    found = sorted(Path("/opt/nvidia/nsight-systems").glob("*/target-linux-x64/nsys"))
+    exe = str(found[-1]) if found else os.path.realpath(shutil.which("nsys") or "nsys")
     return exe, str(Path(exe).parents[1])
 
 
@@ -66,7 +69,7 @@ def _server_pid(engine: str, srv) -> int:
     return int(R._sh("docker", "inspect", "-f", "{{.State.Pid}}", f"bgcmp-{engine}"))
 
 
-def profile(out: Path, engines: list[str], precision: str, points: list[str]) -> None:
+def profile(out: Path, engines: list[str], precision: str, points: list[str], plain: bool = False) -> None:
     from lab import target
     from regimes import runner, suite
     from regimes.__main__ import _cpus
@@ -83,7 +86,8 @@ def profile(out: Path, engines: list[str], precision: str, points: list[str]) ->
         ctl = (lambda *a: R._sh("docker", "exec", f"bgcmp-{engine}", exe, *a)) if docker else (lambda *a: R._sh(exe, *a))
         where = "/prof" if docker else str(d)
         try:
-            with R.Server(spec, engine, precision, d, prefix=launch, mounts=f"-v {root}:{root}:ro -v {d}:/prof ") as srv:
+            with (R.Server(spec, engine, precision, d) if plain else
+                  R.Server(spec, engine, precision, d, prefix=launch, mounts=f"-v {root}:{root}:ro -v {d}:/prof ")) as srv:
                 url = f"http://127.0.0.1:{R.PORT}"
                 ctx = suite.Ctx.from_target(t, url, client_procs=8, client_cpus=_cpus(c["client_cpus"]))
                 for point in points:
@@ -92,23 +96,18 @@ def profile(out: Path, engines: list[str], precision: str, points: list[str]) ->
                     rows: list = []
                     total = WARM_S + 2 * WINDOW_S + 5
                     load = threading.Thread(target=_drive, args=(ctx, point, total, rows), daemon=True)
-                    t0 = time.time()
                     load.start()
                     time.sleep(WARM_S)
-                    ctl("start", "--session=bg", f"--output={where}/{point}", "--force-overwrite=true")
-                    time.sleep(WINDOW_S)
-                    ctl("stop", "--session=bg")
-                    pid = _server_pid(engine, srv)
-                    subprocess.run(["sudo", shutil.which("py-spy") or str(Path(sys.executable).with_name("py-spy")), "record", "--pid", str(pid),
-                                    "--subprocesses", "--nonblocking", "--duration", str(int(WINDOW_S)),
-                                    "--rate", "100", "--format", "speedscope", "-o", str(d / f"{point}.pyspy.json")],
-                                   capture_output=True, timeout=WINDOW_S + 120)
+                    if not plain:
+                        _capture(engine, srv, d, point, ctl, where)
                     load.join()
-                    summary = runner.summarize(rows, ctx.conversational, time.time() - t0)
+                    steady = [r for r in rows if r.scheduled_s >= WARM_S]     # after the first calls' compiles
+                    summary = runner.summarize(steady, ctx.conversational, total - WARM_S)
                     (d / f"{point}.json").write_text(json.dumps({"point": point, "def": POINTS[point],
                                                                  "summary": summary, "facts": R.facts()}) + "\n")
                     print(f"{engine}-{precision} {point}: {summary['output_tok_per_s']:.0f} tok/s, TPOT p50 "
-                          f"{(summary['tpot_p50_s'] or 0) * 1e3:.1f} ms, ok {summary['ok']}/{summary['n']}", flush=True)
+                          f"{(summary['tpot_p50_s'] or 0) * 1e3:.1f} ms, TTFT p99 {summary['ttft_p99_s'] or 0:.2f} s, "
+                          f"ok {summary['ok']}/{summary['n']}", flush=True)
         except RuntimeError as err:
             (d / "error.txt").write_text(f"{err}\n")
             print(f"{engine}-{precision}: {err}", file=sys.stderr)
@@ -117,11 +116,23 @@ def profile(out: Path, engines: list[str], precision: str, points: list[str]) ->
                 R._sh(exe, "export", "--type=sqlite", f"--output={rep.with_suffix('.sqlite')}", str(rep))
 
 
+def _capture(engine: str, srv, d: Path, point: str, ctl, where: str) -> None:
+    """One WINDOW_S nsys window, then WINDOW_S of py-spy over the server's processes."""
+    ctl("start", "--session=bg", "--sample=none", "--cpuctxsw=none", f"--output={where}/{point}", "--force-overwrite=true")
+    time.sleep(WINDOW_S)
+    ctl("stop", "--session=bg")
+    pid = _server_pid(engine, srv)
+    subprocess.run(["sudo", shutil.which("py-spy") or str(Path(sys.executable).with_name("py-spy")), "record", "--pid",
+                    str(pid), "--subprocesses", "--duration", str(int(WINDOW_S)), "--rate", "100", "--format",
+                    "speedscope", "-o", str(d / f"{point}.pyspy.json")], capture_output=True, timeout=WINDOW_S + 120)
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--engines", default="ours,vllm,trtllm")
     ap.add_argument("--precision", default="fp8")
     ap.add_argument("--points", default=",".join(POINTS))
+    ap.add_argument("--plain", action="store_true", help="no profiler: the client's numbers only")
     a = ap.parse_args()
-    profile(a.out, a.engines.split(","), a.precision, a.points.split(","))
+    profile(a.out, a.engines.split(","), a.precision, a.points.split(","), a.plain)

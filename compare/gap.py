@@ -18,8 +18,9 @@ def kernels(db: Path, top: int) -> dict:
     q = lambda sql: con.execute(sql).fetchall()
     if not q("select name from sqlite_master where name='CUPTI_ACTIVITY_KIND_KERNEL'"):
         return {"error": "no kernels in the window"}
-    rows = q("select k.start, k.end, s.value from CUPTI_ACTIVITY_KIND_KERNEL k join StringIds s on s.id = k.shortName "
-             "order by k.start")
+    every = q("select k.start, k.end, s.value from CUPTI_ACTIVITY_KIND_KERNEL k join StringIds s on s.id = k.shortName "
+              "order by k.start")
+    rows = [r for r in every if 0 <= r[0] <= r[1] and r[1] - r[0] < 1e9]   # nsys gives some graph nodes a bogus start
     span = (max(e for _, e, _ in rows) - rows[0][0]) / 1e9
     busy, cur_s, cur_e = 0, None, None
     for s, e, _ in rows:
@@ -41,6 +42,7 @@ def kernels(db: Path, top: int) -> dict:
     copy = q("select coalesce(sum(end - start), 0) from CUPTI_ACTIVITY_KIND_MEMCPY")[0][0] \
         if q("select name from sqlite_master where name='CUPTI_ACTIVITY_KIND_MEMCPY'") else 0
     return {"span_s": span, "gpu_busy": busy / 1e9 / span, "kernel_s": total / 1e9, "kernels": len(rows),
+            "dropped": len(every) - len(rows),
             "memcpy_s": copy / 1e9, "launch_calls": launches,
             "top": [(n, by[n] / total, calls[n], by[n] / calls[n] / 1e3) for n, _ in by.most_common(top)]}
 
@@ -79,7 +81,8 @@ def render(d: Path, top: int = 12) -> str:
             lc = sum((k.get("launch_calls") or {}).values())
             lines.append(f"| {c.name} | {s['output_tok_per_s']:.0f} | {(s['tpot_p50_s'] or 0) * 1e3:.1f} | "
                          f"{(s['ttft_p99_s'] or 0):.2f} | {s['ok']}/{s['n']} | "
-                         + (f"{k['gpu_busy']:.0%} | {k['kernels']} | {lc} | {k['memcpy_s']:.2f} |" if "error" not in k
+                         + (f"{k['gpu_busy']:.0%} | {k['kernels']}" + (f" ({k['dropped']} bad dropped)" if k["dropped"] else "")
+                            + f" | {lc} | {k['memcpy_s']:.2f} |" if "error" not in k
                             else f"{k['error']} | | | |"))
             if "top" in k:
                 detail += [f"**{c.name}** top kernels (share of kernel time, calls, mean us):", ""]
