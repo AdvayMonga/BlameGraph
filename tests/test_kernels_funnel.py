@@ -78,7 +78,7 @@ def test_a_call_sees_the_starting_program_other_programs_as_full_code_the_memory
 
 def test_the_search_runs_rounds_and_the_archive_reads_them_back(tmp_path):
     from lab import ledger
-    tree, cost = search(START, "SYS", Model(), lambda c: stage(c, 2), tmp_path, evals=5, usd=50.0, funnel=funnel())
+    tree, cost = search(START, "SYS", Model(), lambda c: stage(c, 2), tmp_path, evals=5, funnel=funnel())
     assert tree.best().score >= 2.2 and cost["usd"] > 0
     root = tmp_path / "ledger"
     root.mkdir()
@@ -120,11 +120,37 @@ def test_the_precheck_drops_what_does_not_build_and_feeds_the_compiler_slice():
     assert any("The compiler's report for this program" in u for u in f.models.judge.calls)
 
 
-def test_a_round_stops_mid_way_when_the_model_budget_runs_out_and_says_so():
-    f, t, rows = funnel(workers=1), Tree(), []
-    f.usd_cap = 0.15                                      # each call costs 0.1: the third is refused
-    assert expand(f, t, root_of(t), "SYS", 1, lambda n, c: t.add(n), rows.append) == []
-    assert rows[0]["stopped"] == "model budget" and f.calls == 2
+class Bag:
+    """A fake embedder: a change's vector counts its `a = N` lines by N mod 3, so 5 and 8 (and 22 and 7... ) collide."""
+    def passages(self, texts):
+        out = []
+        for t in texts:
+            ns = [int(n) for n in re.findall(r"\+a = (\d+)", t)]
+            out.append([float(sum(n % 3 == k for n in ns)) for k in range(3)])
+        return out
+
+
+def test_a_program_whose_change_is_like_one_already_written_is_refused_before_any_gpu_time():
+    judged = []
+
+    def staged(code, n):
+        judged.append(code)
+        return stage(code, n)
+    f = Funnel(Models(Model((5, 8, 22, 7))), staged, per_call=4, parallel=1, embedder=Bag())
+    t, rows = Tree(), []
+    root = root_of(t)
+    expand(f, t, root, "SYS", 1, lambda n, c: t.add(n), rows.append)
+    fates = {x["idea"]["modification_plan"]: x["fate"] for x in rows[0]["ideas"]}
+    assert fates["set a = 5"] == "full exam" and fates["set a = 22"] == "full exam"
+    assert fates["set a = 8"].startswith("not applied: a near-duplicate of a program written this run (cosine 1.000")
+    assert fates["set a = 7"].startswith("not applied: a near-duplicate")          # 7 and 22: the same change class
+    assert not any("a = 8" in c for c in judged) and len(t.nodes) == 3
+    rows2 = []
+    f.models.judge.values = (11,)                                    # 11 % 3 == 2, like 5: one judged in round 1
+    expand(f, t, root, "SYS", 2, lambda n, c: t.add(n), rows2.append)
+    first = rows2[0]["ideas"][0]["fate"]
+    named = next(n.id for n in t.nodes.values() if "a = 5" in n.code)
+    assert first.startswith(f"not applied: a near-duplicate of program {named}")          # named by its id
 
 
 def test_ncu_is_not_asked_for_again_once_the_host_refuses_and_programs_are_never_written_twice():

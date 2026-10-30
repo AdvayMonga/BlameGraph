@@ -164,7 +164,7 @@ def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_node():
         os.environ["KERNEL_EVAL_CONFIG"] = str(cfg)
         out = Path(d) / "run"
         tree, cost = search(SEED.read_text(), system_message(t), scripted,
-                            cascade(evaluator.judge_stage), out, evals=10, usd=100.0)
+                            cascade(evaluator.judge_stage), out, evals=10)
         best = tree.best()
         root = next(n for n in tree.nodes.values() if n.parent is None)    # the naive seed is ~0.1x the baseline
         assert "rsqrt" in best.code and best.metrics["correct"] == 1.0 and best.score > 3 * root.score
@@ -209,7 +209,7 @@ def test_the_prompt_states_the_roofline_gap_and_the_search_does_not_stop_there()
     judge = lambda code: {"metrics": n.metrics, "artifacts": n.artifacts}
     silent = lambda system, user: ("", 0.0)
     with tempfile.TemporaryDirectory() as d:
-        _, cost = search("x = 1\n", "S", silent, judge, Path(d), evals=5, usd=1.0)
+        _, cost = search("x = 1\n", "S", silent, judge, Path(d), evals=5)
     assert cost["model_calls"] > 0 and "stopped_near_roofline" not in cost
 
 
@@ -251,7 +251,7 @@ def test_diagnosis_facts_bound_type_two_shape_counters_ranking_and_patience():
     n = iter(range(100))
     with tempfile.TemporaryDirectory() as d:
         _, cost = search("x = 0\n", "S", lambda s, u: (f"<<<<<<< SEARCH\nx = 0\n=======\nx = {next(n) + 1}\n>>>>>>> "
-                                                       "REPLACE", 0.0), lambda code: flat, Path(d), evals=50, usd=1.0,
+                                                       "REPLACE", 0.0), lambda code: flat, Path(d), evals=50,
                          patience=3)
     assert cost["stopped_no_progress"] and cost["evals"] <= 5                # no score ever beats the root's
 
@@ -410,7 +410,7 @@ def test_every_arm_differs_from_kernels_search_in_one_flag():
     cli.main = lambda argv: seen.append(argv) or print('{"ledger": null}')
     try:
         from types import SimpleNamespace
-        a = SimpleNamespace(task="t", shapes="s", evals=3, usd=1.0, model="m", device="cpu", initial=None)
+        a = SimpleNamespace(task="t", shapes="s", evals=3, model="m", device="cpu", initial=None)
         assert "search-beam" not in ab.ARMS                       # the beam was removed (2026-10-27)
         for arm in ("kernels.search", "search-no-tools", "search-mcts", "search-untyped"):
             ab.ARMS[arm](a, Path("/tmp/x"), 0)
@@ -705,6 +705,9 @@ def test_the_cli_builds_its_funnel_with_every_task_in_the_memory(monkeypatch, tm
     a = SimpleNamespace(archive=str(path), second_judge_model="none", second_judge_share=4, effort="high",
                         judge_tools=False, model="m", ptx=None, per_call=20, parallel=4, ncu=False, precheck=True,
                         workers=8, tune_points=8)
-    f = cli._funnel(a, SimpleNamespace(name="toy", size_expr=None), lambda s, u: ("", 0.0))
-    assert [e.id for e in f.library] == ["i1", "i2"]
-    assert f.task == "toy" and f.tune and f.precheck and f.workers == 8 and f.parallel == 4
+    import lab.search
+    monkeypatch.setattr(lab.search, "FastEmbed", lambda cache: "EMBEDDER")
+    f = cli._funnel(a, SimpleNamespace(name="moe_gemm_fp8", size_expr=None), lambda s, u: ("", 0.0))
+    assert [e.id for e in f.library] == ["i1", "i2"] and f.embedder == "EMBEDDER"
+    assert "vllm.fused_moe" in f.ptx and cli.ptx_cards("toy") is None       # the task's cards, read by its name
+    assert f.task == "moe_gemm_fp8" and f.tune and f.precheck and f.workers == 8 and f.parallel == 4

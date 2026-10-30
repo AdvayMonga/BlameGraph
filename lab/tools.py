@@ -217,7 +217,7 @@ class Toolbox(EvalTools, ProfTools):
             start = out / "start.py"
             start.write_text(pipeline.start_program(task, tree))
             from lab.evaltools import _layer_facts
-            found = pipeline.search(task, caps, start, out / "search", model_usd, evals, self.s.ledger_root, env,
+            found = pipeline.search(task, caps, start, out / "search", evals, self.s.ledger_root, env,
                                     device=device,
                                     facts_text=pipeline.facts(task, _layer_facts(self.s.ledger_root, "kernel_tasks"),
                                                               scored))

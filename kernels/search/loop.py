@@ -192,10 +192,10 @@ def cascade(judge_stage: Callable[[str, int], dict], counters: bool = False, tun
 
 
 def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, float]],
-           judge: Callable[[str], dict], out: Path, evals: int, usd: float, seed: int = 0,
+           judge: Callable[[str], dict], out: Path, evals: int, seed: int = 0,
            patience: int | None = None, children: int = 4,
            uct_c: float = UCT_C, funnel=None) -> tuple[Tree, dict]:
-    """Search until `evals` programs are judged, `usd` is spent on model calls, nothing is left to try, or `patience`
+    """Search until `evals` programs are judged, nothing is left to try, or `patience`
     programs have been judged since the best last improved (MANTIS, Hari et al.: 16 attempts without progress).
 
     Each expansion of an MCTS-chosen parent is one funnel round (kernels/search/funnel.py), every idea and what became
@@ -203,8 +203,6 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
     Returns the tree and the run's cost {usd, model_calls, evals, ...}."""
     out.mkdir(parents=True, exist_ok=True)
     tree, spent, calls, judged, it, rows = Tree(seed, c=uct_c), 0.0, 0, 0, 0, []
-    if funnel is not None:                       # its rounds stop mid-way at the same cap
-        funnel.usd_cap = usd if funnel.usd_cap is None else funnel.usd_cap
     with open(out / "trace.jsonl", "w") as trace, open(out / "hypotheses.jsonl", "w") as hyplog:
         def keep(node: Node, cost: float) -> None:
             tree.add(node)
@@ -212,9 +210,9 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
             trace.flush()
 
         def attempt(parent: Node) -> None:
-            """One coder call, applied and judged (nothing when the budget ran out first)."""
+            """One coder call, applied and judged (nothing once `evals` are judged)."""
             nonlocal spent, calls, judged
-            if judged >= evals or spent >= usd:
+            if judged >= evals:
                 return
             text, c = propose(system + "\n\n" + FORMAT, prompt(tree, parent))
             spent, calls = spent + c, calls + 1
@@ -233,7 +231,7 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
         judged += 1
         keep(Node(uuid.uuid4().hex[:8], None, r.get("code", initial), r["metrics"], r["artifacts"], 0), 0.0)
         best_at, best_score = judged, tree.best().score
-        while judged < evals and spent < usd:
+        while judged < evals:
             if tree.best().score > best_score:
                 best_at, best_score = judged, tree.best().score
             if patience and judged - best_at >= patience:
@@ -256,5 +254,5 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
             spent, calls, judged = spent + funnel.spent - before, funnel.calls, judged + len(kids)
             if not kids:                         # a round that examined nothing counts as one failure
                 parent.failures += 1
-    stalled = bool(patience and judged < evals and spent < usd and judged - best_at >= patience)
+    stalled = bool(patience and judged < evals and judged - best_at >= patience)
     return tree, {"usd": round(spent, 4), "model_calls": calls, "evals": judged, "stopped_no_progress": stalled}

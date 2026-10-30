@@ -1,6 +1,7 @@
 """The genetic search (decided 2026-10-26): generations inside one call, each a funnel round from several parents.
 
-Generation 0 is a round from the start program alone (GEN0 changes). Every later generation splits its `gen_size`
+Generation 0 is a round from the start program alone (GEN0 changes); other implementations of the kernel ported from
+competitors' source (`starts`, kernels/competitors.py) are judged beside it and join the population. Every later generation splits its `gen_size`
 changes over four idea types (decided 2026-10-29), one call each:
   refine     new ideas on `parents` programs drawn from the population (the POPULATION best correct, scored programs
              still open; the best always among them, the rest drawn without replacement with weight = percentile
@@ -15,8 +16,7 @@ The split starts at TYPES and adapts: TYPE_FLOOR ideas each, the rest by each ty
 children that beat the best score their generation started from (Laplace-smoothed over the run); a type with nothing
 to work on (no open line, one parent) gives its ideas to the others. Every correct program takes the full exam and
 joins the population. Every call gets the memory (kernels/search/memory.py), rebuilt before each generation. The search
-runs `generations` generations after generation 0, and only the model budget `usd` stops it sooner (decided
-2026-10-30). Why many small generations: Kevin's 16 x 8 beat 128 x 1 (1.10x against 0.65x) and ShinkaEvolve's archive
+runs exactly `generations` generations after generation 0; nothing stops it sooner (decided 2026-10-30). Why many small generations: Kevin's 16 x 8 beat 128 x 1 (1.10x against 0.65x) and ShinkaEvolve's archive
 of 40 under 150 evaluations; why weighted parents rather than MCTS: every tree of the 2026-10-24/25 runs stayed one
 level deep.
 
@@ -109,14 +109,13 @@ def advance(tree: Tree, lines: dict[str, int], plan: list[Slot], kids: list[Node
     return lines | {c.id: 0 for c in kids if c.score > tree.nodes[c.parent].score}
 
 
-def search(initial: str, system: str, funnel: Funnel, judge: Callable[[str], dict], out: Path, usd: float,
-           seed: int = 0, gen_size: int = 24, n_parents: int = 4, generations: int = 10,
-           types: bool = True) -> tuple[Tree, dict]:
+def search(initial: str, system: str, funnel: Funnel, judge: Callable[[str], dict], out: Path, seed: int = 0, gen_size: int = 24, n_parents: int = 4, generations: int = 10,
+           types: bool = True, starts: dict[str, str] | None = None) -> tuple[Tree, dict]:
     """Returns the tree and the run's cost {usd, model_calls, evals, generations, types}. `types=False`: every idea is
-    a refine idea (the search before 2026-10-29; an A/B arm)."""
+    a refine idea (the search before 2026-10-29; an A/B arm). `starts`: competitor name -> program, each judged as a
+    child of the start program (kind "competitor")."""
     out.mkdir(parents=True, exist_ok=True)
     tree, rng, judged = Tree(seed), random.Random(seed), 0
-    funnel.usd_cap = usd if funnel.usd_cap is None else funnel.usd_cap
     general, rows = memory.general(funnel.library, funnel.task), []
     stats = {t: [0, 0] for t in TYPES}           # per type: children examined, children that beat their generation's start
     lines: dict[str, int] = {}                   # each open line's head -> generations of persist children with no better
@@ -133,9 +132,15 @@ def search(initial: str, system: str, funnel: Funnel, judge: Callable[[str], dic
             hyplog.flush()
         r = judge(initial)
         judged += 1
-        keep_node(Node(uuid.uuid4().hex[:8], None, r.get("code", initial), r["metrics"], r["artifacts"], 0), 0.0)
+        root = Node(uuid.uuid4().hex[:8], None, r.get("code", initial), r["metrics"], r["artifacts"], 0)
+        keep_node(root, 0.0)
+        for name, code in (starts or {}).items():
+            r = judge(code)
+            judged += 1
+            keep_node(Node(uuid.uuid4().hex[:8], root.id, r.get("code", code), r["metrics"], r["artifacts"], 0,
+                           judge=json.dumps({"competitor": name}), kind="competitor"), 0.0)
         gen = 0
-        while gen <= generations and funnel.spent < usd:
+        while gen <= generations:
             funnel.memory = (general, memory.task(funnel.library, funnel.task, rows))
             extra, ps = {}, [tree.root()] if gen == 0 else parents(tree, n_parents, rng)
             lines = {h: m for h, m in lines.items() if tree.expandable(tree.nodes[h])}
