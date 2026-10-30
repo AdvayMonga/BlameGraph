@@ -65,7 +65,7 @@ def rows_of(d):
 
 def test_generation_zero_is_the_start_alone_and_later_ones_draw_parents_by_fitness(tmp_path):
     f = funnel()
-    tree, cost = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, usd=50.0, gen_size=8, n_parents=2,
+    tree, cost = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, gen_size=8, n_parents=2,
                           generations=2, types=False)
     rows = rows_of(tmp_path)
     assert [r["iteration"] for r in rows] == [0, 1, 2] and cost["generations"] == 3
@@ -119,7 +119,7 @@ def test_the_search_runs_every_generation_however_little_improves(tmp_path):
     f.stage = worse
     _, cost = G.search(START, "SYS", f, lambda c: {"metrics": {"correct": 1.0, "combined_score": 1.0, "stage": 2},
                                                    "artifacts": {}},
-                       tmp_path, usd=1000.0, gen_size=6, n_parents=2, generations=5, types=False)
+                       tmp_path, gen_size=6, n_parents=2, generations=5, types=False)
     rows = rows_of(tmp_path)
     assert all(r["improved"] == 0 for r in rows) and [r["named"] for r in rows[1:]] == [6] * 5
     assert cost["generations"] == 6 and set(cost) == {"usd", "model_calls", "evals", "generations", "types"}
@@ -127,7 +127,7 @@ def test_the_search_runs_every_generation_however_little_improves(tmp_path):
 
 def test_each_generation_splits_its_ideas_over_the_four_types(tmp_path):
     f = funnel()
-    tree, cost = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, usd=50.0, gen_size=12, n_parents=2,
+    tree, cost = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, gen_size=12, n_parents=2,
                           generations=2)
     rows = rows_of(tmp_path)
     assert {x["idea"]["type"] for x in rows[0]["ideas"]} == {"start"} and "types" not in rows[0]
@@ -189,6 +189,16 @@ def test_a_line_moves_to_a_better_persist_child_and_closes_after_three_misses():
     assert lines == {}                                             # three generations without a better child
 
 
+def test_competitor_programs_are_judged_beside_the_start_and_join_the_population(tmp_path):
+    f = funnel()
+    tree, cost = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, gen_size=4, n_parents=2, generations=1,
+                          types=False, starts={"vllm.x": "a = 89\n"})      # the fastest: always a parent
+    comp = [n for n in tree.nodes.values() if n.kind == "competitor"]
+    assert len(comp) == 1 and comp[0].parent == tree.root().id and json.loads(comp[0].judge) == {"competitor": "vllm.x"}
+    assert cost["evals"] == 2 + G.GEN0 + 4
+    assert any(p["id"] == comp[0].id for p in rows_of(tmp_path)[1]["parents"])     # a parent like any other program
+
+
 def test_every_call_gets_the_memory(tmp_path):
     other = archive.Entry("i1", "other_task", "split k", {"optimisation_method": "split k"}, outcomes=[
         archive.Outcome("k", "p", 1.0, "c", 1.3, True, 2, bound="memory")])
@@ -197,7 +207,7 @@ def test_every_call_gets_the_memory(tmp_path):
     MADE[0] = 0
     m = Model("opus")
     f = Funnel(Models(m), stage, parallel=2, task="toy", library=[other, lost])
-    G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, usd=50.0, gen_size=8, n_parents=2, generations=1)
+    G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, gen_size=8, n_parents=2, generations=1)
     assert m.systems and all("split k" in s and '"best_gain": 1.3' in s and '"bound": "memory"' in s for s in m.systems)
     assert all("bigger tiles" in s and '"worst_gain": 0.8' in s for s in m.systems)
     first = m.systems[0]
@@ -208,7 +218,7 @@ def test_every_call_gets_the_memory(tmp_path):
 def test_the_archive_reads_each_ideas_own_parent_from_a_generation(tmp_path):
     from lab import ledger
     f = funnel()
-    tree, _ = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, usd=50.0, gen_size=6, n_parents=2,
+    tree, _ = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, gen_size=6, n_parents=2,
                        generations=1)
     root = tmp_path / "ledger"
     root.mkdir()

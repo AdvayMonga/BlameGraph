@@ -269,8 +269,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `tests/test_kernels_evolve.py` must all score 0; selection never sees held-out shapes, `gate` judges them (correctness, and their speedup as a fact); `validate_gpu.sh` = the GPU validation (shapes captured under real corpus traffic at several concurrencies, `CAPTURE_SPECS`; never synthetic prompts, whose batches have uniform lengths); tolerances from the target's
   `[kernels]`). `kernels/search/` (extra `kernel-search`; our own layer-1 generator, replacing OpenEvolve, which stays as the A/B baseline: `python -m
   kernels.search`; by default the genetic search (`kernels/search/generations.py`, decided 2026-10-26): generation 0 is
-  one round from the start program (40 changes), then exactly `--generations` (10) generations (decided 2026-10-30:
-  nothing stops it sooner but the model budget `--usd`), each a round whose `--gen-size` (24) changes are split over
+  one round from the start program (40 changes; competitors' ported kernels, `kernels.competitors.starts`, judged beside
+  it and joined to the population), then exactly `--generations` (10) generations (decided 2026-10-30:
+  nothing stops it sooner), each a round whose `--gen-size` (24) changes are split over
   four idea types (decided 2026-10-29;
   `--no-types` = refine only, arm `search-untyped`): refine (new ideas on `--parents` (4) programs drawn from the
   population: the 32 best open programs, the best always, the rest by percentile reward + 0.05 without replacement),
@@ -363,7 +364,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   kernels counted from its PTX (or `cuobjdump -sass` output, for libraries that ship no PTX): instruction classes,
   widest vector access, declared registers, static shared memory, and the Hopper features in use (wgmma, TMA,
   setmaxnreg, mbarrier, cp.async, mma, ldmatrix), with a measured time beside it when given; fastest first.
-  `python -m kernels.ptx card --name N PTX ... [--timing N=MS] --out F`, read by `kernels.search --ptx F`. Producing
+  `python -m kernels.ptx card --name N PTX ... [--timing N=MS] --out F`, read by `kernels.search` from `knowledge/ptx/<task>.txt` (no timings in them: no target numbers in prompts; only
+  moe_gemm_fp8 has a competitor card, the 2026-10-25 SASS of the others came out empty). Producing
   competitors' PTX and timings on our shapes needs their libraries on the GPU host (not built yet).
 - `kernels/search/funnel.py` — one round (decided 2026-10-22; one call per change and every correct program measured
   since 2026-10-30, replacing the funnel's tiers: named ideas, merge, past-failure check, wide coder, repairs, quick
@@ -372,7 +374,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   persist, fresh and crossover calls read the measurements). The slices: measurements, winners elsewhere in the tree,
   compiler report, PTX comparison; a slice with no facts is skipped; the type's request ends the prompt (`loop.MODES`).
   Calls cycle through the mix (`--second-judge-model` Sonnet 5.5 one call in `--second-judge-share` 4). Then edits that
-  do not apply or repeat a program are dropped, the no-GPU precheck (`--precheck`, default on) drops what fails to
+  do not apply, repeat a program, or change the start within cosine `NOVEL` (0.95) of a program already written
+  (fastembed on the changed lines, `near_duplicates`; ShinkaEvolve) are dropped, the no-GPU precheck (`--precheck`, default on) drops what fails to
   build and keeps the compiler's report on the program (the compiler slice of its children), stage 1 in `--parallel`
   jails, and every correct program takes the full exam (tuned first) and joins the tree. A parent gets its ncu
   counters (stage 3) when it is first chosen. Model calls run `--workers` (8) at a time, the first of each batch alone

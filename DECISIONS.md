@@ -5,13 +5,22 @@ a reversed decision gets a new entry that names the old one. Change any of these
 
 ## 2026-10-30 — The kernel search: 10 generations always, one call per change, every correct program measured
 Three changes to `kernels.search`'s genetic search:
-1. It runs exactly 10 generations after generation 0. Only the model budget stops it sooner. Removed: patience,
-   shrinking a generation that improved little, the wall-clock cap, the GPU-seconds cap, and the evals count.
+1. It runs exactly 10 generations after generation 0, and nothing stops it sooner. Removed: patience, shrinking a
+   generation that improved little, the wall-clock cap, the GPU-seconds cap, the evals count, and the model budget
+   (`--usd`; the user: there should be no budget flag).
 2. Every program that builds and passes correctness takes the full exam and joins the population. Removed: the quick
    timing on one shape, racing at the cutoff, the 8 kept per generation, and the cut per idea type.
 3. One call makes each change: it states the hypothesis and writes the SEARCH/REPLACE edit in one answer, as
    OpenEvolve's calls do. The call is shown the parent, the starting program and up to 2 better programs from other
    branches, all as full code, plus its slice of facts and the memory tables.
+
+Added the same day (the user, from the list of published methods we had not used):
+- the PTX comparison's cards are read by task name from `knowledge/ptx/<task>.txt` (no `--ptx`), without competitor
+  timings (no target numbers in prompts);
+- a program whose change from the starting program is within cosine 0.95 of one already written is refused before
+  any GPU time (local embeddings of the changed lines; ShinkaEvolve's novelty rejection);
+- competitors' kernels ported from source (`kernels.competitors.starts`) are judged at generation 0 beside the start
+  and join the population.
 
 Removed with change 3, as orphans: the named-ideas step, merging duplicate ideas (`--cheap-model`), the past-failure
 check, the wide coder (`--wide-model`), repairs (`--max-repairs`), the strong coder's rewrite of kept programs, and

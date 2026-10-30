@@ -132,13 +132,13 @@ def facts(task, kernel_tasks: dict | None, regimes: tuple[str, ...] = ()) -> str
     return "\n".join(out)
 
 
-def search(task, caps: list[Path], start: Path, out: Path, usd: float, evals: int, ledger_root: Path, env: dict,
+def search(task, caps: list[Path], start: Path, out: Path, evals: int, ledger_root: Path, env: dict,
            device: str = "cuda", facts_text: str | None = None) -> dict:
     """`python -m kernels.search` on the captures: its last JSON line (best, cost, out, ledger record id)."""
     out.mkdir(parents=True, exist_ok=True)
     if facts_text:
         (out / "facts.txt").write_text(facts_text)
-    argv = [sys.executable, "-m", "kernels.search", "--task", task.name, "--out", str(out), "--usd", str(usd),
+    argv = [sys.executable, "-m", "kernels.search", "--task", task.name, "--out", str(out),
             "--evals", str(evals), "--initial", str(start), "--ledger", str(ledger_root), "--equal-captures",
             "--device", device, *(["--facts", str(out / "facts.txt")] if facts_text else []),
             *[w for c in caps for w in ("--captures", str(c))]]

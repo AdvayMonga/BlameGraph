@@ -1,4 +1,4 @@
-"""python -m kernels.search --task T [--shapes SHAPES.json | --captures DIR ...] --out DIR [--evals N] [--usd X]
+"""python -m kernels.search --task T [--shapes SHAPES.json | --captures DIR ...] --out DIR [--evals N]
                           [--samples DIR --shared-weights FILE]   (T = region:FIRST:LAST: its captures, its holder)
                           [--model CODER] [--judge-model JUDGE|none] [--effort E] [--[no-]ncu] [--device cuda]
                           [--initial PROGRAM.py] [--retime K] [--tune-points N] [--generations N --gen-size N
@@ -8,7 +8,7 @@ Our own layer-1 generator on one kernel task: by default the genetic search (ker
 of rounds from fitness-sampled parents); with --mcts one round per MCTS-chosen parent (kernels/search/
 loop.py). Judged by kernels.evolve's evaluator exactly as `python -m kernels.evolve run` is: the
 same run dir, selection config (seen shapes only), re-timed promotion and `kernels` ledger record, so the generators
-compare like for like. Model calls cost money; --usd caps them."""
+compare like for like."""
 from __future__ import annotations
 
 import argparse
@@ -30,6 +30,7 @@ from kernels.search.loop import cascade, search
 from kernels.search.tree import UCT_C
 from kernels.tasks import load
 
+ROOT = Path(__file__).resolve().parents[2]
 
 TUNE_FACT = ("A program may define, at module level, `CONFIG` (a dict of the launch parameters its kernel uses) and "
              "`TUNABLES` (for each CONFIG key, a list of values). Before a program's full exam, up to {points} points "
@@ -60,17 +61,26 @@ def staged(judge_stage) -> Callable[[str, int], dict]:
     return stage
 
 
+def ptx_cards(task: str) -> str | None:
+    """The task's PTX comparison cards (kernels/ptx.py, built from compiled code on the GPU host), when built."""
+    f = ROOT / "knowledge" / "ptx" / f"{task}.txt"
+    return f.read_text() if f.exists() else None
+
+
 def _funnel(a, task, review):
     from kernels import archive
     from kernels.search.funnel import Funnel, Models
     if review is None:
         raise SystemExit("--funnel needs a judge (--judge-model)")
+    from lab import ledger
+    from lab.search import FastEmbed
     library = archive.load(Path(a.archive)) if a.archive else []      # every task's ideas: the memory
     second = Claude(a.second_judge_model, a.effort, tools=a.judge_tools) if a.second_judge_model != "none" else None
     mix = (review,) * (a.second_judge_share - 1) + (second,) if second and a.second_judge_share > 1 else ()
     return Funnel(Models(review, mix), staged(evaluator.judge_stage), task.name,
-                  Path(a.ptx).read_text() if a.ptx else None, a.per_call, a.parallel, a.ncu, a.precheck,
-                  workers=a.workers, tune=bool(a.tune_points), size_expr=task.size_expr, library=library)
+                  ptx_cards(task.name), a.per_call, a.parallel, a.ncu, a.precheck,
+                  workers=a.workers, tune=bool(a.tune_points), size_expr=task.size_expr, library=library,
+                  embedder=FastEmbed(ledger.ROOT / "index" / "models"))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -83,7 +93,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--equal-captures", action="store_true",
                     help="each --captures dir (one traffic, e.g. a scored regime) weighs the same in the shape counts")
     ap.add_argument("--evals", type=int, default=30, help="with --mcts or no judge: programs judged, the root included")
-    ap.add_argument("--usd", type=float, default=10.0, help="cap on model spend")
     ap.add_argument("--model", default="claude-opus-5-5", help="the model alone, with --judge-model none")
     ap.add_argument("--judge-model", default="claude-opus-5-5", help="the model making each change; `none`: --model alone")
     ap.add_argument("--judge-tools", action=argparse.BooleanOptionalAction, default=True,
@@ -121,7 +130,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--parallel", type=int, default=4, help="correctness checks run at once")
     ap.add_argument("--workers", type=int, default=8, help="the funnel's model calls run at once")
     ap.add_argument("--archive", help="an exported idea archive (python -m kernels.archive export)")
-    ap.add_argument("--ptx", help="the PTX comparison's feature cards (text)")
     ap.add_argument("--precheck", action=argparse.BooleanOptionalAction, default=True,
                     help="the funnel's no-GPU build check and compiler report before stage 1")
     a = ap.parse_args(argv)
@@ -141,10 +149,10 @@ def main(argv: list[str] | None = None) -> int:
     fun = _funnel(a, task, review) if review is not None else None
     if fun is not None and not a.mcts:
         from kernels.search.generations import search as evolve
-        tree, cost = evolve(program.read_text(), system, fun, judge, out, a.usd, a.seed, a.gen_size, a.parents,
+        tree, cost = evolve(program.read_text(), system, fun, judge, out, a.seed, a.gen_size, a.parents,
                             a.generations, types=a.types)
     else:
-        tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.usd, a.seed,
+        tree, cost = search(program.read_text(), system, Claude(a.model, a.effort), judge, out, a.evals, a.seed,
                             patience=a.patience or None, uct_c=a.uct_c, funnel=fun)
     spent: list = []
     exclude = detect.detector(Claude(a.detector_model, a.effort), spent) if a.detector_model != "none" else None

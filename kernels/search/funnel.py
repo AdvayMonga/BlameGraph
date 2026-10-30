@@ -11,7 +11,8 @@ From the parents:
      (kernels/search/memory.py), and answers with its hypothesis and the change as SEARCH/REPLACE blocks. A round's
      slots (a parent, an idea type and a count, kernels/search/generations.py) say how many calls each parent gets
      and of which type. The calls cycle through `Models.judges` (3 Opus : 1 Sonnet by default), for diversity.
-  2. edits that do not apply or repeat a program already written are dropped; with `precheck`, what fails to build in
+  2. edits that do not apply, repeat a program already written, or whose change from the start is within NOVEL cosine
+     of one already written (local embeddings, ShinkaEvolve's novelty rejection) are dropped; with `precheck`, what fails to build in
      a jail with no GPU is dropped too, and the compiler's report is kept
   3. correctness on the GPU (stage 1), `parallel` at a time
   4. every correct program takes the full exam (stage 2, its grid tuned first with `tune`) and joins the tree; every
@@ -35,6 +36,8 @@ from kernels.search.llm import CACHE_SPLIT
 from kernels.search.tree import Node, Tree, fingerprint
 
 SLICES = ("measurements", "winners", "compiler", "ptx")
+NOVEL = 0.95                 # cosine of two programs' changes from the start at which the later one is a near-duplicate
+                             # (ShinkaEvolve's novelty rejection threshold)
 
 
 @dataclass
@@ -53,11 +56,12 @@ class Funnel:
     parallel: int = 4
     ncu: bool = False
     precheck: bool = False                   # the no-GPU build check (jailed stage 5) before stage 1
-    usd_cap: float | None = None             # model spend at which a round stops, mid-round included
     workers: int = 8                         # model calls at once
     tune: bool = False                       # each program's grid tuned before its full exam
     size_expr: str | None = None             # the task's call size: the tuning may dispatch on it
     library: list = field(default_factory=list)            # kernels.archive entries for every task (the memory's)
+    embedder: object | None = None           # lab.search's embedder: near-duplicate programs refused before any GPU time
+    vectors: dict = field(default_factory=dict)            # each program's fingerprint -> (its id or "", its vector)
     spent: float = 0.0
     calls: int = 0
     judge_calls: int = 0                     # calls so far: picks the model from the mix
@@ -66,9 +70,6 @@ class Funnel:
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def _ask(self, model, system: str, user: str) -> str:
-        with self._lock:
-            if self.usd_cap is not None and self.spent >= self.usd_cap:
-                raise Spent("model budget")
         text, usd = model(system, user)
         with self._lock:
             self.spent, self.calls = self.spent + usd, self.calls + 1
@@ -92,10 +93,6 @@ class Funnel:
         if rows:
             r = {**r, "artifacts": {**r["artifacts"], "tune": json.dumps(rows)}}
         return code, r
-
-
-class Spent(Exception):
-    """The model budget ran out mid-round: the round ends with what it has."""
 
 
 def pmap(f: Funnel, fn: Callable, items) -> list:
@@ -163,6 +160,36 @@ def written(f: Funnel, results: list[tuple[str | None, str]], seen: set) -> list
             seen.add(fingerprint(code))
             f.tried.add(fingerprint(code))
         out.append((code, why))
+    return out
+
+
+def change_text(tree: Tree, code: str) -> str:
+    """A program's lines changed from the starting program: what its embedding compares."""
+    return "".join(x for x in difflib.unified_diff(tree.root().code.splitlines(True), code.splitlines(True), n=0)
+                   if x[:1] in "+-" and not x.startswith(("+++", "---")))
+
+
+def near_duplicates(f: Funnel, tree: Tree, codes: list[str]) -> list[str | None]:
+    """For each new program, why it repeats one already written (its change from the start within NOVEL cosine of
+    that one's), else None; the novel ones join `f.vectors`, so a later program in the same batch is compared too."""
+    from lab.search import _cosine
+    if f.embedder is None:
+        return [None] * len(codes)
+    for n in tree.nodes.values():                # a program written earlier has since joined the tree: name it
+        if f.vectors.get(fingerprint(n.code), ("x",))[0] == "":
+            f.vectors[fingerprint(n.code)] = (n.id, f.vectors[fingerprint(n.code)][1])
+    old = [n for n in tree.nodes.values() if n.parent and fingerprint(n.code) not in f.vectors]
+    for n, v in zip(old, f.embedder.passages([change_text(tree, n.code) for n in old]) if old else []):
+        f.vectors[fingerprint(n.code)] = (n.id, v)
+    out = []
+    for c, v in zip(codes, f.embedder.passages([change_text(tree, c) for c in codes]) if codes else []):
+        best = max(((_cosine(v, w), i) for i, w in f.vectors.values()), default=(0.0, ""))
+        if best[0] >= NOVEL:
+            out.append(f"a near-duplicate of {'program ' + best[1] if best[1] else 'a program written this run'} "
+                       f"(cosine {best[0]:.3f} between their changes from the start)")
+        else:
+            out.append(None)
+            f.vectors[fingerprint(c)] = ("", v)
     return out
 
 
@@ -237,96 +264,94 @@ def generation(f: Funnel, tree: Tree, slots: list[Slot], system: str, it: int,
     """One round: each slot's `n` calls each make one change; every program that builds and passes stage 1 takes the
     full exam and joins the tree under its own parent, its `kind` its idea's type. A refine (or start) slot's calls
     read the slices in turn; persist, fresh and crossover calls read the measurements. Every idea carries an `idea_id`
-    and its `type`, and its log row the diff its program made. A budget that runs out mid-round (`Spent`) ends the
-    round with what it has; the log says where. `extra` goes into the round's log row."""
+    and its `type`, and its log row the diff its program made. `extra` goes into the round's log row."""
     from kernels.search.loop import prompt
     spent0, fates, children = f.spent, [], []
     counts = {"named": 0, "written": 0, "correct": 0}
-    stopped, code_of = None, {}                  # code_of: each written idea's program, for the log's diff
+    code_of = {}                                 # each written idea's program, for the log's diff
     by_id = {s.parent.id: s.parent for s in slots}
     parents = list(by_id.values())
 
     def key(h):
         return h.get("idea_id")
-    try:
-        profile_parents(f, parents)
-        need = [p for p in parents if f.precheck and "compile_report" not in p.artifacts]
-        for p, r in zip(need, correct(f, [p.code for p in need], PRECHECK)):    # for the compiler slice
-            if r["artifacts"].get("compile_report"):
-                p.artifacts["compile_report"] = r["artifacts"]["compile_report"]
-        bases = {p.id: prompt(tree, p) for p in parents}
-        seen = set(tree.seen) | f.tried
-        calls = []                               # (slot, the facts its call reads, the request, its format args)
-        for i, s in enumerate(slots):
-            p = s.parent
-            for k in range(s.n):
-                if s.kind == "crossover":
-                    calls.append((s, f"# Another program in this generation, {s.other.id} (score {s.other.score:.4f})"
-                                     f"\n```python\n{s.other.code}\n```", "crossover", {}))
-                elif s.kind == "persist":        # the program's last change, to be taken further
-                    before = tree.nodes[p.parent].score if p.parent else 0.0
-                    calls.append((s, f"# Its last change\n{p.judge}", "persistence",
-                                  {"before": before, "after": p.score}))
-                elif s.kind == "fresh":
-                    calls.append((s, "", "fresh", {}))
-                else:
-                    facts = slices(f, tree, p)
-                    names = [x for x in SLICES if x in facts]
-                    calls.append((s, facts[names[(it + i + k) % len(names)]], "optimization", {}))
+    profile_parents(f, parents)
+    need = [p for p in parents if f.precheck and "compile_report" not in p.artifacts]
+    for p, r in zip(need, correct(f, [p.code for p in need], PRECHECK)):    # for the compiler slice
+        if r["artifacts"].get("compile_report"):
+            p.artifacts["compile_report"] = r["artifacts"]["compile_report"]
+    bases = {p.id: prompt(tree, p) for p in parents}
+    seen = set(tree.seen) | f.tried
+    calls = []                               # (slot, the facts its call reads, the request, its format args)
+    for i, s in enumerate(slots):
+        p = s.parent
+        for k in range(s.n):
+            if s.kind == "crossover":
+                calls.append((s, f"# Another program in this generation, {s.other.id} (score {s.other.score:.4f})"
+                                 f"\n```python\n{s.other.code}\n```", "crossover", {}))
+            elif s.kind == "persist":        # the program's last change, to be taken further
+                before = tree.nodes[p.parent].score if p.parent else 0.0
+                calls.append((s, f"# Its last change\n{p.judge}", "persistence",
+                              {"before": before, "after": p.score}))
+            elif s.kind == "fresh":
+                calls.append((s, "", "fresh", {}))
+            else:
+                facts = slices(f, tree, p)
+                names = [x for x in SLICES if x in facts]
+                calls.append((s, facts[names[(it + i + k) % len(names)]], "optimization", {}))
 
-        def one(c):
-            s, facts, mode, kw = c
-            idea, code, why = change(f, system, bases[s.parent.id], s.parent, facts, mode, set(seen), **kw)
-            return {**idea, "parent_id": s.parent.id, "type": s.kind, "idea_id": uuid.uuid4().hex[:8],
-                    **({"with": s.other.id} if s.other else {})}, (code, why)
-        made = pmap(f, one, calls)
-        counts["named"] = len(made)
-        ideas = [h for h, _ in made]
-        drafts = written(f, [cw for _, cw in made], seen)
-        wrote = []
-        for h, (code, why) in zip(ideas, drafts):
-            if code is None:
-                fates.append({"idea": h, "fate": f"not applied: {why}"})
-            else:
-                wrote.append((h, code))
-                code_of[key(h)] = code
-        counts["written"] = len(wrote)
-        reports = {}
-        if f.precheck and wrote:                 # what fails to build never takes GPU time
-            built = []
-            for (h, code), r in zip(wrote, correct(f, [c for _, c in wrote], PRECHECK)):
-                if r["artifacts"].get("compile_report"):
-                    reports[code] = r["artifacts"]["compile_report"]
-                if r["metrics"].get("correct") == 0.0:
-                    fates.append({"idea": h, "fate": "precheck: " + r["artifacts"].get("precheck", "")[:300]})
-                    continue
-                built.append((h, code))
-            wrote = built
-        survivors = []
-        for (h, code), r in zip(wrote, correct(f, [c for _, c in wrote])):
-            if r["metrics"].get("correct") == 1.0:
-                survivors.append((h, code))
-            else:
-                fates.append({"idea": h, "fate": "failed correctness", "error": str(r["artifacts"])[:300]})
-        counts["correct"] = len(survivors)
-        for h, code in survivors:                # GPU timings: one at a time
-            p = by_id[h["parent_id"]]
-            report = reports.get(code)
-            code, r = f.measure(code)
+    def one(c):
+        s, facts, mode, kw = c
+        idea, code, why = change(f, system, bases[s.parent.id], s.parent, facts, mode, set(seen), **kw)
+        return {**idea, "parent_id": s.parent.id, "type": s.kind, "idea_id": uuid.uuid4().hex[:8],
+                **({"with": s.other.id} if s.other else {})}, (code, why)
+    made = pmap(f, one, calls)
+    counts["named"] = len(made)
+    ideas = [h for h, _ in made]
+    drafts = written(f, [cw for _, cw in made], seen)
+    near = iter(near_duplicates(f, tree, [c for c, _ in drafts if c is not None]))
+    drafts = [(c, w) if c is None else ((None, why) if (why := next(near)) else (c, w)) for c, w in drafts]
+    wrote = []
+    for h, (code, why) in zip(ideas, drafts):
+        if code is None:
+            fates.append({"idea": h, "fate": f"not applied: {why}"})
+        else:
+            wrote.append((h, code))
             code_of[key(h)] = code
-            if report:
-                r["artifacts"] = {**r["artifacts"], "compile_report": report}
-            plan = json.dumps({k: v for k, v in h.items() if k in ("bottleneck", "optimisation_method",
-                                                                   "modification_plan", "mechanism")})
-            child = Node(uuid.uuid4().hex[:8], p.id, code, r["metrics"], r["artifacts"], it, "", plan, "optimization",
-                         h.get("type", ""))
-            keep_node(child, 0.0)
-            children.append(child)
-            fates.append({"idea": h, "fate": "full exam", "child_id": child.id, "child_score": child.score,
-                          "improved": child.score > p.score,
-                          **({"mechanism": mechanism(h, p, child)} if h.get("mechanism") else {})})
-    except Spent as e:
-        stopped = str(e)
+    counts["written"] = len(wrote)
+    reports = {}
+    if f.precheck and wrote:                 # what fails to build never takes GPU time
+        built = []
+        for (h, code), r in zip(wrote, correct(f, [c for _, c in wrote], PRECHECK)):
+            if r["artifacts"].get("compile_report"):
+                reports[code] = r["artifacts"]["compile_report"]
+            if r["metrics"].get("correct") == 0.0:
+                fates.append({"idea": h, "fate": "precheck: " + r["artifacts"].get("precheck", "")[:300]})
+                continue
+            built.append((h, code))
+        wrote = built
+    survivors = []
+    for (h, code), r in zip(wrote, correct(f, [c for _, c in wrote])):
+        if r["metrics"].get("correct") == 1.0:
+            survivors.append((h, code))
+        else:
+            fates.append({"idea": h, "fate": "failed correctness", "error": str(r["artifacts"])[:300]})
+    counts["correct"] = len(survivors)
+    for h, code in survivors:                # GPU timings: one at a time
+        p = by_id[h["parent_id"]]
+        report = reports.get(code)
+        code, r = f.measure(code)
+        code_of[key(h)] = code
+        if report:
+            r["artifacts"] = {**r["artifacts"], "compile_report": report}
+        plan = json.dumps({k: v for k, v in h.items() if k in ("bottleneck", "optimisation_method",
+                                                               "modification_plan", "mechanism")})
+        child = Node(uuid.uuid4().hex[:8], p.id, code, r["metrics"], r["artifacts"], it, "", plan, "optimization",
+                     h.get("type", ""))
+        keep_node(child, 0.0)
+        children.append(child)
+        fates.append({"idea": h, "fate": "full exam", "child_id": child.id, "child_score": child.score,
+                      "improved": child.score > p.score,
+                      **({"mechanism": mechanism(h, p, child)} if h.get("mechanism") else {})})
     for x in fates:                              # each written idea's program as a diff from its parent
         c, p = code_of.get(key(x["idea"])), by_id.get(x["idea"].get("parent_id"))
         if c and p:
@@ -336,6 +361,6 @@ def generation(f: Funnel, tree: Tree, slots: list[Slot], system: str, it: int,
          "parent_score": one_parent.score if one_parent else None,
          "parents": [{"id": p.id, "score": p.score} for p in parents], **counts, "examined": len(children),
          "improved": sum(c.score > by_id[c.parent].score for c in children),
-         "usd": round(f.spent - spent0, 4), **(extra or {}), **({"stopped": stopped} if stopped else {}),
+         "usd": round(f.spent - spent0, 4), **(extra or {}),
          "ideas": fates})
     return children

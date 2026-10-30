@@ -1,4 +1,4 @@
-"""python -m kernels.search.ab --task T --shapes SHAPES.json --out DIR [--initial PROGRAM.py] [--evals N] [--usd X]
+"""python -m kernels.search.ab --task T --shapes SHAPES.json --out DIR [--initial PROGRAM.py] [--evals N]
                              [--model M] [--seeds K] [--device cuda] [--arms A,B,...]
 
 OpenEvolve against kernels.search on one task, everything else equal: the same shapes, starting program, evaluator,
@@ -54,7 +54,7 @@ def _search(a, out: Path, seed: int, extra: tuple = ()) -> dict:
     from kernels.search.__main__ import main
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        main(["--task", a.task, "--shapes", a.shapes, "--out", str(out), "--evals", str(a.evals), "--usd", str(a.usd),
+        main(["--task", a.task, "--shapes", a.shapes, "--out", str(out), "--evals", str(a.evals),
               "--model", a.model, "--judge-model", a.model, "--second-judge-model", a.model, "--device", a.device,
               "--seed", str(seed),
               *(["--initial", a.initial] if a.initial else []), *SAME_PROMOTION, *extra])
@@ -110,7 +110,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--initial")
     ap.add_argument("--evals", type=int, default=30)
-    ap.add_argument("--usd", type=float, default=10.0, help="kernels.search's cap; OpenEvolve has none (measured)")
     ap.add_argument("--model", default="claude-opus-5-5")
     ap.add_argument("--seeds", type=int, default=1)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")

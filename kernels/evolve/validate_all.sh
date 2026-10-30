@@ -13,7 +13,7 @@
 # Each step reuses only complete results. Then fetch the small files (rsync -a --include='*.json' --include='*.py'
 # --include='*.log' --include='*/' --exclude='*' VM:~/BlameGraph/lab/runs/kernels-validate-all/ ./...) and run the
 # search from the controller: python -m kernels.search --task T --shapes shapes-T.json --initial START.py --out DIR
-# --device cuda --evals N --usd X, with KERNEL_EVAL_SSH / KERNEL_EVAL_REMOTE (LAB_TARGET, the engine venv on PATH)
+# --device cuda --evals N, with KERNEL_EVAL_SSH / KERNEL_EVAL_REMOTE (LAB_TARGET, the engine venv on PATH)
 # set; then gate its winner on the VM (python -m kernels.evolve gate ... --device cuda).
 set -euo pipefail
 SHIPPED="${1:?the shipped program to re-gate}"
