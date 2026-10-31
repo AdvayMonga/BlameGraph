@@ -703,13 +703,12 @@ def test_the_cli_builds_its_funnel_with_every_task_in_the_memory(monkeypatch, tm
     path = archive.export([archive.Entry("i1", "toy", "t", {}), archive.Entry("i2", "other", "u", {})],
                           tmp_path / "archive.jsonl")
     a = SimpleNamespace(archive=str(path), second_judge_model="none", second_judge_share=4, effort="high",
-                        judge_tools=False, model="m", ptx=None, per_call=20, parallel=4, ncu=False, precheck=True,
+                        judge_tools=False, model="m", per_call=20, parallel=4, ncu=False, precheck=True,
                         workers=8, tune_points=8)
     import lab.search
     monkeypatch.setattr(lab.search, "FastEmbed", lambda cache: "EMBEDDER")
     f = cli._funnel(a, SimpleNamespace(name="moe_gemm_fp8", size_expr=None), lambda s, u: ("", 0.0))
     assert [e.id for e in f.library] == ["i1", "i2"] and f.embedder == "EMBEDDER"
-    assert "vllm.fused_moe" in f.ptx and cli.ptx_cards("toy") is None       # the task's cards, read by its name
     assert f.task == "moe_gemm_fp8" and f.tune and f.precheck and f.workers == 8 and f.parallel == 4
 
 

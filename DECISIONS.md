@@ -3,6 +3,16 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-31 — Other libraries' kernels in every search prompt, from one index
+`kernels/library/` holds 2-3 other implementations of every kernel task (vLLM v0.32.0, SGLang v0.5.22, FlashInfer
+v0.7.2.post1, TensorRT-LLM v1.2.1): `index.toml` names each with its upstream paths and line ranges, the files are kept
+verbatim, and every call of the search gets their source and, where built, their PTX/SASS card as one fixed block of
+the system message (cached), with the starting program's card. No timings. The PTX comparison stops being one of the
+rotating fact slices, which only about a quarter of the refine calls read. Why (the user): competitor and library
+kernels are good to draw on, kept standardized in one place; a fixed block over a retrieval tool (Claude's
+recommendation, the user agreed) so every call sees the same and the cache makes it cheap. Larger kernels (TRT-LLM's
+XQA decode, its CUTLASS MoE GEMM) are left out for their size. Amends 2026-10-30 (cards read by task name as a slice).
+
 ## 2026-10-30 — The kernel search: 10 generations always, one call per change, every correct program measured
 Three changes to `kernels.search`'s genetic search:
 1. It runs exactly 10 generations after generation 0, and nothing stops it sooner. Removed: patience, shrinking a

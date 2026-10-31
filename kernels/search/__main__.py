@@ -23,14 +23,13 @@ import torch
 
 from kernels import competitors
 from kernels.evolve import evaluator
+from kernels.library import block as other_implementations
 from kernels.evolve.run import (_shapes, _target_tolerances, load_task, prepare, record, region_args, retime,
                                setting, system_message, task_args, tolerances)
 from kernels.search import detect
 from kernels.search.llm import Claude
 from kernels.search.loop import cascade, search
 from kernels.search.tree import UCT_C
-
-ROOT = Path(__file__).resolve().parents[2]
 
 TUNE_FACT = ("A program may define, at module level, `CONFIG` (a dict of the launch parameters its kernel uses) and "
              "`TUNABLES` (for each CONFIG key, a list of values). Before a program's full exam, up to {points} points "
@@ -61,12 +60,6 @@ def staged(judge_stage) -> Callable[[str, int], dict]:
     return stage
 
 
-def ptx_cards(task: str) -> str | None:
-    """The task's PTX comparison cards (kernels/ptx.py, built from compiled code on the GPU host), when built."""
-    f = ROOT / "knowledge" / "ptx" / f"{task}.txt"
-    return f.read_text() if f.exists() else None
-
-
 def _funnel(a, task, review):
     from kernels import archive
     from kernels.search.funnel import Funnel, Models
@@ -78,7 +71,7 @@ def _funnel(a, task, review):
     second = Claude(a.second_judge_model, a.effort, tools=a.judge_tools) if a.second_judge_model != "none" else None
     mix = (review,) * (a.second_judge_share - 1) + (second,) if second and a.second_judge_share > 1 else ()
     return Funnel(Models(review, mix), staged(evaluator.judge_stage), task.name,
-                  ptx_cards(task.name), a.per_call, a.parallel, a.ncu, a.precheck,
+                  a.per_call, a.parallel, a.ncu, a.precheck,
                   workers=a.workers, tune=bool(a.tune_points), size_expr=task.size_expr, library=library,
                   embedder=FastEmbed(ledger.ROOT / "index" / "models"))
 
@@ -145,7 +138,8 @@ def main(argv: list[str] | None = None) -> int:
     judge = cascade(evaluator.judge_stage, counters=a.ncu, tuned=bool(a.tune_points), size_expr=task.size_expr)
     system = (system_message(task) + "\n\n" + setting(task, sets, a.device, tol)
               + ("\n\n" + TUNE_FACT.format(points=a.tune_points) if a.tune_points else "")
-              + ("\n\n" + Path(a.facts).read_text().strip() if a.facts else ""))
+              + ("\n\n" + Path(a.facts).read_text().strip() if a.facts else "")
+              + ("\n\n" + other if (other := other_implementations(task.name)) else ""))
     fun = _funnel(a, task, review) if review is not None else None
     if fun is not None and not a.mcts:
         from kernels.search.generations import search as evolve

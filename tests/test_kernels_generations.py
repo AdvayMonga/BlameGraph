@@ -31,7 +31,7 @@ class Model:
 
     def __call__(self, system, user):
         cur = int(re.search(r"```python\na = (\d+)", user).group(1))
-        sl = next((s for s, m in (("ptx", "PTX comparison"), ("winners", "winners elsewhere"), ("compiler", "compiler's"),
+        sl = next((s for s, m in (("winners", "winners elsewhere"), ("compiler", "compiler's"),
                                   ("crossover", "Another program")) if m in user), "measurements")
         self.calls.append((self.tag, sl, cur))
         self.systems.append(system)
@@ -49,10 +49,10 @@ def stage(code, n):
     return {"metrics": {"correct": 1.0, "combined_score": score, "stage": n}, "artifacts": {}}
 
 
-def funnel(ptx="cards", **kw):
+def funnel(**kw):
     MADE[0] = 0
     opus, sonnet = Model("opus"), Model("sonnet")
-    return Funnel(Models(opus, (opus, opus, opus, sonnet)), stage, ptx=ptx, parallel=2, **kw)
+    return Funnel(Models(opus, (opus, opus, opus, sonnet)), stage, parallel=2, **kw)
 
 
 def calls(f):
@@ -71,7 +71,7 @@ def test_generation_zero_is_the_start_alone_and_later_ones_draw_parents_by_fitne
     assert [r["iteration"] for r in rows] == [0, 1, 2] and cost["generations"] == 3
     g0 = rows[0]
     assert g0["parent_id"] == tree.root().id and g0["named"] == G.GEN0 and g0["examined"] == G.GEN0   # all correct
-    assert {c[1] for c in calls(f) if c[2] == 1} == {"measurements", "ptx"}         # slices rotated over the calls
+    assert {c[1] for c in calls(f) if c[2] == 1} == {"measurements"}           # the start's only slice
     for r in rows[1:]:
         assert r["parent_id"] is None and len(r["parents"]) == 2 and r["examined"] == r["named"] == 8
         assert r["parents"][0]["score"] == max(p["score"] for p in r["parents"])      # the best is always a parent
@@ -86,10 +86,10 @@ def test_generation_zero_is_the_start_alone_and_later_ones_draw_parents_by_fitne
 def test_each_call_reads_one_rotated_slice_and_every_fourth_call_goes_to_the_second_model():
     f, t = funnel(), Tree()
     ok = lambda sc: {"correct": 1.0, "combined_score": sc, "stage": 2}      # noqa: E731
-    ps = [t.add(Node(f"p{i}", None, f"a = {i + 1}\n", ok(1.0 + i), {}, 0)) for i in range(4)]
+    ps = [t.add(Node(f"p{i}", None, f"a = {i + 1}\n", ok(1.0 + i), {"compile_report": "r"}, 0)) for i in range(4)]
     generation(f, t, [G.Slot(p, "refine", 1) for p in ps], "SYS", 1, lambda n, c: t.add(n), [].append)
     got = sorted(calls(f), key=lambda c: c[2])
-    assert [c[1] for c in got] == ["ptx", "measurements", "ptx", "measurements"]     # rotated across the calls
+    assert [c[1] for c in got] == ["compiler", "measurements", "compiler", "measurements"]   # rotated across calls
     assert [c[0] for c in got].count("sonnet") == 1 and len(got) == 4               # 3 : 1
 
 

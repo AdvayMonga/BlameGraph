@@ -389,9 +389,16 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   kernels counted from its PTX (or `cuobjdump -sass` output, for libraries that ship no PTX): instruction classes,
   widest vector access, declared registers, static shared memory, and the Hopper features in use (wgmma, TMA,
   setmaxnreg, mbarrier, cp.async, mma, ldmatrix), with a measured time beside it when given; fastest first.
-  `python -m kernels.ptx card --name N PTX ... [--timing N=MS] --out F`, read by `kernels.search` from `knowledge/ptx/<task>.txt` (no timings in them: no target numbers in prompts; only
-  moe_gemm_fp8 has a competitor card, the 2026-10-25 SASS of the others came out empty). Producing
-  competitors' PTX and timings on our shapes needs their libraries on the GPU host (not built yet).
+  `python -m kernels.ptx card --name N PTX ... [--timing N=MS] --out F`; the cards live in
+  `knowledge/ptx/<task>.txt`, built by `python -m kernels.library cards` (only moe_gemm_fp8's exist yet).
+- `kernels/library/` — other implementations of every kernel task in one place (decided 2026-10-31): `index.toml`
+  names 2-3 per task from vLLM v0.32.0, SGLang v0.5.22, FlashInfer v0.7.2.post1 and TensorRT-LLM v1.2.1 (upstream
+  paths with line ranges; whole files kept verbatim in `src/`, `python -m kernels.library fetch` re-downloads them),
+  and `block(task)` is the part of every search prompt (the system message, cached) that shows each one's source, URL
+  and PTX/SASS card where built, and the starting program's card; no timings. `python -m kernels.library cards --task T
+  --out knowledge/ptx/T.txt [--dump DIR]` on the GPU host: each entry's card from a `kernels.competitors` dump or from
+  its package's .so (`sass` in the index; SGLang's JIT kernels and Triton kernels without a dump have none). Regions
+  have no entries.
 - `kernels/competitors.py` — competitors timed on our shapes (`python -m kernels.competitors`, libraries installed) and
   `starts(task, program)`: each task's vLLM v0.32.0 port as a starting program from source vendored in
   `kernels/vllm_sources.py` (no library needed; rmsnorm, add_rmsnorm, silu_mul, topk_softmax as CUDA C++ built at import,
@@ -401,7 +408,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   timing, strong rewrite), from one parent (`expand`, an MCTS expansion: `--per-call` changes) or several
   (`generation`: one `Slot` per parent and idea type with its count; a refine slot's calls read the slices in turn;
   persist, fresh and crossover calls read the measurements). The slices: measurements, winners elsewhere in the tree,
-  compiler report, PTX comparison; a slice with no facts is skipped; the type's request ends the prompt (`loop.MODES`).
+  compiler report (the PTX cards moved into every call's system message with `kernels/library`); a slice with no facts is skipped; the type's request ends the prompt (`loop.MODES`).
   Calls cycle through the mix (`--second-judge-model` Sonnet 5.5 one call in `--second-judge-share` 4). Then edits that
   do not apply, repeat a program, or change the start within cosine `NOVEL` (0.95) of a program already written
   (fastembed on the changed lines, `near_duplicates`; ShinkaEvolve) are dropped, the no-GPU precheck (`--precheck`, default on) drops what fails to

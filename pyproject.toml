@@ -28,7 +28,7 @@ python_files = ["test_lab_*.py"]   # the lab's pytest suite; the other tests are
 
 [tool.ruff]
 line-length = 120
-extend-exclude = ["lab/ledger", "lab/runs", "data"]
+extend-exclude = ["lab/ledger", "lab/runs", "data", "kernels/library/src"]
 target-version = "py311"
 
 [tool.ruff.lint]

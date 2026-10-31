@@ -7,7 +7,7 @@ From the parents:
      so a program is profiled when it is first chosen as a parent (decided 2026-10-27)
   1. one model call per change: the call is shown the parent, its measurements, the starting program and the best
      programs off its lineage as full code, one slice of facts (the measurements; measured winners elsewhere in the
-     tree; the compiler's report; the PTX comparison; rotated across a slot's calls) and the memory
+     tree; the compiler's report; rotated across a slot's calls) and the memory
      (kernels/search/memory.py), and answers with its hypothesis and the change as SEARCH/REPLACE blocks. A round's
      slots (a parent, an idea type and a count, kernels/search/generations.py) say how many calls each parent gets
      and of which type. The calls cycle through `Models.judges` (3 Opus : 1 Sonnet by default), for diversity.
@@ -35,7 +35,7 @@ from kernels.search import diff, tune
 from kernels.search.llm import CACHE_SPLIT
 from kernels.search.tree import Node, Tree, fingerprint
 
-SLICES = ("measurements", "winners", "compiler", "ptx")
+SLICES = ("measurements", "winners", "compiler")
 NOVEL = 0.95                 # cosine of two programs' changes from the start at which the later one is a near-duplicate
                              # (ShinkaEvolve's novelty rejection threshold)
 
@@ -51,7 +51,6 @@ class Funnel:
     models: Models
     stage: Callable[[str, int], dict]       # (code, stage) -> {metrics, artifacts}; 1, 2, 3 (ncu), 5 (precheck), 6 (tune)
     task: str | None = None
-    ptx: str | None = None                   # the PTX comparison's feature cards, when built
     per_call: int = 20                       # changes per MCTS expansion
     parallel: int = 4
     ncu: bool = False
@@ -119,8 +118,6 @@ def slices(f: Funnel, tree: Tree, parent: Node) -> dict[str, str]:
             "".join(f"## {n.id} (score {n.score:.4f})\n```diff\n{diff_from_root(tree, n)}```\n" for n in wins)
     if parent.artifacts.get("compile_report"):
         out["compiler"] = f"# The compiler's report for this program\n{parent.artifacts['compile_report']}"
-    if f.ptx:
-        out["ptx"] = f"# The PTX comparison: this program and other implementations, as feature cards\n{f.ptx}"
     return out
 
 

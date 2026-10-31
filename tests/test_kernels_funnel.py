@@ -52,15 +52,17 @@ def root_of(t):
 
 
 def test_one_call_per_change_and_every_correct_program_joins_the_tree():
-    f, t, rows, kept = funnel(ptx="cards"), Tree(), [], []           # two slices: measurements, ptx
-    kids = expand(f, t, root_of(t), "SYS", 1, lambda n, c: kept.append(t.add(n)), rows.append)
+    f, t, rows, kept = funnel(), Tree(), [], []
+    root = root_of(t)
+    root.artifacts["compile_report"] = "regs 40"                      # two slices: measurements, compiler
+    kids = expand(f, t, root, "SYS", 1, lambda n, c: kept.append(t.add(n)), rows.append)
     row = rows[0]
     assert row["named"] == 4 and f.calls == 4 and row["correct"] == 3
     assert sorted(k.score for k in kids) == [0.5, 0.7, 2.2] and kept == kids and len(t.nodes) == 4
     fates = {x["idea"]["modification_plan"]: x["fate"] for x in row["ideas"]}
     assert fates["set a = 13"] == "failed correctness" and fates["set a = 22"] == "full exam"
     assert all(json.loads(k.judge)["bottleneck"] for k in kids)     # the hypothesis, braces in code
-    assert sum("feature cards" in u for u in f.models.judge.calls) == 2                 # slices rotated over the calls
+    assert sum("compiler's report" in u for u in f.models.judge.calls) == 2             # slices rotated over the calls
 
 
 def test_a_call_sees_the_starting_program_other_programs_as_full_code_the_memory_and_the_format():
