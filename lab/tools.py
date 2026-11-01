@@ -178,11 +178,11 @@ class Toolbox(EvalTools, ProfTools):
             task_name(str(args.get("task")))
         except argparse.ArgumentTypeError:
             raise ValueError(f"`task` must be one of {list(TASKS)} or region:FIRST:LAST") from None
-        usd = args.get("budget_usd")
+        usd = args.get("budget")
         if isinstance(usd, bool) or not isinstance(usd, (int, float)) or usd <= 0:
-            raise ValueError("`budget_usd` must be a positive number")
+            raise ValueError("`budget` must be a positive number")
         if usd > self.s.budget.remaining_usd:
-            raise ValueError(f"`budget_usd` {usd} is more than the run has left (${self.s.budget.remaining_usd:.2f})")
+            raise ValueError(f"`budget` {usd} is more than the run has left (${self.s.budget.remaining_usd:.2f})")
         if not os.environ.get("ANTHROPIC_API_KEY"):
             raise ValueError("kernel_search needs ANTHROPIC_API_KEY on this host (its search calls the models)")
         rate = gpu_rate()[0]
@@ -190,7 +190,7 @@ class Toolbox(EvalTools, ProfTools):
         evals = int((usd - model_usd) / (rate * KERNEL_SEARCH_GPU_MIN / 60)) if rate else 30
         if evals < KERNEL_SEARCH_MIN_EVALS:
             least = KERNEL_SEARCH_ROUND_USD + KERNEL_SEARCH_MIN_EVALS * rate * KERNEL_SEARCH_GPU_MIN / 60
-            raise ValueError(f"`budget_usd` {usd} leaves ${usd - model_usd:.2f} of GPU time after two generations of model calls "
+            raise ValueError(f"`budget` {usd} leaves ${usd - model_usd:.2f} of GPU time after two generations of model calls "
                              f"(${KERNEL_SEARCH_ROUND_USD:g}): {evals} judged programs at ${rate:g}/GPU-hour; a search needs "
                              f"at least {KERNEL_SEARCH_MIN_EVALS} (~${least:.2f} in all)")
         evals = min(60, evals)
@@ -478,18 +478,18 @@ class Toolbox(EvalTools, ProfTools):
                      self.submit),
             *self.prof_specs(gpu),
             ToolSpec("kernel_search", "Search for a faster version of one engine kernel: `task` (one of the kernel "
-                     "tasks, the engine entry point it replaces), `budget_usd` (model calls plus GPU time, charged to "
+                     "tasks, the engine entry point it replaces), `budget` (USD: model calls plus GPU time, charged to "
                      "the run). Captures the task's calls under real seen-split traffic at several concurrencies, splits "
                      "the shapes seen / held-out, searches from your workspace's version of the kernel (kernels.search), "
                      "and gates the winner on the held-out shapes. Returns the winner's seen-shape speedup, the gate's "
                      "verdict and held-out speedup, the `kernels` ledger record of the search, and, if the gate passed, "
                      "the path of a patch of the engine module in your workspace (not applied). Blocks until done. "
-                     f"`budget_usd` covers two generations of the search's model calls (${KERNEL_SEARCH_ROUND_USD:g}; "
+                     f"`budget` covers two generations of the search's model calls (${KERNEL_SEARCH_ROUND_USD:g}; "
                      f"later generations run while the model half lasts) plus GPU time at {KERNEL_SEARCH_GPU_MIN:g} min "
                      f"per judged program, {KERNEL_SEARCH_MIN_EVALS} programs at least."
-                     + gpu("hours, sized to `budget_usd`"),
-                     {"type": "object", "required": ["task", "budget_usd"],
-                      "properties": {"task": {"type": "string"}, "budget_usd": {"type": "number"}}},
+                     + gpu("hours, sized to `budget`"),
+                     {"type": "object", "required": ["task", "budget"],
+                      "properties": {"task": {"type": "string"}, "budget": {"type": "number"}}},
                      self.kernel_search),
             ToolSpec("hypothesis", "Record a hypothesis: `hypothesis` (the bottleneck and the proposed change), "
                      f"`rationale` (why), `layer` (where the change is: {', '.join(experiments.LAYERS)}), optional "

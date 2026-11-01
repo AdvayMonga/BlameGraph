@@ -134,7 +134,7 @@ def test_kernel_search_runs_a_region_and_hands_back_its_override_module(tb, monk
     h = next(s for s in tb.specs() if s.name == "hypothesis").fn
     k = h({"hypothesis": "fuse norm..add", "rationale": "r", "layer": "kernels"}).split()[1]
     fn = next(s for s in tb.specs() if s.name == "kernel_search").fn
-    out = json.loads(fn({"hypothesis_id": k, "expect": EXPECT, "task": "region:norm:add", "budget_usd": 20}
+    out = json.loads(fn({"hypothesis_id": k, "expect": EXPECT, "task": "region:norm:add", "budget": 20}
                         ).split("\n\nExperiment record")[0])
     assert seen["hold"] == "region:norm:add" and seen["search"] == (start, "/gpu/w.pkl") and seen["gate"]["samples"]
     patch = (tb.s.workspace.path / out["patch"]).read_text()

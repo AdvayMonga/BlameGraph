@@ -226,7 +226,7 @@ against $12.32; both passed the held-out gate. The user called it the clear winn
 run. Replaces the beam as the default (2026-10-20).
 
 ## 2026-10-23 — The agent calls the kernel layer as a tool, blocking for now, and gets a patch
-`kernel_search` (task, budget_usd, with a kernels-layer hypothesis and its expect) runs the kernel layer end to end:
+`kernel_search` (task, budget, with a kernels-layer hypothesis and its expect) runs the kernel layer end to end:
 capture under real traffic, search from the agent's own version of the kernel, the held-out gate, and a patch of the
 engine module saved in the workspace for the agent to apply and judge with its own bench/equiv/submit. Why (the user):
 the agent decides which kernel to work on, given each task's share of time as a fact; the agent applying the patch

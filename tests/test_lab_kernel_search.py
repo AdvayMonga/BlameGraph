@@ -64,14 +64,14 @@ def test_refused_off_the_kernels_layer_and_beyond_the_budget(tb, monkeypatch):
     h = next(s for s in tb.specs() if s.name == "hypothesis").fn
     rt = h({"hypothesis": "h", "rationale": "r", "layer": "runtime"}).split()[1]
     with pytest.raises(ValueError, match="kernels layer only"):
-        spec(tb).fn({"hypothesis_id": rt, "expect": EXPECT, "task": "silu_mul", "budget_usd": 1})
+        spec(tb).fn({"hypothesis_id": rt, "expect": EXPECT, "task": "silu_mul", "budget": 1})
     k = h({"hypothesis": "k", "rationale": "r", "layer": "kernels"}).split()[1]
-    for bad, why in (({"task": "nope", "budget_usd": 1}, "task"),
-                     ({"task": "region:norm", "budget_usd": 1}, "region:FIRST:LAST"),
-                     ({"task": "silu_mul", "budget_usd": 0}, "budget_usd"),
-                     ({"task": "silu_mul", "budget_usd": 10_000}, "more than the run has left"),
-                     ({"task": "silu_mul", "budget_usd": 0.5}, "a search needs at least"),
-                     ({"task": "silu_mul", "budget_usd": 12}, "two generations of model calls")):   # 2026-10-25: $6 timed nothing
+    for bad, why in (({"task": "nope", "budget": 1}, "task"),
+                     ({"task": "region:norm", "budget": 1}, "region:FIRST:LAST"),
+                     ({"task": "silu_mul", "budget": 0}, "budget"),
+                     ({"task": "silu_mul", "budget": 10_000}, "more than the run has left"),
+                     ({"task": "silu_mul", "budget": 0.5}, "a search needs at least"),
+                     ({"task": "silu_mul", "budget": 12}, "two generations of model calls")):   # 2026-10-25: $6 timed nothing
         with pytest.raises(ValueError, match=why):
             spec(tb).fn({"hypothesis_id": k, "expect": EXPECT, **bad})
 
@@ -99,7 +99,7 @@ def test_one_call_records_the_search_and_saves_a_patch_when_the_gate_passes(tb, 
     h = next(s for s in tb.specs() if s.name == "hypothesis").fn
     k = h({"hypothesis": "fuse", "rationale": "r", "layer": "kernels"}).split()[1]
     spent = tb.s.budget.spent_usd
-    out = json.loads(spec(tb).fn({"hypothesis_id": k, "expect": EXPECT, "task": "silu_mul", "budget_usd": 20}
+    out = json.loads(spec(tb).fn({"hypothesis_id": k, "expect": EXPECT, "task": "silu_mul", "budget": 20}
                                  ).split("\n\nExperiment record")[0])
     assert out["gate"]["passed"] and out["metrics"] == {"speedup": 1.3, "heldout_speedup": 1.2}
     patch = (tb.s.workspace.path / out["patch"]).read_text()
@@ -160,6 +160,6 @@ def test_a_search_that_dies_still_charges_what_it_spent(tb, monkeypatch, tmp_pat
     h = next(s for s in tb.specs() if s.name == "hypothesis").fn
     k = h({"hypothesis": "fuse", "rationale": "r", "layer": "kernels"}).split()[1]
     spent = tb.s.budget.spent_usd
-    out = spec(tb).fn({"hypothesis_id": k, "expect": EXPECT, "task": "silu_mul", "budget_usd": 20})
+    out = spec(tb).fn({"hypothesis_id": k, "expect": EXPECT, "task": "silu_mul", "budget": 20})
     assert out.startswith("kernel_search failed") and tb.s.budget.spent_usd >= spent + 1.75
     assert list(ledger.records(tb.s.ledger_root, kind="kernels"))[-1]["result"]["model_usd"] == 1.75
