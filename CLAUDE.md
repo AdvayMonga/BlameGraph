@@ -454,6 +454,15 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   recombined to length: 0 of ~2,000 generated prompts per class equal a real one; KS on prompt tokens ≤ 0.02 and
   per-10 s arrival counts within a few % of the real class (`python -m regimes.synth compare`). Not yet compared
   against the real corpus on a GPU; until then bench/submit stay on the public corpus.
+- `regimes/arrivals.py` + `arrivals.json` — request timing fitted from real conversation traffic (2026-11-01):
+  BurstGPT_3's conversation log cut into sittings (a session's gap over 30 min ends one; the user returns as a resumed
+  sitting with that many turns of history), fitted on the seen weeks: counts of (first turn, turns) and gap quantiles
+  by transition index. `Model.schedule(rate, duration_s, seed)`: sittings start as Poisson(rate) from -horizon (the
+  99.9th percentile sitting span, 8,105 s) so users are mid-conversation at t=0; load rises by raising the sitting
+  rate, which is what the data does (turns and gaps per sitting are the same at every hour of day, `seen_by_hour`).
+  `python -m regimes.arrivals fit|compare`: the fit carries the source's hash; compare puts the model beside the
+  held-out weeks (sitting-start CV and KS against exponential, request-count dispersion at 1/10/60 s per busy
+  window, KS real vs model for turns, first turn and gaps), numbers only. Not wired into the regimes yet.
 - `regimes/` — load generation: drives a live OpenAI-compatible server the eight ways it gets used, client-side.
   `client.py` (one streamed chat request: TTFT from *scheduled* send to first real token, TPOT = (E2E − TTFT)/(n − 1),
   status ok / error (explicit 4xx or 503 rejection) / silent_drop / truncated / crash (other 5xx, no response,

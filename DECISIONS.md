@@ -65,6 +65,23 @@ with an idea table, immigrants and an extra judge call, so its loss did not meas
 extra model calls. Arm `search-untyped` keeps the search before this (refine only); `--crossover`/`search-crossover`
 are replaced by the crossover type. Found the same day: no search so far passed `--archive`, so none read past ideas.
 
+## 2026-11-01 — Request timing fitted from real conversation traffic; load rises by adding users
+The open-loop regimes get their timing from a model fitted to BurstGPT_3's conversation log (`regimes/arrivals.py`):
+sittings start as a Poisson process at the load's rate, each a run of turns of one conversation (a gap over 30 min
+ends a sitting; 12% of gaps; the user returns as a resumed sitting with history), the gap to the next turn drawn from
+the real gaps by transition index (median 79 s after a first turn, 106-121 s later; 35% of sittings are one turn),
+and a run starts with users already mid-conversation (steady state from the first second). Load rises by raising the
+sitting rate and nothing else. Why (the user): the most realistic measurement. The evidence, from the held-out
+weeks (222 busy 20-minute windows): sitting starts are Poisson within a window (inter-arrival CV 0.96 real, 0.95
+model; KS against exponential p 0.71 and 0.72; request-count variance/mean 0.99/0.98/1.07 real against
+0.99/0.97/1.08 model at 1/10/60 s), and busy hours have more sittings with the same turns and gaps per sitting
+(turns 2.6-3.5 and median gap 94-130 s at every hour of day while starts per hour range 91-3,978). So within a run
+real conversation traffic is not burstier than Poisson; what the model adds is the multi-turn structure (a third of
+requests continue a conversation, with real pauses), which the fixed 3 s think time and per-request Poisson never
+had. Frontier benchmark clients offer Poisson or gamma gaps and a think time the user sets (vLLM, AIPerf, GuideLLM);
+none fits real traffic. This entry adds the model and its comparison; wiring the regimes to it follows. Replaces,
+once wired, Poisson requests and `sessions`' fixed think time (2026-10-02).
+
 ## 2026-10-28 — Everything from the InferenceBench era is removed
 `logs/`, the InferenceBench diagnostics (`assertions`, `blame`, `claims_audit`, `exploration`, `inject`, `noise`),
 `feedback/verdict.py`, their tests, and the `research-v1` tag are deleted; `python -m feedback` reads lab ledgers
