@@ -457,8 +457,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
 - `regimes/arrivals.py` + `arrivals.json` — request timing fitted from real conversation traffic (2026-11-01):
   BurstGPT_3's conversation log cut into sittings (a session's gap over 30 min ends one; the user returns as a resumed
   sitting with that many turns of history), fitted on the seen weeks: counts of (first turn, turns) and gap quantiles
-  by transition index. `Model.schedule(rate, duration_s, seed)`: sittings start as Poisson(rate) from -horizon (the
-  99.9th percentile sitting span, 8,105 s) so users are mid-conversation at t=0; load rises by raising the sitting
+  by transition index (buckets at 5, 10, 20, 40). `Model.schedule(rate, duration_s, seed)`: sittings start as
+  Poisson(rate) from -horizon (the p99.99 span of the model's own sittings, 23,049 s; a pre-roll sitting whose shape
+  cannot reach t=0 is skipped undrawn) so users are mid-conversation at t=0; load rises by raising the sitting
   rate, which is what the data does (turns and gaps per sitting are the same at every hour of day, `seen_by_hour`).
   `python -m regimes.arrivals fit|compare`: the fit carries the source's hash; compare puts the model beside the
   held-out weeks (sitting-start CV and KS against exponential, request-count dispersion at 1/10/60 s per busy

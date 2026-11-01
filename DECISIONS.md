@@ -69,15 +69,18 @@ are replaced by the crossover type. Found the same day: no search so far passed 
 The open-loop regimes get their timing from a model fitted to BurstGPT_3's conversation log (`regimes/arrivals.py`):
 sittings start as a Poisson process at the load's rate, each a run of turns of one conversation (a gap over 30 min
 ends a sitting; 12% of gaps; the user returns as a resumed sitting with history), the gap to the next turn drawn from
-the real gaps by transition index (median 79 s after a first turn, 106-121 s later; 35% of sittings are one turn),
-and a run starts with users already mid-conversation (steady state from the first second). Load rises by raising the
+the real gaps by transition index, pooled in buckets at 5, 10, 20 and 40 turns (median 79 s after a first turn,
+106-121 s over the next four, 66 s past 40: long conversations have short gaps; 42% of sittings are one turn), and
+a run starts with users already mid-conversation: the pre-roll reaches back to the p99.99 span of the model's own
+sittings (23,000 s), so all but ~0.2% of turns are there from the first second. Failed requests (0 prompt tokens,
+0.8% of rows) count as turns here, since the user made them; the corpus drops them. Load rises by raising the
 sitting rate and nothing else. Why (the user): the most realistic measurement. The evidence, from the held-out
-weeks (222 busy 20-minute windows): sitting starts are Poisson within a window (inter-arrival CV 0.96 real, 0.95
-model; KS against exponential p 0.71 and 0.72; request-count variance/mean 0.99/0.98/1.07 real against
-0.99/0.97/1.08 model at 1/10/60 s), and busy hours have more sittings with the same turns and gaps per sitting
-(turns 2.6-3.5 and median gap 94-130 s at every hour of day while starts per hour range 91-3,978). So within a run
-real conversation traffic is not burstier than Poisson; what the model adds is the multi-turn structure (a third of
-requests continue a conversation, with real pauses), which the fixed 3 s think time and per-request Poisson never
+weeks (222 busy 20-minute windows): sitting starts are Poisson within a window (inter-arrival CV 0.96 real, 0.93
+model; KS against exponential p 0.70 and 0.75, the rate estimated from the same sample, so a side-by-side, not a
+calibrated p; request-count variance/mean 0.99/0.98/1.07 real against 0.99/0.98/1.07 model at 1/10/60 s), and busy hours have more sittings with the same turns and gaps per sitting
+(turns 2.4-3.5 and median gap 84-155 s at every hour of day while starts per hour range 91-3,978). So within a run
+real conversation traffic is not burstier than Poisson; what the model adds is the multi-turn structure (two thirds
+of requests continue a conversation, with real pauses), which the fixed 3 s think time and per-request Poisson never
 had. Frontier benchmark clients offer Poisson or gamma gaps and a think time the user sets (vLLM, AIPerf, GuideLLM);
 none fits real traffic. This entry adds the model and its comparison; wiring the regimes to it follows. Replaces,
 once wired, Poisson requests and `sessions`' fixed think time (2026-10-02).

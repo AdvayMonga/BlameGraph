@@ -31,7 +31,8 @@ DEFAULT_CACHE = Path.home() / ".cache" / "inference-server" / "traces"
 BURSTGPT_CSV = "burstgpt/BurstGPT_3.csv"
 WEEK_S = 7 * 86400          # even trace weeks are `seen`, odd weeks `heldout` (corpus/build_corpus.py's rule)
 BREAK_S = 1800.0            # a gap this long ends a sitting
-MAX_INDEX = 5               # gaps are kept by transition index 0..MAX_INDEX-1, then pooled
+INDEX_BUCKETS = (0, 1, 2, 3, 4, 5, 10, 20, 40)   # gaps are kept by transition index, pooled within these buckets
+HORIZON_DRAWS = 100000      # sittings drawn from the fit to find how long its own sittings run
 QUANTILES = 201
 WINDOW_S = 1200.0           # the comparison's windows
 MIN_STARTS = 30             # a window with fewer sitting starts is not compared
@@ -107,20 +108,25 @@ def quantiles(xs: list[float], n: int = QUANTILES) -> list[float]:
 
 
 def _index(k: int) -> str:
-    return str(min(k, MAX_INDEX))
+    return str(max(b for b in INDEX_BUCKETS if b <= k))
 
 
 def fit(sittings: list[Sitting]) -> dict:
-    """Counts of (first_turn, turns) and gap quantiles by transition index."""
+    """Counts of (first_turn, turns) and gap quantiles by transition index; `horizon_s` is the p99.99 span of the
+    fitted model's own sittings (at least the real p99.9), so a schedule's pre-roll covers what the model draws."""
     gaps: dict[str, list[float]] = defaultdict(list)
     for s in sittings:
         for k, g in enumerate(s.gaps):
             gaps[_index(s.first_turn + k)].append(g)
     shapes = Counter(f"{s.first_turn}:{s.turns}" for s in sittings)
     spans = sorted(sum(s.gaps) for s in sittings)
-    return {"sittings": len(sittings), "shapes": dict(sorted(shapes.items(), key=lambda kv: -kv[1])),
-            "gap_s": {k: quantiles(v) for k, v in sorted(gaps.items())},
-            "span_s_max": spans[-1], "horizon_s": spans[round(0.999 * (len(spans) - 1))]}
+    out = {"sittings": len(sittings), "shapes": dict(sorted(shapes.items(), key=lambda kv: -kv[1])),
+           "gap_s": {k: quantiles(v) for k, v in sorted(gaps.items())},
+           "span_s_max": spans[-1], "horizon_s": spans[round(0.999 * (len(spans) - 1))]}
+    model, rng = Model(out), random.Random(0)
+    drawn = sorted(sum(model.draw_sitting(0.0, rng).gaps) for _ in range(HORIZON_DRAWS))  # reach 0: never None
+    out["horizon_s"] = max(out["horizon_s"], drawn[round(0.9999 * (len(drawn) - 1))])
+    return out
 
 
 def by_hour(sittings: list[Sitting]) -> dict:
@@ -143,7 +149,8 @@ class Model:
         self.shapes = [tuple(int(x) for x in k.split(":")) for k in fitted["shapes"]]
         self.weights = list(fitted["shapes"].values())
         self.gap_q = dict(fitted["gap_s"])
-        self.horizon_s = float(fitted["horizon_s"])     # sittings longer than this and under way at t=0 are missed
+        self.horizon_s = float(fitted["horizon_s"])     # sittings longer than this (0.01%) under way at t=0 are missed
+        self.max_span = {sh: sum(self.gap_q[_index(sh[0] + k)][-1] for k in range(sh[1] - 1)) for sh in self.shapes}
 
     @classmethod
     def load(cls, path: Path = DEFAULT_MODEL) -> "Model":
@@ -155,8 +162,12 @@ class Model:
         i, frac = int(u), u - int(u)
         return q[i] + (q[min(i + 1, len(q) - 1)] - q[i]) * frac
 
-    def draw_sitting(self, start_s: float, rng: random.Random) -> Sitting:
-        first, turns = rng.choices(self.shapes, self.weights)[0]
+    def draw_sitting(self, start_s: float, rng: random.Random, reach_s: float = 0.0) -> Sitting | None:
+        """None when the drawn shape cannot last `reach_s` (the pre-roll skips what cannot reach t=0)."""
+        shape = rng.choices(self.shapes, self.weights)[0]
+        if self.max_span[shape] < reach_s:
+            return None
+        first, turns = shape
         return Sitting(start_s, first, [self.draw_gap(first + k, rng) for k in range(turns - 1)])
 
     def schedule(self, rate: float, duration_s: float, seed) -> list[Turn]:
@@ -167,7 +178,10 @@ class Model:
             t += rng.expovariate(rate)
             if t >= duration_s:
                 return sorted(out, key=lambda x: x.at_s)
-            s, at = self.draw_sitting(t, rng), t
+            s, at = self.draw_sitting(t, rng, -t), t
+            if s is None:
+                k += 1
+                continue
             for j in range(s.turns):
                 if j:
                     at += s.gaps[j - 1]
@@ -277,7 +291,7 @@ def main(argv=None):
                "fit": fit(seen), "seen_by_hour": by_hour(seen)}
         a.out.write_text(json.dumps(out, indent=1) + "\n")
         print(f"wrote {a.out}: {len(seen)} sittings, {len(out['fit']['shapes'])} shapes, "
-              f"horizon {out['fit']['span_s_max']:.0f} s")
+              f"horizon {out['fit']['horizon_s']:.0f} s, longest sitting {out['fit']['span_s_max']:.0f} s")
     else:
         print(json.dumps(compare(Model.load(a.model), sittings["heldout"], a.seed), indent=1))
 
