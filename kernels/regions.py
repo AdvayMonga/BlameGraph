@@ -10,7 +10,8 @@ bound is the bytes the region must move (its inputs and outputs; intermediates c
 beside the bytes its stations move one by one. `functional()` gives an in-place writer (kv_append) a copy of the K/V
 pool, a copy the engine never makes, so its winner could not install as is: a region must end before kv_append or
 start after it (refused otherwise, for now). The checker clones every input, shared weights included, several times
-(the reference's fp32 copy, the baseline's, the before-copies), so a whole-step region does not fit in memory yet."""
+(the reference's fp32 copy, the baseline's, the before-copies), so a whole step of stations does not fit in memory:
+the whole step is kernels/step.py, whose weights are passed beside the inputs, never cloned."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -165,6 +166,23 @@ STATION_MODULES = ("inference_server.models.fused", "inference_server.models.moe
                    "inference_server.models.paged_attention_kernel", "inference_server.models.paged_kv_cache",
                    "inference_server.models.qwen3_moe")
 POOL = ("k_cache", "v_cache")           # the K/V pool's names when the engine declares no IN_PLACE
+LAYER = 0                                # the layer a region is captured at and held for (kernels/hold.py)
+
+
+def _needs_worker(*_a, **_k):
+    raise RuntimeError("this region task is described, not loaded: it loads where its samples and holder are")
+
+
+def light(name: str, heldout_axes: tuple[int, ...] = ()) -> Task:
+    """A region as the controller knows it without the engine, its samples or its holder (all on the GPU host): its
+    name, entry, capture traffic's env and, from a shapes file the GPU host wrote, its held-out axes. Enough to
+    capture it, select its shapes and write its prompts; nothing here can run it."""
+    from lab.capture import STEP, STEP_ENTRY
+    step = name == STEP
+    return Task(name=name, entry=STEP_ENTRY if step else f"{ENGINE}:DECODE", reference=_needs_worker,
+                make_inputs=_needs_worker, shape_of=lambda call: None, cost=_needs_worker, layouts=(),
+                heldout_axes=tuple(heldout_axes), error_budget=ERROR_BUDGET, capture_fn=name,
+                capture_env=() if step else (("CAPTURE_REGION_LAYERS", str(LAYER)), ("MEGAKERNEL", "0")))
 
 
 def _engine():

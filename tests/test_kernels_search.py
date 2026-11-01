@@ -164,7 +164,7 @@ def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_node():
         os.environ["KERNEL_EVAL_CONFIG"] = str(cfg)
         out = Path(d) / "run"
         tree, cost = search(SEED.read_text(), system_message(t), scripted,
-                            cascade(evaluator.judge_stage), out, evals=10, usd=100.0)
+                            cascade(evaluator.judge_stage), out, evals=10)
         best = tree.best()
         root = next(n for n in tree.nodes.values() if n.parent is None)    # the naive seed is ~0.1x the baseline
         assert "rsqrt" in best.code and best.metrics["correct"] == 1.0 and best.score > 3 * root.score
@@ -209,7 +209,7 @@ def test_the_prompt_states_the_roofline_gap_and_the_search_does_not_stop_there()
     judge = lambda code: {"metrics": n.metrics, "artifacts": n.artifacts}
     silent = lambda system, user: ("", 0.0)
     with tempfile.TemporaryDirectory() as d:
-        _, cost = search("x = 1\n", "S", silent, judge, Path(d), evals=5, usd=1.0)
+        _, cost = search("x = 1\n", "S", silent, judge, Path(d), evals=5)
     assert cost["model_calls"] > 0 and "stopped_near_roofline" not in cost
 
 
@@ -251,7 +251,7 @@ def test_diagnosis_facts_bound_type_two_shape_counters_ranking_and_patience():
     n = iter(range(100))
     with tempfile.TemporaryDirectory() as d:
         _, cost = search("x = 0\n", "S", lambda s, u: (f"<<<<<<< SEARCH\nx = 0\n=======\nx = {next(n) + 1}\n>>>>>>> "
-                                                       "REPLACE", 0.0), lambda code: flat, Path(d), evals=50, usd=1.0,
+                                                       "REPLACE", 0.0), lambda code: flat, Path(d), evals=50,
                          patience=3)
     assert cost["stopped_no_progress"] and cost["evals"] <= 5                # no score ever beats the root's
 
@@ -410,16 +410,16 @@ def test_every_arm_differs_from_kernels_search_in_one_flag():
     cli.main = lambda argv: seen.append(argv) or print('{"ledger": null}')
     try:
         from types import SimpleNamespace
-        a = SimpleNamespace(task="t", shapes="s", evals=3, usd=1.0, model="m", device="cpu", initial=None)
+        a = SimpleNamespace(task="t", shapes="s", evals=3, model="m", device="cpu", initial=None)
         assert "search-beam" not in ab.ARMS                       # the beam was removed (2026-10-27)
-        for arm in ("kernels.search", "search-no-tools", "search-mcts", "search-gen20", "search-untyped"):
+        for arm in ("kernels.search", "search-no-tools", "search-mcts", "search-untyped"):
             ab.ARMS[arm](a, Path("/tmp/x"), 0)
     finally:
         cli.main = orig
     base = seen[0]
     extras = [argv[len(base):] for argv in seen[1:]]
-    assert extras == [["--no-judge-tools"], ["--mcts"], ["--gen-size", "20", "--keep", "12"], ["--no-types"]]
-    assert "--second-judge-model" in base            # every arm names hypotheses with the one model
+    assert extras == [["--no-judge-tools"], ["--mcts"], ["--no-types"]]
+    assert "--second-judge-model" in base            # every arm makes changes with the one model
     assert all(argv[:len(base)] == base for argv in seen)
     try:
         ab.main(["--task", "t", "--shapes", "s", "--out", "/tmp/x", "--arms", "nope"])
@@ -578,18 +578,18 @@ def test_a_turn_whose_stream_dies_is_sent_again_and_a_real_error_is_not():
         llm._stream, time.sleep = orig, real_sleep
 
 
-def test_inspirations_show_other_branches_to_the_judge_only():
+def test_the_prompt_shows_other_branches_and_the_start_as_full_code():
     from kernels.search.loop import prompt
     t = Tree()
     ok = lambda sc: {"combined_score": sc, "correct": 1.0, "stage": 2}        # noqa: E731
     t.add(Node("r", None, "a = 1\nb = 1\n", ok(1.0), {}, 0))
     t.add(Node("x", "r", "a = 2\nb = 1\n", ok(1.5), {}, 1))
     t.add(Node("y", "r", "a = 1\nb = 2\n", ok(1.3), {}, 1))
-    judge_view = prompt(t, t.nodes["y"], coder=False)
-    assert "# Other programs in the tree" in judge_view and "+a = 2" in judge_view and "Program r" not in \
-        judge_view.split("# Other programs")[1]
-    assert "+a = 2" not in prompt(t, t.nodes["y"], '{"modification_plan": "p"}')         # the coder: its plan only
-    assert "Hypotheses already measured" not in judge_view          # dropped: the archive lookup does this by similarity
+    view = prompt(t, t.nodes["y"])
+    assert "## Program x (score 1.5000)\n```python\na = 2\nb = 1\n" in view          # full code, not a diff
+    assert "# The starting program r" in view and "# The starting program" not in prompt(t, t.nodes["r"])
+    assert "Hypotheses already measured" not in view
+
 
 def test_a_flagged_candidate_is_passed_over_at_promotion():
     from kernels.evolve.run import retime
@@ -694,7 +694,7 @@ def test_a_query_tool_that_cannot_run_answers_the_model_instead_of_crashing_the_
     assert out.startswith("query failed: ") and "Error" in out
 
 
-def test_the_cli_builds_its_funnel_with_every_task_in_the_memory_and_this_task_in_the_archive(monkeypatch, tmp_path):
+def test_the_cli_builds_its_funnel_with_every_task_in_the_memory(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     from kernels import archive
@@ -703,9 +703,38 @@ def test_the_cli_builds_its_funnel_with_every_task_in_the_memory_and_this_task_i
     path = archive.export([archive.Entry("i1", "toy", "t", {}), archive.Entry("i2", "other", "u", {})],
                           tmp_path / "archive.jsonl")
     a = SimpleNamespace(archive=str(path), second_judge_model="none", second_judge_share=4, effort="high",
-                        judge_tools=False, cheap_model="c", wide_model="w", model="m", ptx=None, per_call=20, keep=8,
-                        parallel=4, max_repairs=3, ncu=False, precheck=True, workers=8, tune_points=8)
-    monkeypatch.setattr(archive, "_embedder", lambda root: None)
-    f = cli._funnel(a, SimpleNamespace(name="toy", size_expr=None), lambda s, u: ("", 0.0))
-    assert [e.id for e in f.archive] == ["i1"] and [e.id for e in f.library] == ["i1", "i2"]
-    assert f.task == "toy" and f.tune and f.keep == 8 and f.precheck and f.workers == 8
+                        judge_tools=False, model="m", per_call=20, parallel=4, ncu=False, precheck=True,
+                        workers=8, tune_points=8)
+    import lab.search
+    monkeypatch.setattr(lab.search, "FastEmbed", lambda cache: "EMBEDDER")
+    f = cli._funnel(a, SimpleNamespace(name="moe_gemm_fp8", size_expr=None), lambda s, u: ("", 0.0))
+    assert [e.id for e in f.library] == ["i1", "i2"] and f.embedder == "EMBEDDER"
+    assert f.task == "moe_gemm_fp8" and f.tune and f.precheck and f.workers == 8 and f.parallel == 4
+
+
+def test_the_cli_starts_the_generations_from_every_competitor_port_of_its_task(monkeypatch, tmp_path):
+    from kernels.search import __main__ as cli
+    from kernels.search import generations
+    program = tmp_path / "start.py"
+    program.write_text("# EVOLVE-BLOCK-START\nimport torch\n\n\ndef silu_mul(x):\n    return x\n"
+                       "# EVOLVE-BLOCK-END\n\nkernel = silu_mul\n")
+    config = tmp_path / "eval_config.json"
+    config.write_text("{}")
+    monkeypatch.setenv("KERNEL_EVAL_CONFIG", str(config))
+    monkeypatch.setattr(cli, "_shapes", lambda task, a: {})
+    monkeypatch.setattr(cli, "prepare", lambda *a, **k: ({}, program))
+    monkeypatch.setattr(cli, "setting", lambda *a, **k: "")
+    monkeypatch.setattr(cli, "Claude", lambda *a, **k: "JUDGE")
+    monkeypatch.setattr(cli, "_funnel", lambda *a, **k: "FUNNEL")
+    seen = {}
+
+    def evolve(initial, *a, starts=None, **k):
+        seen.update(starts=starts)
+        raise SystemExit("judged")
+    monkeypatch.setattr(generations, "search", evolve)
+    try:
+        cli.main(["--task", "silu_mul", "--shapes", "s.json", "--out", str(tmp_path / "out"), "--device", "cpu"])
+    except SystemExit as e:
+        assert str(e) == "judged"
+    assert list(seen["starts"]) == ["vllm.silu_and_mul"] and "_silu_mul_engine = silu_mul" in seen["starts"][
+        "vllm.silu_and_mul"]

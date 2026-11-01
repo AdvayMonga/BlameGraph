@@ -1,0 +1,112 @@
+# Other implementations of our kernel tasks: each library's upstream source, kept verbatim under src/<library>/<path>
+# (python -m kernels.library fetch writes them from these entries), and the parts every search prompt shows.
+# All four libraries are Apache-2.0. `source`: upstream paths, each optionally with a line range ("#L62-L172").
+# `sass`: where a GPU host finds the compiled kernel for its card (the package whose .so files hold it, and a regex of
+# the kernel's name); a Triton kernel's card comes from the `kernels.competitors` dump instead, and SGLang's JIT-built
+# kernels have none yet.
+
+[libraries]
+vllm = { repo = "vllm-project/vllm", version = "v0.32.0" }
+sglang = { repo = "sgl-project/sglang", version = "v0.5.22" }
+flashinfer = { repo = "flashinfer-ai/flashinfer", version = "v0.7.2.post1" }
+trtllm = { repo = "NVIDIA/TensorRT-LLM", version = "v1.2.1" }
+
+[[kernel]]
+name = "vllm.rms_norm"
+tasks = ["rmsnorm"]
+source = ["csrc/layernorm_kernels.cu"]
+sass = { package = "vllm", pattern = "rms_norm_kernel" }
+
+[[kernel]]
+name = "flashinfer.rmsnorm"
+tasks = ["rmsnorm"]
+source = ["include/flashinfer/norm.cuh#L62-L172"]
+sass = { package = "flashinfer", pattern = "RMSNormKernel" }
+
+[[kernel]]
+name = "trtllm.rmsnorm"
+tasks = ["rmsnorm"]
+source = ["cpp/tensorrt_llm/kernels/rmsnormKernels.cu"]
+sass = { package = "tensorrt_llm", pattern = "generalRmsNorm" }
+
+[[kernel]]
+name = "vllm.fused_add_rms_norm"
+tasks = ["add_rmsnorm"]
+source = ["csrc/layernorm_kernels.cu"]
+sass = { package = "vllm", pattern = "fused_add_rms_norm_kernel" }
+
+[[kernel]]
+name = "flashinfer.fused_add_rmsnorm"
+tasks = ["add_rmsnorm"]
+source = ["include/flashinfer/norm.cuh#L415-L543"]
+sass = { package = "flashinfer", pattern = "FusedAddRMSNormKernel" }
+
+[[kernel]]
+name = "sglang.fused_add_rmsnorm"
+tasks = ["add_rmsnorm"]
+source = ["python/sglang/kernels/jit/csrc/elementwise/fused_add_rmsnorm.cuh"]
+
+[[kernel]]
+name = "vllm.fused_qknorm_rope"
+tasks = ["rmsnorm_rope"]
+source = ["csrc/fused_qknorm_rope_kernel.cu#L89-L560"]
+sass = { package = "vllm", pattern = "fusedQKNormRopeKernel" }
+
+[[kernel]]
+name = "trtllm.fused_qknorm_rope"
+tasks = ["rmsnorm_rope"]
+source = ["cpp/tensorrt_llm/kernels/fusedQKNormRopeKernel.cu"]
+sass = { package = "tensorrt_llm", pattern = "fusedQKNormRopeKernel" }
+
+[[kernel]]
+name = "vllm.silu_and_mul"
+tasks = ["silu_mul"]
+source = ["csrc/activation_kernels.cu#L19-L178"]
+sass = { package = "vllm", pattern = "act_and_mul_kernel" }
+
+[[kernel]]
+name = "flashinfer.silu_and_mul"
+tasks = ["silu_mul"]
+source = ["include/flashinfer/activation.cuh"]
+sass = { package = "flashinfer", pattern = "act_and_mul_kernel" }
+
+[[kernel]]
+name = "sglang.silu_and_mul"
+tasks = ["silu_mul"]
+source = ["python/sglang/kernels/jit/csrc/elementwise/activation.cuh"]
+
+[[kernel]]
+name = "vllm.topk_softmax"
+tasks = ["topk_softmax"]
+source = ["csrc/moe/topk_softmax_kernels.cu#L262-L625"]
+sass = { package = "vllm", pattern = "topkGatingSoftmax" }
+
+[[kernel]]
+name = "trtllm.moe_routing"
+tasks = ["topk_softmax"]
+source = ["cpp/tensorrt_llm/kernels/customMoeRoutingKernels.cu", "cpp/tensorrt_llm/kernels/moeTopKFuncs.cuh"]
+sass = { package = "tensorrt_llm", pattern = "customMoeRoutingKernel" }
+
+[[kernel]]
+name = "vllm.fused_moe"
+tasks = ["moe_gemm", "moe_gemm_fp8", "moe_gemm_scatter_fp8"]
+source = ["vllm/model_executor/layers/fused_moe/fused_moe.py#L44-L62",
+          "vllm/model_executor/layers/fused_moe/fused_moe.py#L297-L608"]
+
+[[kernel]]
+name = "sglang.fused_moe"
+tasks = ["moe_gemm", "moe_gemm_fp8", "moe_gemm_scatter_fp8"]
+source = ["python/sglang/kernels/ops/moe/fused_moe_triton_kernels.py#L72-L91",
+          "python/sglang/kernels/ops/moe/fused_moe_triton_kernels.py#L324-L719"]
+
+[[kernel]]
+name = "vllm.decode_attention"
+tasks = ["paged_decode", "paged_decode_fp8"]
+source = ["vllm/v1/attention/ops/triton_decode_attention.py#L277-L468",
+          "vllm/v1/attention/ops/triton_decode_attention.py#L574-L640"]
+
+[[kernel]]
+name = "flashinfer.batch_decode"
+tasks = ["paged_decode", "paged_decode_fp8"]
+source = ["include/flashinfer/attention/decode.cuh#L42-L193", "include/flashinfer/attention/decode.cuh#L401-L645"]
+sass = { package = "flashinfer", pattern = "BatchDecodeWithPagedKVCacheKernel" }

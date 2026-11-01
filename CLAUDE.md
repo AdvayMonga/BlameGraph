@@ -90,7 +90,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   the task's module, the traffic and the spec are unchanged, `tree_key`), runs
   `kernels.search` on the controller with its evaluator on the worker over ssh, gates the winner on held-out shapes,
   and saves a patch of the engine module in the workspace for the agent to apply; kernels-layer hypotheses only;
-  `budget_usd` split between model calls and GPU time); every record's `cost` has wall seconds, and
+  `budget` (USD) split between model calls and GPU time); every record's `cost` has wall seconds, and
   GPU tools charge them at `LAB_GPU_USD_PER_HOUR` / the target's `[cost] gpu_usd_per_hour` to the run's budget) +
   `proftools.py` (profile = torch.profiler, trace = nsys, kernel = ncu, hostprof = py-spy, all one path: lab.profile's
   workload in the jail with validated args, the GPU watched like a served engine (`serve.Watch`: refused when busy,
@@ -269,39 +269,38 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `tests/test_kernels_evolve.py` must all score 0; selection never sees held-out shapes, `gate` judges them (correctness, and their speedup as a fact); `validate_gpu.sh` = the GPU validation (shapes captured under real corpus traffic at several concurrencies, `CAPTURE_SPECS`; never synthetic prompts, whose batches have uniform lengths); tolerances from the target's
   `[kernels]`). `kernels/search/` (extra `kernel-search`; our own layer-1 generator, replacing OpenEvolve, which stays as the A/B baseline: `python -m
   kernels.search`; by default the genetic search (`kernels/search/generations.py`, decided 2026-10-26): generation 0 is
-  one funnel round from the start program (40 ideas, the fastest 12 to the full exam), then up to `--generations` (10)
-  generations, each a funnel round whose `--gen-size` (24) ideas are split over four idea types (decided 2026-10-29;
+  one round from the start program (40 changes; competitors' ported kernels, `kernels.competitors.starts`, judged beside
+  it and joined to the population), then exactly `--generations` (10) generations (decided 2026-10-30:
+  nothing stops it sooner), each a round whose `--gen-size` (24) changes are split over
+  four idea types (decided 2026-10-29;
   `--no-types` = refine only, arm `search-untyped`): refine (new ideas on `--parents` (4) programs drawn from the
   population: the 32 best open programs, the best always, the rest by percentile reward + 0.05 without replacement),
   persist (a line's last change taken further; every child that beat its parent heads a line, which moves to a persist
   child that beats it and closes after 3 generations without one), fresh (a different overall structure, half from the
-  start, half from a random program) and crossover (a parent shown another parent's diff), 8/6/6/4 adapted each
-  generation by each type's Laplace-smoothed rate of new bests (floor 2); the fastest `--keep` (8) to the full exam,
-  shared out by type the same way, children under their own parent with their type (`Node.kind`); every judge call gets
+  start, half from a random program) and crossover (a parent shown another parent's full code), 8/6/6/4 adapted each
+  generation by each type's Laplace-smoothed rate of new bests (floor 2); every correct program takes the full exam,
+  children under their own parent with their type (`Node.kind`); every call gets
   the memory (`kernels/search/memory.py`, cached blocks: ideas that beat their parent on other tasks with their best gain
   and bound type, then every idea tried on this task, earlier runs from `--archive` and this run so far, with measured
-  gains; archived ideas naming a program of their own run left out); a generation where under 1/5 of
-  the examined beat their parent makes the next 2/3 as large; stops after `--patience` (3) generations with
-  no new best, the budget or `--wall-s` (wall-clock; `--gpu-s` sums every evaluator job's seconds, parallel ones and
-  the no-GPU precheck included); with `--mcts` instead a tree of refinement chains, one parent per round chosen by MCTS (UCT with
+  gains; archived ideas naming a program of their own run left out); with `--mcts` instead a tree of refinement chains, one parent per round chosen by MCTS (UCT with
   C = 0.6 on percentile rewards and max backup,
   KernelPro's progressive widening and virtual-child rule), a node closed after 3 judged failed children or 3 edits
-  that never reached the GPU; in every mode the model is shown only the
-  parent program, its measurements and its lineage, SEARCH/REPLACE answers, duplicates refused before any GPU time,
-  each round one funnel round (`kernels/search/funnel.py`, since it won the 2026-10-24 A/B; the beam it replaced was
-  removed 2026-10-27), its judge (Opus 5.5) naming changes as JSON, each written and judged
-  (each and its fate in `hypotheses.jsonl`), from the facts (and, its choice when, Anthropic's web search
-  and read-only SQL over the agent's view of the ledger index, `--judge-tools`; the harness pastes no research), with
-  up to 2 better programs from other branches as diffs (CodeEvolve's inspirations), including CudaForge's 24 ncu counters
+  that never reached the GPU; in every mode the model is shown the
+  parent program, its measurements, its lineage, the starting program and up to 2 better programs from other branches,
+  all as full code (CodeEvolve's inspirations; decided 2026-10-30), one call per change answering with its hypothesis as
+  JSON and the change as SEARCH/REPLACE blocks (`kernels/search/funnel.py`; each and its fate in `hypotheses.jsonl`),
+  duplicates refused before any GPU time, from the facts (and, its choice when, Anthropic's web search
+  and read-only SQL over the agent's view of the ledger index, `--judge-tools`; the harness pastes no research),
+  including CudaForge's 24 ncu counters
   (`kernels/evolve/ncu.py`, stage 3 of the jailed evaluator; collected in the jail since 2026-10-27, on a Nebius H200
   whose driver had them open: the earlier refusals, ERR_NVGPUCTRPERM, were on hosts with them closed, which
   `vm-setup.sh` never opened because it grepped the module option's name, not the driver's `RmProfilingAdminOnly`; a
-  run stops asking after the first refusal), and the coder writing it; launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen by a measured grid
-  search before every first measurement of the program's speed (decided 2026-10-27; `kernels/search/tune.py` `tuned`,
-  `Funnel.measure`, `cascade(tuned=True)`; `--tune-points` (8), 0: off): the evaluator's tune stage (jailed stage 6,
-  7 on the most-called shape only; `core._tune`) loads each point with CONFIG rewritten, checks it on the most-called
-  shape and times it, on that shape before the quick timing and on every seen shape before the full exam, and the
-  program is measured and kept with the fastest point written in; after the full exam's sweep, where different points
+  run stops asking after the first refusal); launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen by a measured grid
+  search before every full exam (decided 2026-10-27; `kernels/search/tune.py` `tuned`,
+  `Funnel.measure`, `cascade(tuned=True)`; `--tune-points` (8), 0: off): the evaluator's tune stage (jailed stage 6;
+  `core._tune`) loads each point with CONFIG rewritten, checks it on the most-called
+  shape and times it on every seen shape, and the
+  program is measured and kept with the fastest point written in; where different points
   win in different size regions, a dispatcher between `# TUNED-DISPATCH-START/END` picks CONFIG per call from the
   call's size (`Task.size_expr`, tensor shapes only, so CUDA graphs bake it per captured size), removed (`tune.strip`)
   before the grid is tuned again; the root program too; each point's score is a fact in the prompt; re-timing and the gate measure the tuned program as it is; the prompt states the best program's % of its call-weighted roofline bound as a fact, and with
@@ -328,7 +327,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   reference, `bytes_moved` (fused vs one-by-one), and the error budget: `Task.error_budget` (2) lets each element differ from the reference by
   that many times the baseline's own error there, on top of the dtype's tolerance (`check._compare(base=, k=)`), in the
   checker, the timed outputs and `verify.py`; the baseline is bound before the candidate loads and its modules (`Task.watch`) are watched for
-  patches. The engine's stations (`models/stations.py`) and region capture are on engine branches, not merged; the
+  patches. The engine's stations (`models/stations.py`) and region capture are merged in the engine (main 0a00b0c); the
   tests use fake stations. `from_engine(first, last, samples, shared_weights)` binds a region to the engine's
   `inference_server.models.stations.DECODE` (as `functional(DECODE)`, which copies what kv_append writes in place, so a
   region including an `IN_PLACE` writer is refused): inputs from a CAPTURE_REGION dir's samples of the holder's `layer`
@@ -338,7 +337,19 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   (`region:F:L`); `load("region:FIRST:LAST")` and `from_config` (keys `samples`, `shared_weights`) take it, and so do
   `kernels.search` and `kernels.evolve run|gate|split|ship` (`--task region:F:L --samples DIR --shared-weights FILE`;
   the samples are the captures unless `--captures` is given; both keys go into `eval_config.json` and the gate's
-  config); kernel_search refuses regions until the pipeline takes them. The jail mounts the samples and the holder
+  config). `load` with neither key gives `regions.light`: name, entry, capture env (`CAPTURE_REGION_LAYERS` =
+  `regions.LAYER` 0, `MEGAKERNEL=0`) and held-out axes, no engine import: what the controller knows. kernel_search takes
+  `region:F:L` end to end (`kernels/pipeline.py`): captured with `lab.profile --capture region:F:L` (sets the engine's
+  CAPTURE_REGION/_DIR before the backend is built) under the scored regimes' traffic, `pipeline.pack` merges the
+  captures into one samples dir (each traffic's calls kept apart under traffic<i>/profile-<source>/captures, so each
+  weighs the same), pushed to a remote worker, and `pipeline.hold` runs `python -m kernels.hold` where the evaluator
+  runs (over the evaluator's ssh env, or locally with the engine's python): it loads the engine (target env, 16 K/V
+  blocks, no graphs, no megakernel), shares the region's weights (`Holder(jail_uid=)`), describes the region (shapes
+  split with `heldout_axes`, ints, sources, the start program, the engine's station names) on one JSON line, and holds
+  until its stdin closes. The search runs on `--shapes --initial --samples --shared-weights` (paths on the worker;
+  with KERNEL_EVAL_SSH `run.load_task` describes the region by `regions.light` from the shapes file, never loading it
+  on the controller), the gate on the described shapes, and the winner comes back as a patch adding the override
+  module (`ship.region_files`, git-free, overlap checked against the overrides in the agent's tree). The jail mounts the samples and the holder
   file with its `.pristine` and `.constants` sidecars read-only and shares the host's IPC
   namespace (root lab only, never at the precheck); afterwards every /dev/shm entry of the jail's uid is removed.
   `kernels/shared_weights.py`: a holder shares tensors by reference (CUDA IPC, or shared memory on the CPU) and writes
@@ -359,38 +370,56 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   stations call (`STATION_MODULES`) are watched; the K/V pool's shape is not part of a shape. First run on the H200
   2026-10-27 (engine branch engine/region-capture): router..down of layer 0 captured under mixed_1 and mixed_3, held,
   split and gated jailed with the weights attached over IPC: the start program passed every gate, 1.0x seen, 1.001x
-  held-out. A region search from the controller (the evaluator over ssh) is still refused: the task loads where
-  the engine and the holder are.
+  held-out. Not yet run through kernel_search or over ssh on a GPU.
+- `kernels/step.py` — the whole decode step as one region, `region:embed:argmax` (`lab.capture.STEP`): the engine's
+  megakernel (`megakernel.decode_step`) as a kernel task. Captured by `lab.capture.step` (`lab.profile --capture
+  region:embed:argmax`: wraps decode_step; the first call per (rows, block-table width) kept whole up to 256 MiB:
+  tokens, pos, bt renumbered to the blocks its rows touch, every layer's K/V of those blocks stacked [layers, blocks,
+  ...], and logits, next tokens and those blocks after). Inputs (tokens, pos, bt, k_cache, v_cache), outputs (logits,
+  next, K/V): pure, so baseline and programs copy the K/V per call. The weights are not inputs: `Task.call` passes the
+  holder's dict (`step.weights`: every layer's `<i>.w.*`, embed, final norm, lm_head, inv_freq; cfg, n_layers) after
+  the inputs, so the checker never clones them; attached over IPC only (no copy fallback). Baseline: the engine's
+  decode_step on a Model namespace built from the held weights; reference: the engine's `stations.reference()` in
+  fp32 over every layer, error budget 2x; bytes bound: every non-expert weight + top-k experts per layer + lm_head + the
+  K/V. Start program: decode_step.cu as a raw literal (its globaltimer stamp edited to 0, `START_EDITS`) built with
+  load_inline under the engine's build flags. Shapes (rows, bt width), both held-out axes. A winner does not ship: the
+  engine has no hook for a whole-step override (`ship.region_files` refuses it, kernel_search reports `patch_refused`).
+  Tested on the CPU with a fake megakernel and the engine's stations; never run on a GPU.
 - `kernels/ptx.py` — the PTX comparison's cards (decided 2026-10-22, after Standard Kernel): each implementation's
   kernels counted from its PTX (or `cuobjdump -sass` output, for libraries that ship no PTX): instruction classes,
   widest vector access, declared registers, static shared memory, and the Hopper features in use (wgmma, TMA,
   setmaxnreg, mbarrier, cp.async, mma, ldmatrix), with a measured time beside it when given; fastest first.
-  `python -m kernels.ptx card --name N PTX ... [--timing N=MS] --out F`, read by `kernels.search --ptx F`. Producing
-  competitors' PTX and timings on our shapes needs their libraries on the GPU host (not built yet).
-- `kernels/search/funnel.py` — one funnel round (decided 2026-10-22; `kernels.search`'s tiers since 2026-10-25, when
-  it beat the beam on moe_gemm_fp8 1.161x to 1.026x seen, 1.284x to 1.096x held-out; the beam was removed
-  2026-10-27), from one parent (`expand`, an MCTS expansion: one judge call per slice of facts x `--per-call`
-  hypotheses) or several (`generation`: one call per slot, a parent with an idea type and its quota, `Slot`; a refine
-  slot's slice rotated across the parents so each call reads one slice and every slice is read; persist, fresh and
-  crossover slots read the measurements; generation 0 splits its 40 over the start's slices). The slices:
-  measurements, winners elsewhere in the tree, compiler report, PTX comparison (the archive slice became the memory,
-  2026-10-29); a slice with no facts is skipped; the type's request ends the prompt (`loop.MODES`). Hypothesis calls cycle through the judge mix (`--second-judge-model` Sonnet 5.5 one call in
-  `--second-judge-share` 4; the past-failure check stays the judge's). Then: same-idea clusters
-  merged by `--cheap-model`, ideas like archived ones that never beat their parent kept only when the judge names what
-  differs, `--wide-model` writes each, the no-GPU precheck (`--precheck`, default on) drops what fails to build and keeps
-  the compiler's report on the program (the compiler slice of its children), stage 1 in `--parallel` jails, failures repaired once by
-  the strong coder, a quick timing on the most-called shape (`jailed.QUICK_STAGE`; programs within 5% of the cutoff
-  timed once more and ranked by their mean, `race`), the fastest `--keep` rewritten by the strong coder (the rewrite
-  kept only if it passes stage 1 and times faster, decided 2026-10-27) and sent to stage 2; only those join the tree
-  (a round that examined nothing is one failure of its parent). A parent gets its ncu counters (stage 3) when it is
-  first chosen, not at its full exam. Model calls run `--workers` (8) at a time, the first of each batch alone so the
-  rest read the prompt cache it writes (`kernels/search/llm.py`'s `CACHE_SPLIT`: the stable part of a prompt is sent as
-  cached blocks); GPU timings run one at a time. Each hypothesis may
-  predict ncu counter changes (`mechanism`), measured against the parent's. Every idea's fate goes to
-  `hypotheses.jsonl` (each idea with its `parent_id`; the row's `parents`, `improved` and the Spearman rank correlation
-  between the quick timing and the full exam over the programs that took both, `quick_vs_full_spearman`), which the
-  archive reads. `--facts FILE` adds facts to every prompt; the `kernel_search` tool passes the scored regimes and the
-  task's share of the latest profiled window (`pipeline.facts`).
+  `python -m kernels.ptx card --name N PTX ... [--timing N=MS] --out F`; the cards live in
+  `knowledge/ptx/<task>.txt`, built by `python -m kernels.library cards` (only moe_gemm_fp8's exist yet).
+- `kernels/library/` — other implementations of every kernel task in one place (decided 2026-10-31): `index.toml`
+  names 2-3 per task from vLLM v0.32.0, SGLang v0.5.22, FlashInfer v0.7.2.post1 and TensorRT-LLM v1.2.1 (upstream
+  paths with line ranges; whole files kept verbatim in `src/`, `python -m kernels.library fetch` re-downloads them),
+  and `block(task)` is the part of every search prompt (the system message, cached) that shows each one's source, URL
+  and PTX/SASS card where built, and the starting program's card; no timings. `python -m kernels.library cards --task T
+  --out knowledge/ptx/T.txt [--dump DIR]` on the GPU host: each entry's card from a `kernels.competitors` dump or from
+  its package's .so (`sass` in the index; SGLang's JIT kernels and Triton kernels without a dump have none). Regions
+  have no entries.
+- `kernels/competitors.py` — competitors timed on our shapes (`python -m kernels.competitors`, libraries installed) and
+  `starts(task, program)`: each task's vLLM v0.32.0 port as a starting program from source vendored in
+  `kernels/vllm_sources.py` (no library needed; rmsnorm, add_rmsnorm, silu_mul, topk_softmax as CUDA C++ built at import,
+  moe_gemm(_fp8), moe_gemm_scatter_fp8 and paged_decode(_fp8) as Triton), routed to the engine's kernel where unsupported.
+- `kernels/search/funnel.py` — one round (decided 2026-10-22; one call per change and every correct program measured
+  since 2026-10-30, replacing the funnel's tiers: named ideas, merge, past-failure check, wide coder, repairs, quick
+  timing, strong rewrite), from one parent (`expand`, an MCTS expansion: `--per-call` changes) or several
+  (`generation`: one `Slot` per parent and idea type with its count; a refine slot's calls read the slices in turn;
+  persist, fresh and crossover calls read the measurements). The slices: measurements, winners elsewhere in the tree,
+  compiler report (the PTX cards moved into every call's system message with `kernels/library`); a slice with no facts is skipped; the type's request ends the prompt (`loop.MODES`).
+  Calls cycle through the mix (`--second-judge-model` Sonnet 5.5 one call in `--second-judge-share` 4). Then edits that
+  do not apply, repeat a program, or change the start within cosine `NOVEL` (0.95) of a program already written
+  (fastembed on the changed lines, `near_duplicates`; ShinkaEvolve) are dropped, the no-GPU precheck (`--precheck`, default on) drops what fails to
+  build and keeps the compiler's report on the program (the compiler slice of its children), stage 1 in `--parallel`
+  jails, and every correct program takes the full exam (tuned first) and joins the tree. A parent gets its ncu
+  counters (stage 3) when it is first chosen. Model calls run `--workers` (8) at a time, the first of each batch alone
+  so the rest read the prompt cache it writes (`kernels/search/llm.py`'s `CACHE_SPLIT`: the stable part of a prompt is
+  sent as cached blocks); GPU timings run one at a time. Each hypothesis may predict ncu counter changes (`mechanism`),
+  measured against the parent's. Every idea's fate goes to `hypotheses.jsonl` (each idea with its `parent_id`; the
+  row's `parents` and `improved`), which the archive reads. `--facts FILE` adds facts to every prompt; the
+  `kernel_search` tool passes the scored regimes and the task's share of the latest profiled window (`pipeline.facts`).
 - `kernels/archive.py` — the idea archive (decided 2026-10-22): every distinct kernel idea from the `kernels` records'
   hypothesis logs and traces, with each outcome (run, parent and its score, child and its score, improved, stage
   reached, error); an idea within cosine 0.92 of an earlier one on the same task is folded into it (identical texts only

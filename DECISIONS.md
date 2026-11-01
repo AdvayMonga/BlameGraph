@@ -3,6 +3,49 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-10-31 — Other libraries' kernels in every search prompt, from one index
+`kernels/library/` holds 2-3 other implementations of every kernel task (vLLM v0.32.0, SGLang v0.5.22, FlashInfer
+v0.7.2.post1, TensorRT-LLM v1.2.1): `index.toml` names each with its upstream paths and line ranges, the files are kept
+verbatim, and every call of the search gets their source and, where built, their PTX/SASS card as one fixed block of
+the system message (cached), with the starting program's card. No timings. The PTX comparison stops being one of the
+rotating fact slices, which only about a quarter of the refine calls read. Why (the user): competitor and library
+kernels are good to draw on, kept standardized in one place; a fixed block over a retrieval tool (Claude's
+recommendation, the user agreed) so every call sees the same and the cache makes it cheap. Larger kernels (TRT-LLM's
+XQA decode, its CUTLASS MoE GEMM) are left out for their size. Amends 2026-10-30 (cards read by task name as a slice).
+
+## 2026-10-30 — The kernel search: 10 generations always, one call per change, every correct program measured
+Three changes to `kernels.search`'s genetic search:
+1. It runs exactly 10 generations after generation 0, and nothing stops it sooner. Removed: patience, shrinking a
+   generation that improved little, the wall-clock cap, the GPU-seconds cap, the evals count, and the model budget
+   (`--usd`; the user: there should be no budget flag).
+2. Every program that builds and passes correctness takes the full exam and joins the population. Removed: the quick
+   timing on one shape, racing at the cutoff, the 8 kept per generation, and the cut per idea type.
+3. One call makes each change: it states the hypothesis and writes the SEARCH/REPLACE edit in one answer, as
+   OpenEvolve's calls do. The call is shown the parent, the starting program and up to 2 better programs from other
+   branches, all as full code, plus its slice of facts and the memory tables.
+
+Added the same day (the user, from the list of published methods we had not used):
+- the PTX comparison's cards are read by task name from `knowledge/ptx/<task>.txt` (no `--ptx`), without competitor
+  timings (no target numbers in prompts);
+- a program whose change from the starting program is within cosine 0.95 of one already written is refused before
+  any GPU time (local embeddings of the changed lines; ShinkaEvolve's novelty rejection);
+- competitors' kernels ported from source (`kernels.competitors.starts`) are judged at generation 0 beside the start
+  and join the population.
+
+Removed with change 3, as orphans: the named-ideas step, merging duplicate ideas (`--cheap-model`), the past-failure
+check, the wide coder (`--wide-model`), repairs (`--max-repairs`), the strong coder's rewrite of kept programs, and
+arm `search-gen20` (it varied `--keep`).
+
+Why (the user, comparing with OpenEvolve on moe_gemm_fp8): OpenEvolve fully measured 130 programs from 140 calls in
+2.5 h; our typed run fully measured 34 of about 100 correct programs from 206 calls, and stopped at the wall-clock cap
+after 5 generations. Our calls never saw the starting program, only diffs against it, and the coder never saw the
+judge's reasoning. "No cap" (the user) means no target number for the task, never a cut in the generation count.
+
+Replaces, in part:
+- 2026-10-23 (the funnel's tiers)
+- 2026-10-26 (patience 3, the shrink rule, the fastest 8 to the full exam)
+- 2026-10-27 (the wall-clock cap; the strong coder writing only the kept programs)
+
 ## 2026-10-29 — Four idea types per generation; the judge remembers every measured idea
 Each generation after the first splits its 24 ideas over four types, each with its own judge calls: refine (new ideas on
 the fitness-drawn parents, as before), persist (a line's last change taken further; every child that beat its parent
@@ -183,7 +226,7 @@ against $12.32; both passed the held-out gate. The user called it the clear winn
 run. Replaces the beam as the default (2026-10-20).
 
 ## 2026-10-23 — The agent calls the kernel layer as a tool, blocking for now, and gets a patch
-`kernel_search` (task, budget_usd, with a kernels-layer hypothesis and its expect) runs the kernel layer end to end:
+`kernel_search` (task, budget, with a kernels-layer hypothesis and its expect) runs the kernel layer end to end:
 capture under real traffic, search from the agent's own version of the kernel, the held-out gate, and a patch of the
 engine module saved in the workspace for the agent to apply and judge with its own bench/equiv/submit. Why (the user):
 the agent decides which kernel to work on, given each task's share of time as a fact; the agent applying the patch

@@ -179,14 +179,25 @@ def task_args(p) -> None:
 
 
 def region_args(a) -> dict:
-    """A region task's `samples` and `shared_weights`, absolute: what `load` and the eval config take."""
+    """A region task's `samples` and `shared_weights`, absolute: what `load` and the eval config take. With the
+    evaluator on a remote worker (KERNEL_EVAL_SSH) they are paths there, kept as given."""
     if not a.task.startswith("region:"):
         return {}
-    if os.environ.get("KERNEL_EVAL_SSH"):        # this process attaches the holder and reads the samples itself
-        raise SystemExit("a region task runs on the GPU host that holds its samples and holder: KERNEL_EVAL_SSH "
-                         "(the evaluator on a remote worker) does not take regions yet")
-    return {k: str(Path(v).resolve()) for k, v in (("samples", getattr(a, "samples", None)),
-                                                   ("shared_weights", getattr(a, "shared_weights", None))) if v}
+    there = bool(os.environ.get("KERNEL_EVAL_SSH"))
+    return {k: v if there else str(Path(v).resolve()) for k, v in (("samples", getattr(a, "samples", None)),
+                                                                 ("shared_weights", getattr(a, "shared_weights", None))) if v}
+
+
+def load_task(a):
+    """The task. A region judged on a remote worker loads only there: here it is described by its shapes file
+    (kernels/hold.py wrote it, with the held-out axes) and starts from --initial."""
+    if a.task.startswith("region:") and os.environ.get("KERNEL_EVAL_SSH"):
+        if not (a.shapes and a.initial):
+            raise SystemExit("a region judged on a remote worker needs --shapes and --initial from where it loads "
+                             "(python -m kernels.hold)")
+        from kernels.regions import light
+        return light(a.task, tuple(shapes_mod.read(a.shapes).get("heldout_axes") or ()))
+    return load(a.task, **region_args(a))
 
 
 def _shapes(task, a) -> dict:
@@ -261,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         names = list(gates) or list(TASKS)       # with gates, only the gated tasks: two tasks can name one kernel
         print(json.dumps(rank([Path(p) for p in a.profile], [load(n) for n in names], gates), indent=1))
         return 0
-    task = load(a.task, **region_args(a))
+    task = load_task(a)
     sets = _shapes(task, a)
     tol = tolerances(_target_tolerances())
     if a.cmd == "split":
