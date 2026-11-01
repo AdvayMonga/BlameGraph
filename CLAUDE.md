@@ -462,8 +462,18 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   rate, which is what the data does (turns and gaps per sitting are the same at every hour of day, `seen_by_hour`).
   `python -m regimes.arrivals fit|compare`: the fit carries the source's hash; compare puts the model beside the
   held-out weeks (sitting-start CV and KS against exponential, request-count dispersion at 1/10/60 s per busy
-  window, KS real vs model for turns, first turn and gaps), numbers only. Not wired into the regimes yet.
-- `regimes/` — load generation: drives a live OpenAI-compatible server the eight ways it gets used, client-side.
+  window, KS real vs model for turns, first turn and gaps), numbers only. `workload.realistic` turns a schedule into
+  requests: each sitting draws a conversation of the pool with turns enough for its indices (else one of the longest,
+  the turns past its end not sent), turn j resends the history to the j-th user message at the reference's length for
+  it, every sitting salted. Regimes on it (2026-11-01): `realistic` (the corpus mix, the task's objective; headline
+  good req/s, `sittings_per_s` beside it), `long_prompt_short_output`, `shared_prefix_multi_turn` (sittings/s) and
+  `overload` (2x the sitting rate); `short_prompt_long_output` stays Poisson (single-turn by nature) and `bursty` the
+  real spike replay. `offline` = every record of every class at once, closed loop, output tokens/s, no limits
+  (MLPerf's Offline). `saturated` also reports `curve`: each probed level's output tokens/s beside 1 / median TPOT.
+  Every request is salted ("[k] " before the conversation's opening message; `Cycle`, `Once`, `realistic`), so no two
+  share a prefix except a conversation's turns and the shared system prompt (MLPerf's rule). Tests set
+  `suite.ARRIVALS` to `tests/fake_engine.fast_arrivals()`.
+- `regimes/` — load generation: drives a live OpenAI-compatible server the ten ways it gets used, client-side.
   `client.py` (one streamed chat request: TTFT from *scheduled* send to first real token, TPOT = (E2E − TTFT)/(n − 1),
   status ok / error (explicit 4xx or 503 rejection) / silent_drop / truncated / crash (other 5xx, no response,
   stream died); a one-token answer has no TPOT and never meets the limits; corpus headers X-Session-Id,
@@ -479,7 +489,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   process ran above 80% CPU; `--client-cpus` pins the client), `workload.py` (reads `corpus/` through `lab.corpus`'s verified loader — hashes checked, a changed trace
   refuses — plus Poisson, trace replay with speed-up and peak-window crop, multi-turn
   conversations rebuilt from stored histories under one shared system prompt; synthetic prompts when no corpus),
-  `suite.py` (the 8 regimes; probes ≥ `min_requests` (100) and tier length, capped at 4× the tier length, then a
+  `suite.py` (the 10 regimes; probes ≥ `min_requests` (100) and tier length, capped at 4× the tier length, then a
   confirmation at `final_s` backing off 15% up to 5 times; the load search stops below start/16; closed-loop
   schedules are generated lazily; shared-prefix runs score only the steady-state window; cold start launches a command with
   fresh VLLM/inductor/Triton cache dirs, polls until "17 + 25" is answered "42", then relaunches for the warm figure).

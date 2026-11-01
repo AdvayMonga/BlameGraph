@@ -67,6 +67,78 @@ def test_saturated_starts_at_the_bases_concurrency():
     assert capped["stopped"] == "max_concurrency" and max(calls) == 4096
 
 
+def _fast():
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from fake_engine import fast_arrivals
+    return fast_arrivals()
+
+
+def test_realistic_maps_sittings_to_conversations_and_salts_each():
+    from regimes import workload as W
+    convs = [{"id": f"c{k}", "session_id": f"s{k}", "max_tokens": 16, "expected_output_tokens": 8,
+              "expected_turn_output_tokens": [3, 4, 5],
+              "messages": [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"},
+                           {"role": "user", "content": "c"}, {"role": "assistant", "content": "d"},
+                           {"role": "user", "content": "e"}]} for k in range(3)]
+    single = [{"id": f"p{k}", "prompt": f"q{k}", "max_tokens": 16} for k in range(3)]
+    reqs = W.realistic(convs + single, 20.0, 5.0, "seed", _fast(), system="sys")
+    assert reqs and reqs == sorted(reqs, key=lambda q: q.at_s) and all(0 <= q.at_s < 5.0 for q in reqs)
+    assert reqs == W.realistic(convs + single, 20.0, 5.0, "seed", _fast(), system="sys")
+    by: dict[str, list] = {}
+    for q in reqs:
+        by.setdefault(q.session_id, []).append(q)
+    salts = {q.messages[1]["content"].split("]")[0] for q in reqs}
+    assert len(salts) == len(by)                                   # one salt per sitting, none shared
+    assert all(q.messages[0] == {"role": "system", "content": "sys"} for q in reqs)
+    for sid, turns in by.items():
+        for q in turns:                                            # turn j carries j prior exchanges
+            assert len(q.messages) == 2 + 2 * q.turn_index, (sid, q.turn_index, len(q.messages))
+            if q.turn_index:
+                assert q.max_tokens == [3, 4, 5][q.turn_index] and q.ignore_eos
+    assert any(q.turn_index > 0 for q in reqs)                     # resumed and continuing sittings are there
+    assert all(len(turns) == len({q.turn_index for q in turns}) for turns in by.values())
+    # a pool of single-turn records gets only the turns it can supply
+    only = W.realistic(single, 20.0, 5.0, "seed", _fast())
+    assert only and all(q.turn_index == 0 for q in only)
+
+
+def test_once_salts_every_request_and_splits_over_parts():
+    from regimes import workload as W
+    order = [{"id": f"r{k}", "prompt": "p", "max_tokens": 4} for k in range(7)]
+    reqs = list(W.Once(order))
+    assert [q.id for q in reqs] == [f"r{k}#{k}" for k in range(7)]
+    assert [q.messages[0]["content"] for q in reqs] == [f"[{k + 1}] p" for k in range(7)]
+    parts = [list(W.Once(order).part(k, 3)) for k in range(3)]
+    assert sorted(q.id for p in parts for q in p) == sorted(q.id for q in reqs)
+    cyc = W.Cycle(order)
+    first = [next(iter(cyc)) for _ in range(1)]
+    assert first[0].messages[0]["content"] == "[1] p"              # salted from the opening request on
+
+
+def test_saturated_reports_its_curve():
+    res, _ = _saturated(64)
+    assert [pt["concurrency"] for pt in res["curve"]] == sorted(lv["concurrency"] for lv in res["levels"])
+    assert all(set(pt) == {"concurrency", "output_tok_per_s", "tok_per_s_per_user", "ttft_p50_s", "meets_limits"}
+               for pt in res["curve"])
+    assert [pt["meets_limits"] for pt in res["curve"]] == [pt["concurrency"] <= 64 for pt in res["curve"]]
+
+
+def test_offline_sends_the_whole_pool_at_once():
+    seen = {}
+    ctx = suite.Ctx("u", "m")
+    ctx.pool = lambda cls=None: [{"id": f"r{k}", "prompt": "p", "max_tokens": 4} for k in range(9)]
+    ctx.run_closed = lambda reqs, c, duration, procs=None: seen.update(n=len(list(reqs)), c=c, d=duration, p=procs) or ([], 3.0)
+    real = suite._warmup, suite.summarize
+    suite._warmup = lambda ctx, pool: None
+    suite.summarize = lambda rows, limits, elapsed: {"valid": True, "invalid_reasons": [], "output_tok_per_s": 100.0,
+                                                     "meets_limits": True}
+    try:
+        res = suite.offline(ctx)
+    finally:
+        suite._warmup, suite.summarize = real
+    assert seen == {"n": 9, "c": 9, "d": None, "p": 4} and res["value"] == 100.0 and res["objective"] == "output_tok_per_s"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

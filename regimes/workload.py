@@ -5,9 +5,10 @@ schedules built from it. Trace format (corpus/README.md): one request per line w
 """
 from __future__ import annotations
 
+import bisect
 import json
 import random
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 from .client import Request
@@ -55,8 +56,9 @@ def messages(rec: dict) -> list[dict]:
 def to_request(rec: dict, at_s: float = 0.0, max_tokens: int | None = None, suffix: str = "", system: str | None = None,
                rid: str | None = None, salt: int = 0) -> Request:
     """A record with a measured reference length is sent at a fixed length: the regime's `max_tokens` when it sets
-    one, else that length, with ignore_eos. `salt` > 0 (the record's salt-th reuse in one schedule) starts its first
-    message with "[salt] ", so a reused record shares no prefix with its earlier sends."""
+    one, else that length, with ignore_eos. `salt` > 0 starts the conversation's opening message with "[salt] ":
+    every schedule salts each request (a record's k-th send, or its sitting), so no two requests share a prefix
+    except the turns of one conversation, and nothing precomputed on the public corpus text is served."""
     msgs = [dict(m) for m in messages(rec)]
     if salt:
         msgs[0]["content"] = f"[{salt}] " + msgs[0]["content"]
@@ -70,21 +72,30 @@ def to_request(rec: dict, at_s: float = 0.0, max_tokens: int | None = None, suff
 
 
 class Cycle:
-    """Closed-loop requests built one at a time, cycling `order`; pass p > 0 salts every request with p. `part(k, n)`
-    is every n-th request from the k-th, for one of n client processes (ids stay unique across parts)."""
+    """Closed-loop requests built one at a time, cycling `order`, every one salted (no two share a prefix); `part(k,
+    n)` is every n-th request from the k-th, for one of n client processes (ids stay unique across parts)."""
 
     def __init__(self, order: list[dict], tag: str = "", k: int = 0, n: int = 1):
         self.order, self.tag, self.k, self.n = order, tag, k, n
 
     def part(self, k: int, n: int) -> "Cycle":
-        return Cycle(self.order, self.tag, k, n)
+        return type(self)(self.order, self.tag, k, n)
 
     def __iter__(self):
         i = self.k
         while True:
             r = self.order[i % len(self.order)]
-            yield to_request(r, rid=f"{r['id']}#{self.tag}{i}", salt=i // len(self.order))
+            yield to_request(r, rid=f"{r['id']}#{self.tag}{i}", salt=i + 1)
             i += self.n
+
+
+class Once(Cycle):
+    """`order` once through, otherwise as Cycle."""
+
+    def __iter__(self):
+        for i in range(self.k, len(self.order), self.n):
+            r = self.order[i]
+            yield to_request(r, rid=f"{r['id']}#{self.tag}{i}", salt=i + 1)
 
 
 def synthetic(n: int, words: int = 60, seed: int = 0, prefix: str = "syn") -> list[dict]:
@@ -101,14 +112,14 @@ def shared_system_prompt(words: int = 1200, seed: int = 0) -> str:
 
 
 def poisson(pool: list[dict], rate: float, duration_s: float, seed: int, **req_kw) -> list[Request]:
-    """Open-loop arrivals at `rate` req/s for `duration_s`, requests drawn with replacement from `pool`."""
+    """Open-loop arrivals at `rate` req/s for `duration_s`, requests drawn with replacement from `pool`, each salted."""
     rng, t, out, uses = random.Random(seed), 0.0, [], Counter()
     while True:
         t += rng.expovariate(rate)
         if t >= duration_s:
             return out
         rec = rng.choice(pool)
-        out.append(to_request(rec, t, rid=f"{rec['id']}#{len(out)}", salt=uses[rec["id"]], **req_kw))
+        out.append(to_request(rec, t, rid=f"{rec['id']}#{len(out)}", salt=uses[rec["id"]] + 1, **req_kw))
         uses[rec["id"]] += 1
 
 
@@ -133,7 +144,7 @@ def scaled(trace: list[dict], factor: float = 1.0, window: tuple[float, float] |
             src = r if j == 0 else draw[k % len(draw)]
             k += j > 0
             out.append(to_request(src, t if j == 0 else t + rng.random() * gap, rid=f"{src['id']}#{i}.{j}",
-                                  salt=uses[src["id"]]))
+                                  salt=uses[src["id"]] + 1))
             uses[src["id"]] += 1
     return sorted(out, key=lambda q: q.at_s)
 
@@ -165,22 +176,28 @@ def conversations(pool: list[dict], max_turns: int = 6) -> list[list[dict]]:
     return convs
 
 
-def sessions(pool: list[dict], rate: float, duration_s: float, seed: int, think_s: float = 3.0,
-             system: str | None = None, max_turns: int = 6) -> list[Request]:
-    """Multi-turn conversations arriving at `rate` sessions/s; turn k of a session follows turn k-1 by `think_s`.
-    Each turn resends the conversation so far, and every request carries the same `system` prompt, so prefixes
-    are shared within and across sessions; a conversation drawn again is salted after the system prompt."""
-    convs = conversations(pool, max_turns)
+def realistic(pool: list[dict], rate: float, duration_s: float, seed, model, system: str | None = None,
+              **req_kw) -> list[Request]:
+    """Real conversation traffic (regimes/arrivals.py): sittings at `rate` per second from `model.schedule`, each a
+    conversation drawn from the pool with turns enough for its turn indices (else one of the longest, and the turns
+    past its end are not sent); turn j resends the history up to the j-th user message at the reference's length for
+    it. Every sitting is salted after `system`, so no two share a prefix; the turns of one do, as a conversation's."""
+    convs = conversations(pool, 1 << 30) + [[{**r, "turn_index": 0}] for r in pool if not r.get("messages")]
     if not convs:
-        raise ValueError("no multi-turn conversations in the pool")
-    rng, t, out, uses = random.Random(seed), 0.0, [], Counter()
-    while True:
-        t += rng.expovariate(rate)
-        if t >= duration_s:
-            return out
-        conv, sid = rng.choice(convs), len(out)
-        salt, uses[conv[0]["id"]] = uses[conv[0]["id"]], uses[conv[0]["id"]] + 1
-        for k, rec in enumerate(conv):
-            req = to_request(rec, t + k * think_s, system=system, rid=f"{rec['id']}#{sid}", salt=salt)
-            req.session_id = f"{rec.get('session_id')}#{sid}"
-            out.append(req)
+        raise ValueError("empty pool")
+    convs.sort(key=len)
+    lens = [len(c) for c in convs]
+    by: dict[int, list] = defaultdict(list)
+    for t in model.schedule(rate, duration_s, seed):
+        by[t.sitting].append(t)
+    rng, out = random.Random(seed), []
+    for k in sorted(by):
+        i = bisect.bisect_left(lens, max(t.turn_index for t in by[k]) + 1)
+        conv = rng.choice(convs[i:] if i < len(convs) else convs[bisect.bisect_left(lens, lens[-1]):])
+        for t in by[k]:
+            if t.turn_index < len(conv):
+                rec = conv[t.turn_index]
+                req = to_request(rec, t.at_s, system=system, rid=f"{rec['id']}#{k}", salt=k + 1, **req_kw)
+                req.session_id, req.turn_index = f"{rec.get('session_id')}#{k}", t.turn_index
+                out.append(req)
+    return sorted(out, key=lambda q: q.at_s)

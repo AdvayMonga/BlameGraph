@@ -65,6 +65,28 @@ with an idea table, immigrants and an extra judge call, so its loss did not meas
 extra model calls. Arm `search-untyped` keeps the search before this (refine only); `--crossover`/`search-crossover`
 are replaced by the crossover type. Found the same day: no search so far passed `--archive`, so none read past ideas.
 
+## 2026-11-01 — The regimes on real conversation timing; `realistic` is the objective, `saturated` the developer's signal; `offline`; a salt on every request
+Four open-loop regimes run on the fitted timing model (`regimes/arrivals.py`, same day): the new `realistic` (the
+corpus mix, sittings added until the limits break; headline good requests/s) replaces Poisson as the regime a task
+optimizes; `long_prompt_short_output`, `shared_prefix_multi_turn` (now sittings/s, the conversation's full length, the
+real gaps instead of a 3 s think time) and `overload` (2x the sitting rate of its goodput, over the whole mix) move
+onto it. `short_prompt_long_output` stays Poisson: single-turn by nature, and within a window the data is Poisson.
+`bursty` stays the real spike replay: real timing already. `saturated` is unchanged and stays measured beside
+`realistic`: closed loop is the least noisy signal of raw capacity and what vLLM, SGLang, InferenceX and MLPerf
+Endpoints publish, so it is the developer's number and the comparison's; it now also reports its `curve` (each
+probed level's output tokens/s beside 1 / median TPOT, the throughput-vs-speed-per-user plot of InferenceX and MLPerf
+Endpoints). `offline` is new: every record of every class at once, closed loop, output tokens/s, no latency limit
+(MLPerf's Offline). Every request is salted ("[k] " before the conversation's opening message, the sitting's or the
+closed-loop request's index), so no two share a prefix except the turns of one conversation and the shared system
+prompt: MLPerf salts every query and InferenceX AgentX busts the cache per replay; until now a record's own
+opening send was unsalted. Why (the user): both numbers, the realistic one to optimize for and the closed-loop one
+for the developer's signal and comparison, each regime callable on its own; a review of the frontier clients and
+suites (vLLM bench, SGLang bench, AIPerf, GuideLLM, LLMPerf, inference-perf; MLPerf Inference and Endpoints,
+InferenceX, AgentX, Artificial Analysis) found no fitted timing anywhere, fixed concurrency or Poisson, and three
+things they test that we did not: the curve, an offline point and salting. Still open from that review: an agent
+regime, answers over 1,024 tokens, 10-60 minute runs. Replaces the Poisson open-loop regimes and `sessions`' fixed
+think time (2026-10-02, 2026-10-18's defaults).
+
 ## 2026-11-01 — Request timing fitted from real conversation traffic; load rises by adding users
 The open-loop regimes get their timing from a model fitted to BurstGPT_3's conversation log (`regimes/arrivals.py`):
 sittings start as a Poisson process at the load's rate, each a run of turns of one conversation (a gap over 30 min
