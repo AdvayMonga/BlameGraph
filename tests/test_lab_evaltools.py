@@ -17,6 +17,7 @@ from regimes import suite
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lab_fixtures import make_repo  # noqa: E402
+from fake_engine import fast_arrivals  # noqa: E402
 
 FAKE = Path(__file__).resolve().parent / "fake_engine.py"
 
@@ -104,13 +105,13 @@ def lab(tmp_path, monkeypatch):
     tb.serve_jailed = False
     tb.bench_default_regimes = ("single_stream",)
     from regimes import runner
-    saved, think, lag = dict(suite.TIERS["min"]), suite.THINK_S, runner.MAX_CLIENT_LAG_S
+    saved, think, lag = dict(suite.TIERS["min"]), suite.ARRIVALS, runner.MAX_CLIENT_LAG_S
     runner.MAX_CLIENT_LAG_S = 0.05      # wiring tests on a shared laptop; client precision has its own test
     suite.TIERS["min"].update(probe_s=1.0, final_s=1.5)
     suite.TIERS["full"].update(probe_s=1.0, final_s=1.5)
-    suite.THINK_S = 0.3
+    suite.ARRIVALS = fast_arrivals()
     yield tb, s
-    suite.TIERS["min"].update(saved); suite.TIERS["full"].update(probe_s=60.0, final_s=600.0); suite.THINK_S = think
+    suite.TIERS["min"].update(saved); suite.TIERS["full"].update(probe_s=60.0, final_s=600.0); suite.ARRIVALS = think
     runner.MAX_CLIENT_LAG_S = lag
     target._cache.clear()
 

@@ -151,6 +151,7 @@ class Model:
         self.gap_q = dict(fitted["gap_s"])
         self.horizon_s = float(fitted["horizon_s"])     # sittings longer than this (0.01%) under way at t=0 are missed
         self.max_span = {sh: sum(self.gap_q[_index(sh[0] + k)][-1] for k in range(sh[1] - 1)) for sh in self.shapes}
+        self.turns_mean = sum(t * c for (_, t), c in zip(self.shapes, self.weights)) / sum(self.weights)
 
     @classmethod
     def load(cls, path: Path = DEFAULT_MODEL) -> "Model":
