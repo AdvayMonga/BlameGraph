@@ -102,7 +102,10 @@ def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, qu
             finally:
                 sem.release()
 
-    srv = ThreadingHTTPServer(("127.0.0.1", port), H)
+    class Srv(ThreadingHTTPServer):
+        request_queue_size = 4096                   # a real server's listen backlog: all of offline's connections at once
+
+    srv = Srv(("127.0.0.1", port), H)
     srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv

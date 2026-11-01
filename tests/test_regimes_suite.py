@@ -77,9 +77,9 @@ def test_realistic_maps_sittings_to_conversations_and_salts_each():
     from regimes import workload as W
     convs = [{"id": f"c{k}", "session_id": f"s{k}", "max_tokens": 16, "expected_output_tokens": 8,
               "expected_turn_output_tokens": [3, 4, 5],
-              "messages": [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"},
-                           {"role": "user", "content": "c"}, {"role": "assistant", "content": "d"},
-                           {"role": "user", "content": "e"}]} for k in range(3)]
+              "messages": [{"role": "user", "content": f"a{k}"}, {"role": "assistant", "content": f"b{k}"},
+                           {"role": "user", "content": f"c{k}"}, {"role": "assistant", "content": f"d{k}"},
+                           {"role": "user", "content": f"e{k}"}]} for k in range(3)]
     single = [{"id": f"p{k}", "prompt": f"q{k}", "max_tokens": 16} for k in range(3)]
     reqs = W.realistic(convs + single, 20.0, 5.0, "seed", _fast(), system="sys")
     assert reqs and reqs == sorted(reqs, key=lambda q: q.at_s) and all(0 <= q.at_s < 5.0 for q in reqs)
@@ -91,8 +91,12 @@ def test_realistic_maps_sittings_to_conversations_and_salts_each():
     assert len(salts) == len(by)                                   # one salt per sitting, none shared
     assert all(q.messages[0] == {"role": "system", "content": "sys"} for q in reqs)
     for sid, turns in by.items():
-        for q in turns:                                            # turn j carries j prior exchanges
+        assert len({q.id.split("#")[0].split(".t")[0] for q in turns}) == 1   # one conversation per sitting
+        for q in turns:                                            # turn j carries j prior exchanges of it
             assert len(q.messages) == 2 + 2 * q.turn_index, (sid, q.turn_index, len(q.messages))
+            if sid.startswith("s"):                                # a conversation: its own text, turn by turn
+                k = sid.split("#")[0][1:]
+                assert q.messages[1]["content"].endswith(f"a{k}") and q.messages[-1]["content"].endswith("ace"[q.turn_index] + k)
             if q.turn_index:
                 assert q.max_tokens == [3, 4, 5][q.turn_index] and q.ignore_eos
     assert any(q.turn_index > 0 for q in reqs)                     # resumed and continuing sittings are there

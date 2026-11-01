@@ -489,13 +489,14 @@ def test_bench_starts_its_searches_where_the_base_ended(lab, monkeypatch):
                         bands=None: got.append(hints) or [])
     tb.bench({"regimes": ["saturated"]})                                     # no base measured yet: a cold search
     base = json.dumps({"saturated": {"value": 3.8, "valid": True, "concurrency": 64}, "bursty": {"value": 2.0, "valid": True},
+                       "realistic": {"value": 5.98, "valid": True, "sittings_per_s": 2.0},
                        "single_stream": {"value": 0.006, "valid": True}})
     (s.run_dir / "base-seen-min-000000000000.json").write_text(base)
     tb.bench({"regimes": ["saturated"]})                                     # a base on another corpus version: unused
     tb._base_cache("seen", "min").write_text(base)
     tb.bench({"regimes": ["saturated"]})
     tb.bench({"regimes": ["saturated"], "seed": 3})                          # another sample: not the base's search
-    assert got == [{}, {}, {"saturated": {"concurrency": 64}, "bursty": {"load": 2.0}}, {}]
+    assert got == [{}, {}, {"saturated": {"concurrency": 64}, "bursty": {"load": 2.0}, "realistic": {"load": 2.0}}, {}]
 
 
 @pytest.fixture
