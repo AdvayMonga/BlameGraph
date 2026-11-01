@@ -211,7 +211,11 @@ def saturated(ctx: Ctx, max_concurrency: int = 4096) -> dict:
         best = s
     else:
         misses = 1
-    c *= 2
+
+    def double(c):                                 # the last step lands on the cap, whatever the start
+        return c * 2 if c * 2 <= max_concurrency or c >= max_concurrency else max_concurrency
+
+    c = double(c)
     while s["valid"] and not down and misses < 2 and c <= max_concurrency:   # down: the level above already failed
         s = probe(c)
         if not s["valid"]:
@@ -220,7 +224,7 @@ def saturated(ctx: Ctx, max_concurrency: int = 4096) -> dict:
             best, misses = s, 0
         elif not s["meets_limits"]:
             misses += 1
-        c *= 2
+        c = double(c)
     stopped = ("invalid" if not s["valid"] else "max_concurrency" if c > max_concurrency and s["meets_limits"]
                else "resolved")
     tol = ctx.search("saturated", 1.0)["rel_tol"]
@@ -320,7 +324,7 @@ def overload(ctx: Ctx, factor: float = 2.0, rate: float | None = None) -> dict:
         return _result("overload", "good_req_per_s", None, "higher", found["probes"][-1] if found else None)
     s = measure(rate * factor, True)
     return _result("overload", "good_req_per_s", s["good_req_per_s"], "higher", s, offered_req_per_s=rate * factor,
-                   explicit_rejections=s["error"], base_goodput_req_per_s=rate)
+                   explicit_rejections=s["error"], base_goodput_req_per_s=rate, **(_bracket(found) if found else {}))
 
 
 PROBE = [{"role": "user", "content": "What is 17 + 25? Reply with the number only."}]
