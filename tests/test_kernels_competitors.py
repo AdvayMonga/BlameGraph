@@ -403,10 +403,13 @@ def test_every_ported_task_starts_from_its_competitor_with_the_engines_signature
 
 
 def test_the_ports_apply_to_the_engines_own_modules_when_it_is_here():
-    from lab import engine
-    src = engine.repo() / "src"
+    from lab import engine, target
+    try:
+        src = engine.repo() / "src"
+    except target.NoTarget:
+        return                                      # no target set (CI)
     if not src.is_dir():
-        return                                      # the engine repo is not here (CI)
+        return                                      # the engine repo is not here
     for name in PORTED:
         t = load(name)
         mod = t.entry.partition(":")[0]
