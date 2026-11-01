@@ -140,13 +140,16 @@ def test_offline_sends_the_whole_pool_at_once():
     ctx.run_closed = lambda reqs, c, duration, procs=None: seen.update(n=len(list(reqs)), c=c, d=duration, p=procs) or ([], 3.0)
     real = suite._warmup, suite.summarize
     suite._warmup = lambda ctx, pool: None
-    suite.summarize = lambda rows, limits, elapsed: {"valid": True, "invalid_reasons": [], "output_tok_per_s": 100.0,
-                                                     "meets_limits": True}
+    summary = {"valid": True, "invalid_reasons": [], "output_tok_per_s": 100.0, "meets_limits": True, "error": 0}
+    suite.summarize = lambda rows, limits, elapsed: dict(summary)
     try:
         res = suite.offline(ctx)
+        summary["error"] = 2                                       # rejected records: no offline number
+        rejected = suite.offline(ctx)
     finally:
         suite._warmup, suite.summarize = real
     assert seen == {"n": 9, "c": 9, "d": None, "p": 4} and res["value"] == 100.0 and res["objective"] == "output_tok_per_s"
+    assert rejected["value"] is None and not rejected["valid"] and rejected["invalid_reasons"] == ["2 requests rejected"]
 
 
 if __name__ == "__main__":
