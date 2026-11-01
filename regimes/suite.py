@@ -291,8 +291,10 @@ def offline(ctx: Ctx) -> dict:
     pool = ctx.pool(None)
     _warmup(ctx, pool)
     order = random.Random(ctx.seed).sample(pool, len(pool))
-    rows, elapsed = ctx.run_closed(W.Once(order), len(order), None, procs=4)
+    rows, elapsed = ctx.run_closed(W.Once(order), len(order), None, procs=ctx.client_procs or 4)
     s = summarize(rows, ctx.conversational, elapsed)
+    if s["valid"] and s["error"]:                  # every record is answered, or there is no offline number
+        s = {**s, "valid": False, "invalid_reasons": [f"{s['error']} requests rejected"]}
     return _result("offline", "output_tok_per_s", s["output_tok_per_s"] if s["valid"] else None, "higher", s)
 
 
@@ -473,9 +475,10 @@ MEASUREMENT = ("TTFT runs from a request's scheduled send to its initial real to
                "silent drop, truncation or crash, or when the client's own send lag p99 exceeds 10 ms. When the corpus "
                "carries the reference's answer lengths, every request is sent with ignore_eos at a fixed length (the "
                "regime's max_tokens where it names one, else the length of the reference's own answer to the corpus "
-               "messages it carries, measured without the shared-prefix regime's system prompt) and special tokens kept "
-               "in the text; an answer that ends before that length is a truncation. Every request is salted (\"[k] \" "
-               "before its conversation's opening message), so no two share a prefix except the turns of one "
+               "messages it carries, measured without the shared-prefix regime's system prompt and without the salt) and "
+               "special tokens kept in the text; an answer that ends before that length is a truncation. Every request is "
+               "salted (\"[k] \" before its conversation's opening message, k numbered within one schedule: one probe, "
+               "one level or one final), so no two requests of a schedule share a prefix except the turns of one "
                "conversation and the shared system prompt.")
 
 REGIMES = {"single_stream": single_stream, "saturated": saturated, "realistic": realistic, "bursty": bursty,
