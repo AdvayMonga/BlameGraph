@@ -3,6 +3,15 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-01 — Tuning only for programs that beat their parent
+`Funnel.measure` takes a program's full exam first; only one whose score beats its parent's (and the root, which has
+none) has its `CONFIG` + `TUNABLES` grid tuned on every seen shape and takes the exam again with the fastest point
+written in. Why (the user, on the first 10-generation run through `kernel_search`, lab-gpu-10): a generation took
+~80 min, 62% of it the tune stage (200-540 s per program, 8 points x 8 shapes paired against the baseline) on
+programs that mostly never beat their parent (8 of 10 in generation 0); GPU timings run one at a time by design, so
+tuning everything set the pace. Amends "Every program is tuned before it is measured" (2026-10-27): a winner is still
+ranked and kept at its tuned speed, a loser is dropped at the speed the model wrote.
+
 ## 2026-10-31 — Other libraries' kernels in every search prompt, from one index
 `kernels/library/` holds 2-3 other implementations of every kernel task (vLLM v0.32.0, SGLang v0.5.22, FlashInfer
 v0.7.2.post1, TensorRT-LLM v1.2.1): `index.toml` names each with its upstream paths and line ranges, the files are kept

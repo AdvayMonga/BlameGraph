@@ -15,8 +15,8 @@ From the parents:
      of one already written (local embeddings, ShinkaEvolve's novelty rejection) are dropped; with `precheck`, what fails to build in
      a jail with no GPU is dropped too, and the compiler's report is kept
   3. correctness on the GPU (stage 1), `parallel` at a time
-  4. every correct program takes the full exam (stage 2, its grid tuned first with `tune`) and joins the tree; every
-     idea and how far it got go to the log
+  4. every correct program takes the full exam (stage 2) and joins the tree; one that beats its parent has its grid
+     tuned with `tune` and is examined again; every idea and how far it got go to the log
 
 Model calls run `workers` at a time (the first of each batch alone, so the rest read the prompt cache it writes); GPU
 timings stay one at a time. A program that fails correctness does not join the tree: a round's failures would
@@ -82,15 +82,16 @@ class Funnel:
             self.judge_calls += 1
         return m
 
-    def measure(self, code: str) -> tuple[str, dict]:
-        """A program's full exam, its grid tuned on every seen shape first (kernels/search/tune.py): (the program
-        measured, its result, with every grid point's row)."""
-        rows = []
-        if self.tune:
-            code, rows = tune.tuned(self.stage, code, quick=False, size_expr=self.size_expr)
+    def measure(self, code: str, parent_score: float | None = None) -> tuple[str, dict]:
+        """A program's full exam: (the program measured, its result). Only a program whose score beats its parent's
+        (or has no parent) has its grid tuned on every seen shape (kernels/search/tune.py) and takes the exam again
+        with the fastest point written in, its result carrying every grid point's row."""
         r = self.stage(code, 2)
-        if rows:
-            r = {**r, "artifacts": {**r["artifacts"], "tune": json.dumps(rows)}}
+        if self.tune and (parent_score is None or float(r["metrics"].get("combined_score") or 0) > parent_score):
+            code, rows = tune.tuned(self.stage, code, quick=False, size_expr=self.size_expr)
+            if rows:
+                r = self.stage(code, 2)
+                r = {**r, "artifacts": {**r["artifacts"], "tune": json.dumps(rows)}}
         return code, r
 
 
@@ -336,7 +337,7 @@ def generation(f: Funnel, tree: Tree, slots: list[Slot], system: str, it: int,
     for h, code in survivors:                # GPU timings: one at a time
         p = by_id[h["parent_id"]]
         report = reports.get(code)
-        code, r = f.measure(code)
+        code, r = f.measure(code, p.score)
         code_of[key(h)] = code
         if report:
             r["artifacts"] = {**r["artifacts"], "compile_report": report}

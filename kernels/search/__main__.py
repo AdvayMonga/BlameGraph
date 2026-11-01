@@ -32,10 +32,10 @@ from kernels.search.loop import cascade, search
 from kernels.search.tree import UCT_C
 
 TUNE_FACT = ("A program may define, at module level, `CONFIG` (a dict of the launch parameters its kernel uses) and "
-             "`TUNABLES` (for each CONFIG key, a list of values). Before a program's full exam, up to {points} points "
-             "of that grid (its current CONFIG first, the rest a seeded sample) are each loaded with CONFIG rewritten "
-             "in its source, checked on the most-called seen shape and timed on every seen shape. The program is "
-             "measured with the fastest point written into CONFIG; where different points are fastest in different "
+             "`TUNABLES` (for each CONFIG key, a list of values). When a program's full exam beats its parent's score, up to "
+             "{points} points of that grid (its current CONFIG first, the rest a seeded sample) are each loaded with CONFIG "
+             "rewritten in its source, checked on the most-called seen shape and timed on every seen shape, and the program "
+             "is examined again with the fastest point written into CONFIG; where different points are fastest in different "
              "size regions, a dispatcher (between `# TUNED-DISPATCH-START` and `# TUNED-DISPATCH-END`) sets CONFIG per "
              "call from the call's size instead, and is removed before the grid is tuned again. Children start from "
              "the tuned program.")
