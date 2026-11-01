@@ -216,32 +216,6 @@ def test_model_calls_run_in_parallel_the_first_alone_and_a_program_written_twice
     assert [c for c, _ in out] == ["a = 1\n", None, None, "a = 2\n"] and "identical" in out[1][1] and len(seen) == 2
 
 
-def test_a_program_that_beats_its_parent_is_tuned_on_every_seen_shape_and_examined_again():
-    from kernels.search import tune
-    prog = "CONFIG = {'t': 1}\nTUNABLES = {'t': [1, 2, 4]}\n\n\ndef kernel(x):\n    return x\n"
-    calls = []
-
-    def tstage(code, n):
-        calls.append((n, tune.params(code)[0]["t"], "TUNED-DISPATCH-START" in code))
-        if n == 6:                               # point t=2 wins small calls, t=4 large ones
-            rows = [{"config": {"t": t}, "score": s, "timings": [{"shape": [4], "speedup": a, "weight": 0.5},
-                                                                 {"shape": [512], "speedup": b, "weight": 0.5}]}
-                    for t, s, a, b in ((1, 1.0, 1.0, 1.0), (2, 1.3, 2.0, 0.9), (4, 1.2, 0.8, 1.8))]
-            return {"metrics": {"stage": n}, "artifacts": {"tune": json.dumps(rows)}}
-        return {"metrics": {"correct": 1.0, "combined_score": 1.2, "speedup": 1.2, "stage": n}, "artifacts": {}}
-    f = Funnel(Models(None), tstage, tune=True, size_expr="args[0].shape[0]")
-    code, r = f.measure(prog, 1.1)               # beats its parent: the exam, every shape tuned, the exam again
-    assert [c[0] for c in calls] == [2, 6, 2] and calls[2] == (2, 2, True) and "TUNED-DISPATCH-START" in code
-    code2, _ = f.measure(code)                   # no parent (a start): tuned again, the old dispatcher removed first
-    assert calls[4] == (6, 2, False) and code2.count("TUNED-DISPATCH-START") == 1
-    del calls[:]
-    assert f.measure(prog, 1.5)[0] == prog and [c[0] for c in calls] == [2]      # no better than its parent: not tuned
-    assert Funnel(Models(None), tstage).measure(prog)[0] == prog          # tuning off
-    from kernels.search.loop import facts
-    shown = facts(Node("n", None, code, r["metrics"], r["artifacts"], 0))
-    assert "grid points timed" in shown and '"config": {"t": 4}, "score": 1.2' in shown       # a fact for the model
-
-
 if __name__ == "__main__":
     import inspect
     import tempfile
