@@ -82,6 +82,21 @@ def test_push_then_pull_restores_everything(lab, tmp_path):
     assert (tmp_path / "corpus2" / "c1" / "heldout.jsonl").read_text() == '{"secret": 1}\n'
 
 
+def test_push_keeps_a_stored_blobs_trace_only_in_the_store(lab, tmp_path):
+    root, runs = lab
+    src = tmp_path / "prof"; src.mkdir()
+    (src / "trace.json").write_text("{}" * 1000); (src / "kernels.json").write_text("{}")
+    blob = root / ledger.put_blob(src, root)
+    copy = runs / "r1" / "workspace" / "lab" / "runs" / blob.name; copy.mkdir(parents=True)
+    (copy / "trace.json").write_text("{}"); (copy / "kernels.json").write_text("{}")
+    remote = DirRemote(tmp_path / "bucket")
+    sync.push(root, remote, runs=runs)
+    assert not (blob / "trace.json").exists() and (blob / "kernels.json").exists()
+    assert not (copy / "trace.json").exists() and (copy / "kernels.json").exists()
+    sync.pull(tmp_path / "fresh", remote, blobs=True)
+    assert (tmp_path / "fresh" / "blobs" / blob.name / "trace.json").read_text() == "{}" * 1000
+
+
 def test_ledger_goes_up_in_write_once_segments(lab, tmp_path):
     root, _ = lab
     remote = DirRemote(tmp_path / "bucket")

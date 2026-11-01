@@ -180,7 +180,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   (fp8 -> quantization).
 - `store/` — the data store (2026-10-09; bucket `bg-data`, credentials in `.env`: `LAB_STORE`, `LAB_STORE_ENDPOINT`,
   `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`). `remote.py` (`LAB_STORE` = `s3://<bucket>` with `LAB_STORE_ENDPOINT` for
-  Cloudflare R2, or a directory; write-once keys), `sync.py` (`push`/`pull`: ledger as byte-range segments, blobs,
+  Cloudflare R2, or a directory; write-once keys), `sync.py` (`push`/`pull`: ledger as byte-range segments, blobs
+  (once stored, a blob's trace.json is deleted locally, with its copies in `lab/runs/*/workspace/lab/runs/`),
   submit's held-out passive data, held-out traces + seed, `archive` for
   anything else; zstd, `heldout/` prefix for held-out material), `index.py` (DuckDB tables rebuilt from the ledger and
   blobs: records, regimes, heldout_aggregates, noise, client_rows, engine_rows, device_samples, kernels, ops;
