@@ -3,6 +3,16 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-01 — Tuning after the search, on the top programs only
+During the search programs are measured as written; after it, each of the `--retime` (4) top programs has its
+`CONFIG` + `TUNABLES` grid tuned on every seen shape and is re-timed with the fastest point written in (`run.retime`'s
+`tune`), so the gate and the shipped program are the tuned ones. The A/B's shared promotion turns it off for both arms
+(`--tune-points 0`). Why (the user, after the measurements): over 18 tuned programs of the 2026-11-01 moe_gemm_fp8 runs
+the best grid point beat the program's own settings by a median +0.3% (15 under 1.1%, max +5.7%), no program beat its
+parent only because it was tuned, and the tuning took about half of the GPU time; the run-to-run noise (the same start
+scored 1.055x and 1.015x) is larger than the gains. Replaces "Tuning only for programs that beat their parent" (same
+day) and "Every program is tuned before it is measured" (2026-10-27); back to the 2026-10-18 rule.
+
 ## 2026-11-01 — Tuning only for programs that beat their parent
 `Funnel.measure` takes a program's full exam first; only one whose score beats its parent's (and the root, which has
 none) has its `CONFIG` + `TUNABLES` grid tuned on every seen shape and takes the exam again with the fastest point

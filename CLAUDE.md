@@ -296,15 +296,13 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   whose driver had them open: the earlier refusals, ERR_NVGPUCTRPERM, were on hosts with them closed, which
   `vm-setup.sh` never opened because it grepped the module option's name, not the driver's `RmProfilingAdminOnly`; a
   run stops asking after the first refusal); launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen by a measured grid
-  search after a full exam that beats the parent's score (the root always; decided 2026-11-01, was before every exam
-  2026-10-27; `kernels/search/tune.py` `tuned`,
-  `Funnel.measure`, `cascade(tuned=True)`; `--tune-points` (8), 0: off): the evaluator's tune stage (jailed stage 6;
-  `core._tune`) loads each point with CONFIG rewritten, checks it on the most-called
-  shape and times it on every seen shape, and the
-  program is examined again and kept with the fastest point written in; where different points
-  win in different size regions, a dispatcher between `# TUNED-DISPATCH-START/END` picks CONFIG per call from the
-  call's size (`Task.size_expr`, tensor shapes only, so CUDA graphs bake it per captured size), removed (`tune.strip`)
-  before the grid is tuned again; the root program too; each point's score is a fact in the prompt; re-timing and the gate measure the tuned program as it is; the prompt states the best program's % of its call-weighted roofline bound as a fact, and with
+  search after the search, on each of the `--retime` (4) top programs before it is re-timed (decided 2026-11-01; during
+  the search programs are measured as written; `kernels/search/tune.py` `tuned`, `run.retime(tune=)`; `--tune-points`
+  (8), 0: off): the evaluator's tune stage (jailed stage 6; `core._tune`) loads each point with CONFIG rewritten,
+  checks it on the most-called shape and times it on every seen shape, and the program is re-timed with the fastest
+  point written in; where different points win in different size regions, a dispatcher between
+  `# TUNED-DISPATCH-START/END` picks CONFIG per call from the call's size (`Task.size_expr`, tensor shapes only, so
+  CUDA graphs bake it per captured size); the gate measures the tuned program as it is; the prompt states the best program's % of its call-weighted roofline bound as a fact, and with
   `--mcts` the search stops after `--patience` (16) judged programs with no new best (MANTIS; no roofline stop since
   2026-10-27);
   each timed shape carries its bound type (memory or compute) and the achieved % of peak bandwidth and of peak FLOPs,
@@ -414,7 +412,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   do not apply, repeat a program, or change the start within cosine `NOVEL` (0.95) of a program already written
   (fastembed on the changed lines, `near_duplicates`; ShinkaEvolve) are dropped, the no-GPU precheck (`--precheck`, default on) drops what fails to
   build and keeps the compiler's report on the program (the compiler slice of its children), stage 1 in `--parallel`
-  jails, and every correct program takes the full exam (tuned and examined again if it beat its parent) and joins the tree. A parent gets its ncu
+  jails, and every correct program takes the full exam and joins the tree. A parent gets its ncu
   counters (stage 3) when it is first chosen. Model calls run `--workers` (8) at a time, the first of each batch alone
   so the rest read the prompt cache it writes (`kernels/search/llm.py`'s `CACHE_SPLIT`: the stable part of a prompt is
   sent as cached blocks); GPU timings run one at a time. Each hypothesis may predict ncu counter changes (`mechanism`),

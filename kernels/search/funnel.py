@@ -15,8 +15,8 @@ From the parents:
      of one already written (local embeddings, ShinkaEvolve's novelty rejection) are dropped; with `precheck`, what fails to build in
      a jail with no GPU is dropped too, and the compiler's report is kept
   3. correctness on the GPU (stage 1), `parallel` at a time
-  4. every correct program takes the full exam (stage 2) and joins the tree; one that beats its parent has its grid
-     tuned with `tune` and is examined again; every idea and how far it got go to the log
+  4. every correct program takes the full exam (stage 2) and joins the tree; every idea and how far it got go to
+     the log
 
 Model calls run `workers` at a time (the first of each batch alone, so the rest read the prompt cache it writes); GPU
 timings stay one at a time. A program that fails correctness does not join the tree: a round's failures would
@@ -31,7 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable
 
-from kernels.search import diff, tune
+from kernels.search import diff
 from kernels.search.llm import CACHE_SPLIT
 from kernels.search.tree import Node, Tree, fingerprint
 
@@ -49,15 +49,13 @@ class Models:
 @dataclass
 class Funnel:
     models: Models
-    stage: Callable[[str, int], dict]       # (code, stage) -> {metrics, artifacts}; 1, 2, 3 (ncu), 5 (precheck), 6 (tune)
+    stage: Callable[[str, int], dict]       # (code, stage) -> {metrics, artifacts}; 1, 2, 3 (ncu), 5 (precheck)
     task: str | None = None
     per_call: int = 20                       # changes per MCTS expansion
     parallel: int = 4
     ncu: bool = False
     precheck: bool = False                   # the no-GPU build check (jailed stage 5) before stage 1
     workers: int = 8                         # model calls at once
-    tune: bool = False                       # each program's grid tuned before its full exam
-    size_expr: str | None = None             # the task's call size: the tuning may dispatch on it
     library: list = field(default_factory=list)            # kernels.archive entries for every task (the memory's)
     embedder: object | None = None           # lab.search's embedder: near-duplicate programs refused before any GPU time
     vectors: dict = field(default_factory=dict)            # each program's fingerprint -> (its id or "", its vector)
@@ -81,18 +79,6 @@ class Funnel:
             m = mix[self.judge_calls % len(mix)]
             self.judge_calls += 1
         return m
-
-    def measure(self, code: str, parent_score: float | None = None) -> tuple[str, dict]:
-        """A program's full exam: (the program measured, its result). Only a program whose score beats its parent's
-        (or has no parent) has its grid tuned on every seen shape (kernels/search/tune.py) and takes the exam again
-        with the fastest point written in, its result carrying every grid point's row."""
-        r = self.stage(code, 2)
-        if self.tune and (parent_score is None or float(r["metrics"].get("combined_score") or 0) > parent_score):
-            code, rows = tune.tuned(self.stage, code, quick=False, size_expr=self.size_expr)
-            if rows:
-                r = self.stage(code, 2)
-                r = {**r, "artifacts": {**r["artifacts"], "tune": json.dumps(rows)}}
-        return code, r
 
 
 def pmap(f: Funnel, fn: Callable, items) -> list:
@@ -337,7 +323,7 @@ def generation(f: Funnel, tree: Tree, slots: list[Slot], system: str, it: int,
     for h, code in survivors:                # GPU timings: one at a time
         p = by_id[h["parent_id"]]
         report = reports.get(code)
-        code, r = f.measure(code, p.score)
+        r = f.stage(code, 2)
         code_of[key(h)] = code
         if report:
             r["artifacts"] = {**r["artifacts"], "compile_report": report}
