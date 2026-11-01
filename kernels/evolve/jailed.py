@@ -1,4 +1,4 @@
-"""python -m kernels.evolve.jailed CONFIG.json PROGRAM|- STAGE (1, 2, or 3: ncu counters)  (or `- - STAGE`: {config, source} as JSON on stdin)  ->  kernels.evolve.core's JSON, judged in the jail.
+"""python -m kernels.evolve.jailed CONFIG.json PROGRAM|- STAGE (1, 2, 3: ncu counters, 4: quick, 5: precheck, 6/7: tune)  (or `- - STAGE`: {config, source} as JSON on stdin)  ->  kernels.evolve.core's JSON, judged in the jail.
 
 The candidate runs as agent code (lab/safety/grader.jailed: a container with no network on Linux, srt elsewhere;
 LAB_NO_JAIL=1 waives it). The jail sees a fresh tree holding only the candidate and its config, a read-only copy of
@@ -31,6 +31,8 @@ TIMEOUT_S = float(os.environ.get("KERNEL_EVAL_TIMEOUT_S", "600"))
 NCU_STAGE = 3                    # not a judging stage: ncu counters for a program that passed stage 2 (kernels/evolve/ncu.py)
 QUICK_STAGE = 4                  # stage 2 on the most-called seen shape only: the funnel's quick speed test
 PRECHECK_STAGE = 5               # no GPU attached: the screen, the CUDA C++ build, the compiler's report (precheck.py)
+TUNE_STAGE = 6                   # every point of the program's grid timed on every seen shape (core._tune)
+TUNE_QUICK_STAGE = 7             # the same on the most-called seen shape only: before the quick speed test
 EVAL_DIRS = Path(os.environ.get("KERNEL_EVAL_DIRS") or Path(tempfile.gettempdir()) / "kernel-eval")
 CUDA = Path("/usr/local/cuda")
 MEMORY = os.environ.get("KERNEL_EVAL_MEMORY", "32g")   # host RAM a judgment may use: a program cannot starve the host
@@ -167,11 +169,12 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
             why = a.get("ncu_error") or a.get("shared_weights_changed") or a.get("error", "")    # a void's evidence too
             out.append({"shape": shape, **(json.loads(a["ncu"]) if "ncu" in a else {"error": why[-500:]})})
         return {"metrics": {"stage": stage}, "artifacts": {"ncu": json.dumps({"shapes": out})}}
-    if stage == QUICK_STAGE:                     # selection orders seen shapes by calls: the first is the most called
+    if stage in (QUICK_STAGE, TUNE_QUICK_STAGE):  # selection orders seen shapes by calls: the first is the most called
         one = json.dumps(list(cfg["seen"][0]))
         r = judge_jailed({**cfg, "seen": cfg["seen"][:1], "weights": {one: (cfg.get("weights") or {}).get(one, 1)},
-                          "ints": {k: v for k, v in (cfg.get("ints") or {}).items() if k == one}}, source, 2, timeout_s)
-        return {**r, "metrics": {**r["metrics"], "stage": QUICK_STAGE}}
+                          "ints": {k: v for k, v in (cfg.get("ints") or {}).items() if k == one}}, source,
+                         2 if stage == QUICK_STAGE else TUNE_STAGE, timeout_s)
+        return {**r, "metrics": {**r["metrics"], "stage": stage}}
     fail = {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage}}
     if cfg.get("shared_weights"):
         _refuse_writable(Path(cfg["shared_weights"]))

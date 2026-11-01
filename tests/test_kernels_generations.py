@@ -1,7 +1,8 @@
 """The genetic search (kernels/search/generations.py) with fake models and a fake evaluator: generation 0 from the
 start alone, parents drawn by fitness with the best always among them, one rotated slice per parent call, the judge mix
 cycling, children under their own parent, the shrink rule, racing at the quick cutoff, the quick-vs-full rank
-correlation, patience in generations, crossover ideas, and the archive reading each idea's own parent back."""
+correlation, patience in generations, the four idea types and their adaptive split, persistence lines, the memory in
+every judge call, and the archive reading each idea's own parent back."""
 from __future__ import annotations
 
 import json
@@ -15,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from kernels import archive  # noqa: E402
 from kernels.search import generations as G  # noqa: E402
 from kernels.search.funnel import Funnel, Models, generation, race, spearman  # noqa: E402
+from kernels.search.llm import CACHE_SPLIT  # noqa: E402
 from kernels.search.tree import Node, Tree  # noqa: E402
 
 START = "a = 1\n"
@@ -28,7 +30,7 @@ class Judge:
         self.tag, self.calls = tag, []
 
     def __call__(self, system, user):
-        n = int(re.search(r"Name (\d+)", system).group(1))
+        n = int(re.search(r"Name (\d+)", user).group(1))
         cur = int(re.search(r"```python\na = (\d+)", user).group(1))
         sl = next((s for s, m in (("ptx", "PTX comparison"), ("winners", "winners elsewhere"), ("compiler", "compiler's"),
                                   ("crossover", "Another program")) if m in user), "measurements")
@@ -63,7 +65,7 @@ def funnel(ptx="cards", **kw):
 def test_generation_zero_is_the_start_alone_and_later_ones_draw_parents_by_fitness(tmp_path):
     f = funnel()
     tree, cost = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, evals=100, usd=50.0, gen_size=8, keep=3,
-                          n_parents=2, generations=2, patience=None)
+                          n_parents=2, generations=2, patience=None, types=False)
     rows = [json.loads(x) for x in (tmp_path / "hypotheses.jsonl").read_text().splitlines()]
     assert [r["iteration"] for r in rows] == [0, 1, 2] and cost["generations"] == 3
     g0 = rows[0]
@@ -119,7 +121,7 @@ def test_a_generation_with_few_improvements_shrinks_the_next_one(tmp_path):
     f.stage = worse
     _, cost = G.search(START, "SYS", f, lambda c: {"metrics": {"correct": 1.0, "combined_score": 1.0, "stage": 2},
                                                    "artifacts": {}},
-                       tmp_path, evals=100, usd=50.0, gen_size=12, keep=2, n_parents=2, generations=2, patience=None)
+                       tmp_path, evals=100, usd=50.0, gen_size=12, keep=2, n_parents=2, generations=2, patience=None, types=False)
     rows = [json.loads(x) for x in (tmp_path / "hypotheses.jsonl").read_text().splitlines()]
     assert rows[0]["improved"] == 0 and [r["named"] for r in rows[1:]] == [8, 8]        # 2/3 of 12, from generation 0 on
     assert cost["evals"] == 1 + G.GEN0_KEEP + 2 + 2 and not cost["stopped_no_progress"]
@@ -129,7 +131,7 @@ def test_the_search_stops_after_patience_generations_with_no_new_best(tmp_path):
     f = funnel()
     flat = {"metrics": {"correct": 1.0, "combined_score": 5.0, "stage": 2}, "artifacts": {}}
     _, cost = G.search(START, "SYS", f, lambda c: flat, tmp_path, evals=1000, usd=50.0, gen_size=4, keep=1,
-                       n_parents=2, generations=20, patience=2)
+                       n_parents=2, generations=20, patience=2, types=False)
     assert cost["stopped_no_progress"] and cost["generations"] == 2
 
 
@@ -151,15 +153,99 @@ def test_racing_times_the_programs_at_the_cutoff_again_and_the_rank_correlation_
     assert abs(spearman([1, 2, 2, 4], [1, 2, 3, 4]) - 0.9486832980505138) < 1e-6
 
 
-def test_crossover_ideas_show_another_parents_diff_and_are_measured_like_the_rest(tmp_path):
+def test_each_generation_splits_its_ideas_over_the_four_types_and_cuts_each_on_its_own(tmp_path):
     f = funnel()
-    tree, _ = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, evals=100, usd=50.0, gen_size=10, keep=2,
-                       n_parents=2, generations=1, patience=None, crossover=0.2)
+    tree, cost = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, evals=100, usd=50.0, gen_size=12, keep=4,
+                          n_parents=2, generations=2, patience=None)
     rows = [json.loads(x) for x in (tmp_path / "hypotheses.jsonl").read_text().splitlines()]
-    xs = [x for x in rows[1]["ideas"] if x["idea"].get("slice") == "crossover"]
-    assert len(xs) == 2 and all(x["idea"]["with"] in {p["id"] for p in rows[1]["parents"]} for x in xs)
-    assert any(c[1] == "crossover" for c in f.models.judge.calls + f.models.judges[-1].calls)
-    assert not any(x["idea"].get("slice") == "crossover" for x in rows[0]["ideas"])          # none in generation 0
+    assert {x["idea"]["type"] for x in rows[0]["ideas"]} == {"start"} and "types" not in rows[0]
+    for r in rows[1:]:
+        q = r["types"]
+        assert set(q) == {"refine", "persist", "fresh", "crossover"} and sum(q.values()) == 12   # generation 0 opened lines
+        assert all(n >= G.TYPE_FLOOR for n in q.values()) and sum(r["keep_by"].values()) == 4
+        named = {t: sum(x["idea"]["type"] == t for x in r["ideas"]) for t in q}
+        assert named == q                                          # every idea tagged with the type it was named for
+        kids = [n for n in tree.nodes.values() if n.iteration == r["iteration"]]
+        assert all(sum(k.kind == t for k in kids) <= r["keep_by"][t] for t in q)          # each type cut on its own
+    calls = f.models.judge.calls + f.models.judges[-1].calls
+    assert any(c[1] == "crossover" for c in calls)
+    assert set(cost["types"]) == set(G.TYPES) and sum(v["examined"] for v in cost["types"].values()) == \
+        cost["evals"] - 1 - G.GEN0_KEEP
+    xs = [x for r in rows[1:] for x in r["ideas"] if x["idea"]["type"] == "crossover"]
+    assert xs and all(x["idea"]["with"] in {p["id"] for p in rows[1]["parents"]} | {n for n in tree.nodes} for x in xs)
+
+
+def test_persist_fresh_and_crossover_calls_ask_for_their_own_kind_of_change():
+    seen = []
+
+    def judge(system, user):
+        seen.append(user)
+        return json.dumps([{"bottleneck": "b", "optimisation_method": "m", "modification_plan": "set a = 7"}]), 0.0
+    f = Funnel(Models(judge, lambda s, u: ("", 0.0), coder, coder), stage, keep=2, parallel=2)
+    t, ok = Tree(), (lambda sc: {"correct": 1.0, "combined_score": sc, "stage": 2})
+    root = t.add(Node("r", None, "a = 1\n", ok(1.0), {}, 0))
+    head = t.add(Node("h", "r", "a = 2\n", ok(1.5), {}, 1, judge='{"optimisation_method": "wider tiles"}'))
+    plan = [G.Slot(head, "persist", 1), G.Slot(root, "fresh", 1), G.Slot(root, "crossover", 1, head)]
+    generation(f, t, [root, head], "SYS", 2, lambda n, c: t.add(n), [].append, quota=0, keep=3, slots=plan)
+    persist, fresh, cross = seen
+    assert "from 1.0000 to 1.5000" in persist and "wider tiles" in persist and "same change further" in persist
+    assert "overall structure" in fresh and "Another program" in cross and "Another program" not in fresh
+
+
+def test_the_split_adapts_to_each_types_rate_of_new_bests_with_a_floor():
+    even = G.split(24, {t: [0, 0] for t in G.TYPES}, set(G.TYPES))
+    assert even == G.TYPES                                         # no measurements yet: the base split
+    hot = G.split(24, {"refine": [20, 0], "persist": [10, 8], "fresh": [10, 0], "crossover": [5, 0]}, set(G.TYPES))
+    assert hot["persist"] > 6 and min(hot.values()) >= G.TYPE_FLOOR and sum(hot.values()) == 24
+    some = G.split(16, {t: [0, 0] for t in G.TYPES}, {"refine", "fresh"})       # no line open, one parent
+    assert set(some) == {"refine", "fresh"} and sum(some.values()) == 16
+    assert sum(G.split(5, {t: [0, 0] for t in G.TYPES}, set(G.TYPES)).values()) == 5
+    assert G.shares(8, {"a": 8, "b": 6, "c": 6, "d": 4}) == {"a": 3, "b": 2, "c": 2, "d": 1}
+
+
+def test_a_line_moves_to_a_better_persist_child_and_closes_after_three_misses():
+    t, ok = Tree(), (lambda sc: {"correct": 1.0, "combined_score": sc, "stage": 2})
+    t.add(Node("r", None, "a = 1\n", ok(1.0), {}, 0))
+    h = t.add(Node("h", "r", "a = 2\n", ok(1.2), {}, 1))
+    lines = G.advance(t, {}, [], [h])
+    assert lines == {"h": 0}                                       # beat its parent: heads a line
+    worse = t.add(Node("w", "h", "a = 3\n", ok(1.1), {}, 2, kind="persist"))
+    plan = [G.Slot(h, "persist", 1)]
+    lines = G.advance(t, lines, plan, [worse])
+    assert lines == {"h": 1}
+    better = t.add(Node("b", "h", "a = 4\n", ok(1.3), {}, 3, kind="persist"))
+    assert G.advance(t, lines, plan, [better]) == {"b": 0}         # the line moves on
+    for _ in range(2):
+        lines = G.advance(t, lines, plan, [])
+    assert lines == {}                                             # three generations without a better child
+
+
+def test_every_judge_call_gets_the_memory_and_no_coder_call_does(tmp_path):
+    other = archive.Entry("i1", "other_task", "split k", {"optimisation_method": "split k"}, outcomes=[
+        archive.Outcome("k", "p", 1.0, "c", 1.3, True, 2, bound="memory")])
+    lost = archive.Entry("i2", "toy", "bigger tiles", {"optimisation_method": "bigger tiles"}, outcomes=[
+        archive.Outcome("k", "p", 1.0, "c", 0.8, False, 2), archive.Outcome("k", "p", 1.0, None, error="precheck")])
+    systems = []
+
+    def judge(system, user):
+        systems.append(("judge", system))
+        return Judge("opus")(system, user)
+
+    def code(system, user):
+        systems.append(("coder", system))
+        return coder(system, user)
+    NAMED[0] = 0
+    f = Funnel(Models(judge, lambda s, u: (u.split("\n\n")[0], 0.0), code, code), stage, keep=2, parallel=2,
+               task="toy", library=[other, lost])
+    G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, evals=100, usd=50.0, gen_size=8, keep=2, n_parents=2,
+             generations=1, patience=None)
+    judged = [s for who, s in systems if who == "judge"]
+    assert judged and all("split k" in s and '"best_gain": 1.3' in s and '"bound": "memory"' in s for s in judged)
+    assert all("bigger tiles" in s and '"worst_gain": 0.8' in s for s in judged)
+    first = judged[0]
+    assert first.index("split k") < first.index(CACHE_SPLIT) < first.index("bigger tiles")    # general part first
+    assert any("## This run so far" in s for s in judged[1:]) and "## This run so far" not in judged[0]
+    assert not any("split k" in s or "bigger tiles" in s for who, s in systems if who == "coder")
 
 
 def test_the_archive_reads_each_ideas_own_parent_from_a_generation(tmp_path):
