@@ -108,7 +108,8 @@ def functions(stations, first, last, live=(), constants: dict | None = None,
             clones = [x.clone() if isinstance(x, torch.Tensor) else x for x in xs]
             picks = dict(zip(DISCRETE, run(region[:region.index(route) + 1], {**consts, **dict(zip(ins, clones))},
                                            DISCRETE)))
-            pinned = {route.name: lambda c: {**picks, "pair_w": pair_weights(
+            ref_route = ref_region[region.index(route)]      # its other writes (e.g. an accumulator it zeroes) stay its own
+            pinned = {route.name: lambda c: {**ref_route.fn(c), **picks, "pair_w": pair_weights(
                 c["logits"], *(picks[k] for k in DISCRETE), bool(getattr(c.get("cfg"), "norm_topk_prob", False)))}}
         exact = run(ref_region, {**consts, **dict(zip(ins, up))}, outs, pinned)
         key = tuple((tuple(x.shape), x.dtype) if isinstance(x, torch.Tensor) else x for x in xs)
