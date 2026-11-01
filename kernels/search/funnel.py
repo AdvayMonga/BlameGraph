@@ -83,12 +83,11 @@ class Funnel:
         return m
 
     def measure(self, code: str, parent_score: float | None = None) -> tuple[str, dict]:
-        """A program's full exam: (the program measured, its result). Only a program whose exam beats its parent's
-        score (or has no parent) has its grid tuned on every seen shape (kernels/search/tune.py) and takes the exam
-        again with the fastest point written in, its result carrying every grid point's row: tuning cost ~6 GPU
-        minutes per program and most programs never beat their parent (2026-11-01)."""
+        """A program's full exam: (the program measured, its result). Only a program whose score beats its parent's
+        (or has no parent) has its grid tuned on every seen shape (kernels/search/tune.py) and takes the exam again
+        with the fastest point written in, its result carrying every grid point's row."""
         r = self.stage(code, 2)
-        if self.tune and (parent_score is None or r["metrics"].get("speedup", 0) > parent_score):
+        if self.tune and (parent_score is None or float(r["metrics"].get("combined_score") or 0) > parent_score):
             code, rows = tune.tuned(self.stage, code, quick=False, size_expr=self.size_expr)
             if rows:
                 r = self.stage(code, 2)

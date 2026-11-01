@@ -228,7 +228,7 @@ def test_a_program_that_beats_its_parent_is_tuned_on_every_seen_shape_and_examin
                                                                  {"shape": [512], "speedup": b, "weight": 0.5}]}
                     for t, s, a, b in ((1, 1.0, 1.0, 1.0), (2, 1.3, 2.0, 0.9), (4, 1.2, 0.8, 1.8))]
             return {"metrics": {"stage": n}, "artifacts": {"tune": json.dumps(rows)}}
-        return {"metrics": {"correct": 1.0, "combined_score": 1.0, "speedup": 1.2, "stage": n}, "artifacts": {}}
+        return {"metrics": {"correct": 1.0, "combined_score": 1.2, "speedup": 1.2, "stage": n}, "artifacts": {}}
     f = Funnel(Models(None), tstage, tune=True, size_expr="args[0].shape[0]")
     code, r = f.measure(prog, 1.1)               # beats its parent: the exam, every shape tuned, the exam again
     assert [c[0] for c in calls] == [2, 6, 2] and calls[2] == (2, 2, True) and "TUNED-DISPATCH-START" in code
