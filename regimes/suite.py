@@ -60,6 +60,7 @@ class Ctx:
     on_rows: object = None             # called with each run_open/run_closed call's rows (lab.live progress)
     _pools: dict = field(default_factory=dict)
     _calls: int = 0
+    _warm: bool = False
 
     @property
     def probe_s(self) -> float:
@@ -97,10 +98,11 @@ class Ctx:
         return self._keep(run_open(self.url, self.model, reqs, self.timeout, self.count_tokens, self.client_procs or 4,
                                    chat_kwargs=self.chat_kwargs, cpus=self.client_cpus), started)
 
-    def run_closed(self, reqs, c, duration):
+    def run_closed(self, reqs, c, duration, min_requests: int = 0):
         started = time.time()
         rows, elapsed = run_closed(self.url, self.model, reqs, c, duration, self.timeout, self.count_tokens,
-                                   chat_kwargs=self.chat_kwargs, procs=self.client_procs or 1, cpus=self.client_cpus)
+                                   chat_kwargs=self.chat_kwargs, procs=self.client_procs or 1, cpus=self.client_cpus,
+                                   min_requests=min_requests)
         return self._keep(rows, started), elapsed
 
     def _keep(self, rows, started: float):
@@ -130,7 +132,18 @@ class Ctx:
                    conversational=Limits(t.conversational.ttft_s, t.conversational.tpot_s), **kw)
 
 
+WARM_CONCURRENCY = 256
+
+
 def _warmup(ctx: Ctx, pool: list[dict], n: int = 8):
+    """Once per Ctx (one engine launch): the corpus mix closed loop at WARM_CONCURRENCY for a probe's length, at the
+    records' own lengths, so the engine's first measured load is not its first load at that size (the first
+    saturated level after a launch read up to 40% low, 2026-10-28). Then `n` of this regime's records."""
+    if not ctx._warm:
+        ctx._warm = True
+        order = random.Random(ctx.seed).sample(ctx.pool(None), len(ctx.pool(None)))
+        run_closed(ctx.url, ctx.model, W.Cycle(order, "w"), WARM_CONCURRENCY, ctx.probe_s, ctx.timeout,
+                   chat_kwargs=ctx.chat_kwargs, procs=ctx.client_procs or 4, cpus=ctx.client_cpus)
     run_closed(ctx.url, ctx.model, [W.to_request(r, max_tokens=32) for r in pool[:n]], 4, None, ctx.timeout,
                chat_kwargs=ctx.chat_kwargs)
 
@@ -182,7 +195,7 @@ def single_stream(ctx: Ctx) -> dict:
     pool = ctx.pool("steady_interactive")
     _warmup(ctx, pool)
     order = random.Random(ctx.seed).sample(pool, len(pool))
-    rows, elapsed = ctx.run_closed(W.Cycle(order), 1, ctx.final_s)
+    rows, elapsed = ctx.run_closed(W.Cycle(order), 1, ctx.final_s, min_requests=ctx.min_requests)   # a p99 of 14 is the slowest of 14
     s = summarize(rows, ctx.interactive, elapsed)
     return _result("single_stream", "tpot_p99_s", s["tpot_p99_s"], "lower", s, ttft_p99_s=s["ttft_p99_s"])
 
@@ -375,8 +388,9 @@ def _launch_once(url, model, cmd, env, expect, timeout_s, poll_s, log_dir, label
 
 # What each regime sends and what it reports, in the words the agent's objective uses (lab/prompts/objective.md).
 FACTS = {
-    "single_stream": ("one request at a time (closed loop, concurrency 1) on steady_interactive prompts",
-                      "p99 time per output token, seconds", "interactive"),
+    "single_stream": ("one request at a time (closed loop, concurrency 1) on steady_interactive prompts, for the "
+                      "tier's final length and at least `min_requests` requests", "p99 time per output token, seconds",
+                      "interactive"),
     "saturated": ("closed loop at doubling concurrency over every corpus class; each level's requests judged against "
                   "the limits, the highest passing level rerun at full length", "goodput, good requests/s", "conversational"),
     "bursty": ("the spike trace open loop at a searched multiple of its real request rate over its own span, burst "
@@ -399,7 +413,9 @@ MEASUREMENT = ("TTFT runs from a request's scheduled send to its initial real to
                "carries the reference's answer lengths, every request is sent with ignore_eos at a fixed length (the "
                "regime's max_tokens where it names one, else the length of the reference's own answer to the corpus "
                "messages it carries, measured without the shared-prefix regime's system prompt) and special tokens kept "
-               "in the text; an answer that ends before that length is a truncation.")
+               "in the text; an answer that ends before that length is a truncation. The first regime measured after an "
+               "engine launch is preceded by an unscored warmup: the corpus mix closed loop at concurrency "
+               f"{WARM_CONCURRENCY} for a probe's length.")
 
 REGIMES = {"single_stream": single_stream, "saturated": saturated, "bursty": bursty,
            "long_prompt_short_output": long_prompt_short_output, "short_prompt_long_output": short_prompt_long_output,

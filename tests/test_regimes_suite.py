@@ -39,6 +39,33 @@ def test_the_search_reports_its_bracket_and_never_stops_on_its_budget_first():
     assert client["stopped"] == "invalid" and client["fails_at"] is None and client["goodput"] == 4.0
 
 
+def test_the_warmup_serves_the_mix_once_per_launch_then_the_regimes_records():
+    calls = []
+    ctx = suite.Ctx("u", "m", tier="min")
+    real = suite.run_closed
+    suite.run_closed = lambda url, model, reqs, c, duration, *a, **kw: calls.append((c, duration)) or ([], 0.0)
+    try:
+        suite._warmup(ctx, ctx.pool("steady_interactive"))
+        suite._warmup(ctx, ctx.pool("long_context"))
+    finally:
+        suite.run_closed = real
+    assert calls == [(suite.WARM_CONCURRENCY, ctx.probe_s), (4, None), (4, None)]
+
+
+def test_single_stream_runs_at_least_min_requests():
+    seen = {}
+    ctx = suite.Ctx("u", "m", min_requests=100)
+    ctx.pool = lambda cls=None: [{"id": "a", "prompt": "x"}]
+    ctx.run_closed = lambda reqs, c, duration, min_requests=0: seen.update(c=c, d=duration, m=min_requests) or ([], 1.0)
+    real = suite._warmup
+    suite._warmup = lambda ctx, pool: None
+    try:
+        suite.single_stream(ctx)
+    finally:
+        suite._warmup = real
+    assert seen == {"c": 1, "d": ctx.final_s, "m": 100}
+
+
 def _saturated(capacity: int, hints: dict | None = None) -> tuple[dict, list[int]]:
     """saturated() against a server that meets the limits up to `capacity` concurrent requests."""
     calls: list[int] = []

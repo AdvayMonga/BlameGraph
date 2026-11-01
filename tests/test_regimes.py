@@ -62,6 +62,11 @@ def test_closed_loop_split_over_processes():
         assert summarize(rows, LOOSE, elapsed)["valid"]
         busy = [runner.Row("x", "ok", 0.0, 0.0, 0.01, 0.1, 10, client_cpu=0.95)]
         assert not summarize(busy, LOOSE)["valid"]
+        few, _ = runner.run_closed(url, "m", W.Cycle(pool, "q"), 1, 0.05)          # one client, 50 ms: a request or two
+        many, _ = runner.run_closed(url, "m", W.Cycle(pool, "r"), 1, 0.05, min_requests=12)
+        assert len(few) < 12 <= len(many)                                          # the floor outlasts the duration
+        split, _ = runner.run_closed(url, "m", W.Cycle(pool, "s"), 3, 0.05, procs=3, min_requests=12)
+        assert len(split) >= 12
     finally:
         proc.kill()
 

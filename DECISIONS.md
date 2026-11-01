@@ -65,6 +65,19 @@ with an idea table, immigrants and an extra judge call, so its loss did not meas
 extra model calls. Arm `search-untyped` keeps the search before this (refine only); `--crossover`/`search-crossover`
 are replaced by the crossover type. Found the same day: no search so far passed `--archive`, so none read past ideas.
 
+## 2026-11-01 — A real warmup before the first measurement on a launch; single_stream at least 100 requests
+Before the first regime measured after an engine launch, the harness serves the corpus mix closed loop at concurrency
+256 for a probe's length (15 s at `min`), unscored (`suite._warmup`, once per `Ctx`); every regime's 8-request touch
+stays. single_stream runs the tier's final length and at least `min_requests` (100) requests (`run_closed`'s
+`min_requests` floor). Why: the 2026-10-28 calibrations (`lab.validate`, spot H200, `min` tier) measured
+saturated at 5.37 then 9.19 and 8.65 req/s on the same requests, and 5.37 on seed 0's first run in a launch against
+8.74 later in it: the first load at a size after a launch runs slow (the bench cold-start bug of 2026-10-27, seen at
+the base's concurrency), so a noise band measured across launches was 53%, then 23.7% with the bisecting search. And
+single_stream's 30 s at concurrency 1 held 14 requests, so its "p99" was the slowest of 14 (5.0, 4.69, 3.84 ms:
+26.7%). The bands and the performance reference are measured again after this (`lab.validate`) and only then written
+to the ledger; the two calibrations' raw results are in the store (`archive/calib-20261028-*`). Amends 2026-10-28
+(minimal gates) and 2026-10-18 (short gates).
+
 ## 2026-10-28 — Everything from the InferenceBench era is removed
 `logs/`, the InferenceBench diagnostics (`assertions`, `blame`, `claims_audit`, `exploration`, `inject`, `noise`),
 `feedback/verdict.py`, their tests, and the `research-v1` tag are deleted; `python -m feedback` reads lab ledgers
