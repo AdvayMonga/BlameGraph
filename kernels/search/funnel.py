@@ -18,7 +18,8 @@ From the parents:
   4. every correct program takes the full exam (stage 2) and joins the tree; every idea and how far it got go to
      the log
 
-Model calls run `workers` at a time (the first of each batch alone, so the rest read the prompt cache it writes); GPU
+Model calls run in waves of `workers` (the round's first call alone, so the rest read the prompt cache it writes),
+each call shown the changes the waves before it proposed and asked for a different one; GPU
 timings stay one at a time. A program that fails correctness does not join the tree: a round's failures would
 otherwise close the parent. Facts only in every prompt; the instructions say what to return, never what to try."""
 from __future__ import annotations
@@ -81,15 +82,23 @@ class Funnel:
         return m
 
 
-def pmap(f: Funnel, fn: Callable, items) -> list:
-    """`fn` over `items`, `f.workers` at a time, in order; the first alone, so the calls after it read the prompt cache
-    it writes (a cache entry is readable only once its request has started)."""
+def pmap(f: Funnel, fn: Callable, items, alone: bool = True) -> list:
+    """`fn` over `items`, `f.workers` at a time, in order; with `alone` the first alone, so the calls after it read the
+    prompt cache it writes (a cache entry is readable only once its request has started)."""
     items = list(items)
     if len(items) <= 1 or f.workers <= 1:
         return [fn(x) for x in items]
-    first = fn(items[0])
+    first = [fn(items[0])] if alone else []
     with ThreadPoolExecutor(max_workers=f.workers) as ex:
-        return [first, *ex.map(fn, items[1:])]
+        return [*first, *ex.map(fn, items[len(first):])]
+
+
+def proposed(ideas: list[dict]) -> str:
+    """The changes earlier calls of this round proposed, for every later call of the round."""
+    from kernels.search.memory import short
+    rows = [f"- {short(h)}" for h in ideas if h.get("optimisation_method") or h.get("modification_plan")]
+    return ("# Changes already proposed in this round by other calls (not measured yet)\n" + "\n".join(rows)
+            + "\nYour change must differ from each of these.") if rows else ""
 
 
 def slices(f: Funnel, tree: Tree, parent: Node) -> dict[str, str]:
@@ -283,12 +292,16 @@ def generation(f: Funnel, tree: Tree, slots: list[Slot], system: str, it: int,
                 names = [x for x in SLICES if x in facts]
                 calls.append((s, facts[names[(it + i + k) % len(names)]], "optimization", {}))
 
-    def one(c):
+    def one(c, note):
         s, facts, mode, kw = c
-        idea, code, why = change(f, system, bases[s.parent.id], s.parent, facts, mode, set(seen), **kw)
+        idea, code, why = change(f, system, bases[s.parent.id], s.parent, "\n\n".join(x for x in (facts, note) if x),
+                                 mode, set(seen), **kw)
         return {**idea, "parent_id": s.parent.id, "type": s.kind, "idea_id": uuid.uuid4().hex[:8],
                 **({"with": s.other.id} if s.other else {})}, (code, why)
-    made = pmap(f, one, calls)
+    made, wave = [], max(1, f.workers)
+    for w in range(0, len(calls), wave):     # waves: each call sees the changes proposed by the waves before it
+        note = proposed([h for h, _ in made])
+        made += pmap(f, lambda c, note=note: one(c, note), calls[w:w + wave], alone=w == 0)
     counts["named"] = len(made)
     ideas = [h for h, _ in made]
     drafts = written(f, [cw for _, cw in made], seen)

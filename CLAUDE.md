@@ -417,8 +417,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   (fastembed on the changed lines, `near_duplicates`; ShinkaEvolve) are dropped, the no-GPU precheck (`--precheck`, default on) drops what fails to
   build and keeps the compiler's report on the program (the compiler slice of its children), stage 1 in `--parallel`
   jails, and every correct program takes the full exam and joins the tree. A parent gets its ncu
-  counters (stage 3) when it is first chosen. Model calls run `--workers` (8) at a time, the first of each batch alone
-  so the rest read the prompt cache it writes (`kernels/search/llm.py`'s `CACHE_SPLIT`: the stable part of a prompt is
+  counters (stage 3) when it is first chosen. Model calls run in waves of `--workers` (8), each call shown the changes earlier waves of the round proposed and
+  asked for a different one (`funnel.proposed`, decided 2026-11-01), the round's first call alone so the rest read
+  the prompt cache it writes (`kernels/search/llm.py`'s `CACHE_SPLIT`: the stable part of a prompt is
   sent as cached blocks); GPU timings run one at a time. Each hypothesis may predict ncu counter changes (`mechanism`),
   measured against the parent's. Every idea's fate goes to `hypotheses.jsonl` (each idea with its `parent_id`; the
   row's `parents` and `improved`), which the archive reads. `--facts FILE` adds facts to every prompt; the
