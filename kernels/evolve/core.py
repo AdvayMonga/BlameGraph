@@ -264,10 +264,10 @@ def _shown(ratio: dict) -> bool:
 
 
 def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | None, device: str,
-          tolerances: dict | None, stage: int, iters: int = 30, points: int = 8) -> dict:
+          tolerances: dict | None, stage: int, iters: int = 30, points: int = 8, full: bool = False) -> dict:
     """stage 1: correctness on the two most frequent seen shapes, one seed. stage 2: correctness on every seen shape and
-    timing against the baseline; with held-out shapes (the gate, never selection) the full check on them and the seen
-    shapes: three seeds, repeats, edge cases and layouts, other value scales, the baseline's error, peak memory. A candidate that
+    timing against the baseline; with `full` or held-out shapes (the gate, never selection) the full check on them and
+    the seen shapes: three seeds, repeats, edge cases and layouts, other value scales, the baseline's error, peak memory. A candidate that
     leaves any function the evaluator watches patched scores 0, whatever it measured. TUNE_STAGE: `points` points of
     the program's grid (kernels/search/tune.py), each loaded with CONFIG rewritten, checked on the first seen shape and
     timed on every one; the rows choose launch parameters and score nothing."""
@@ -283,7 +283,7 @@ def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | 
         patched.extend(n for n in _patched(before, task) if n not in patched)
         return bool(patched)
     out = (_tune(task, program, seen, weights, device, tolerances, iters, points, checkpoint) if stage == TUNE_STAGE
-           else _judge(task, program, seen, heldout, weights, device, tolerances, stage, iters, checkpoint))
+           else _judge(task, program, seen, heldout, weights, device, tolerances, stage, iters, checkpoint, full))
     if checkpoint():
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
                 "artifacts": {"error": "patched what the evaluator uses: " + ", ".join(patched[:20])}}
@@ -291,7 +291,7 @@ def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | 
 
 
 def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | None, device: str,
-           tolerances: dict | None, stage: int, iters: int, checkpoint) -> dict:
+           tolerances: dict | None, stage: int, iters: int, checkpoint, full: bool = False) -> dict:
     """The gates and timing; returns {} as soon as `checkpoint` finds a patch (judge reports it)."""
     bfn = task.baseline() if task.error_budget else None                 # bound before the candidate loads
     budget = {"baseline": task.bind(bfn), "budget": task.error_budget} if bfn else {}
@@ -310,7 +310,7 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
         return out
     ref = task.reference
     shapes = seen[:2] if stage == 1 else seen
-    full = stage > 1 and bool(heldout)           # the gate: every check; selection: correctness and timing only
+    full = stage > 1 and (full or bool(heldout))     # the gate: every check; selection: correctness and timing only
     try:
         keep = lambda case, out: _keep("check", case["shape"], case["dtype"], case["seed"], out)    # noqa: E731
         r = check_kernel(ref, cand, task.make_inputs, shapes, heldout if full else [], dtypes=task.dtypes,
@@ -474,7 +474,7 @@ def main() -> int:
     tol = {getattr(torch, k): tuple(v) for k, v in (cfg.get("tolerances") or {}).items()}
     out = judge(task, program, [tuple(s) for s in cfg["seen"]], [tuple(s) for s in cfg.get("heldout", [])],
                 cfg.get("weights"), cfg.get("device", "cpu"), tol or None, stage, cfg.get("iters", 30),
-                cfg.get("tune_points", 8))
+                cfg.get("tune_points", 8), bool(cfg.get("full")))
     if cfg.get("record"):
         _save({"records": RECORDS}, cfg["record"])
     sys.stdout.write("\n" + json.dumps({**out, "result_key": key} if key else out) + "\n")

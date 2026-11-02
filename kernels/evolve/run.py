@@ -282,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
         out = judge_jailed({"task": task.name, "seen": [list(s) for s in sets["seen"]],
                             "heldout": [list(s) for s in sets["heldout"]], "weights": sets.get("calls"),
                             "device": a.device, "tolerances": tol, "ints": _ints(sets, ("seen", "heldout")),
-                            "options": options_from_target(task), **region_args(a)},
+                            "options": options_from_target(task), "full": True, **region_args(a)},
                            Path(a.program).read_text(), 2, timeout_s=3600)
         print(json.dumps(out, indent=1))
         from kernels.evolve.ship import gate_passed

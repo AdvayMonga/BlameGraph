@@ -8,7 +8,8 @@ Stage 2 during a search (and re-timing) checks correctness on every seen shape a
 checks (memoization, non-finite inputs, inputs unchanged, aliasing), times the program against the baseline with the
 timed outputs checked, applies the roofline physics alarm and re-verifies the outputs outside the jail. The rest (seeds
 1-2, three repeats for determinism, edge shapes and layouts, the x3 / x0.01 / x-1 value scales, the baseline's error,
-peak memory) runs only in the held-out gate, i.e. on the winner before it ships. Why (the user: make the exam really
+peak memory) runs only in the held-out gate (its config says `full`, so a split with no held-out shapes still gets
+every check), i.e. on the winner before it ships. Why (the user: make the exam really
 cheap and run the full one only on the winner): across the 474 recorded stage-2 exams, one gate other than correctness
 on stage 1's shapes ever failed (a x3 value scale, once), and the exam was most of a generation's ~17-24 min. Amends
 the stage-2 definition of 2026-10-04 (kernels/evolve/core.judge).
