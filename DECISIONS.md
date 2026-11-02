@@ -3,6 +3,15 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-01 — A round's calls run in waves, each shown the changes already proposed
+A generation's model calls run in waves of `--workers` (8); every call after the first wave gets the changes the
+earlier waves of the round proposed (their hypothesis text, not measured yet) and is asked for a change different from
+each. Why (the user, for diversity and to stop paying for duplicates): all calls of a round ran in parallel on the
+same prompt and the memory holds only earlier generations, so in the 2026-11-01 moe_gemm_fp8 run 63 of 85 changes were
+dropped as identical (30) or near-duplicate (33) programs after being written. Waves of 8 rather than 20 (the user's
+first figure): a wave's own calls still cannot see each other. Costs ~1-2 min of wall time per extra wave. Amends
+2026-10-27 (calls 8 at a time, the first of each batch alone).
+
 ## 2026-11-01 — Selection's exam is correctness and timing; the gate keeps every check
 Stage 2 during a search (and re-timing) checks correctness on every seen shape at one seed, with the cheap anti-gaming
 checks (memoization, non-finite inputs, inputs unchanged, aliasing), times the program against the baseline with the

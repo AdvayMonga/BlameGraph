@@ -216,6 +216,15 @@ def test_model_calls_run_in_parallel_the_first_alone_and_a_program_written_twice
     assert [c for c, _ in out] == ["a = 1\n", None, None, "a = 2\n"] and "identical" in out[1][1] and len(seen) == 2
 
 
+
+def test_calls_run_in_waves_each_shown_the_changes_proposed_before_it_this_round():
+    f, t, rows = funnel(workers=2), Tree(), []
+    expand(f, t, root_of(t), "SYS", 1, lambda n, c: t.add(n), rows.append)
+    calls = f.models.judge.calls                 # wave 1: calls 1-2, wave 2: calls 3-4
+    assert not any("already proposed" in u for u in calls[:2])
+    assert all("already proposed" in u and "m5 / set a = 5" in u and "m13 / set a = 13" in u for u in calls[2:])
+    assert "m22" not in calls[3] and rows[0]["named"] == 4
+
 if __name__ == "__main__":
     import inspect
     import tempfile
