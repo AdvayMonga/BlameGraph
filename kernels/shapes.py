@@ -76,34 +76,42 @@ def ints_from_captures(task: Task, dirs: list[Path]) -> dict:
     return out
 
 
-def split(task: Task, counts: Counter, quantile: float = 0.8) -> dict:
-    """Held out: a shape whose value on any held-out axis is above that axis's `quantile` (by calls; by distinct values
-    when that holds out nothing, i.e. most calls sit at the largest value). By distinct values the most-called shape
-    always stays seen, and axes are added smallest region first while at most half of all calls are held out (on
-    2026-10-19 the union of two such regions held out 83% of calls, the most-called shapes among them).
-    Seen: the rest. Each list is ordered by call count, most frequent first."""
+HELDOUT_BAND = (0.6, 0.8)     # held out: a band of each held-out axis, by calls; the largest values stay seen
+
+
+def split(task: Task, counts: Counter) -> dict:
+    """Held out: a shape whose value on any held-out axis lies in that axis's `HELDOUT_BAND` (above its 60th and up to
+    its 80th percentile, by calls; by distinct values when that holds out nothing, i.e. most calls sit at a few values),
+    never the axis's largest value: the shapes a loaded regime runs most (the largest batches, the longest waves) stay
+    seen, and the band in between tests the program on sizes it was not selected on. By distinct values the
+    most-called shape always stays seen, and axes are added smallest band first while at most half of all calls are
+    held out. Seen: the rest. Each list is ordered by call count, most frequent first."""
     if not counts:
         return {"seen": list(task.seen_default), "heldout": list(task.heldout_default), "source": "defaults"}
-    cut = {}
-    for ax in task.heldout_axes:
-        vals = sorted(v for s, n in counts.items() for v in [s[ax]] * n)
-        cut[ax] = vals[min(len(vals) - 1, int(quantile * len(vals)))]
-    held = {s for s in counts if any(s[ax] > cut[ax] for ax in task.heldout_axes)}
+    lo_q, hi_q = HELDOUT_BAND
+
+    def band(vals: list) -> tuple:
+        top = vals[-1]
+        lo, hi = vals[min(len(vals) - 1, int(lo_q * len(vals)))], vals[min(len(vals) - 1, int(hi_q * len(vals)))]
+        return lo, (hi if hi < top else max([v for v in vals if v < top], default=lo))
+
+    cut = {ax: band(sorted(v for s, n in counts.items() for v in [s[ax]] * n)) for ax in task.heldout_axes}
+    held = {s for s in counts if any(cut[ax][0] < s[ax] <= cut[ax][1] for ax in task.heldout_axes)}
     by = "calls"
-    if not held:                                 # calls pile up at the largest value: cut over distinct values instead
+    if not held:                                 # calls pile up at a few values: a band over distinct values instead
         by, top, total, cut = "distinct", max(counts, key=lambda s: counts[s]), sum(counts.values()), {}
-        tails = {}
+        bands = {}
         for ax in task.heldout_axes:
-            vals = sorted({s[ax] for s in counts})
-            c = vals[min(len(vals) - 1, int(quantile * len(vals)))]
-            tails[ax] = (c, {s for s in counts if s[ax] > c} - {top})
-        for ax, (c, region) in sorted(tails.items(), key=lambda kv: sum(counts[s] for s in kv[1][1])):
+            c = band(sorted({s[ax] for s in counts}))
+            bands[ax] = (c, {s for s in counts if c[0] < s[ax] <= c[1]} - {top})
+        for ax, (c, region) in sorted(bands.items(), key=lambda kv: sum(counts[s] for s in kv[1][1])):
             if region and sum(counts[s] for s in held | region) <= total / 2:
                 held, cut[ax] = held | region, c
     order = sorted(counts, key=lambda s: -counts[s])
     seen = [s for s in order if s not in held]
     return {"seen": seen, "heldout": [s for s in order if s in held], "source": "captures",
-            "cut": {str(k): v for k, v in cut.items()}, "cut_by": by, "calls": {json.dumps(list(s)): n for s, n in counts.items()}}
+            "cut": {str(k): list(v) for k, v in cut.items()}, "cut_by": by,
+            "calls": {json.dumps(list(s)): n for s, n in counts.items()}}
 
 
 def select(task: Task, sets: dict, k: int = 8, bins: int = 4) -> dict:

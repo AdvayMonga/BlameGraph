@@ -109,7 +109,7 @@ def test_counters_are_not_asked_for_again_once_the_host_refuses_them():
 
 def test_every_ab_arm_gets_the_same_promotion():
     from kernels.search import ab
-    assert ab.SAME_PROMOTION == ("--retime", "3", "--detector-model", "none")       # tuning is in the search
+    assert ab.SAME_PROMOTION == ("--retime", "3", "--detector-model", "none", "--tune-points", "0")   # same for both
 
 
 def test_share_with_gates_ranks_only_the_gated_tasks():
@@ -308,6 +308,7 @@ def kernel(x, w):
 
 def test_the_grid_search_picks_launch_parameters_and_rewrites_them_as_constants():
     from kernels.evolve import evaluator
+    from kernels.evolve.run import retime
     from kernels.search import tune
     from kernels.search.loop import cascade
     from kernels.tasks import load
@@ -337,9 +338,12 @@ def test_the_grid_search_picks_launch_parameters_and_rewrites_them_as_constants(
         broken = CHUNKED.replace('c = CONFIG["chunk"]', 'c = CONFIG["chunk"]\n    assert c == 1')   # only chunk 1 runs
         code, got = tune.tuned(stage, broken, quick=False)
         assert "'chunk': 1," in code and sum(x["score"] > 0 for x in got) == 1 and any("error" in x for x in got)
-        r = cascade(evaluator.judge_stage, tuned=True)(CHUNKED)          # every program tuned before its exam
-        assert r["metrics"]["correct"] == 1.0 and "'chunk': 1," not in r["code"] and json.loads(r["artifacts"]["tune"])
-        assert cascade(evaluator.judge_stage)(CHUNKED)["code"] == CHUNKED
+        assert cascade(evaluator.judge_stage)(CHUNKED)["code"] == CHUNKED              # the search measures as written
+        trace = Path(d) / "trace.jsonl"
+        trace.write_text(json.dumps({"child_id": "c", "child_code": CHUNKED,
+                                     "child_metrics": {"combined_score": 1.0, "correct": 1.0}}) + "\n")
+        code, _, timed = retime(trace, 1, tune=lambda c: tune.tuned(stage, c, quick=False))   # the top ones tuned
+        assert "'chunk': 1," not in code and timed[0]["tuned_points"] == 3
 
 
 def test_the_ab_harness_runs_both_arms_and_gates_each_winner_on_held_out_shapes():
@@ -704,12 +708,12 @@ def test_the_cli_builds_its_funnel_with_every_task_in_the_memory(monkeypatch, tm
                           tmp_path / "archive.jsonl")
     a = SimpleNamespace(archive=str(path), second_judge_model="none", second_judge_share=4, effort="high",
                         judge_tools=False, model="m", per_call=20, parallel=4, ncu=False, precheck=True,
-                        workers=8, tune_points=8)
+                        workers=8)
     import lab.search
     monkeypatch.setattr(lab.search, "FastEmbed", lambda cache: "EMBEDDER")
     f = cli._funnel(a, SimpleNamespace(name="moe_gemm_fp8", size_expr=None), lambda s, u: ("", 0.0))
     assert [e.id for e in f.library] == ["i1", "i2"] and f.embedder == "EMBEDDER"
-    assert f.task == "moe_gemm_fp8" and f.tune and f.precheck and f.workers == 8 and f.parallel == 4
+    assert f.task == "moe_gemm_fp8" and f.precheck and f.workers == 8 and f.parallel == 4
 
 
 def test_the_cli_starts_the_generations_from_every_competitor_port_of_its_task(monkeypatch, tmp_path):

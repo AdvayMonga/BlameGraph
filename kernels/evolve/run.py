@@ -282,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
         out = judge_jailed({"task": task.name, "seen": [list(s) for s in sets["seen"]],
                             "heldout": [list(s) for s in sets["heldout"]], "weights": sets.get("calls"),
                             "device": a.device, "tolerances": tol, "ints": _ints(sets, ("seen", "heldout")),
-                            "options": options_from_target(task), **region_args(a)},
+                            "options": options_from_target(task), "full": True, **region_args(a)},
                            Path(a.program).read_text(), 2, timeout_s=3600)
         print(json.dumps(out, indent=1))
         from kernels.evolve.ship import gate_passed
@@ -345,11 +345,12 @@ def prepare(task, sets: dict, out: Path, device: str, tol: dict, timing_shapes: 
     return sets, program
 
 
-def retime(trace: Path, k: int, repeats: int = 3, exclude=None) -> tuple[str | None, dict | None, list]:
+def retime(trace: Path, k: int, repeats: int = 3, exclude=None, tune=None) -> tuple[str | None, dict | None, list]:
     """The top `k` candidates by score re-judged `repeats` times through the evaluator (stage 2, local or remote);
     the one with the highest median score is promoted. One timing of each is what selection saw, and one timing can
     win by noise. `exclude(code, row) -> reason | None` passes over a candidate (e.g. flagged as gaming the
-    evaluator), the next-best taking its place. Returns (code, metrics of its median run, every re-timing, the
+    evaluator), the next-best taking its place. `tune(code) -> (code, grid rows)` tunes each candidate first, and it is
+    re-judged as tuned (kernels/search/tune.py). Returns (code, metrics of its median run, every re-timing, the
     excluded ones included with their reason)."""
     import statistics
     import tempfile
@@ -369,8 +370,9 @@ def retime(trace: Path, k: int, repeats: int = 3, exclude=None) -> tuple[str | N
         else:
             top.append(r)
     for r in top:
+        code, rows = tune(r["child_code"]) if tune else (r["child_code"], [])
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
-            f.write(r["child_code"])
+            f.write(code)
         runs = [evaluator.judge_stage(f.name, 2)["metrics"] for _ in range(repeats)]
         Path(f.name).unlink()
         scores = [m.get("combined_score", 0.0) for m in runs]
@@ -380,7 +382,7 @@ def retime(trace: Path, k: int, repeats: int = 3, exclude=None) -> tuple[str | N
             continue
         med = statistics.median(scores)
         out.append({"id": r["child_id"], "selected_score": r["child_metrics"]["combined_score"], "scores": scores,
-                    "median": med, "code": r["child_code"],
+                    "median": med, "code": code, **({"tuned_points": len(rows)} if rows else {}),
                     "metrics": min(runs, key=lambda m: abs(m.get("combined_score", 0.0) - med))})
     timed = [x for x in out if "median" in x]
     if not timed:
