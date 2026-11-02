@@ -325,7 +325,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   kernels no task covers, by share: the facts for choosing the next task). `lab/capture.py` + `lab.profile --capture MODULE:FUNCTION` (the `profile` tool's `capture`): every
   call's argument shapes and small int tensors, the first call per shape kept whole as real inputs.
 - `kernels/regions.py` — regions (decided 2026-10-22/23): any run of consecutive decode stations of the engine as a
-  kernel task with a generated harness: `Station(name, reads, writes, fn)`; `interface` (inputs read before written,
+  kernel task with a generated harness (since 2026-11-02 prefill stations too: a region whose first station starts
+  "p_" binds the engine's `PREFILL`, `station_set`; its held-out axis is the tokens of the packed wave; a read the
+  engine passes as None in the captured calls, e.g. a packed wave's `tokens`, is a constant None and the calls where it
+  is a tensor are left out; a shipped override runs the engine's own stations on such a call): `Station(name, reads, writes, fn)`; `interface` (inputs read before written,
   outputs read after the region or `live`), the stations as the baseline (`Task.baseline_fn`), an fp32 run as the
   reference, `bytes_moved` (fused vs one-by-one), and the error budget: `Task.error_budget` (2) lets each element differ from the reference by
   that many times the baseline's own error there, on top of the dtype's tolerance (`check._compare(base=, k=)`), in the

@@ -54,13 +54,24 @@ DECODE = (
     Station("kv", ("h", "kv"), ("kv",), _kv),
 )
 
+def _p_scale(c):                               # a prefill station: every token, or only the real ones of a padded wave
+    out = c["n"] * 2
+    if c["tokens"] is not None:
+        out = c["n"].clone().index_copy_(1, c["tokens"], (c["n"] * 2).index_select(1, c["tokens"]))
+    return {"h": out}
+
+PREFILL = (
+    Station("p_norm", ("h", "cfg"), ("n",), _norm),
+    Station("p_scale", ("n", "tokens"), ("h",), _p_scale),
+)
+
 def functional(stations=DECODE):
     def pure(fn):
         return lambda c: fn({**c, "h": c["h"].clone()})
     return tuple(replace(s, fn=pure(s.fn)) if s.name == "add" else s for s in stations)
 
-def reference():
-    return functional(DECODE)
+def reference(stations=DECODE):
+    return functional(stations)
 """
 
 
@@ -319,3 +330,39 @@ def test_a_region_judged_on_a_remote_worker_is_described_here_from_its_shapes_fi
     cfg = json.loads((tmp_path / "out" / "eval_config.json").read_text())
     assert cfg["samples"] == "/gpu/s" and cfg["shared_weights"] == "/gpu/w.pkl"       # paths on the worker, as given
     assert cfg["task"] == "region:norm:add" and cfg["seen"] == [[4, 64], [16, 64]]
+
+
+def test_a_prefill_region_binds_the_prefill_stations_and_a_none_read_becomes_a_constant(tmp_path, monkeypatch):
+    """A "p_" region is the engine's PREFILL; a read the engine passes as None (packed waves' `tokens`) is a constant
+    None, the calls where it is a tensor (padded waves) left out; a shipped override runs the engine's own stations
+    for a padded wave."""
+    from kernels.evolve import core
+    regions = engine(tmp_path, monkeypatch)
+    h = held(tmp_path, regions)
+    d = tmp_path / "pcaps"
+    (d / "samples").mkdir(parents=True)
+    with open(d / "calls.jsonl", "w") as f:
+        for i, (t, padded) in enumerate([(8, False), (24, False), (16, True)]):
+            tokens = {"shape": [t - 2], "dtype": "int64"} if padded else {"value": None}
+            f.write(json.dumps({"fn": "region:p_norm:p_scale", "layer": 0, "sample": f"{i}.pt",
+                                "reads": {"h": {"shape": [1, t, 64], "dtype": "float32"}, "cfg": {"value": {"eps": 1e-6}},
+                                          "tokens": tokens}}) + "\n")
+            torch.save({"reads": {"h": torch.randn(1, t, 64), "cfg": {"eps": 1e-6},
+                                  **({"tokens": torch.arange(t - 2)} if padded else {})}, "writes": {}},
+                       d / "samples" / f"{i}.pt")
+    assert regions.station_set("p_norm") == "PREFILL" and regions.light("region:p_norm:p_scale").entry.endswith(":PREFILL")
+    assert dict(regions.light("region:p_norm:p_scale").capture_env) == {"CAPTURE_REGION_LAYERS": "0"}
+    t = regions.from_engine("p_norm", "p_scale", str(d), str(h.path), dtypes=(torch.float32,))
+    assert set(t.seen_default) == {(1, 8, 64), (1, 24, 64)} and t.heldout_axes == (1,)    # the tokens axis
+    start = tmp_path / "start.py"
+    start.write_text(t.start_program())
+    assert "_CONST['tokens'] = None" in start.read_text() and "_st.PREFILL" in start.read_text()
+    r = core.judge(t, start, [(1, 8, 64), (1, 24, 64)], [], None, "cpu", None, 2, iters=3)
+    assert r["metrics"]["correct"] == 1.0, r["artifacts"]
+    ns: dict = {}
+    exec(compile(regions.override_module(start.read_text(), "p_norm", "p_scale"), "o.py", "exec"), ns)
+    c = {"h": torch.randn(1, 6, 64), "cfg": regions._engine().LayerConfig(1e-6), "tokens": torch.tensor([0, 2])}
+    got = ns["OVERRIDES"][("p_norm", "p_scale")](c)["h"]                # a padded wave: the engine's own stations
+    st = regions._engine()
+    want = st.PREFILL[1].fn({**c, **st.PREFILL[0].fn(c)})["h"]
+    assert torch.equal(got, want)

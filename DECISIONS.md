@@ -3,6 +3,18 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-02 — Regions for everything: the prefill path becomes stations
+The kernel layer moves to regions for every kernel, prefill included: the engine declares a CUDA prefill wave as
+stations (`PREFILL`, names "p_": norms, qkv, rope, K/V store, FlashInfer attention from the wave's tensors, o_proj, the
+experts as one station calling the same `moe_cuda` the module calls), capturable and overridable like decode, and
+`kernels/regions.py` binds a "p_" region to them. The hand-written tasks are retired once the single-station regions
+reproduce their baselines and gates. Why (the user, after the coverage audit of 2026-11-01): the tasks covered about
+20% of the engine's kernel time; the largest uncovered kernels were prefill's (the fp8 grouped GEMM 10-17%, FlashInfer
+prefill attention 2-9%), and regions have the higher upside (fusion across kernels, real inputs and weights, a harness
+generated from the engine's own code). A prefill wave runs through the stations only while a "p_" stretch is overridden
+or captured, so the default path is unchanged. Known limits: one layer captured, writers in place (K/V) outside
+regions, the whole step's weights large to share.
+
 ## 2026-11-01 — A round's calls run in waves, each shown the changes already proposed
 A generation's model calls run in waves of `--workers` (8); every call after the first wave gets the changes the
 earlier waves of the round proposed (their hypothesis text, not measured yet) and is asked for a change different from
