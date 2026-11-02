@@ -3,6 +3,17 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-02 — Captures at the regime's steady state; held out is a middle band, the largest shapes stay seen
+A kernel capture (`kernels/pipeline.captures`, `lab.profile --concurrency`) runs closed loop: the regime's load in
+flight (`n`), each request replaced by the next when it ends, over 3x as many requests (all of a class with fewer, a
+third as many in flight), answers 256 tokens, so most of the window is the steady state: rows at every point of their
+answers, prefill waves mixed into decode. The held-out split (`kernels/shapes.split`) holds out a band of each held-out
+axis (above its 60th and up to its 80th percentile by calls, by distinct values when calls pile up), never the axis's
+largest value. Why (the user, after the coverage audit): every capture fired its N requests at once with 128-token
+answers, so captures and profiles were prefill-heavy (decode attention 7.7% of the saturated window here against 39%
+in a steady-state profile), and the held-out split removed the shapes a loaded regime runs most (the largest batches,
+the longest waves), which the search then never saw. Replaces the burst captures (2026-10-19, validate_gpu.sh's
+CAPTURE_SPECS) and "held-out = whole regions above the 80th percentile" (2026-10-17).
 ## 2026-11-02 — Regions for everything: the prefill path becomes stations
 The kernel layer moves to regions for every kernel, prefill included: the engine declares a CUDA prefill wave as
 stations (`PREFILL`, names "p_": norms, qkv, rope, K/V store, FlashInfer attention from the wave's tensors, o_proj, the

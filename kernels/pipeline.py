@@ -27,6 +27,19 @@ REGIME_CAPTURE = {"single_stream": ("steady_interactive", 1), "saturated": ("mix
                   "shared_prefix_multi_turn": ("mixed_3", 64), "overload": ("mixed_1", 256)}
 
 
+CAPTURE_TOKENS = 256          # each capture request's answer length
+
+
+def steady(cls: str, n: int) -> tuple[int, int]:
+    """(requests, in flight) for a capture of corpus class `cls` at load `n`: closed loop at `n` in flight over 3x as
+    many requests, so most of the window is the regime's steady state; a class with fewer seen requests runs them all
+    at a third as many in flight."""
+    from lab import corpus
+    have = len(corpus.load_trace(cls, "seen")[1])
+    total = min(3 * n, have)
+    return total, max(1, min(n, total // 3))
+
+
 def specs(regimes: tuple[str, ...] = ()) -> tuple[tuple[str, int], ...]:
     """The capture traffic for the task's scored regimes (each once), else the default."""
     got = tuple(dict.fromkeys(REGIME_CAPTURE[r] for r in regimes if r in REGIME_CAPTURE))
@@ -82,8 +95,10 @@ def captures(task, tree: Path, profile: Callable[[Path, dict], Path | None], reg
     env = capture_env(task)
     for cls, n in specs(regimes):
         key = tree_key(task, tree, (task.name, cls, n, sorted(env.items())))
+        total, lanes = steady(cls, n)
         bundle = Path(known[key]) if key in known and Path(known[key]).is_dir() else \
-            profile(tree, {"capture": [task.capture_fn or task.entry], "corpus_class": cls, "requests": n,
+            profile(tree, {"capture": [task.capture_fn or task.entry], "corpus_class": cls, "requests": total,
+                           "concurrency": lanes, "max_tokens": CAPTURE_TOKENS,
                            **({"capture_task": task.name} if task.capture_env else {})})
         if bundle is not None and (Path(bundle) / "captures").is_dir():
             out.append(Path(bundle) / "captures")

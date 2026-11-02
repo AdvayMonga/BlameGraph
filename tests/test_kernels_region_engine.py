@@ -154,15 +154,15 @@ def test_a_region_writing_in_place_is_refused(tmp_path, monkeypatch):
 def test_captured_shapes_split_with_a_heldout_region_from_the_holders_layer_only(tmp_path, monkeypatch):
     from kernels import shapes
     regions = engine(tmp_path, monkeypatch)
-    calls = [(4, 64, 0, True)] + [(4, 64, 0, False)] * 4 + [(16, 64, 0, True)] * 3 + [(64, 64, 0, True)]
+    calls = [(4, 64, 0, True)] + [(4, 64, 0, False)] * 4 + [(16, 64, 0, True)] * 3 + [(32, 64, 0, True), (64, 64, 0, True)]
     calls += [(32, 64, 1, True), (8, 64, 0, False)]          # another layer's; a shape whose sample was over the cap
     caps = captures(tmp_path, calls)
     t = regions.from_engine("norm", "add", str(caps), str(held(tmp_path, regions).path), dtypes=(torch.float32,))
-    assert t.heldout_axes == (0,) and set(t.seen_default) == {(4, 64), (16, 64), (64, 64)}
+    assert t.heldout_axes == (0,) and set(t.seen_default) == {(4, 64), (16, 64), (32, 64), (64, 64)}
     counts = shapes.from_captures(t, [caps])                 # read by the task's capture fn, not its entry
-    assert counts == {(4, 64): 5, (16, 64): 3, (64, 64): 1} and shapes.ints_from_captures(t, [caps]) == {}
+    assert counts == {(4, 64): 5, (16, 64): 3, (32, 64): 1, (64, 64): 1} and shapes.ints_from_captures(t, [caps]) == {}
     sets = shapes.split(t, counts)
-    assert sets["heldout"] == [(64, 64)] and sets["seen"] == [(4, 64), (16, 64)]
+    assert sets["heldout"] == [(32, 64)] and sets["seen"] == [(4, 64), (16, 64), (64, 64)]       # the largest seen
 
 
 def test_seed_zero_is_the_capture_and_later_seeds_perturb_it_differently(tmp_path, monkeypatch):
@@ -283,7 +283,7 @@ def test_the_search_cli_takes_a_region_with_its_samples_and_holder(tmp_path, mon
     from kernels.search import __main__ as cli
     regions = engine(tmp_path, monkeypatch)
     h = held(tmp_path, regions)
-    caps = captures(tmp_path, [(4, 64, 0, True)] * 3 + [(16, 64, 0, True)] * 2 + [(64, 64, 0, True)])
+    caps = captures(tmp_path, [(4, 64, 0, True)] * 3 + [(16, 64, 0, True)] * 2 + [(32, 64, 0, True), (64, 64, 0, True)])
     for k in ("KERNEL_EVAL_CONFIG", "KERNELS_EVAL_LOG"):
         monkeypatch.setenv(k, "")
     monkeypatch.setattr(cli, "Claude", lambda *a, **k: None)
@@ -294,13 +294,13 @@ def test_the_search_cli_takes_a_region_with_its_samples_and_holder(tmp_path, mon
                   "--out", str(out), "--judge-model", "none", "--device", "cpu"])
     cfg = json.loads((out / "eval_config.json").read_text())
     assert cfg["task"] == "region:norm:add" and cfg["samples"] == str(caps.resolve())
-    assert cfg["shared_weights"] == str(h.path.resolve()) and cfg["seen"] == [[4, 64], [16, 64]]   # split from samples
+    assert cfg["shared_weights"] == str(h.path.resolve()) and cfg["seen"] == [[4, 64], [16, 64], [64, 64]]   # split
     assert "_CONST['w.mm_scale'] = None" in (out / "initial_program.py").read_text()
     gates = []
     monkeypatch.setattr(run, "judge_jailed", lambda cfg, *a, **k: gates.append(cfg) or {"metrics": {}})
     run.main(["gate", "--task", "region:norm:add", "--samples", str(caps), "--shared-weights", str(h.path),
               "--program", str(out / "initial_program.py"), "--device", "cpu"])
-    assert gates[0]["heldout"] == [[64, 64]] and gates[0]["samples"] == cfg["samples"]
+    assert gates[0]["heldout"] == [[32, 64]] and gates[0]["samples"] == cfg["samples"]
     assert gates[0]["shared_weights"] == cfg["shared_weights"]
     with pytest.raises(argparse.ArgumentTypeError):
         run.task_name("region:norm")
