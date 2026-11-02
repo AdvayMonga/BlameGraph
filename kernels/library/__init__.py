@@ -33,6 +33,7 @@ class Kernel:
     tasks: tuple[str, ...]
     source: tuple[str, ...]                             # upstream paths, each optionally "#L<a>-L<b>"
     sass: dict | None = None
+    stations: tuple[str, ...] = ()                      # the engine stations it implements (a region's prompt)
 
     @property
     def library(self) -> str:
@@ -51,11 +52,17 @@ def index(path: Path = INDEX) -> list[Kernel]:
     raw = tomllib.loads(path.read_text())
     libs = raw["libraries"]
     return [Kernel(k["name"], libs[k["name"].split(".", 1)[0]]["repo"], libs[k["name"].split(".", 1)[0]]["version"],
-                   tuple(k["tasks"]), tuple(k["source"]), k.get("sass")) for k in raw["kernel"]]
+                   tuple(k.get("tasks", ())), tuple(k["source"]), k.get("sass"), tuple(k.get("stations", ())))
+            for k in raw["kernel"]]
 
 
 def for_task(task: str, path: Path = INDEX) -> list[Kernel]:
     return [k for k in index(path) if task in k.tasks]
+
+
+def for_stations(names, path: Path = INDEX) -> list[Kernel]:
+    """The entries implementing any of the engine stations `names` (a region's)."""
+    return [k for k in index(path) if set(k.stations) & set(names)]
 
 
 def url(k: Kernel, part: str) -> str:
@@ -88,13 +95,20 @@ def cards(task: str, cards_dir: Path = CARDS) -> dict[str, list[str]]:
     return out
 
 
-def block(task: str, path: Path = INDEX, src: Path = SRC, cards_dir: Path = CARDS) -> str:
+def block(task: str, path: Path = INDEX, src: Path = SRC, cards_dir: Path = CARDS, stations=None) -> str:
     """The prompt's part on other implementations: each one's upstream source and, where built, its card, and the
-    starting program's card; empty when the task has neither."""
-    ks, cs = for_task(task, path), cards(task, cards_dir)
+    starting program's card; empty when the task has neither. A region (`stations`: its station names) gets every entry
+    implementing one of its stations, each with its card from its own tasks' card files."""
+    if stations:
+        ks = for_stations(stations, path)
+        cs = {}
+        for t in {t for k in ks for t in k.tasks}:
+            cs.update({n: c for n, c in cards(t, cards_dir).items() if n != ENGINE})
+    else:
+        ks, cs = for_task(task, path), cards(task, cards_dir)
     if not ks and not cs:
         return ""
-    out = ["# Other implementations of this operation",
+    out = ["# Other implementations of " + ("these operations" if stations else "this operation"),
            "Their upstream source as published, and, where built, a card counted from the compiled code of each "
            "(kernels/ptx.py: instruction classes, widest vector access, registers, static shared memory, Hopper "
            "features in use). They are not timed on our shapes."]

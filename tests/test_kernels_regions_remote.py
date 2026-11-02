@@ -58,7 +58,8 @@ def test_the_hold_side_describes_a_region_from_its_samples_and_holder(tmp_path, 
     pack = pipeline.pack(two_traffics(tmp_path), tmp_path / "pack")
     d = hold.describe("region:norm:add", pack, held(tmp_path, regions).path)
     assert d["shapes"]["heldout"] == [[32, 64]] and d["shapes"]["heldout_axes"] == [0]
-    assert sorted(d["shapes"]["seen"]) == [[4, 64], [16, 64], [64, 64]] and d["stations"] == ["norm", "mm", "act", "add", "kv"]
+    assert sorted(d["shapes"]["seen"]) == [[4, 64], [16, 64], [64, 64]] and d["stations"] == ["norm", "mm", "act", "add"]
+    assert d["shapes"]["stations"] == d["stations"]                  # in the shapes file the controller's search reads
     assert "_CONST['w.mm_scale'] = None" in d["start"] and json.loads(json.dumps(d)) == d     # one JSON line
 
 

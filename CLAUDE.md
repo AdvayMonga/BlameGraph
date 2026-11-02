@@ -403,7 +403,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   names 2-3 per task from vLLM v0.32.0, SGLang v0.5.22, FlashInfer v0.7.2.post1 and TensorRT-LLM v1.2.1 (upstream
   paths with line ranges; whole files kept verbatim in `src/`, `python -m kernels.library fetch` re-downloads them),
   and `block(task)` is the part of every search prompt (the system message, cached) that shows each one's source, URL
-  and PTX/SASS card where built, and the starting program's card; no timings. `python -m kernels.library cards --task T
+  and PTX/SASS card where built, and the starting program's card; no timings. Each entry also names the engine stations
+  it implements (`stations`), so a region's prompt gets every entry for its stations (`for_stations`; the hold side
+  writes the region's station names into its shapes file), FlashInfer's batch prefill included for `p_attention`. `python -m kernels.library cards --task T
   --out knowledge/ptx/T.txt [--dump DIR]` on the GPU host: each entry's card from a `kernels.competitors` dump or from
   its package's .so (`sass` in the index; SGLang's JIT kernels and Triton kernels without a dump have none). Regions
   have no entries.

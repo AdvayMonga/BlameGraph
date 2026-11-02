@@ -3,6 +3,12 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-02 — Regions get the other libraries' kernels for their stations; no library becomes an engine dependency
+Every `kernels/library` entry names the engine stations it implements, and a region's search prompt shows every entry
+for its stations (FlashInfer's batch prefill added for `p_attention`). vLLM and SGLang do not become engine
+dependencies (the user): a program reads their source and ports from it; FlashInfer, already a dependency, stays
+callable. Why (the user): most of a region's gain may come from what specialized libraries already do; regions, the
+kernel layer's unit since today, had no library block.
 ## 2026-11-02 — Decode regions are timed as CUDA-graph replays
 A decode region's task has `graphs=True`, like the hand-written decode tasks: its baseline and programs are captured
 and timed as a graph replay, so host time (the Python station chain, launch overhead) is not timed; prefill regions
