@@ -115,6 +115,7 @@ def test_a_region_of_the_engines_stations_is_judged_end_to_end(tmp_path, monkeyp
     caps = captures(tmp_path, [(4, 64, 0, True), (16, 64, 0, True)])
     t = regions.from_engine("norm", "add", str(caps), str(h.path), dtypes=(torch.float32,))
     assert t.name == "region:norm:add" and set(t.seen_default) == {(4, 64), (16, 64)}
+    assert t.graphs                                    # decode is replayed as a graph: timed as one
     xs = t.make_inputs((4, 64), torch.float32, "cpu", torch.Generator().manual_seed(0))
     assert len(xs) == 2 and xs[1].shape == (64, 64)                  # h, then the weight; its None scale bound
     start = tmp_path / "start.py"
@@ -354,6 +355,7 @@ def test_a_prefill_region_binds_the_prefill_stations_and_a_none_read_becomes_a_c
     assert dict(regions.light("region:p_norm:p_scale").capture_env) == {"CAPTURE_REGION_LAYERS": "0"}
     t = regions.from_engine("p_norm", "p_scale", str(d), str(h.path), dtypes=(torch.float32,))
     assert set(t.seen_default) == {(1, 8, 64), (1, 24, 64)} and t.heldout_axes == (1,)    # the tokens axis
+    assert not t.graphs                                # prefill runs eagerly: its host time is real
     start = tmp_path / "start.py"
     start.write_text(t.start_program())
     assert "_CONST['tokens'] = None" in start.read_text() and "_st.PREFILL" in start.read_text()
