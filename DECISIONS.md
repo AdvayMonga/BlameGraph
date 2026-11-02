@@ -3,6 +3,12 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-02 — Regions are captured at four layers and one layer is held out
+A region is captured at layers 0, 16, 32 and 47 (`regions.LAYERS`), the holder shares each layer's weights
+("L<i>.w.*"), a call's shape starts with its layer, and layer 32's calls are held out (`Task.heldout_values`).
+Why (the user, on the limits of regions): all 48 layers share shapes and code but not values (outlier channels, each
+layer's expert routing), so a program chosen on layer 0 alone could fail a tolerance or slow down on another layer;
+a held-out layer tests exactly that. Replaces capturing and holding layer 0 only (2026-10-23).
 ## 2026-11-02 — Regions get the other libraries' kernels for their stations; no library becomes an engine dependency
 Every `kernels/library` entry names the engine stations it implements, and a region's search prompt shows every entry
 for its stations (FlashInfer's batch prefill added for `p_attention`). vLLM and SGLang do not become engine

@@ -352,7 +352,7 @@ def test_a_prefill_region_binds_the_prefill_stations_and_a_none_read_becomes_a_c
                                   **({"tokens": torch.arange(t - 2)} if padded else {})}, "writes": {}},
                        d / "samples" / f"{i}.pt")
     assert regions.station_set("p_norm") == "PREFILL" and regions.light("region:p_norm:p_scale").entry.endswith(":PREFILL")
-    assert dict(regions.light("region:p_norm:p_scale").capture_env) == {"CAPTURE_REGION_LAYERS": "0"}
+    assert dict(regions.light("region:p_norm:p_scale").capture_env) == {"CAPTURE_REGION_LAYERS": "0,16,32,47"}
     t = regions.from_engine("p_norm", "p_scale", str(d), str(h.path), dtypes=(torch.float32,))
     assert set(t.seen_default) == {(1, 8, 64), (1, 24, 64)} and t.heldout_axes == (1,)    # the tokens axis
     assert not t.graphs                                # prefill runs eagerly: its host time is real
@@ -368,3 +368,21 @@ def test_a_prefill_region_binds_the_prefill_stations_and_a_none_read_becomes_a_c
     st = regions._engine()
     want = st.PREFILL[1].fn({**c, **st.PREFILL[0].fn(c)})["h"]
     assert torch.equal(got, want)
+
+
+def test_a_region_held_for_several_layers_keys_shapes_by_layer_and_holds_one_layer_out(tmp_path, monkeypatch):
+    """Each layer's calls are its own shapes, with that layer's weights; the held-out layer's calls are held out."""
+    from kernels import shapes
+    from kernels.shared_weights import Holder
+    regions = engine(tmp_path, monkeypatch)
+    w = {i: torch.randn(64, 64) / 8 for i in (0, 32)}
+    h = Holder({"L0.w.mm": w[0], "L32.w.mm": w[32], "w.mm_scale": None}, tmp_path / "w.pkl",
+               {"cfg": regions._engine().LayerConfig(1e-6), "layers": [0, 32]})
+    monkeypatch.setattr(regions, "HELDOUT_LAYER", 32)
+    caps = captures(tmp_path, [(4, 64, 0, True), (16, 64, 0, True), (4, 64, 32, True), (8, 64, 7, True)])
+    t = regions.from_engine("norm", "add", str(caps), str(h.path), dtypes=(torch.float32,))
+    assert set(t.seen_default) == {(0, 4, 64), (0, 16, 64), (32, 4, 64)}           # layer 7 is not held
+    xs = t.make_inputs((32, 4, 64), torch.float32, "cpu", torch.Generator().manual_seed(0))
+    assert torch.equal(xs[1], w[32]) and t.heldout_values == ((0, (32,)),) and t.heldout_axes == (1,)
+    sets = shapes.split(t, shapes.from_captures(t, [caps]))
+    assert (32, 4, 64) in sets["heldout"] and (0, 4, 64) in sets["seen"]

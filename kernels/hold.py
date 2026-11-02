@@ -2,7 +2,7 @@
 
 A region's GPU-host side, for a search whose controller cannot load it (kernels/pipeline.py): loads the engine as it
 serves (its target's env, a token K/V pool, no CUDA graphs), shares the region's weights from this process
-(kernels/shared_weights.Holder: one layer's, `regions.LAYER`, for a stretch of stations; every layer's and the head's
+(kernels/shared_weights.Holder: the layers of `regions.LAYERS`, each as "L<i>.w.*", for a stretch of stations; every layer's and the head's
 for the decode step), then loads the task from its samples (a packed capture dir, kernels/pipeline.pack) and the
 holder, and prints one JSON line: the holder file, its shapes split seen / held-out with the held-out axes, the
 starting program and the engine's station names. It keeps the weights shared until its stdin closes."""
@@ -24,7 +24,11 @@ def held(name: str, model) -> tuple[dict, dict]:
     if name == STEP:
         return step.weights(model)
     st = regions._engine()
-    return st.layer_weights(model, regions.LAYER), {"cfg": st.layer_config(model), "layer": regions.LAYER}
+    tensors = {}
+    for i in regions.LAYERS:
+        for k, v in st.layer_weights(model, i).items():
+            tensors.update({f"L{i}.{k}": v} if v is not None else {k: None})     # a None (bf16 scale) is every layer's
+    return tensors, {"cfg": st.layer_config(model), "layers": list(regions.LAYERS)}
 
 
 def describe(name: str, samples: Path, holder: Path) -> dict:
