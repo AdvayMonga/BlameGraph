@@ -10,6 +10,7 @@ import math
 import multiprocessing as mp
 import os
 import queue
+import resource
 import threading
 import time
 from dataclasses import dataclass
@@ -147,11 +148,19 @@ def run_closed(url: str, model: str, requests, concurrency: int, duration_s: flo
     return [recount(r, count_tokens) for r in rows], max((r.scheduled_s + (r.e2e_s or 0) for r in rows), default=0.0)
 
 
+def _nofile(n: int):
+    """Raise this process's open-file soft limit to `n` (offline opens a connection per record at once)."""
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft < n:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (min(n, hard) if hard != resource.RLIM_INFINITY else n, hard))
+
+
 def _closed_all(url, model, requests, concurrency: int, duration_s: float | None, timeout: float, t0: float,
                 chat_kwargs: dict | None = None) -> list[Row]:
     """One process's closed-loop clients on the shared start t0; every client stops once `duration_s` has passed.
     Each row carries the process's CPU share over the call: closed loop has no send schedule to lag behind, so a busy
     client process is the sign that it read its streams late."""
+    _nofile(concurrency + 64)
     clock, c0, w0 = (lambda: time.perf_counter() - t0), time.process_time(), time.perf_counter()
     lock, it, rows = threading.Lock(), iter(requests), []
 
