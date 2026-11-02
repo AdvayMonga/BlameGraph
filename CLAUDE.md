@@ -502,7 +502,11 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `suite.py` (the 10 regimes; probes ≥ `min_requests` (100) and tier length, capped at 4× the tier length, then a
   confirmation at `final_s` backing off 15% up to 5 times; the load search stops below start/16; saturated doubles
   concurrency, then bisects between the last passing and the lowest failing level to the band (else 10%); closed-loop
-  schedules are generated lazily; shared-prefix runs score only the steady-state window; cold start launches a command with
+  schedules are generated lazily; before the first regime measured on a launch, `_warmup` serves the corpus mix closed
+  loop at `WARM_CONCURRENCY` (256) for a probe's length in an order of its own, unscored, because an engine's first load
+  at a size runs slow (2026-10-28: the first saturated level after a launch read up to 40% low); single_stream runs its
+  final length and at least `min_requests` requests, never past `MAX_STRETCH` x the final (`run_closed(min_requests=,
+  max_s=)`: a p99 of 14 requests was the slowest of 14); shared-prefix runs score only the steady-state window; cold start launches a command with
   fresh VLLM/inductor/Triton cache dirs, polls until "17 + 25" is answered "42", then relaunches for the warm figure).
   Tiers: min (15 s probes, 30 s final; bursty cropped to its peak window like short), short (30 s probes, 60 s final),
   full (60 s probes, 600 s final). Probes must last well beyond the TTFT limit

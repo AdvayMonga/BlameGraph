@@ -130,20 +130,24 @@ def _wait_until(clock, t: float, spin_s: float = 0.002):
 
 def run_closed(url: str, model: str, requests, concurrency: int, duration_s: float | None = None,
                timeout: float = 600, count_tokens=None, chat_kwargs: dict | None = None, procs: int = 1,
-               cpus: list[int] | None = None) -> tuple[list[Row], float]:
-    """`concurrency` clients take requests in order from `requests` (any iterable, consumed lazily) until it (or
-    `duration_s`) runs out. Returns (rows, elapsed seconds). A request's scheduled time is when its client became free.
-    With `procs` > 1 and a `requests` that splits (`part(k, n)`, e.g. `workload.Cycle`), the clients are dealt to that
-    many processes on one shared start, so parsing many streams can't starve one interpreter; `cpus` as in run_open."""
+               cpus: list[int] | None = None, min_requests: int = 0, max_s: float | None = None) -> tuple[list[Row], float]:
+    """`concurrency` clients take requests in order from `requests` (any iterable, consumed lazily) until it runs
+    out, or `duration_s` has passed and at least `min_requests` were started (`max_s` passed: no client starts
+    another, whatever the count). Returns (rows, elapsed seconds). A
+    request's scheduled time is when its client became free. With `procs` > 1 and a `requests` that splits
+    (`part(k, n)`, e.g. `workload.Cycle`), the clients are dealt to that many processes on one shared start, so
+    parsing many streams can't starve one interpreter; `cpus` as in run_open."""
     procs = min(procs, concurrency) if hasattr(requests, "part") else 1
     if procs == 1:
         _pin(cpus)
         rows = _closed_all(url, model, requests, concurrency, duration_s, timeout, time.perf_counter(),
-                           chat_kwargs=chat_kwargs)
+                           chat_kwargs=chat_kwargs, min_requests=min_requests, max_s=max_s)
     else:
         sizes = [concurrency // procs + (k < concurrency % procs) for k in range(procs)]
         parts = _spawn([(_closed_all, (url, model, requests.part(k, procs), sizes[k], duration_s, timeout),
-                         {"chat_kwargs": chat_kwargs}) for k in range(procs)], cpus)
+                         {"chat_kwargs": chat_kwargs, "min_requests": -(-min_requests * sizes[k] // concurrency),
+                          "max_s": max_s})
+                        for k in range(procs)], cpus)
         rows = [r for part in parts for r in part]
     return [recount(r, count_tokens) for r in rows], max((r.scheduled_s + (r.e2e_s or 0) for r in rows), default=0.0)
 
@@ -156,20 +160,23 @@ def _nofile(n: int):
 
 
 def _closed_all(url, model, requests, concurrency: int, duration_s: float | None, timeout: float, t0: float,
-                chat_kwargs: dict | None = None) -> list[Row]:
-    """One process's closed-loop clients on the shared start t0; every client stops once `duration_s` has passed.
-    Each row carries the process's CPU share over the call: closed loop has no send schedule to lag behind, so a busy
-    client process is the sign that it read its streams late."""
+                chat_kwargs: dict | None = None, min_requests: int = 0, max_s: float | None = None) -> list[Row]:
+    """One process's closed-loop clients on the shared start t0; every client stops once `duration_s` has passed
+    and `min_requests` were started, or `max_s` has passed. Each row carries the process's CPU share over the call: closed loop has no
+    send schedule to lag behind, so a busy client process is the sign that it read its streams late."""
     _nofile(concurrency + 64)
     clock, c0, w0 = (lambda: time.perf_counter() - t0), time.process_time(), time.perf_counter()
-    lock, it, rows = threading.Lock(), iter(requests), []
+    lock, it, rows, started = threading.Lock(), iter(requests), [], 0
 
     def client():
+        nonlocal started
         while True:
             with lock:
-                if duration_s is not None and clock() >= duration_s:
+                if duration_s is not None and clock() >= duration_s and (started >= min_requests
+                                                                        or (max_s is not None and clock() >= max_s)):
                     return
                 req = next(it, None)
+                started += 1
             if req is None:
                 return
             try:

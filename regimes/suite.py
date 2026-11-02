@@ -72,6 +72,7 @@ class Ctx:
     on_rows: object = None             # called with each run_open/run_closed call's rows (lab.live progress)
     _pools: dict = field(default_factory=dict)
     _calls: int = 0
+    _warm: bool = False
 
     @property
     def probe_s(self) -> float:
@@ -109,11 +110,11 @@ class Ctx:
         return self._keep(run_open(self.url, self.model, reqs, self.timeout, self.count_tokens, self.client_procs or 4,
                                    chat_kwargs=self.chat_kwargs, cpus=self.client_cpus), started)
 
-    def run_closed(self, reqs, c, duration, procs: int | None = None):
+    def run_closed(self, reqs, c, duration, procs: int | None = None, min_requests: int = 0, max_s: float | None = None):
         started = time.time()
         rows, elapsed = run_closed(self.url, self.model, reqs, c, duration, self.timeout, self.count_tokens,
                                    chat_kwargs=self.chat_kwargs, procs=procs or self.client_procs or 1,
-                                   cpus=self.client_cpus)
+                                   cpus=self.client_cpus, min_requests=min_requests, max_s=max_s)
         return self._keep(rows, started), elapsed
 
     def _keep(self, rows, started: float):
@@ -143,7 +144,18 @@ class Ctx:
                    conversational=Limits(t.conversational.ttft_s, t.conversational.tpot_s), **kw)
 
 
+WARM_CONCURRENCY = 256
+
+
 def _warmup(ctx: Ctx, pool: list[dict], n: int = 8):
+    """Once per Ctx (one engine launch): the corpus mix closed loop at WARM_CONCURRENCY for a probe's length, at the
+    records' own lengths, so the engine's first measured load is not its first load at that size (the first
+    saturated level after a launch read up to 40% low, 2026-10-28). Then `n` of this regime's records."""
+    if not ctx._warm:
+        ctx._warm = True
+        order = random.Random(f"{ctx.seed}:warmup").sample(ctx.pool(None), len(ctx.pool(None)))   # not a regime's order
+        run_closed(ctx.url, ctx.model, W.Cycle(order, "w"), WARM_CONCURRENCY, ctx.probe_s, ctx.timeout,
+                   chat_kwargs=ctx.chat_kwargs, procs=ctx.client_procs or 4, cpus=ctx.client_cpus)
     run_closed(ctx.url, ctx.model, [W.to_request(r, max_tokens=32) for r in pool[:n]], 4, None, ctx.timeout,
                chat_kwargs=ctx.chat_kwargs)
 
@@ -195,7 +207,8 @@ def single_stream(ctx: Ctx) -> dict:
     pool = ctx.pool("steady_interactive")
     _warmup(ctx, pool)
     order = random.Random(ctx.seed).sample(pool, len(pool))
-    rows, elapsed = ctx.run_closed(W.Cycle(order), 1, ctx.final_s)
+    rows, elapsed = ctx.run_closed(W.Cycle(order), 1, ctx.final_s, min_requests=ctx.min_requests,   # a p99 of 14 is the slowest of 14
+                                   max_s=ctx.final_s * MAX_STRETCH)
     s = summarize(rows, ctx.interactive, elapsed)
     return _result("single_stream", "tpot_p99_s", s["tpot_p99_s"], "lower", s, ttft_p99_s=s["ttft_p99_s"])
 
@@ -445,7 +458,8 @@ REAL_TRAFFIC = ("real conversation traffic (regimes/arrivals.json, fitted from B
                 "carries its history) with the gap to the next turn drawn from the real gaps by turn, users "
                 "mid-conversation from t=0; load rises by raising the sitting rate")
 FACTS = {
-    "single_stream": ("one request at a time (closed loop, concurrency 1) on steady_interactive prompts",
+    "single_stream": ("one request at a time (closed loop, concurrency 1) on steady_interactive prompts, for the "
+                      "tier's final length and at least `min_requests` requests, never past 4x the final length",
                       "p99 time per output token, seconds", "interactive"),
     "saturated": ("closed loop at doubling concurrency over every corpus class, then bisected between the last "
                   "passing and the lowest failing level to the regime's noise band; each level's requests judged "
@@ -479,7 +493,8 @@ MEASUREMENT = ("TTFT runs from a request's scheduled send to its initial real to
                "special tokens kept in the text; an answer that ends before that length is a truncation. Every request is "
                "salted (\"[k] \" before its conversation's opening message, k numbered within one schedule: one probe, "
                "one level or one final), so no two requests of a schedule share a prefix except the turns of one "
-               "conversation and the shared system prompt.")
+               "conversation and the shared system prompt. Every engine launch gets an unscored warmup ahead of the regimes "
+               f"it measures: the corpus mix closed loop at concurrency {WARM_CONCURRENCY} for a probe's length.")
 
 REGIMES = {"single_stream": single_stream, "saturated": saturated, "realistic": realistic, "bursty": bursty,
            "long_prompt_short_output": long_prompt_short_output, "short_prompt_long_output": short_prompt_long_output,
