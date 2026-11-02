@@ -11,6 +11,7 @@ same prompt and the memory holds only earlier generations, so in the 2026-11-01 
 dropped as identical (30) or near-duplicate (33) programs after being written. Waves of 8 rather than 20 (the user's
 first figure): a wave's own calls still cannot see each other. Costs ~1-2 min of wall time per extra wave. Amends
 2026-10-27 (calls 8 at a time, the first of each batch alone).
+
 ## 2026-11-01 — Selection's exam is correctness and timing; the gate keeps every check
 Stage 2 during a search (and re-timing) checks correctness on every seen shape at one seed, with the cheap anti-gaming
 checks (memoization, non-finite inputs, inputs unchanged, aliasing), times the program against the baseline with the
