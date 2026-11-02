@@ -418,7 +418,8 @@ def test_split_holds_out_a_region_even_when_calls_pile_up_at_the_largest_value()
     counts = Counter({(m, 64, 96, 8, m, 1): (1000 if m == 512 else 3) for m in range(8, 513, 8)})
     s = shapes.split(t, counts)
     assert s["cut_by"] == "distinct" and s["heldout"] and (512, 64, 96, 8, 512, 1) in s["seen"]   # the top stays seen
-    assert max(x[0] for x in s["seen"] if x[0] != 512) < min(x[0] for x in s["heldout"])          # a whole region
+    h = [x[0] for x in s["heldout"]]
+    assert not any(min(h) < x[0] < max(h) for x in s["seen"]) and max(h) < 512                   # a band below the top
     two = Counter({(n, 32, 4, 128, 16, L): (900 if (n, L) == (33, 8032) else 10)                  # 2026-10-19 regate
                    for n in range(1, 257, 8) for L in (650, 8032)})
     two.update({(n, 32, 4, 128, 16, 8032): 300 for n in range(200, 257, 8)})
@@ -646,7 +647,7 @@ def test_paged_decode_reference_matches_dense_attention():
     assert real[1] < nbytes and real[0] == 4 * 8 * int(lens.sum()) * 16
 
 
-def test_capture_records_calls_and_the_split_holds_out_the_largest():
+def test_capture_records_calls_and_the_split_holds_out_a_band():
     t = load("paged_decode")
     import types
     mod = types.ModuleType("fake_engine_kernels")
@@ -672,8 +673,9 @@ def test_capture_records_calls_and_the_split_holds_out_the_largest():
         counts = shapes.from_captures(task, [Path(d)])
         assert counts[(1, 32, 4, 128, 16, 17)] == 2
         s = shapes.split(task, counts)
-        assert s["source"] == "captures" and (256, 32, 4, 128, 16, 17 * 256) in s["heldout"]
-        assert max(x[0] for x in s["seen"]) < min(x[0] for x in s["heldout"])
+        assert s["source"] == "captures" and (256, 32, 4, 128, 16, 17 * 256) in s["seen"]       # the largest stays seen
+        h = [x[0] for x in s["heldout"]]
+        assert h and not any(min(h) < x[0] < max(h) for x in s["seen"])                           # a band
         ints = shapes.ints_from_captures(task, [Path(d)])
         assert ints[json.dumps([1, 32, 4, 128, 16, 17])] == [[17]] and len(ints) == 9       # first call per shape
         kept = shapes.select(task, {**s, "ints": ints}, k=3)["ints"]

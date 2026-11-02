@@ -235,8 +235,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `silu_mul`, `topk_softmax` = its fused kernels in `models/fused.py`, references from its own eager paths, the start
   that module with its kernels module imported directly (`Task.start_edits`: the screen refuses its importlib/getattr); prefill
   attention has no task: `sdpa_prefill` takes the backend's paged context, not tensors),
-  `kernels/shapes.py` (shapes and call counts from captures; held-out = whole regions above the 80th percentile on the
-  task's axes, never random samples; `ints_from_captures` keeps each shape's captured int args, e.g. real sequence
+  `kernels/shapes.py` (shapes and call counts from captures; held-out = a whole band of each held-out axis, above its 60th and up to its 80th percentile by calls, never
+  the axis's largest value and never random samples (decided 2026-11-02); `ints_from_captures` keeps each shape's captured int args, e.g. real sequence
   lengths, which `Task.with_ints` uses for checking and timing in place of synthetic ones), `kernels/evolve/` (the layer-1 generator, a replication of OpenEvolve 0.4.0 =
   open AlphaEvolve: `python -m kernels.evolve run|gate|split`; the starting program is the engine's kernel module;
   each run appends one `kernels` ledger record (every candidate's seen-shape metrics and lineage, OpenEvolve's
