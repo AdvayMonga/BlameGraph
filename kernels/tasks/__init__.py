@@ -27,6 +27,7 @@ class Task:
                                             # move; with inputs, for those exact inputs (e.g. real sequence lengths)
     call: Callable = None                   # call(fn, *inputs) -> fn's output (adds scalars); default fn(*inputs)
     heldout_axes: tuple[int, ...] = ()      # shape axes whose largest values are held out as a region
+    heldout_values: tuple = ()              # (axis, values) pairs: a shape with one of those values there is held out
     edge_shapes: Callable = None            # edge_shapes(shape) -> shapes; default: the checker's
     dtypes: tuple = (torch.bfloat16,)
     layouts: tuple = ("strided", "transposed")  # non-contiguous variants its callers pass (lab/capture records it)

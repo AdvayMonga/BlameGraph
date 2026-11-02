@@ -167,7 +167,8 @@ STATION_MODULES = ("inference_server.models.fused", "inference_server.models.moe
                    "inference_server.models.paged_attention_kernel", "inference_server.models.paged_kv_cache",
                    "inference_server.models.qwen3_moe", "inference_server.models.prefill_flashinfer")
 POOL = ("k_cache", "v_cache")           # the K/V pool's names when the engine declares no IN_PLACE
-LAYER = 0                                # the layer a region is captured at and held for (kernels/hold.py)
+LAYERS = (0, 16, 32, 47)                 # the layers a region is captured at and held for (kernels/hold.py)
+HELDOUT_LAYER = 32                       # its calls are held out: a program must hold on a layer it was not chosen on
 
 
 def station_set(first: str) -> str:
@@ -186,7 +187,8 @@ def light(name: str, heldout_axes: tuple[int, ...] = ()) -> Task:
     from lab.capture import STEP, STEP_ENTRY
     step = name == STEP
     which = station_set(name.split(":")[1]) if not step else ""
-    env = () if step else (("CAPTURE_REGION_LAYERS", str(LAYER)),) + ((("MEGAKERNEL", "0"),) if which == "DECODE" else ())
+    env = () if step else (("CAPTURE_REGION_LAYERS", ",".join(map(str, LAYERS))),) + \
+        ((("MEGAKERNEL", "0"),) if which == "DECODE" else ())
     return Task(name=name, entry=STEP_ENTRY if step else f"{ENGINE}:{which}", reference=_needs_worker,
                 make_inputs=_needs_worker, shape_of=lambda call: None, cost=_needs_worker, layouts=(),
                 heldout_axes=tuple(heldout_axes), error_budget=ERROR_BUDGET, capture_fn=name, capture_env=env)
@@ -290,12 +292,14 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
     held = attach(Path(shared_weights), copy_ok=True) if shared_weights else {}   # the jail's IPC may be refused
     consts = _consts(held, constants)
     ins = tuple(i for i in interface(stations, first, last, live())[0] if i not in consts)
-    fn, layer, which = f"region:{first}:{last}", consts.get("layer"), station_set(first)
+    fn, which = f"region:{first}:{last}", station_set(first)
+    layers = consts.get("layers") or ([consts["layer"]] if consts.get("layer") is not None else None)
+    multi = bool(layers) and len(layers) > 1     # a call's shape starts with its layer; each layer its own weights
     calls = []
     if samples:
         from lab import capture
         calls = [c for c in capture.load(Path(samples))
-                 if c.get("fn") == fn and (layer is None or c.get("layer") == layer)]
+                 if c.get("fn") == fn and (layers is None or c.get("layer") in layers)]
     # A read the engine passes as None in some calls (a prefill wave's `tokens`, `fi_tokens` when nothing is padded)
     # is a constant None: the calls where it is None are kept, the others left out.
     nones = sorted({i for c in calls for i, d in (c.get("reads") or {}).items() if i in ins and d.get("value", 1) is None})
@@ -303,12 +307,15 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
         calls = [c for c in calls if all((c.get("reads") or {}).get(i, {}).get("value", 1) is None for i in nones)]
         consts = {**consts, **{i: None for i in nones}}
         ins = tuple(i for i in ins if i not in nones)
+    def key(call) -> tuple:
+        return ((call.get("layer"),) if multi else ()) + _signature(call.get("reads") or {})
     by_shape: dict[tuple, Path] = {}
     for call in calls:
         if call.get("sample"):
-            by_shape.setdefault(_signature(call.get("reads") or {}), Path(samples) / "samples" / call["sample"])
+            by_shape.setdefault(key(call), Path(samples) / "samples" / call["sample"])
     reads = (calls[0].get("reads") or {}) if calls else {}
-    missing = [i for i in ins if "shape" not in reads.get(i, {}) or (i.startswith("w.") and i not in held)] \
+    weights = {k.split(".", 1)[1] if k[:1] == "L" and k.split(".", 1)[0][1:].isdigit() else k for k in held}
+    missing = [i for i in ins if "shape" not in reads.get(i, {}) or (i.startswith("w.") and i not in weights)] \
         if calls else []
     if missing:
         raise ValueError(f"region {first}..{last} reads {missing}, which are neither captured tensors nor constants: "
@@ -324,19 +331,23 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
             for k, v in xs.items():
                 if v.is_floating_point() and k not in ("cos", "sin", "k_cache", "v_cache"):
                     xs[k] = (v.float() * (1 + 1e-2 * torch.randn(v.shape, generator=g).to(device))).to(v.dtype)
-        return {**xs, **{k: v for k, v in held.items() if isinstance(v, torch.Tensor)}}
+        own = f"L{shape[0]}." if multi else None     # that layer's weights ("L<i>.w.*"), else the one layer's
+        return {**xs, **{(k[len(own):] if own else k): v for k, v in held.items() if isinstance(v, torch.Tensor)
+                         and (own is None or k.startswith(own))}}
 
     def shape_of(call):
-        if call.get("fn") != fn or (layer is not None and call.get("layer") != layer):
+        if call.get("fn") != fn or (layers is not None and call.get("layer") not in layers):
             return None
-        s = _signature(call.get("reads") or {})
+        s = key(call)
         return s if s in by_shape else None          # a shape with no saved sample (over the engine's cap) is skipped
     start = (lambda: start_program(first, last, {**(constants or {}), **{i: None for i in nones}}, shared_weights)) \
         if shared_weights else None
     return task(fn, stations, first, last, make_ctx, shape_of, dtypes=dtypes, live=live(),
                 watch=(ENGINE, *_importable(STATION_MODULES)), entry=f"{ENGINE}:{which}", capture_fn=fn,
                 seen_default=tuple(by_shape), constants=consts, reference_stations=reference_stations(which),
-                heldout_axes=_heldout_axes(reads, ins, which == "PREFILL") if calls else (), start_program=start,
+                heldout_axes=tuple(a + int(multi) for a in _heldout_axes(reads, ins, which == "PREFILL")) if calls else (),
+                heldout_values=((0, (HELDOUT_LAYER,)),) if multi and HELDOUT_LAYER in layers else (),
+                start_program=start,
                 graphs=which == "DECODE",         # the engine replays its decode step as a CUDA graph: no host time
                 edge_shapes=lambda shape: [])     # inputs come from captures only: no synthetic edge shapes
 
