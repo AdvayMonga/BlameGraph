@@ -67,6 +67,8 @@ def test_closed_loop_split_over_processes():
         assert len(few) < 12 <= len(many)                                          # the floor outlasts the duration
         split, _ = runner.run_closed(url, "m", W.Cycle(pool, "s"), 3, 0.05, procs=3, min_requests=12)
         assert len(split) >= 12
+        capped, el = runner.run_closed(url, "m", W.Cycle(pool, "t"), 1, 0.05, min_requests=10 ** 6, max_s=0.2)
+        assert len(capped) < 100 and el < 1.0                                     # the cap ends the floor
     finally:
         proc.kill()
 

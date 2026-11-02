@@ -67,9 +67,10 @@ are replaced by the crossover type. Found the same day: no search so far passed 
 
 ## 2026-11-01 — A real warmup before the first measurement on a launch; single_stream at least 100 requests
 Before the first regime measured after an engine launch, the harness serves the corpus mix closed loop at concurrency
-256 for a probe's length (15 s at `min`), unscored (`suite._warmup`, once per `Ctx`); every regime's 8-request touch
-stays. single_stream runs the tier's final length and at least `min_requests` (100) requests (`run_closed`'s
-`min_requests` floor). Why: the 2026-10-28 calibrations (`lab.validate`, spot H200, `min` tier) measured
+256 for a probe's length (15 s at `min`), unscored (`suite._warmup`, once per `Ctx`), in an order of its own so no
+regime's requests run on a prefix the warmup just served; every regime's 8-request touch stays. single_stream runs
+the tier's final length and at least `min_requests` (100) requests (`run_closed`'s `min_requests` floor), but never
+past `MAX_STRETCH` (4x) the final length, the cap the open-loop probes have. Why: the 2026-10-28 calibrations (`lab.validate`, spot H200, `min` tier) measured
 saturated at 5.37 then 9.19 and 8.65 req/s on the same requests, and 5.37 on seed 0's first run in a launch against
 8.74 later in it: the first load at a size after a launch runs slow (the bench cold-start bug of 2026-10-27, seen at
 the base's concurrency), so a noise band measured across launches was 53%, then 23.7% with the bisecting search. And

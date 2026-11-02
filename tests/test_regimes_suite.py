@@ -2,6 +2,8 @@
 server). Run: python tests/test_regimes_suite.py"""
 from __future__ import annotations
 
+import itertools
+import random
 import sys
 from pathlib import Path
 
@@ -52,18 +54,33 @@ def test_the_warmup_serves_the_mix_once_per_launch_then_the_regimes_records():
     assert calls == [(suite.WARM_CONCURRENCY, ctx.probe_s), (4, None), (4, None)]
 
 
+def test_the_warmup_order_is_not_a_regimes_order():
+    orders = []
+    ctx = suite.Ctx("u", "m", tier="min")
+    real = suite.run_closed
+    suite.run_closed = lambda url, model, reqs, c, duration, *a, **kw: orders.append([q.id for q in itertools.islice(reqs.part(0, 1) if hasattr(reqs, "part") else reqs, 50)]) or ([], 0.0)
+    try:
+        suite._warmup(ctx, ctx.pool(None))
+    finally:
+        suite.run_closed = real
+    pool = ctx.pool(None)
+    saturated = [r["id"] for r in random.Random(ctx.seed).sample(pool, len(pool))][:50]
+    assert len(pool) > 50 and [x.split("#")[0] for x in orders[0]] != saturated
+
+
 def test_single_stream_runs_at_least_min_requests():
     seen = {}
     ctx = suite.Ctx("u", "m", min_requests=100)
     ctx.pool = lambda cls=None: [{"id": "a", "prompt": "x"}]
-    ctx.run_closed = lambda reqs, c, duration, min_requests=0: seen.update(c=c, d=duration, m=min_requests) or ([], 1.0)
+    ctx.run_closed = lambda reqs, c, duration, min_requests=0, max_s=None: (seen.update(c=c, d=duration, m=min_requests, x=max_s)
+                                                                          or ([], 1.0))
     real = suite._warmup
     suite._warmup = lambda ctx, pool: None
     try:
         suite.single_stream(ctx)
     finally:
         suite._warmup = real
-    assert seen == {"c": 1, "d": ctx.final_s, "m": 100}
+    assert seen == {"c": 1, "d": ctx.final_s, "m": 100, "x": ctx.final_s * suite.MAX_STRETCH}
 
 
 def _saturated(capacity: int, hints: dict | None = None) -> tuple[dict, list[int]]:
