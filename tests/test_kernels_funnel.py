@@ -216,29 +216,14 @@ def test_model_calls_run_in_parallel_the_first_alone_and_a_program_written_twice
     assert [c for c, _ in out] == ["a = 1\n", None, None, "a = 2\n"] and "identical" in out[1][1] and len(seen) == 2
 
 
-def test_every_program_is_tuned_on_every_seen_shape_before_its_full_exam():
-    from kernels.search import tune
-    prog = "CONFIG = {'t': 1}\nTUNABLES = {'t': [1, 2, 4]}\n\n\ndef kernel(x):\n    return x\n"
-    calls = []
 
-    def tstage(code, n):
-        calls.append((n, tune.params(code)[0]["t"], "TUNED-DISPATCH-START" in code))
-        if n == 6:                               # point t=2 wins small calls, t=4 large ones
-            rows = [{"config": {"t": t}, "score": s, "timings": [{"shape": [4], "speedup": a, "weight": 0.5},
-                                                                 {"shape": [512], "speedup": b, "weight": 0.5}]}
-                    for t, s, a, b in ((1, 1.0, 1.0, 1.0), (2, 1.3, 2.0, 0.9), (4, 1.2, 0.8, 1.8))]
-            return {"metrics": {"stage": n}, "artifacts": {"tune": json.dumps(rows)}}
-        return {"metrics": {"correct": 1.0, "combined_score": 1.0, "stage": n}, "artifacts": {}}
-    f = Funnel(Models(None), tstage, tune=True, size_expr="args[0].shape[0]")
-    code, r = f.measure(prog)                    # every shape, a dispatcher per size region
-    assert calls[0][0] == 6 and calls[1] == (2, 2, True) and "TUNED-DISPATCH-START" in code
-    code2, _ = f.measure(code)                   # tuned again: the old dispatcher removed first
-    assert calls[2] == (6, 2, False) and code2.count("TUNED-DISPATCH-START") == 1
-    assert Funnel(Models(None), tstage).measure(prog)[0] == prog          # tuning off
-    from kernels.search.loop import facts
-    shown = facts(Node("n", None, code, r["metrics"], r["artifacts"], 0))
-    assert "grid points timed" in shown and '"config": {"t": 4}, "score": 1.2' in shown       # a fact for the model
-
+def test_calls_run_in_waves_each_shown_the_changes_proposed_before_it_this_round():
+    f, t, rows = funnel(workers=2), Tree(), []
+    expand(f, t, root_of(t), "SYS", 1, lambda n, c: t.add(n), rows.append)
+    calls = f.models.judge.calls                 # wave 1: calls 1-2, wave 2: calls 3-4
+    assert not any("already proposed" in u for u in calls[:2])
+    assert all("already proposed" in u and "m5 / set a = 5" in u and "m13 / set a = 13" in u for u in calls[2:])
+    assert "m22" not in calls[3] and rows[0]["named"] == 4
 
 if __name__ == "__main__":
     import inspect

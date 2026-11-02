@@ -108,7 +108,8 @@ def functions(stations, first, last, live=(), constants: dict | None = None,
             clones = [x.clone() if isinstance(x, torch.Tensor) else x for x in xs]
             picks = dict(zip(DISCRETE, run(region[:region.index(route) + 1], {**consts, **dict(zip(ins, clones))},
                                            DISCRETE)))
-            pinned = {route.name: lambda c: {**picks, "pair_w": pair_weights(
+            ref_route = ref_region[region.index(route)]      # its other writes (e.g. an accumulator it zeroes) stay its own
+            pinned = {route.name: lambda c: {**ref_route.fn(c), **picks, "pair_w": pair_weights(
                 c["logits"], *(picks[k] for k in DISCRETE), bool(getattr(c.get("cfg"), "norm_topk_prob", False)))}}
         exact = run(ref_region, {**consts, **dict(zip(ins, up))}, outs, pinned)
         key = tuple((tuple(x.shape), x.dtype) if isinstance(x, torch.Tensor) else x for x in xs)
@@ -164,9 +165,14 @@ OVERRIDES_PACKAGE = "inference_server.models.regions"    # where the engine's `o
 # The engine modules the stations call into at call time (watched for patches; the engine may export this later).
 STATION_MODULES = ("inference_server.models.fused", "inference_server.models.moe_kernel",
                    "inference_server.models.paged_attention_kernel", "inference_server.models.paged_kv_cache",
-                   "inference_server.models.qwen3_moe")
+                   "inference_server.models.qwen3_moe", "inference_server.models.prefill_flashinfer")
 POOL = ("k_cache", "v_cache")           # the K/V pool's names when the engine declares no IN_PLACE
 LAYER = 0                                # the layer a region is captured at and held for (kernels/hold.py)
+
+
+def station_set(first: str) -> str:
+    """The engine's station set a region's first station names: PREFILL for "p_" stations, DECODE otherwise."""
+    return "PREFILL" if first.startswith("p_") else "DECODE"
 
 
 def _needs_worker(*_a, **_k):
@@ -179,10 +185,11 @@ def light(name: str, heldout_axes: tuple[int, ...] = ()) -> Task:
     capture it, select its shapes and write its prompts; nothing here can run it."""
     from lab.capture import STEP, STEP_ENTRY
     step = name == STEP
-    return Task(name=name, entry=STEP_ENTRY if step else f"{ENGINE}:DECODE", reference=_needs_worker,
+    which = station_set(name.split(":")[1]) if not step else ""
+    env = () if step else (("CAPTURE_REGION_LAYERS", str(LAYER)),) + ((("MEGAKERNEL", "0"),) if which == "DECODE" else ())
+    return Task(name=name, entry=STEP_ENTRY if step else f"{ENGINE}:{which}", reference=_needs_worker,
                 make_inputs=_needs_worker, shape_of=lambda call: None, cost=_needs_worker, layouts=(),
-                heldout_axes=tuple(heldout_axes), error_budget=ERROR_BUDGET, capture_fn=name,
-                capture_env=() if step else (("CAPTURE_REGION_LAYERS", str(LAYER)), ("MEGAKERNEL", "0")))
+                heldout_axes=tuple(heldout_axes), error_budget=ERROR_BUDGET, capture_fn=name, capture_env=env)
 
 
 def _engine():
@@ -207,19 +214,23 @@ def _pool() -> tuple[str, ...]:
     return tuple(getattr(_engine(), "IN_PLACE", POOL))
 
 
-def engine_stations() -> tuple[Station, ...]:
-    """The engine's decode stations (`DECODE`), made pure (`functional(DECODE)`: what writes in place gets a copy)."""
+def engine_stations(which: str = "DECODE") -> tuple[Station, ...]:
+    """The engine's stations of set `which` (DECODE or PREFILL), made pure (`functional`: what writes in place gets a
+    copy)."""
     st = _engine()
-    pure = st.functional(st.DECODE) if hasattr(st, "functional") else st.DECODE
+    own = getattr(st, which)
+    pure = st.functional(own) if hasattr(st, "functional") else own
     return tuple(Station(s.name, tuple(s.reads), tuple(s.writes), s.fn) for s in pure)
 
 
-def reference_stations() -> tuple[Station, ...] | None:
-    """The engine's stations in a form that runs in fp32 (`reference()`: torch versions of its kernels), or None."""
+def reference_stations(which: str = "DECODE") -> tuple[Station, ...] | None:
+    """The engine's stations of set `which` in a form that runs in fp32 (`reference()`: torch versions of its
+    kernels), or None."""
     st = _engine()
     if not hasattr(st, "reference"):
         return None
-    return tuple(Station(s.name, tuple(s.reads), tuple(s.writes), s.fn) for s in st.reference())
+    ref = st.reference(getattr(st, which)) if which != "DECODE" else st.reference()
+    return tuple(Station(s.name, tuple(s.reads), tuple(s.writes), s.fn) for s in ref)
 
 
 def live() -> tuple[str, ...]:
@@ -238,15 +249,16 @@ def _signature(reads: dict) -> tuple[int, ...]:
     return tuple(d for k in _shaped(reads) for d in reads[k]["shape"])
 
 
-def _heldout_axes(reads: dict, ins: tuple[str, ...]) -> tuple[int, ...]:
-    """Where in the flat signature the held-out axes are: the rows of the region's first activation, and the attention
-    block tables' width (the context, in blocks) when the region reads them."""
+def _heldout_axes(reads: dict, ins: tuple[str, ...], prefill: bool = False) -> tuple[int, ...]:
+    """Where in the flat signature the held-out axes are: the rows of the region's first activation (its tokens, the
+    second axis, for a prefill wave, packed into one row), and the attention block tables' width (the context, in
+    blocks) when the region reads them."""
     at, pos = {}, 0
     for k in _shaped(reads):
         at[k], pos = pos, pos + len(reads[k]["shape"])
-    first = next((i for i in ins if i in at and reads[i]["shape"]), None)
+    first = next((i for i in ins if i in at and len(reads[i]["shape"]) > int(prefill)), None)
     ctx = "attn_block_tables" in ins and len(reads.get("attn_block_tables", {}).get("shape", ())) == 2
-    return tuple(([at[first]] if first else []) + ([at["attn_block_tables"] + 1] if ctx else []))
+    return tuple(([at[first] + int(prefill)] if first else []) + ([at["attn_block_tables"] + 1] if ctx else []))
 
 
 def _consts(entries: dict, constants: dict | None) -> dict:
@@ -256,12 +268,13 @@ def _consts(entries: dict, constants: dict | None) -> dict:
 
 
 def _region(first: str, last: str) -> tuple[Station, ...]:
-    """The engine's stations, refusing a region that writes the K/V pool in place (see the module docstring)."""
-    stations = engine_stations()
+    """The engine's stations of the region's set, refusing a region that writes the K/V pool in place (see the module
+    docstring)."""
+    stations = engine_stations(station_set(first))
     inplace = {w for s in span(stations, first, last) for w in s.writes} & set(getattr(_engine(), "IN_PLACE", ()))
     if inplace:
-        raise ValueError(f"region {first}..{last} writes {sorted(inplace)} in place (kv_append): a region must end "
-                         "before kv_append or start after it, for now")
+        raise ValueError(f"region {first}..{last} writes {sorted(inplace)} in place (kv_append, p_kv_store): a "
+                         "region must end before that station or start after it, for now")
     return stations
 
 
@@ -277,12 +290,19 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
     held = attach(Path(shared_weights), copy_ok=True) if shared_weights else {}   # the jail's IPC may be refused
     consts = _consts(held, constants)
     ins = tuple(i for i in interface(stations, first, last, live())[0] if i not in consts)
-    fn, layer = f"region:{first}:{last}", consts.get("layer")
+    fn, layer, which = f"region:{first}:{last}", consts.get("layer"), station_set(first)
     calls = []
     if samples:
         from lab import capture
         calls = [c for c in capture.load(Path(samples))
                  if c.get("fn") == fn and (layer is None or c.get("layer") == layer)]
+    # A read the engine passes as None in some calls (a prefill wave's `tokens`, `fi_tokens` when nothing is padded)
+    # is a constant None: the calls where it is None are kept, the others left out.
+    nones = sorted({i for c in calls for i, d in (c.get("reads") or {}).items() if i in ins and d.get("value", 1) is None})
+    if nones:
+        calls = [c for c in calls if all((c.get("reads") or {}).get(i, {}).get("value", 1) is None for i in nones)]
+        consts = {**consts, **{i: None for i in nones}}
+        ins = tuple(i for i in ins if i not in nones)
     by_shape: dict[tuple, Path] = {}
     for call in calls:
         if call.get("sample"):
@@ -311,11 +331,12 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
             return None
         s = _signature(call.get("reads") or {})
         return s if s in by_shape else None          # a shape with no saved sample (over the engine's cap) is skipped
-    start = (lambda: start_program(first, last, constants, shared_weights)) if shared_weights else None
+    start = (lambda: start_program(first, last, {**(constants or {}), **{i: None for i in nones}}, shared_weights)) \
+        if shared_weights else None
     return task(fn, stations, first, last, make_ctx, shape_of, dtypes=dtypes, live=live(),
-                watch=(ENGINE, *_importable(STATION_MODULES)), entry=f"{ENGINE}:DECODE", capture_fn=fn,
-                seen_default=tuple(by_shape), constants=consts, reference_stations=reference_stations(),
-                heldout_axes=_heldout_axes(reads, ins) if calls else (), start_program=start,
+                watch=(ENGINE, *_importable(STATION_MODULES)), entry=f"{ENGINE}:{which}", capture_fn=fn,
+                seen_default=tuple(by_shape), constants=consts, reference_stations=reference_stations(which),
+                heldout_axes=_heldout_axes(reads, ins, which == "PREFILL") if calls else (), start_program=start,
                 edge_shapes=lambda shape: [])     # inputs come from captures only: no synthetic edge shapes
 
 
@@ -332,7 +353,7 @@ def start_program(first: str, last: str, constants: dict | None = None, shared_w
                     else f"_CONST[{k!r}] = {v!r}\n" for k, v in consts.items())
     return (f"# EVOLVE-BLOCK-START\nimport {ENGINE} as _st\n\n"
             f"_NAMES = {names!r}\n_INPUTS = {list(ins)!r}\n_OUTPUTS = {list(outs)!r}\n_CONST = {{}}\n{bound}"
-            "_PURE = _st.functional(_st.DECODE) if hasattr(_st, 'functional') else _st.DECODE\n"
+            f"_PURE = _st.functional(_st.{station_set(first)}) if hasattr(_st, 'functional') else _st.{station_set(first)}\n"
             "_STATIONS = [s.fn for s in _PURE if s.name in _NAMES]\n\n\n"
             "def kernel(*xs):\n    ctx = {**_CONST, **dict(zip(_INPUTS, xs))}\n    for fn in _STATIONS:\n"
             "        ctx.update(fn(ctx))\n    return tuple(ctx[o] for o in _OUTPUTS)\n# EVOLVE-BLOCK-END\n")
@@ -342,10 +363,22 @@ def override_module(program: str, first: str, last: str) -> str:
     """A winning program as a module of the engine's overrides package: the program (`kernel`, `_INPUTS`, `_OUTPUTS`,
     `_CONST`) plus `OVERRIDES = {(first, last): _override}`, which the engine's `overrides()` reads and `resolve()`
     checks against the stretch's interface. Each call checks that what the engine passes for a baked constant is
-    that constant (None stays None, `cfg` equal): per call but trivial next to the kernel (graph replays skip it)."""
+    that constant (None stays None, `cfg` equal): per call but trivial next to the kernel (graph replays skip it). A
+    call that passes a tensor for an activation the program was built for as None (a padded prefill wave's `tokens`, when
+    only packed waves were captured) runs the engine's own stations instead; any other difference (weights' scales,
+    `cfg`) is an error."""
     from kernels.evolve.ship import module_source
-    return (module_source(program, "kernel").rstrip("\n") + "\n\n\ndef _override(c):\n"
-            "    bad = [k for k, v in globals().get('_CONST', {}).items() if k in c and not (c[k] is None if v is None else\n"
+    which = station_set(first)
+    return (module_source(program, "kernel").rstrip("\n") + "\n\n\ndef _own(c):\n"
+            f"    import {ENGINE} as _eng\n"
+            f"    names = [s.name for s in _eng.{which}]\n"
+            f"    ctx = dict(c)\n    for s in _eng.{which}[names.index({first!r}):names.index({last!r}) + 1]:\n"
+            "        ctx.update(s.fn(ctx))\n"
+            "    return {k: ctx[k] for k in _OUTPUTS}\n\n\ndef _override(c):\n"
+            "    consts = globals().get('_CONST', {})\n"
+            "    if any(v is None and c.get(k) is not None for k, v in consts.items() if k in c and not k.startswith('w.')):\n"
+            "        return _own(c)\n"
+            "    bad = [k for k, v in consts.items() if k in c and not (c[k] is None if v is None else\n"
             "                                                           type(c[k]) is type(v) and c[k] == v)]\n"
             "    if bad:\n"
             "        raise ValueError(f'region override {list(OVERRIDES)}: the engine passes {bad} unlike the values '\n"

@@ -15,16 +15,16 @@ from regimes import arrivals  # noqa: E402
 
 
 def _log(path: Path, seed: int = 0) -> None:
-    """Sessions starting Poisson at 0.05/s over two weeks: 1-3 turns 100 s apart, every fifth one resumed after an
+    """Sessions starting Poisson at 0.05/s over two weeks: 1-3 turns with gaps 100 s, 200 s, every fifth one resumed after an
     hour (a break), API rows in between that must be ignored."""
     rng, t, rows = random.Random(seed), 0.0, []
     for k in range(60000):
         t += rng.expovariate(0.05)
         turns = 1 + k % 3
         for j in range(turns):
-            rows.append((t + 100 * j, f"s{k}", 3, "ChatGPT", 100, 50, 150, "Conversation log"))
+            rows.append((t + 50 * j * (j + 1), f"s{k}", 3, "ChatGPT", 100, 50, 150, "Conversation log"))   # gap j = 100 (j + 1)
         if k % 5 == 0:
-            rows.append((t + 100 * turns + 3600, f"s{k}", 3, "ChatGPT", 100, 50, 150, "Conversation log"))
+            rows.append((t + 50 * turns * (turns + 1) + 3600, f"s{k}", 3, "ChatGPT", 100, 50, 150, "Conversation log"))
         rows.append((t + 1, "", 1, "GPT-4", 100, 50, 150, "API log"))
     rows.sort()
     with open(path, "w", newline="") as f:
@@ -48,8 +48,9 @@ def test_read_fit_schedule_compare():
         fitted = arrivals.fit(sittings["seen"])
         assert fitted["sittings"] == len(sittings["seen"])
         assert sum(fitted["shapes"].values()) == fitted["sittings"]
-        assert all(abs(g - 100.0) < 1e-9 for q in fitted["gap_s"].values() for g in q)
-        assert fitted["horizon_s"] == 200.0
+        assert set(fitted["gap_s"]) == {"0", "1"} and all(abs(g - 100.0 * (int(k) + 1)) < 1e-6
+                                                             for k, q in fitted["gap_s"].items() for g in q)
+        assert abs(fitted["horizon_s"] - 300.0) < 0.01                 # the longest sitting the model draws
 
         model = arrivals.Model(fitted)
         sched = model.schedule(2.0, 60.0, "t")
@@ -71,6 +72,7 @@ def test_read_fit_schedule_compare():
         assert 0.7 < med["starts_cv"]["real"] < 1.3 and 0.7 < med["starts_cv"]["model"] < 1.3
         assert med["starts_ks_p"]["real"] > 0.01
         assert report["ks_real_vs_model"]["turns"] < 0.05 and report["ks_real_vs_model"]["gap_0"] < 0.01
+        assert arrivals._index(7) == "5" and arrivals._index(40) == "40" and arrivals._index(300) == "40"
         assert set(report["heldout_by_hour"]) <= {str(h) for h in range(24)}
 
 
@@ -84,8 +86,9 @@ def test_quantile_draw_covers_the_range():
     model = arrivals.Model({"shapes": {"0:2": 1}, "gap_s": {"0": arrivals.quantiles([float(x) for x in range(1000)])},
                             "horizon_s": 0.0})
     rng = random.Random(1)
-    draws = [model.draw_gap(0, rng) for _ in range(5000)]
-    assert min(draws) >= 0.0 and max(draws) <= 999.0 and abs(sum(draws) / len(draws) - 499.5) < 15
+    draws = sorted(model.draw_gap(0, rng) for _ in range(5000))
+    assert draws[0] >= 0.0 and draws[-1] <= 999.0 and abs(sum(draws) / len(draws) - 499.5) < 15
+    assert all(abs(draws[round(f * 4999)] - f * 999) < 40 for f in (0.1, 0.25, 0.5, 0.75, 0.9))   # the table's shape
 
 
 if __name__ == "__main__":

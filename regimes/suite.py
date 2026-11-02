@@ -201,9 +201,10 @@ def single_stream(ctx: Ctx) -> dict:
 
 
 def saturated(ctx: Ctx, max_concurrency: int = 4096) -> dict:
-    """Doubling concurrency; goodput = good req/s at the best level whose requests meet the limits. With a hint the
-    sweep starts at the base's concurrency, halving first while that level fails. `stopped` says why the sweep ended
-    (two failing levels, an invalid level, or `max_concurrency` reached while still passing)."""
+    """Doubling concurrency, then bisecting between the last level that meets the limits and the lowest that does not,
+    to the regime's noise band (else 10%); goodput = good req/s at the best level whose requests meet the limits. With
+    a hint the sweep starts at the base's concurrency, halving first while that level fails. `stopped` says why the
+    sweep ended (two failing levels, an invalid level, or `max_concurrency` reached while still passing)."""
     pool = ctx.pool(None)
     _warmup(ctx, pool)
     order = random.Random(ctx.seed).sample(pool, len(pool))
@@ -223,7 +224,11 @@ def saturated(ctx: Ctx, max_concurrency: int = 4096) -> dict:
         best = s
     else:
         misses = 1
-    c *= 2
+
+    def double(c):                                 # the last step lands on the cap, whatever the start
+        return c * 2 if c * 2 <= max_concurrency or c >= max_concurrency else max_concurrency
+
+    c = double(c)
     while s["valid"] and not down and misses < 2 and c <= max_concurrency:   # down: the level above already failed
         s = probe(c)
         if not s["valid"]:
@@ -232,9 +237,19 @@ def saturated(ctx: Ctx, max_concurrency: int = 4096) -> dict:
             best, misses = s, 0
         elif not s["meets_limits"]:
             misses += 1
-        c *= 2
+        c = double(c)
     stopped = ("invalid" if not s["valid"] else "max_concurrency" if c > max_concurrency and s["meets_limits"]
                else "resolved")
+    tol = ctx.search("saturated", 1.0)["rel_tol"]
+    while s["valid"]:                              # bisect between the best passing level and the next failing one
+        lo = max((lv["concurrency"] for lv in levels if lv["meets_limits"]), default=None)
+        hi = min((lv["concurrency"] for lv in levels if not lv["meets_limits"] and lo and lv["concurrency"] > lo),
+                 default=None)
+        if lo is None or hi is None or (hi - lo) / hi <= tol or hi - lo < 2:
+            break
+        s = probe((lo + hi) // 2)
+    if not s["valid"]:
+        stopped = "invalid"
     final, best = None, None
     passing = sorted((lv for lv in levels if lv["meets_limits"]), key=lambda lv: -lv["good_req_per_s"])
     for cand in passing[:3]:                       # confirm at full length; a short probe can flatter a level
@@ -360,7 +375,7 @@ def overload(ctx: Ctx, factor: float = 2.0, rate: float | None = None) -> dict:
         return _result("overload", "good_req_per_s", None, "higher", found["probes"][-1] if found else None)
     s = measure(rate * factor, True)
     return _result("overload", "good_req_per_s", s["good_req_per_s"], "higher", s, offered_sittings_per_s=rate * factor,
-                   explicit_rejections=s["error"], base_goodput_sittings_per_s=rate)
+                   explicit_rejections=s["error"], base_goodput_sittings_per_s=rate, **(_bracket(found) if found else {}))
 
 
 PROBE = [{"role": "user", "content": "What is 17 + 25? Reply with the number only."}]
@@ -432,9 +447,10 @@ REAL_TRAFFIC = ("real conversation traffic (regimes/arrivals.json, fitted from B
 FACTS = {
     "single_stream": ("one request at a time (closed loop, concurrency 1) on steady_interactive prompts",
                       "p99 time per output token, seconds", "interactive"),
-    "saturated": ("closed loop at doubling concurrency over every corpus class; each level's requests judged against "
-                  "the limits, the highest passing level rerun at full length; `curve` has every level's output "
-                  "tokens/s beside its 1 / median TPOT", "goodput, good requests/s", "conversational"),
+    "saturated": ("closed loop at doubling concurrency over every corpus class, then bisected between the last "
+                  "passing and the lowest failing level to the regime's noise band; each level's requests judged "
+                  "against the limits, the highest passing level rerun at full length; `curve` has every level's "
+                  "output tokens/s beside its 1 / median TPOT", "goodput, good requests/s", "conversational"),
     "realistic": (REAL_TRAFFIC + " over every corpus class, at a searched sitting rate",
                   "goodput, good requests/s at that rate (`sittings_per_s` beside it)", "conversational"),
     "bursty": ("the spike trace open loop at a searched multiple of its real request rate over its own span, burst "
