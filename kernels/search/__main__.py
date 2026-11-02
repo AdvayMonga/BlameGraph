@@ -47,6 +47,24 @@ def _blob(path: Path, root: str | None = None) -> str | None:
         else None
 
 
+def _stations(task, sets: dict) -> list[str] | None:
+    """A region's station names (from its shapes file, as kernels.hold describes it, else from the engine here), for
+    the libraries block; None for a task."""
+    if not task.name.startswith("region:"):
+        return None
+    if sets.get("stations"):
+        return list(sets["stations"])
+    from kernels import regions
+    from lab.capture import STEP
+    try:
+        if task.name == STEP:
+            return [s.name for s in regions.engine_stations()]
+        first, last = task.name.split(":")[1:3]
+        return [s.name for s in regions.span(regions.engine_stations(regions.station_set(first)), first, last)]
+    except Exception:                            # noqa: BLE001  no engine here: the block shows what it can, nothing
+        return None
+
+
 def staged(judge_stage) -> Callable[[str, int], dict]:
     """(code, stage) -> the evaluator's result for that stage, the program written to a temp file."""
     def stage(code: str, n: int) -> dict:
@@ -138,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
     system = (system_message(task) + "\n\n" + setting(task, sets, a.device, tol)
               + ("\n\n" + TUNE_FACT.format(top=a.retime, points=a.tune_points) if a.tune_points and a.retime else "")
               + ("\n\n" + Path(a.facts).read_text().strip() if a.facts else "")
-              + ("\n\n" + other if (other := other_implementations(task.name)) else ""))
+              + ("\n\n" + other if (other := other_implementations(task.name, stations=_stations(task, sets))) else ""))
     fun = _funnel(a, task, review) if review is not None else None
     if fun is not None and not a.mcts:
         from kernels.search.generations import search as evolve

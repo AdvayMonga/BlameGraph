@@ -39,11 +39,15 @@ def describe(name: str, samples: Path, holder: Path) -> dict:
     counts = shapes.from_captures(task, caps, equal=True)
     if not counts:
         raise SystemExit(f"the captures in {samples} hold no sampled call of {name}")
+    names = [s.name for s in regions.engine_stations()] if name == STEP else \
+        [s.name for s in regions.span(regions.engine_stations(regions.station_set(name.split(":")[1])),
+                                      *name.split(":")[1:3])]
     sets = {**shapes.split(task, counts), "ints": shapes.ints_from_captures(task, caps),
-            "sources": shapes.sources_from_captures(task, caps), "heldout_axes": list(task.heldout_axes)}
+            "sources": shapes.sources_from_captures(task, caps), "heldout_axes": list(task.heldout_axes),
+            "stations": names}                   # the controller's prompt shows the libraries implementing them
     return {"holder": str(holder), "samples": str(samples), "start": initial_program(task),
             "shapes": {k: [list(s) for s in v] if k in ("seen", "heldout") else v for k, v in sets.items()},
-            "stations": [] if name == STEP else [s.name for s in regions.engine_stations()]}
+            "stations": names}
 
 
 def main(argv: list[str] | None = None) -> int:
