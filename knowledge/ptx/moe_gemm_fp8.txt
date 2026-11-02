@@ -1,0 +1,4 @@
+engine: 1 kernels
+  _moe_gemm_kernel: {"instructions": 648, "mma": 16, "cp_async": 34, "ldmatrix": 4, "barrier": 6, "ld_global": 8, "st_global": 1, "ld_shared": 17, "convert": 135, "branch": 4, "widest_vector": 4, "declared_registers": 471, "static_shared_bytes": 0, "uses": ["cp_async", "ldmatrix", "mma"]}
+vllm.fused_moe: 1 kernels
+  fused_moe_kernel: {"instructions": 689, "mma": 16, "cp_async": 26, "ldmatrix": 4, "barrier": 5, "ld_global": 9, "st_global": 2, "ld_shared": 17, "convert": 154, "branch": 25, "widest_vector": 4, "declared_registers": 487, "static_shared_bytes": 0, "uses": ["cp_async", "ldmatrix", "mma"]}

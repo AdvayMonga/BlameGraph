@@ -3,6 +3,130 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-02 — Captures at the regime's steady state; held out is a middle band, the largest shapes stay seen
+A kernel capture (`kernels/pipeline.captures`, `lab.profile --concurrency`) runs closed loop: the regime's load in
+flight (`n`), each request replaced by the next when it ends, over 3x as many requests (all of a class with fewer, a
+third as many in flight), answers 256 tokens, so most of the window is the steady state: rows at every point of their
+answers, prefill waves mixed into decode. The held-out split (`kernels/shapes.split`) holds out a band of each held-out
+axis (above its 60th and up to its 80th percentile by calls, by distinct values when calls pile up), never the axis's
+largest value. Why (the user, after the coverage audit): every capture fired its N requests at once with 128-token
+answers, so captures and profiles were prefill-heavy (decode attention 7.7% of the saturated window here against 39%
+in a steady-state profile), and the held-out split removed the shapes a loaded regime runs most (the largest batches,
+the longest waves), which the search then never saw. Replaces the burst captures (2026-10-19, validate_gpu.sh's
+CAPTURE_SPECS) and "held-out = whole regions above the 80th percentile" (2026-10-17).
+## 2026-11-02 — Regions for everything: the prefill path becomes stations
+The kernel layer moves to regions for every kernel, prefill included: the engine declares a CUDA prefill wave as
+stations (`PREFILL`, names "p_": norms, qkv, rope, K/V store, FlashInfer attention from the wave's tensors, o_proj, the
+experts as one station calling the same `moe_cuda` the module calls), capturable and overridable like decode, and
+`kernels/regions.py` binds a "p_" region to them. The hand-written tasks are retired once the single-station regions
+reproduce their baselines and gates. Why (the user, after the coverage audit of 2026-11-01): the tasks covered about
+20% of the engine's kernel time; the largest uncovered kernels were prefill's (the fp8 grouped GEMM 10-17%, FlashInfer
+prefill attention 2-9%), and regions have the higher upside (fusion across kernels, real inputs and weights, a harness
+generated from the engine's own code). A prefill wave runs through the stations only while a "p_" stretch is overridden
+or captured, so the default path is unchanged. Known limits: one layer captured, writers in place (K/V) outside
+regions, the whole step's weights large to share.
+
+## 2026-11-01 — A round's calls run in waves, each shown the changes already proposed
+A generation's model calls run in waves of `--workers` (8); every call after the first wave gets the changes the
+earlier waves of the round proposed (their hypothesis text, not measured yet) and is asked for a change different from
+each. Why (the user, for diversity and to stop paying for duplicates): all calls of a round ran in parallel on the
+same prompt and the memory holds only earlier generations, so in the 2026-11-01 moe_gemm_fp8 run 63 of 85 changes were
+dropped as identical (30) or near-duplicate (33) programs after being written. Waves of 8 rather than 20 (the user's
+first figure): a wave's own calls still cannot see each other. Costs ~1-2 min of wall time per extra wave. Amends
+2026-10-27 (calls 8 at a time, the first of each batch alone).
+
+## 2026-11-01 — Selection's exam is correctness and timing; the gate keeps every check
+Stage 2 during a search (and re-timing) checks correctness on every seen shape at one seed, with the cheap anti-gaming
+checks (memoization, non-finite inputs, inputs unchanged, aliasing), times the program against the baseline with the
+timed outputs checked, applies the roofline physics alarm and re-verifies the outputs outside the jail. The rest (seeds
+1-2, three repeats for determinism, edge shapes and layouts, the x3 / x0.01 / x-1 value scales, the baseline's error,
+peak memory) runs only in the held-out gate (its config says `full`, so a split with no held-out shapes still gets
+every check), i.e. on the winner before it ships. Why (the user: make the exam really
+cheap and run the full one only on the winner): across the 474 recorded stage-2 exams, one gate other than correctness
+on stage 1's shapes ever failed (a x3 value scale, once), and the exam was most of a generation's ~17-24 min. Amends
+the stage-2 definition of 2026-10-04 (kernels/evolve/core.judge).
+
+## 2026-11-01 — Tuning after the search, on the top programs only
+During the search programs are measured as written; after it, each of the `--retime` (4) top programs has its
+`CONFIG` + `TUNABLES` grid tuned on every seen shape and is re-timed with the fastest point written in (`run.retime`'s
+`tune`), so the gate and the shipped program are the tuned ones. The A/B's shared promotion turns it off for both arms
+(`--tune-points 0`). Why (the user, after the measurements): over 18 tuned programs of the 2026-11-01 moe_gemm_fp8 runs
+the best grid point beat the program's own settings by a median +0.3% (15 under 1.1%, max +5.7%), no program beat its
+parent only because it was tuned, and the tuning took about half of the GPU time; the run-to-run noise (the same start
+scored 1.055x and 1.015x) is larger than the gains. Replaces "Tuning only for programs that beat their parent" (same
+day) and "Every program is tuned before it is measured" (2026-10-27); back to the 2026-10-18 rule.
+
+## 2026-11-01 — Tuning only for programs that beat their parent
+`Funnel.measure` takes a program's full exam first; only one whose score beats its parent's (and the root, which has
+none) has its `CONFIG` + `TUNABLES` grid tuned on every seen shape and takes the exam again with the fastest point
+written in. Why (the user, on the first 10-generation run through `kernel_search`, lab-gpu-10): a generation took
+~80 min, 62% of it the tune stage (200-540 s per program, 8 points x 8 shapes paired against the baseline) on
+programs that mostly never beat their parent (8 of 10 in generation 0); GPU timings run one at a time by design, so
+tuning everything set the pace. Amends "Every program is tuned before it is measured" (2026-10-27): a winner is still
+ranked and kept at its tuned speed, a loser is dropped at the speed the model wrote.
+
+## 2026-10-31 — Other libraries' kernels in every search prompt, from one index
+`kernels/library/` holds 2-3 other implementations of every kernel task (vLLM v0.32.0, SGLang v0.5.22, FlashInfer
+v0.7.2.post1, TensorRT-LLM v1.2.1): `index.toml` names each with its upstream paths and line ranges, the files are kept
+verbatim, and every call of the search gets their source and, where built, their PTX/SASS card as one fixed block of
+the system message (cached), with the starting program's card. No timings. The PTX comparison stops being one of the
+rotating fact slices, which only about a quarter of the refine calls read. Why (the user): competitor and library
+kernels are good to draw on, kept standardized in one place; a fixed block over a retrieval tool (Claude's
+recommendation, the user agreed) so every call sees the same and the cache makes it cheap. Larger kernels (TRT-LLM's
+XQA decode, its CUTLASS MoE GEMM) are left out for their size. Amends 2026-10-30 (cards read by task name as a slice).
+
+## 2026-10-30 — The kernel search: 10 generations always, one call per change, every correct program measured
+Three changes to `kernels.search`'s genetic search:
+1. It runs exactly 10 generations after generation 0, and nothing stops it sooner. Removed: patience, shrinking a
+   generation that improved little, the wall-clock cap, the GPU-seconds cap, the evals count, and the model budget
+   (`--usd`; the user: there should be no budget flag).
+2. Every program that builds and passes correctness takes the full exam and joins the population. Removed: the quick
+   timing on one shape, racing at the cutoff, the 8 kept per generation, and the cut per idea type.
+3. One call makes each change: it states the hypothesis and writes the SEARCH/REPLACE edit in one answer, as
+   OpenEvolve's calls do. The call is shown the parent, the starting program and up to 2 better programs from other
+   branches, all as full code, plus its slice of facts and the memory tables.
+
+Added the same day (the user, from the list of published methods we had not used):
+- the PTX comparison's cards are read by task name from `knowledge/ptx/<task>.txt` (no `--ptx`), without competitor
+  timings (no target numbers in prompts);
+- a program whose change from the starting program is within cosine 0.95 of one already written is refused before
+  any GPU time (local embeddings of the changed lines; ShinkaEvolve's novelty rejection);
+- competitors' kernels ported from source (`kernels.competitors.starts`) are judged at generation 0 beside the start
+  and join the population.
+
+Removed with change 3, as orphans: the named-ideas step, merging duplicate ideas (`--cheap-model`), the past-failure
+check, the wide coder (`--wide-model`), repairs (`--max-repairs`), the strong coder's rewrite of kept programs, and
+arm `search-gen20` (it varied `--keep`).
+
+Why (the user, comparing with OpenEvolve on moe_gemm_fp8): OpenEvolve fully measured 130 programs from 140 calls in
+2.5 h; our typed run fully measured 34 of about 100 correct programs from 206 calls, and stopped at the wall-clock cap
+after 5 generations. Our calls never saw the starting program, only diffs against it, and the coder never saw the
+judge's reasoning. "No cap" (the user) means no target number for the task, never a cut in the generation count.
+
+Replaces, in part:
+- 2026-10-23 (the funnel's tiers)
+- 2026-10-26 (patience 3, the shrink rule, the fastest 8 to the full exam)
+- 2026-10-27 (the wall-clock cap; the strong coder writing only the kept programs)
+
+## 2026-10-29 — Four idea types per generation; the judge remembers every measured idea
+Each generation after the first splits its 24 ideas over four types, each with its own judge calls: refine (new ideas on
+the fitness-drawn parents, as before), persist (a line's last change taken further; every child that beat its parent
+heads a line, which moves to a persist child that beats it and closes after 3 generations without one), fresh (a
+different overall structure, half from the start program and half from a random program) and crossover (one parent
+shown another's diff). The split starts at 8/6/6/4 and adapts each generation to each type's measured rate of new
+bests (Laplace-smoothed, at least 2 each); each type gets its share of the 8 full exams, so a type is judged on its own
+fastest, and every idea is tagged with its type. Every judge call also gets the memory as two cached prompt blocks: the
+general table (ideas that beat their parent on other kernel tasks, best measured gain, the task and its bound type)
+and the task table (every idea tried on this task in earlier runs and so far in this run, with how far it got and its
+measured gains); it replaces the archive slice, which showed only the ideas most like one parent's to one call in five.
+Why (the user): a search should explore new ideas, push the ones that show an improvement and combine branches in
+every generation, and, like an expert who remembers thousands of experiments, know what was already tried rather than
+start from square one and be deduplicated afterwards. The tables are measurements, not lessons (the no-beliefs rule,
+2026-10-09); the model draws its own conclusions inside each call. The 2026-10-27 persistence arm bundled persistence
+with an idea table, immigrants and an extra judge call, so its loss did not measure persistence alone; this costs no
+extra model calls. Arm `search-untyped` keeps the search before this (refine only); `--crossover`/`search-crossover`
+are replaced by the crossover type. Found the same day: no search so far passed `--archive`, so none read past ideas.
+
 ## 2026-10-28 — Saturated bisects its concurrency; a searched band is never below the search's resolution
 `saturated` doubles concurrency as before, then bisects between the last level that meets the limits and the lowest
 that does not, to the regime's band (else 10%); `lab.validate` runs its searches to 5% (`RESOLUTION_PCT`) and never
@@ -65,6 +189,17 @@ batch 158 passed at every speed; 512x was voided by the client's own send lag (3
 prompt (80) and shared prefix (0.81) were real break points that both engines reported alike because the search
 stops at a 10% bracket (80 passed, 86.7 failed); the bracket now shows when two results are within it. Replaces the
 time-compressed replay (2026-10-02 eval conventions' bursty).
+## 2026-10-27 — Every program is tuned before it is measured
+`kernels.search` grid-searches a program's declared launch parameters (`CONFIG` + `TUNABLES`, 8 points) before each
+first measurement of its speed: on the most-called shape before the quick timing, on every seen shape before the full
+exam (with a per-size dispatcher where different points win in different regions), and for the root program. Each
+point is loaded with CONFIG rewritten, checked on one shape and timed in the evaluator's own jailed stage; the program
+is measured and kept with the fastest point written in, so its children start from it. Re-timing and the gate
+measure the tuned program as it is; every point's score is shown to the model as a fact. Why (the user: the search space must be unrestricted, nothing that is a lever for
+speed fixed): programs were ranked at the tile sizes the model guessed, and tuning ran only on the top 4 after the
+search (off in the 2026-10-27 race), while OpenEvolve's winner autotuned inside its own program; structure goes to
+the model, numeric knobs to a measured grid. Replaces post-search tuning (2026-10-18, "the top 4 are tuned"); the A/B
+promotion (`ab.SAME_PROMOTION`) no longer sets tuning, which is now part of the search.
 
 ## 2026-10-27 — No roofline stop: a search runs to its budget
 `kernels.search` no longer stops when the best program reaches a share of its roofline (`--stop-pct`, 80 by
@@ -165,7 +300,7 @@ against $12.32; both passed the held-out gate. The user called it the clear winn
 run. Replaces the beam as the default (2026-10-20).
 
 ## 2026-10-23 — The agent calls the kernel layer as a tool, blocking for now, and gets a patch
-`kernel_search` (task, budget_usd, with a kernels-layer hypothesis and its expect) runs the kernel layer end to end:
+`kernel_search` (task, budget, with a kernels-layer hypothesis and its expect) runs the kernel layer end to end:
 capture under real traffic, search from the agent's own version of the kernel, the held-out gate, and a patch of the
 engine module saved in the workspace for the agent to apply and judge with its own bench/equiv/submit. Why (the user):
 the agent decides which kernel to work on, given each task's share of time as a fact; the agent applying the patch

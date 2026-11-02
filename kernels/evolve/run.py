@@ -179,14 +179,25 @@ def task_args(p) -> None:
 
 
 def region_args(a) -> dict:
-    """A region task's `samples` and `shared_weights`, absolute: what `load` and the eval config take."""
+    """A region task's `samples` and `shared_weights`, absolute: what `load` and the eval config take. With the
+    evaluator on a remote worker (KERNEL_EVAL_SSH) they are paths there, kept as given."""
     if not a.task.startswith("region:"):
         return {}
-    if os.environ.get("KERNEL_EVAL_SSH"):        # this process attaches the holder and reads the samples itself
-        raise SystemExit("a region task runs on the GPU host that holds its samples and holder: KERNEL_EVAL_SSH "
-                         "(the evaluator on a remote worker) does not take regions yet")
-    return {k: str(Path(v).resolve()) for k, v in (("samples", getattr(a, "samples", None)),
-                                                   ("shared_weights", getattr(a, "shared_weights", None))) if v}
+    there = bool(os.environ.get("KERNEL_EVAL_SSH"))
+    return {k: v if there else str(Path(v).resolve()) for k, v in (("samples", getattr(a, "samples", None)),
+                                                                 ("shared_weights", getattr(a, "shared_weights", None))) if v}
+
+
+def load_task(a):
+    """The task. A region judged on a remote worker loads only there: here it is described by its shapes file
+    (kernels/hold.py wrote it, with the held-out axes) and starts from --initial."""
+    if a.task.startswith("region:") and os.environ.get("KERNEL_EVAL_SSH"):
+        if not (a.shapes and a.initial):
+            raise SystemExit("a region judged on a remote worker needs --shapes and --initial from where it loads "
+                             "(python -m kernels.hold)")
+        from kernels.regions import light
+        return light(a.task, tuple(shapes_mod.read(a.shapes).get("heldout_axes") or ()))
+    return load(a.task, **region_args(a))
 
 
 def _shapes(task, a) -> dict:
@@ -261,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         names = list(gates) or list(TASKS)       # with gates, only the gated tasks: two tasks can name one kernel
         print(json.dumps(rank([Path(p) for p in a.profile], [load(n) for n in names], gates), indent=1))
         return 0
-    task = load(a.task, **region_args(a))
+    task = load_task(a)
     sets = _shapes(task, a)
     tol = tolerances(_target_tolerances())
     if a.cmd == "split":
@@ -271,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
         out = judge_jailed({"task": task.name, "seen": [list(s) for s in sets["seen"]],
                             "heldout": [list(s) for s in sets["heldout"]], "weights": sets.get("calls"),
                             "device": a.device, "tolerances": tol, "ints": _ints(sets, ("seen", "heldout")),
-                            "options": options_from_target(task), **region_args(a)},
+                            "options": options_from_target(task), "full": True, **region_args(a)},
                            Path(a.program).read_text(), 2, timeout_s=3600)
         print(json.dumps(out, indent=1))
         from kernels.evolve.ship import gate_passed
@@ -334,11 +345,12 @@ def prepare(task, sets: dict, out: Path, device: str, tol: dict, timing_shapes: 
     return sets, program
 
 
-def retime(trace: Path, k: int, repeats: int = 3, exclude=None) -> tuple[str | None, dict | None, list]:
+def retime(trace: Path, k: int, repeats: int = 3, exclude=None, tune=None) -> tuple[str | None, dict | None, list]:
     """The top `k` candidates by score re-judged `repeats` times through the evaluator (stage 2, local or remote);
     the one with the highest median score is promoted. One timing of each is what selection saw, and one timing can
     win by noise. `exclude(code, row) -> reason | None` passes over a candidate (e.g. flagged as gaming the
-    evaluator), the next-best taking its place. Returns (code, metrics of its median run, every re-timing, the
+    evaluator), the next-best taking its place. `tune(code) -> (code, grid rows)` tunes each candidate first, and it is
+    re-judged as tuned (kernels/search/tune.py). Returns (code, metrics of its median run, every re-timing, the
     excluded ones included with their reason)."""
     import statistics
     import tempfile
@@ -358,8 +370,9 @@ def retime(trace: Path, k: int, repeats: int = 3, exclude=None) -> tuple[str | N
         else:
             top.append(r)
     for r in top:
+        code, rows = tune(r["child_code"]) if tune else (r["child_code"], [])
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
-            f.write(r["child_code"])
+            f.write(code)
         runs = [evaluator.judge_stage(f.name, 2)["metrics"] for _ in range(repeats)]
         Path(f.name).unlink()
         scores = [m.get("combined_score", 0.0) for m in runs]
@@ -369,7 +382,7 @@ def retime(trace: Path, k: int, repeats: int = 3, exclude=None) -> tuple[str | N
             continue
         med = statistics.median(scores)
         out.append({"id": r["child_id"], "selected_score": r["child_metrics"]["combined_score"], "scores": scores,
-                    "median": med, "code": r["child_code"],
+                    "median": med, "code": code, **({"tuned_points": len(rows)} if rows else {}),
                     "metrics": min(runs, key=lambda m: abs(m.get("combined_score", 0.0) - med))})
     timed = [x for x in out if "median" in x]
     if not timed:

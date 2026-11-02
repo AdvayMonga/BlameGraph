@@ -58,11 +58,12 @@ def test_the_reference_keeps_the_baselines_experts_and_weighs_them_in_fp32():
     def route(c):                                    # top-1 by a stable sort: a tie goes to the lower expert
         top = torch.argsort(c["logits"], dim=-1, descending=True, stable=True)[:, 0]
         return {"sorted_ids": torch.arange(top.numel()), "expert_ids": top, "tok": torch.arange(top.numel()),
-                "pair_w": torch.softmax(c["logits"].float(), -1).gather(1, top[:, None])[:, 0]}
+                "pair_w": torch.softmax(c["logits"].float(), -1).gather(1, top[:, None])[:, 0],
+                "acc": torch.zeros(top.numel(), c["logits"].shape[-1])}     # the accumulator `down` adds into, as the engine's
     stations = (Station("router", ("x", "w"), ("logits",), lambda c: {"logits": c["x"] @ c["w"]}),
-                Station("route", ("logits",), ("sorted_ids", "expert_ids", "tok", "pair_w"), route),
-                Station("down", ("e", "expert_ids", "pair_w"), ("y",),
-                        lambda c: {"y": (c["e"][c["expert_ids"]].float() * c["pair_w"][:, None]).to(c["e"].dtype)}))
+                Station("route", ("logits",), ("sorted_ids", "expert_ids", "tok", "pair_w", "acc"), route),
+                Station("down", ("e", "expert_ids", "pair_w", "acc"), ("y",),
+                        lambda c: {"y": (c["acc"] + c["e"][c["expert_ids"]].float() * c["pair_w"][:, None]).to(c["e"].dtype)}))
     bf = torch.bfloat16
     x, w = torch.tensor([[1.0, 2 ** -9]], dtype=bf), torch.tensor([[1.0, 1.0], [0.0, 1.0]], dtype=bf)
     e = torch.tensor([[10.0, 20.0], [30.0, 40.0]], dtype=bf)

@@ -80,7 +80,8 @@ def instrument(kind: str, args: dict) -> dict:
     wl = workload(args)
     if kind == "profile":
         capture = [w for f in _flags(args, "capture") for w in ("--capture", f)]
-        return {"binary": None, "flags": wl + ["--profiler", "torch", *capture], "summary": None,
+        steady = ["--concurrency", str(_int(args, "concurrency", 1, 1))] if "concurrency" in args else []
+        return {"binary": None, "flags": wl + ["--profiler", "torch", *capture, *steady], "summary": None,
                 "wrap": lambda exe, out: [], "post": None, "extra": lambda exe: [], "bundle_only": True}
     if kind == "trace":
         flags = _flags(args, "nsys_args", NSYS_FLAGS)
