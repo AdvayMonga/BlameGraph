@@ -169,10 +169,12 @@ def tolerances(target_tol: dict | None) -> dict:
 
 
 def task_name(s: str) -> str:
-    """--task: a named task, `region:FIRST:LAST` or `kb:LEVEL:ID`."""
-    if s in TASKS or re.fullmatch(r"region:\w+:\w+", s) or re.fullmatch(r"kb:\d+:\d+", s):
+    """--task: a named task, `region:FIRST:LAST`, `kb:LEVEL:ID` or `fib:NAME`."""
+    if s in TASKS or re.fullmatch(r"region:\w+:\w+", s) or re.fullmatch(r"kb:\d+:\d+", s) \
+            or re.fullmatch(r"fib:\w+", s):
         return s
-    raise argparse.ArgumentTypeError(f"{s!r} is none of {', '.join(TASKS)}, nor region:FIRST:LAST, nor kb:LEVEL:ID")
+    raise argparse.ArgumentTypeError(f"{s!r} is none of {', '.join(TASKS)}, nor region:FIRST:LAST, kb:LEVEL:ID, "
+                                     f"fib:NAME")
 
 
 def task_args(p) -> None:
@@ -183,12 +185,15 @@ def task_args(p) -> None:
 
 
 def region_args(a) -> dict:
-    """A region task's `samples` and `shared_weights`, absolute, or a KernelBench problem's `source`: what `load` and
-    the eval config take. With the evaluator on a remote worker (KERNEL_EVAL_SSH) region paths are paths there, kept as
-    given."""
+    """A region task's `samples` and `shared_weights`, absolute, a KernelBench problem's `source`, or a FlashInfer-Bench
+    definition's dataset dir as `samples` (the jail mounts it): what `load` and the eval config take. With the
+    evaluator on a remote worker (KERNEL_EVAL_SSH) region paths are paths there, kept as given."""
     if a.task.startswith("kb:"):
         from kernels.kernelbench import problem_source
         return {"source": problem_source(a.task)}
+    if a.task.startswith("fib:"):
+        from kernels import flashinfer_bench
+        return {"samples": str(flashinfer_bench.root())}
     if not a.task.startswith("region:"):
         return {}
     there = bool(os.environ.get("KERNEL_EVAL_SSH"))

@@ -3,6 +3,19 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-02 — The kernel search competes on FlashInfer-Bench, under its own evaluator
+Every FlashInfer-Bench definition its default evaluator judges (`flashinfer-ai/flashinfer-trace`, pinned revision; 95
+of 190: the rest have no workloads or are judged by another evaluator) is a kernel task `fib:NAME`
+(`kernels/flashinfer_bench.py`), and winners are scored by the benchmark's own evaluator (pinned commit), jailed, on
+every workload beside the FlashInfer baseline, with the leaderboard's score; a winner is written as the Solution JSON
+the leaderboard takes. The search follows the benchmark's contract (its inputs and workloads, recorded tensors as
+recorded, each workload's scalars; no layouts, scalings, NaN/Inf or edge shapes; no roofline, since definitions state
+no work) at half its tolerance, which implies its rule, and keeps our anti-gaming gates; a held-out band of workloads
+over every variable axis is ours. Why (the user): compete on the credible public leaderboards rather than build our
+own benchmark now; FlashInfer-Bench is the one built from real serving workloads (Qwen3-30B-A3B among its models) with
+production kernels as the baseline. The gap no published kernel benchmark covers, comparing generation methods at an
+equal budget and scoring what survives deployment, is noted as a possible contribution, not built.
+
 ## 2026-11-02 — Decode regions are timed as CUDA-graph replays
 A decode region's task has `graphs=True`, like the hand-written decode tasks: its baseline and programs are captured
 and timed as a graph replay, so host time (the Python station chain, launch overhead) is not timed; prefill regions

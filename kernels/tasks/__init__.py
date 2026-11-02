@@ -100,7 +100,11 @@ def randn(size, g, device, dtype, scale: float = 1.0) -> torch.Tensor:
 def load(name: str, **region) -> Task:
     """A named task, a region of the engine's decode stations (`region:FIRST:LAST`, or the whole decode step
     `region:embed:argmax`; `region` gives its captured `samples` dir and its `shared_weights` holder file, without
-    which it is `regions.light`), or a KernelBench problem (`kb:LEVEL:ID`; `region` may give its `source`)."""
+    which it is `regions.light`), a KernelBench problem (`kb:LEVEL:ID`; `region` may give its `source`), or a
+    FlashInfer-Bench definition (`fib:NAME`; `region` may give its dataset dir as `samples`)."""
+    if name.startswith("fib:"):
+        from kernels.flashinfer_bench import task
+        return task(name, region.get("samples"))
     if name.startswith("kb:"):
         from kernels.kernelbench import task
         return task(name, region.get("source"))
@@ -124,7 +128,7 @@ TASKS = ("toy_rmsnorm", "paged_decode", "paged_decode_fp8", "moe_gemm", "moe_gem
 def from_config(cfg: dict) -> Task:
     """The task an evaluation config names, with its deployment options and captured ints: what every judge uses."""
     region = {k: cfg[k] for k in ("samples", "shared_weights", "source") if cfg.get(k)} \
-        if cfg["task"].startswith(("region:", "kb:")) else {}
+        if cfg["task"].startswith(("region:", "kb:", "fib:")) else {}
     return load(cfg["task"], **region).with_options(cfg.get("options")).with_ints(cfg.get("ints"))
 
 
