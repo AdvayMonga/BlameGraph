@@ -17,6 +17,7 @@ from regimes import suite
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lab_fixtures import make_repo  # noqa: E402
+from fake_engine import fast_arrivals  # noqa: E402
 
 FAKE = Path(__file__).resolve().parent / "fake_engine.py"
 
@@ -104,13 +105,13 @@ def lab(tmp_path, monkeypatch):
     tb.serve_jailed = False
     tb.bench_default_regimes = ("single_stream",)
     from regimes import runner
-    saved, think, lag = dict(suite.TIERS["min"]), suite.THINK_S, runner.MAX_CLIENT_LAG_S
+    saved, think, lag = dict(suite.TIERS["min"]), suite.ARRIVALS, runner.MAX_CLIENT_LAG_S
     runner.MAX_CLIENT_LAG_S = 0.05      # wiring tests on a shared laptop; client precision has its own test
     suite.TIERS["min"].update(probe_s=1.0, final_s=1.5)
     suite.TIERS["full"].update(probe_s=1.0, final_s=1.5)
-    suite.THINK_S = 0.3
+    suite.ARRIVALS = fast_arrivals()
     yield tb, s
-    suite.TIERS["min"].update(saved); suite.TIERS["full"].update(probe_s=60.0, final_s=600.0); suite.THINK_S = think
+    suite.TIERS["min"].update(saved); suite.TIERS["full"].update(probe_s=60.0, final_s=600.0); suite.ARRIVALS = think
     runner.MAX_CLIENT_LAG_S = lag
     target._cache.clear()
 
@@ -488,13 +489,14 @@ def test_bench_starts_its_searches_where_the_base_ended(lab, monkeypatch):
                         bands=None: got.append(hints) or [])
     tb.bench({"regimes": ["saturated"]})                                     # no base measured yet: a cold search
     base = json.dumps({"saturated": {"value": 3.8, "valid": True, "concurrency": 64}, "bursty": {"value": 2.0, "valid": True},
+                       "realistic": {"value": 5.98, "valid": True, "sittings_per_s": 2.0},
                        "single_stream": {"value": 0.006, "valid": True}})
     (s.run_dir / "base-seen-min-000000000000.json").write_text(base)
     tb.bench({"regimes": ["saturated"]})                                     # a base on another corpus version: unused
     tb._base_cache("seen", "min").write_text(base)
     tb.bench({"regimes": ["saturated"]})
     tb.bench({"regimes": ["saturated"], "seed": 3})                          # another sample: not the base's search
-    assert got == [{}, {}, {"saturated": {"concurrency": 64}, "bursty": {"load": 2.0}}, {}]
+    assert got == [{}, {}, {"saturated": {"concurrency": 64}, "bursty": {"load": 2.0}, "realistic": {"load": 2.0}}, {}]
 
 
 @pytest.fixture

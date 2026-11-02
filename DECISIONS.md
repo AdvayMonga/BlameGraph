@@ -3,6 +3,110 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-02 — Captures at the regime's steady state; held out is a middle band, the largest shapes stay seen
+A kernel capture (`kernels/pipeline.captures`, `lab.profile --concurrency`) runs closed loop: the regime's load in
+flight (`n`), each request replaced by the next when it ends, over 3x as many requests (all of a class with fewer, a
+third as many in flight), answers 256 tokens, so most of the window is the steady state: rows at every point of their
+answers, prefill waves mixed into decode. The held-out split (`kernels/shapes.split`) holds out a band of each held-out
+axis (above its 60th and up to its 80th percentile by calls, by distinct values when calls pile up), never the axis's
+largest value. Why (the user, after the coverage audit): every capture fired its N requests at once with 128-token
+answers, so captures and profiles were prefill-heavy (decode attention 7.7% of the saturated window here against 39%
+in a steady-state profile), and the held-out split removed the shapes a loaded regime runs most (the largest batches,
+the longest waves), which the search then never saw. Replaces the burst captures (2026-10-19, validate_gpu.sh's
+CAPTURE_SPECS) and "held-out = whole regions above the 80th percentile" (2026-10-17).
+## 2026-11-02 — Regions for everything: the prefill path becomes stations
+The kernel layer moves to regions for every kernel, prefill included: the engine declares a CUDA prefill wave as
+stations (`PREFILL`, names "p_": norms, qkv, rope, K/V store, FlashInfer attention from the wave's tensors, o_proj, the
+experts as one station calling the same `moe_cuda` the module calls), capturable and overridable like decode, and
+`kernels/regions.py` binds a "p_" region to them. The hand-written tasks are retired once the single-station regions
+reproduce their baselines and gates. Why (the user, after the coverage audit of 2026-11-01): the tasks covered about
+20% of the engine's kernel time; the largest uncovered kernels were prefill's (the fp8 grouped GEMM 10-17%, FlashInfer
+prefill attention 2-9%), and regions have the higher upside (fusion across kernels, real inputs and weights, a harness
+generated from the engine's own code). A prefill wave runs through the stations only while a "p_" stretch is overridden
+or captured, so the default path is unchanged. Known limits: one layer captured, writers in place (K/V) outside
+regions, the whole step's weights large to share.
+
+## 2026-11-01 — The regimes on real conversation timing; `realistic` is the objective, `saturated` the developer's signal; `offline`; a salt on every request
+Four open-loop regimes run on the fitted timing model (`regimes/arrivals.py`, same day): the new `realistic` (the
+corpus mix, sittings added until the limits break; headline good requests/s) replaces Poisson as the regime a task
+optimizes; `long_prompt_short_output`, `shared_prefix_multi_turn` (now sittings/s, the conversation's full length, the
+real gaps instead of a 3 s think time) and `overload` (2x the sitting rate of its goodput, over the whole mix) move
+onto it. `short_prompt_long_output` stays Poisson: single-turn by nature, and within a window the data is Poisson.
+`bursty` stays the real spike replay: real timing already. `saturated` is unchanged and stays measured beside
+`realistic`: closed loop is the least noisy signal of raw capacity and what vLLM, SGLang, InferenceX and MLPerf
+Endpoints publish, so it is the developer's number and the comparison's; it now also reports its `curve` (each
+probed level's output tokens/s beside 1 / median TPOT, the throughput-vs-speed-per-user plot of InferenceX and MLPerf
+Endpoints). `offline` is new: every record of every class at once, closed loop, output tokens/s, no latency limit
+(MLPerf's Offline). Every request is salted ("[k] " before the conversation's opening message, the sitting's or the
+closed-loop request's index), so no two share a prefix except the turns of one conversation and the shared system
+prompt: MLPerf salts every query and InferenceX AgentX busts the cache per replay; until now a record's own
+opening send was unsalted. Why (the user): both numbers, the realistic one to optimize for and the closed-loop one
+for the developer's signal and comparison, each regime callable on its own; a review of the frontier clients and
+suites (vLLM bench, SGLang bench, AIPerf, GuideLLM, LLMPerf, inference-perf; MLPerf Inference and Endpoints,
+InferenceX, AgentX, Artificial Analysis) found no fitted timing anywhere, fixed concurrency or Poisson, and three
+things they test that we did not: the curve, an offline point and salting. Still open from that review: an agent
+regime, answers over 1,024 tokens, 10-60 minute runs. Replaces the Poisson open-loop regimes and `sessions`' fixed
+think time (2026-10-02, 2026-10-18's defaults).
+
+## 2026-11-01 — Request timing fitted from real conversation traffic; load rises by adding users
+The open-loop regimes get their timing from a model fitted to BurstGPT_3's conversation log (`regimes/arrivals.py`):
+sittings start as a Poisson process at the load's rate, each a run of turns of one conversation (a gap over 30 min
+ends a sitting; 12% of gaps; the user returns as a resumed sitting with history), the gap to the next turn drawn from
+the real gaps by transition index, pooled in buckets at 5, 10, 20 and 40 turns (median 79 s after a first turn,
+106-121 s over the next four, 66 s past 40: long conversations have short gaps; 42% of sittings are one turn), and
+a run starts with users already mid-conversation: the pre-roll reaches back to the p99.99 span of the model's own
+sittings (23,000 s), so all but ~0.2% of turns are there from the first second. Failed requests (0 prompt tokens,
+0.8% of rows) count as turns here, since the user made them; the corpus drops them. Load rises by raising the
+sitting rate and nothing else. Why (the user): the most realistic measurement. The evidence, from the held-out
+weeks (222 busy 20-minute windows): sitting starts are Poisson within a window (inter-arrival CV 0.96 real, 0.93
+model; KS against exponential p 0.70 and 0.75, the rate estimated from the same sample, so a side-by-side, not a
+calibrated p; request-count variance/mean 0.99/0.98/1.07 real against 0.99/0.98/1.07 model at 1/10/60 s), and busy hours have more sittings with the same turns and gaps per sitting
+(turns 2.4-3.5 and median gap 84-155 s at every hour of day while starts per hour range 91-3,978). So within a run
+real conversation traffic is not burstier than Poisson; what the model adds is the multi-turn structure (two thirds
+of requests continue a conversation, with real pauses), which the fixed 3 s think time and per-request Poisson never
+had. Frontier benchmark clients offer Poisson or gamma gaps and a think time the user sets (vLLM, AIPerf, GuideLLM);
+none fits real traffic. This entry adds the model and its comparison; wiring the regimes to it follows. Replaces,
+once wired, Poisson requests and `sessions`' fixed think time (2026-10-02).
+
+## 2026-11-01 — A round's calls run in waves, each shown the changes already proposed
+A generation's model calls run in waves of `--workers` (8); every call after the first wave gets the changes the
+earlier waves of the round proposed (their hypothesis text, not measured yet) and is asked for a change different from
+each. Why (the user, for diversity and to stop paying for duplicates): all calls of a round ran in parallel on the
+same prompt and the memory holds only earlier generations, so in the 2026-11-01 moe_gemm_fp8 run 63 of 85 changes were
+dropped as identical (30) or near-duplicate (33) programs after being written. Waves of 8 rather than 20 (the user's
+first figure): a wave's own calls still cannot see each other. Costs ~1-2 min of wall time per extra wave. Amends
+2026-10-27 (calls 8 at a time, the first of each batch alone).
+
+## 2026-11-01 — Selection's exam is correctness and timing; the gate keeps every check
+Stage 2 during a search (and re-timing) checks correctness on every seen shape at one seed, with the cheap anti-gaming
+checks (memoization, non-finite inputs, inputs unchanged, aliasing), times the program against the baseline with the
+timed outputs checked, applies the roofline physics alarm and re-verifies the outputs outside the jail. The rest (seeds
+1-2, three repeats for determinism, edge shapes and layouts, the x3 / x0.01 / x-1 value scales, the baseline's error,
+peak memory) runs only in the held-out gate (its config says `full`, so a split with no held-out shapes still gets
+every check), i.e. on the winner before it ships. Why (the user: make the exam really
+cheap and run the full one only on the winner): across the 474 recorded stage-2 exams, one gate other than correctness
+on stage 1's shapes ever failed (a x3 value scale, once), and the exam was most of a generation's ~17-24 min. Amends
+the stage-2 definition of 2026-10-04 (kernels/evolve/core.judge).
+
+## 2026-11-01 — Tuning after the search, on the top programs only
+During the search programs are measured as written; after it, each of the `--retime` (4) top programs has its
+`CONFIG` + `TUNABLES` grid tuned on every seen shape and is re-timed with the fastest point written in (`run.retime`'s
+`tune`), so the gate and the shipped program are the tuned ones. The A/B's shared promotion turns it off for both arms
+(`--tune-points 0`). Why (the user, after the measurements): over 18 tuned programs of the 2026-11-01 moe_gemm_fp8 runs
+the best grid point beat the program's own settings by a median +0.3% (15 under 1.1%, max +5.7%), no program beat its
+parent only because it was tuned, and the tuning took about half of the GPU time; the run-to-run noise (the same start
+scored 1.055x and 1.015x) is larger than the gains. Replaces "Tuning only for programs that beat their parent" (same
+day) and "Every program is tuned before it is measured" (2026-10-27); back to the 2026-10-18 rule.
+
+## 2026-11-01 — Tuning only for programs that beat their parent
+`Funnel.measure` takes a program's full exam first; only one whose score beats its parent's (and the root, which has
+none) has its `CONFIG` + `TUNABLES` grid tuned on every seen shape and takes the exam again with the fastest point
+written in. Why (the user, on the first 10-generation run through `kernel_search`, lab-gpu-10): a generation took
+~80 min, 62% of it the tune stage (200-540 s per program, 8 points x 8 shapes paired against the baseline) on
+programs that mostly never beat their parent (8 of 10 in generation 0); GPU timings run one at a time by design, so
+tuning everything set the pace. Amends "Every program is tuned before it is measured" (2026-10-27): a winner is still
+ranked and kept at its tuned speed, a loser is dropped at the speed the model wrote.
+
 ## 2026-10-31 — Other libraries' kernels in every search prompt, from one index
 `kernels/library/` holds 2-3 other implementations of every kernel task (vLLM v0.32.0, SGLang v0.5.22, FlashInfer
 v0.7.2.post1, TensorRT-LLM v1.2.1): `index.toml` names each with its upstream paths and line ranges, the files are kept
@@ -78,6 +182,18 @@ single_stream's 30 s at concurrency 1 held 14 requests, so its "p99" was the slo
 26.7%). The bands and the performance reference are measured again after this (`lab.validate`) and only then written
 to the ledger; the two calibrations' raw results are in the store (`archive/calib-20261028-*`). Amends 2026-10-28
 (minimal gates) and 2026-10-18 (short gates).
+
+## 2026-10-28 — Saturated bisects its concurrency; a searched band is never below the search's resolution
+`saturated` doubles concurrency as before, then bisects between the last level that meets the limits and the lowest
+that does not, to the regime's band (else 10%); `lab.validate` runs its searches to 5% (`RESOLUTION_PCT`) and never
+reports a searched regime's band below that. Why: the first calibration on fixed lengths (2026-10-28, H200 spot)
+gave saturated a 53% band (5.37, 9.19, 8.65 req/s) because 256 sat on the 2 s TTFT limit (p99 1.0-2.09 s) and one
+failure there dropped the result to 128; long_prompt read 80, 80, 80 (a 0% band) because every search stopped on
+the same bisection point. Rerun with the fix: saturated 8.57, 10.48, 10.72 (23.7%), long_prompt 83.3, 83.3, 70.8
+(18.2%), single_stream 5.0, 4.7, 3.8 ms (26.7%). Not adopted as bands: the first saturated run after a launch reads
+low in every launch measured (5.37 vs 8.74 on the same seed in one launch), and single_stream's p99 is over 14
+requests at `min`. The raw results are archived in the store, not merged into the ledger. Amends 2026-10-18
+(short gates: searches resolved to the band).
 
 ## 2026-10-28 — Everything from the InferenceBench era is removed
 `logs/`, the InferenceBench diagnostics (`assertions`, `blame`, `claims_audit`, `exploration`, `inject`, `noise`),

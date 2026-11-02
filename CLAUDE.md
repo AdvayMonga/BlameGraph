@@ -138,7 +138,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
 - `lab/validate.py` — `python -m lab.validate --target T`: serves the target's reference and writes its outputs, judges
   each `[validation]` good/bad launch (good must pass, bad must fail: the gate separates on *this* model and GPU), and
   measures each regime's run-to-run band from repeated runs of the engine into `noise` ledger records tagged with
-  its commit (which `submit` reads for runs on that base commit only). Exit 0 only if both hold. Needs a GPU for a real target; tested on fakes. `lab/LEDGER.md` is the
+  its commit (which `submit` reads for runs on that base commit only), its load searches resolved to
+  `RESOLUTION_PCT` (5%), below which a searched regime's band is never reported. Exit 0 only if both hold. Needs a GPU for a real target; tested on fakes. `lab/LEDGER.md` is the
   record-format spec: the environment's public interface.
 - `lab/RUNTIME.md` — design (2026-10-08): controller (laptop: ledger, referee, secrets) and worker (GPU VM: jails,
   clients, profilers) behind a job interface; trust zones and rules; why srt cannot jail GPU code on Linux.
@@ -168,7 +169,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   record's per-turn `expected_turn_output_tokens`) from a served reference, both splits, resuming from a log in
   `data/`; a new version whose manifest `prompts_version` stays the held-out guard's key (`Manifest.budget_key`); the
   provenance test rebuilds and applies them; run 2026-10-27 against the target's reference (vLLM 0.32.0 bf16, batch
-  invariant, H200): version `7bfae7f7…`, 16,929 answers, p50 525-1,072 tokens per class, ~1% at the 2,048 cap. The run's base cache is per corpus version. Since 2026-10-09 (version
+  invariant, H200): version `7bfae7f7…`, 16,929 answers, p50 525-1,072 tokens per class, ~1% at the 2,048 cap; 300
+  sampled jobs re-measured on the reference 2026-10-28 all came back the same length. The run's base cache is per corpus version. Since 2026-10-09 (version
   `131149…`) the held-out traces and the build seed (`corpus/.seed`, which reproduces them) are gitignored and live in
   the store (`python -m store pull --corpus`); the previous version's held-out split was public in git.
 - `lab/search.py` — the `search` tool (2026-10-15): one document per `hypothesis` record across every run, with its
@@ -180,7 +182,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   (fp8 -> quantization).
 - `store/` — the data store (2026-10-09; bucket `bg-data`, credentials in `.env`: `LAB_STORE`, `LAB_STORE_ENDPOINT`,
   `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`). `remote.py` (`LAB_STORE` = `s3://<bucket>` with `LAB_STORE_ENDPOINT` for
-  Cloudflare R2, or a directory; write-once keys), `sync.py` (`push`/`pull`: ledger as byte-range segments, blobs,
+  Cloudflare R2, or a directory; write-once keys), `sync.py` (`push`/`pull`: ledger as byte-range segments, blobs
+  (once stored, a blob's trace.json is deleted locally, with its copies in `lab/runs/*/workspace/lab/runs/`),
   submit's held-out passive data, held-out traces + seed, `archive` for
   anything else; zstd, `heldout/` prefix for held-out material), `index.py` (DuckDB tables rebuilt from the ledger and
   blobs: records, regimes, heldout_aggregates, noise, client_rows, engine_rows, device_samples, kernels, ops;
@@ -234,8 +237,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `silu_mul`, `topk_softmax` = its fused kernels in `models/fused.py`, references from its own eager paths, the start
   that module with its kernels module imported directly (`Task.start_edits`: the screen refuses its importlib/getattr); prefill
   attention has no task: `sdpa_prefill` takes the backend's paged context, not tensors),
-  `kernels/shapes.py` (shapes and call counts from captures; held-out = whole regions above the 80th percentile on the
-  task's axes, never random samples; `ints_from_captures` keeps each shape's captured int args, e.g. real sequence
+  `kernels/shapes.py` (shapes and call counts from captures; held-out = a whole band of each held-out axis, above its 60th and up to its 80th percentile by calls, never
+  the axis's largest value and never random samples (decided 2026-11-02); `ints_from_captures` keeps each shape's captured int args, e.g. real sequence
   lengths, which `Task.with_ints` uses for checking and timing in place of synthetic ones), `kernels/evolve/` (the layer-1 generator, a replication of OpenEvolve 0.4.0 =
   open AlphaEvolve: `python -m kernels.evolve run|gate|split`; the starting program is the engine's kernel module;
   each run appends one `kernels` ledger record (every candidate's seen-shape metrics and lineage, OpenEvolve's
@@ -248,14 +251,17 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   CUDA C++ build for the GPU's architecture from the config's `arch`, each built kernel's registers, stack, shared and
   local memory from cuobjdump as `compile_report`; only a failed build drops a program, spills are facts, an import
   that needs a device is inconclusive; Triton kernels build on first call, so not here), then a two-stage cascade, each stage a fresh jailed process (`kernels.evolve.jailed`: the jail gets the candidate, its
-  config and a copied harness, never this repo; `core.judge`: stage 1 = two shapes, one seed; stage 2 = the full
-  check on seen shapes + paired timing against the baseline (`kernels.time_pair`: same inputs, random order per
+  config and a copied harness, never this repo; `core.judge`: stage 1 = two shapes, one seed; stage 2 = correctness
+  on every seen shape (one seed, plus memoization, non-finite inputs, inputs unchanged, aliasing) + paired timing against
+  the baseline, and only in the gate (config `full`, or held-out shapes given) the full check: three seeds x 3 repeats, edge shapes and
+  layouts, value scales, the baseline's error, peak memory (decided 2026-11-01) (`kernels.time_pair`: same inputs, random order per
   pair; a task whose callers replay it in CUDA graphs, `Task.graphs`, e.g. `paged_decode`, is captured and timed as a
   graph replay behind a GPU spin so its launch is not timed, and a kernel that cannot be captured scores 0; the
   timed calls' outputs are checked against the reference too, so a kernel that does less only when timed scores 0; every
   plain check case's and timed call's outputs are verified again outside the jail by a process that never loads the
   candidate, `kernels/evolve/verify.py`, gate `verified_outside`, which requires every record the config implies:
-  each seen and held-out shape x dtype x seed, each value scale, each timed buffer; the result is the one stdout line
+  each seen shape x dtype at seed 0 (the gate, `full`: each seen and held-out shape x dtype x seed 0-2 and each value scale),
+  each timed buffer; the result is the one stdout line
   carrying a per-judgment key that core reads and removes before the candidate loads; between judgments only torch's
   build files survive in a program's dir, and the gate has its own), score = call-weighted geometric-mean speedup, a shape counting 1.0 when the middle half of its paired ratios
   includes 1; at the end the top candidates are re-judged 3x and the highest median is promoted, `run --retime`); a program may build CUDA C++ at import with
@@ -296,14 +302,13 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   whose driver had them open: the earlier refusals, ERR_NVGPUCTRPERM, were on hosts with them closed, which
   `vm-setup.sh` never opened because it grepped the module option's name, not the driver's `RmProfilingAdminOnly`; a
   run stops asking after the first refusal); launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen by a measured grid
-  search before every full exam (decided 2026-10-27; `kernels/search/tune.py` `tuned`,
-  `Funnel.measure`, `cascade(tuned=True)`; `--tune-points` (8), 0: off): the evaluator's tune stage (jailed stage 6;
-  `core._tune`) loads each point with CONFIG rewritten, checks it on the most-called
-  shape and times it on every seen shape, and the
-  program is measured and kept with the fastest point written in; where different points
-  win in different size regions, a dispatcher between `# TUNED-DISPATCH-START/END` picks CONFIG per call from the
-  call's size (`Task.size_expr`, tensor shapes only, so CUDA graphs bake it per captured size), removed (`tune.strip`)
-  before the grid is tuned again; the root program too; each point's score is a fact in the prompt; re-timing and the gate measure the tuned program as it is; the prompt states the best program's % of its call-weighted roofline bound as a fact, and with
+  search after the search, on each of the `--retime` (4) top programs before it is re-timed (decided 2026-11-01; during
+  the search programs are measured as written; `kernels/search/tune.py` `tuned`, `run.retime(tune=)`; `--tune-points`
+  (8), 0: off): the evaluator's tune stage (jailed stage 6; `core._tune`) loads each point with CONFIG rewritten,
+  checks it on the most-called shape and times it on every seen shape, and the program is re-timed with the fastest
+  point written in; where different points win in different size regions, a dispatcher between
+  `# TUNED-DISPATCH-START/END` picks CONFIG per call from the call's size (`Task.size_expr`, tensor shapes only, so
+  CUDA graphs bake it per captured size); the gate measures the tuned program as it is; the prompt states the best program's % of its call-weighted roofline bound as a fact, and with
   `--mcts` the search stops after `--patience` (16) judged programs with no new best (MANTIS; no roofline stop since
   2026-10-27);
   each timed shape carries its bound type (memory or compute) and the achieved % of peak bandwidth and of peak FLOPs,
@@ -322,7 +327,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   kernels no task covers, by share: the facts for choosing the next task). `lab/capture.py` + `lab.profile --capture MODULE:FUNCTION` (the `profile` tool's `capture`): every
   call's argument shapes and small int tensors, the first call per shape kept whole as real inputs.
 - `kernels/regions.py` — regions (decided 2026-10-22/23): any run of consecutive decode stations of the engine as a
-  kernel task with a generated harness: `Station(name, reads, writes, fn)`; `interface` (inputs read before written,
+  kernel task with a generated harness (since 2026-11-02 prefill stations too: a region whose first station starts
+  "p_" binds the engine's `PREFILL`, `station_set`; its held-out axis is the tokens of the packed wave; a read the
+  engine passes as None in the captured calls, e.g. a packed wave's `tokens`, is a constant None and the calls where it
+  is a tensor are left out; a shipped override runs the engine's own stations on such a call): `Station(name, reads, writes, fn)`; `interface` (inputs read before written,
   outputs read after the region or `live`), the stations as the baseline (`Task.baseline_fn`), an fp32 run as the
   reference, `bytes_moved` (fused vs one-by-one), and the error budget: `Task.error_budget` (2) lets each element differ from the reference by
   that many times the baseline's own error there, on top of the dtype's tolerance (`check._compare(base=, k=)`), in the
@@ -413,9 +421,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   do not apply, repeat a program, or change the start within cosine `NOVEL` (0.95) of a program already written
   (fastembed on the changed lines, `near_duplicates`; ShinkaEvolve) are dropped, the no-GPU precheck (`--precheck`, default on) drops what fails to
   build and keeps the compiler's report on the program (the compiler slice of its children), stage 1 in `--parallel`
-  jails, and every correct program takes the full exam (tuned first) and joins the tree. A parent gets its ncu
-  counters (stage 3) when it is first chosen. Model calls run `--workers` (8) at a time, the first of each batch alone
-  so the rest read the prompt cache it writes (`kernels/search/llm.py`'s `CACHE_SPLIT`: the stable part of a prompt is
+  jails, and every correct program takes the full exam and joins the tree. A parent gets its ncu
+  counters (stage 3) when it is first chosen. Model calls run in waves of `--workers` (8), each call shown the changes earlier waves of the round proposed and
+  asked for a different one (`funnel.proposed`, decided 2026-11-01), the round's first call alone so the rest read
+  the prompt cache it writes (`kernels/search/llm.py`'s `CACHE_SPLIT`: the stable part of a prompt is
   sent as cached blocks); GPU timings run one at a time. Each hypothesis may predict ncu counter changes (`mechanism`),
   measured against the parent's. Every idea's fate goes to `hypotheses.jsonl` (each idea with its `parent_id`; the
   row's `parents` and `improved`), which the archive reads. `--facts FILE` adds facts to every prompt; the
@@ -454,7 +463,27 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   recombined to length: 0 of ~2,000 generated prompts per class equal a real one; KS on prompt tokens ≤ 0.02 and
   per-10 s arrival counts within a few % of the real class (`python -m regimes.synth compare`). Not yet compared
   against the real corpus on a GPU; until then bench/submit stay on the public corpus.
-- `regimes/` — load generation: drives a live OpenAI-compatible server the eight ways it gets used, client-side.
+- `regimes/arrivals.py` + `arrivals.json` — request timing fitted from real conversation traffic (2026-11-01):
+  BurstGPT_3's conversation log cut into sittings (a session's gap over 30 min ends one; the user returns as a resumed
+  sitting with that many turns of history), fitted on the seen weeks: counts of (first turn, turns) and gap quantiles
+  by transition index (buckets at 5, 10, 20, 40). `Model.schedule(rate, duration_s, seed)`: sittings start as
+  Poisson(rate) from -horizon (the p99.99 span of the model's own sittings, 23,049 s; a pre-roll sitting whose shape
+  cannot reach t=0 is skipped undrawn) so users are mid-conversation at t=0; load rises by raising the sitting
+  rate, which is what the data does (turns and gaps per sitting are the same at every hour of day, `seen_by_hour`).
+  `python -m regimes.arrivals fit|compare`: the fit carries the source's hash; compare puts the model beside the
+  held-out weeks (sitting-start CV and KS against exponential, request-count dispersion at 1/10/60 s per busy
+  window, KS real vs model for turns, first turn and gaps), numbers only. `workload.realistic` turns a schedule into
+  requests: each sitting draws a conversation of the pool with turns enough for its indices (else one of the longest,
+  the turns past its end not sent), turn j resends the history to the j-th user message at the reference's length for
+  it, every sitting salted. Regimes on it (2026-11-01): `realistic` (the corpus mix, the task's objective; headline
+  good req/s, `sittings_per_s` beside it), `long_prompt_short_output`, `shared_prefix_multi_turn` (sittings/s) and
+  `overload` (2x the sitting rate); `short_prompt_long_output` stays Poisson (single-turn by nature) and `bursty` the
+  real spike replay. `offline` = every record of every class at once, closed loop, output tokens/s, no limits
+  (MLPerf's Offline). `saturated` also reports `curve`: each probed level's output tokens/s beside 1 / median TPOT.
+  Every request is salted ("[k] " before the conversation's opening message; `Cycle`, `Once`, `realistic`), so no two
+  share a prefix except a conversation's turns and the shared system prompt (MLPerf's rule). Tests set
+  `suite.ARRIVALS` to `tests/fake_engine.fast_arrivals()`.
+- `regimes/` — load generation: drives a live OpenAI-compatible server the ten ways it gets used, client-side.
   `client.py` (one streamed chat request: TTFT from *scheduled* send to first real token, TPOT = (E2E − TTFT)/(n − 1),
   status ok / error (explicit 4xx or 503 rejection) / silent_drop / truncated / crash (other 5xx, no response,
   stream died); a one-token answer has no TPOT and never meets the limits; corpus headers X-Session-Id,
@@ -470,12 +499,14 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   process ran above 80% CPU; `--client-cpus` pins the client), `workload.py` (reads `corpus/` through `lab.corpus`'s verified loader — hashes checked, a changed trace
   refuses — plus Poisson, trace replay with speed-up and peak-window crop, multi-turn
   conversations rebuilt from stored histories under one shared system prompt; synthetic prompts when no corpus),
-  `suite.py` (the 8 regimes; probes ≥ `min_requests` (100) and tier length, capped at 4× the tier length, then a
-  confirmation at `final_s` backing off 15% up to 5 times; the load search stops below start/16; closed-loop
+  `suite.py` (the 10 regimes; probes ≥ `min_requests` (100) and tier length, capped at 4× the tier length, then a
+  confirmation at `final_s` backing off 15% up to 5 times; the load search stops below start/16; saturated doubles
+  concurrency, then bisects between the last passing and the lowest failing level to the band (else 10%); closed-loop
   schedules are generated lazily; before the first regime measured on a launch, `_warmup` serves the corpus mix closed
-  loop at `WARM_CONCURRENCY` (256) for a probe's length, unscored, because an engine's first load at a size runs slow
-  (2026-10-28: the first saturated level after a launch read up to 40% low); single_stream runs its final length and
-  at least `min_requests` requests (`run_closed(min_requests=)`: a p99 of 14 requests was the slowest of 14); shared-prefix runs score only the steady-state window; cold start launches a command with
+  loop at `WARM_CONCURRENCY` (256) for a probe's length in an order of its own, unscored, because an engine's first load
+  at a size runs slow (2026-10-28: the first saturated level after a launch read up to 40% low); single_stream runs its
+  final length and at least `min_requests` requests, never past `MAX_STRETCH` x the final (`run_closed(min_requests=,
+  max_s=)`: a p99 of 14 requests was the slowest of 14); shared-prefix runs score only the steady-state window; cold start launches a command with
   fresh VLLM/inductor/Triton cache dirs, polls until "17 + 25" is answered "42", then relaunches for the warm figure).
   Tiers: min (15 s probes, 30 s final; bursty cropped to its peak window like short), short (30 s probes, 60 s final),
   full (60 s probes, 600 s final). Probes must last well beyond the TTFT limit

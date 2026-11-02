@@ -35,7 +35,7 @@ def two_traffics(tmp):
     a, b = tmp / "a", tmp / "b"
     a.mkdir()
     b.mkdir()
-    return [captures(a, [(4, 64, 0, True)] * 3 + [(64, 64, 0, True)]), captures(b, [(16, 64, 0, True)])]
+    return [captures(a, [(4, 64, 0, True)] * 3 + [(32, 64, 0, True), (64, 64, 0, True)]), captures(b, [(16, 64, 0, True)])]
 
 
 def test_captures_pack_into_one_samples_dir_each_traffic_counted_apart(tmp_path, monkeypatch):
@@ -44,9 +44,10 @@ def test_captures_pack_into_one_samples_dir_each_traffic_counted_apart(tmp_path,
     caps = two_traffics(tmp_path)
     pack = pipeline.pack(caps, tmp_path / "pack")
     t = regions.from_engine("norm", "add", str(pack), str(held(tmp_path, regions).path), dtypes=(torch.float32,))
-    assert set(t.seen_default) == {(4, 64), (16, 64), (64, 64)}                # every traffic's samples, renamed
+    assert set(t.seen_default) == {(4, 64), (16, 64), (32, 64), (64, 64)}      # every traffic's samples, renamed
     traffic = sorted(pack.glob("traffic*/*/captures"))
-    assert len(traffic) == 2 and shapes.from_captures(t, traffic, equal=True) == {(4, 64): 3, (64, 64): 1, (16, 64): 4}
+    assert len(traffic) == 2 and shapes.from_captures(t, traffic, equal=True) == {(4, 64): 3, (32, 64): 1, (64, 64): 1,
+                                                                                  (16, 64): 5}
     x = t.make_inputs((16, 64), torch.float32, "cpu", torch.Generator().manual_seed(0))[0]
     assert torch.equal(x, torch.load(caps[1] / "samples" / "0.pt", weights_only=True)["reads"]["h"])
 
@@ -56,8 +57,8 @@ def test_the_hold_side_describes_a_region_from_its_samples_and_holder(tmp_path, 
     regions = engine(tmp_path, monkeypatch)
     pack = pipeline.pack(two_traffics(tmp_path), tmp_path / "pack")
     d = hold.describe("region:norm:add", pack, held(tmp_path, regions).path)
-    assert d["shapes"]["heldout"] == [[64, 64]] and d["shapes"]["heldout_axes"] == [0]
-    assert sorted(d["shapes"]["seen"]) == [[4, 64], [16, 64]] and d["stations"] == ["norm", "mm", "act", "add", "kv"]
+    assert d["shapes"]["heldout"] == [[32, 64]] and d["shapes"]["heldout_axes"] == [0]
+    assert sorted(d["shapes"]["seen"]) == [[4, 64], [16, 64], [64, 64]] and d["stations"] == ["norm", "mm", "act", "add", "kv"]
     assert "_CONST['w.mm_scale'] = None" in d["start"] and json.loads(json.dumps(d)) == d     # one JSON line
 
 

@@ -75,7 +75,8 @@ def headline(results: list[dict]) -> dict:
     out: dict = {}
     for r in results:
         h = {"objective": r["objective"], "value": r["value"], "better": r["better"], "valid": r["valid"],
-             "invalid_reasons": r["invalid_reasons"], **({"concurrency": r["concurrency"]} if r.get("concurrency") else {})}
+             "invalid_reasons": r["invalid_reasons"], **({"concurrency": r["concurrency"]} if r.get("concurrency") else {}),
+             **({"sittings_per_s": r["sittings_per_s"]} if r.get("sittings_per_s") else {})}
         if r.get("profile"):
             g = out.get(r["regime"])
             h.update(profile=r["profile"], general={"value": g["value"], "valid": g["valid"]} if g else None)
@@ -98,12 +99,13 @@ def noise_band_pct(regime: str, t: target.Target | None = None, root: Path = led
     return None if d is None else d.get("band_pct")
 
 
-LOAD_SEARCHED = ("bursty", "long_prompt_short_output", "short_prompt_long_output", "shared_prefix_multi_turn")
+LOAD_SEARCHED = ("realistic", "bursty", "long_prompt_short_output", "short_prompt_long_output",
+                 "shared_prefix_multi_turn")
 
 
 def search_hints(base: dict) -> dict:
-    """Where each of the base's valid searches ended (saturated: its concurrency; a load search: its load), for a
-    candidate's search to start there."""
+    """Where each of the base's valid searches ended (saturated: its concurrency; a load search: its load, in
+    sittings/s where the regime searches sittings), for a candidate's search to start there."""
     out = {}
     for n, h in base.items():
         if not h.get("valid") or h.get("value") is None:
@@ -111,7 +113,7 @@ def search_hints(base: dict) -> dict:
         if h.get("concurrency"):
             out[n] = {"concurrency": h["concurrency"]}
         elif n in LOAD_SEARCHED:
-            out[n] = {"load": h["value"]}
+            out[n] = {"load": h.get("sittings_per_s") or h["value"]}
     return out
 
 
@@ -151,6 +153,8 @@ def heldout_context(seen_cal: dict, base: dict, delta: float | None, better: str
 
 def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
     """What the referee measures against: the parameters the agent cannot read off its ledger. Facts, not advice."""
+    from lab import validate                        # validate imports this module
+
     from regimes import suite
     from regimes.workload import corpus_version
     facts = {
@@ -163,7 +167,8 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
                         "tasks": list(t.tasks)},
         "noise_bands_pct": {n: noise_band_pct(n, t, ledger_root or ledger.ROOT) for n in suite.REGIMES},
         "noise_bands_measured_on": "the base commit's engine with its general config, repeated unchanged runs "
-                                   "(lab.validate, the latest at any engine commit on this corpus version); submit applies them "
+                                   "(lab.validate, the latest at any engine commit on this corpus version; a searched regime's band is at "
+                                   f"least the search's resolution, {validate.RESOLUTION_PCT}%); submit applies them "
                                    "to every candidate and "
                                    "every launch profile; None where no band was measured for this target",
         "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,

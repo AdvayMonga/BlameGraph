@@ -120,6 +120,7 @@ def test_captures_follow_the_scored_regimes_weigh_each_the_same_and_are_reused(t
 
     def profile(t, a):
         made.append(a["corpus_class"])
+        assert (a["requests"], a["concurrency"], a["max_tokens"]) == (768, 256, pipeline.CAPTURE_TOKENS)   # steady
         b = tmp_path / f"bundle-{len(made)}"
         (b / "captures").mkdir(parents=True)
         return b

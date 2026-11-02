@@ -26,19 +26,18 @@ from kernels.evolve import evaluator
 from kernels.library import block as other_implementations
 from kernels.evolve.run import (_shapes, _target_tolerances, load_task, prepare, record, region_args, retime,
                                setting, system_message, task_args, tolerances)
-from kernels.search import detect
+from kernels.search import detect, tune
 from kernels.search.llm import Claude
 from kernels.search.loop import cascade, search
 from kernels.search.tree import UCT_C
 
 TUNE_FACT = ("A program may define, at module level, `CONFIG` (a dict of the launch parameters its kernel uses) and "
-             "`TUNABLES` (for each CONFIG key, a list of values). Before a program's full exam, up to {points} points "
-             "of that grid (its current CONFIG first, the rest a seeded sample) are each loaded with CONFIG rewritten "
-             "in its source, checked on the most-called seen shape and timed on every seen shape. The program is "
-             "measured with the fastest point written into CONFIG; where different points are fastest in different "
-             "size regions, a dispatcher (between `# TUNED-DISPATCH-START` and `# TUNED-DISPATCH-END`) sets CONFIG per "
-             "call from the call's size instead, and is removed before the grid is tuned again. Children start from "
-             "the tuned program.")
+             "`TUNABLES` (for each CONFIG key, a list of values). After the search, each of the {top} programs with the highest "
+             "scores has up to {points} points of that grid (its current CONFIG first, the rest a seeded sample) loaded "
+             "with CONFIG rewritten in its source, checked on the most-called seen shape and timed on every seen shape, "
+             "and is re-judged with the fastest point written into CONFIG; where different points are fastest in "
+             "different size regions, a dispatcher (between `# TUNED-DISPATCH-START` and `# TUNED-DISPATCH-END`) sets "
+             "CONFIG per call from the call's size instead. During the search programs are measured as written.")
 
 
 def _blob(path: Path, root: str | None = None) -> str | None:
@@ -72,7 +71,7 @@ def _funnel(a, task, review):
     mix = (review,) * (a.second_judge_share - 1) + (second,) if second and a.second_judge_share > 1 else ()
     return Funnel(Models(review, mix), staged(evaluator.judge_stage), task.name,
                   a.per_call, a.parallel, a.ncu, a.precheck,
-                  workers=a.workers, tune=bool(a.tune_points), size_expr=task.size_expr, library=library,
+                  workers=a.workers, library=library,
                   embedder=FastEmbed(ledger.ROOT / "index" / "models"))
 
 
@@ -100,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--detector-model", default="claude-opus-5-5",
                     help="reads each would-be winner for gaming before promotion; `none`: off")
     ap.add_argument("--tune-points", type=int, default=8,
-                    help="grid points of a program's TUNABLES timed before each of its measurements; 0: none")
+                    help="grid points of TUNABLES timed for each of the --retime programs after the search; 0: none")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--uct-c", type=float, default=UCT_C,
                     help="UCT exploration constant on rewards in [0, 1] (KernelPro's sqrt 2 is on ln speedup)")
@@ -135,9 +134,9 @@ def main(argv: list[str] | None = None) -> int:
     if a.tune_points:                            # the evaluator's tune stage reads its grid size from the config
         cfg = json.loads(Path(os.environ["KERNEL_EVAL_CONFIG"]).read_text())
         Path(os.environ["KERNEL_EVAL_CONFIG"]).write_text(json.dumps({**cfg, "tune_points": a.tune_points}))
-    judge = cascade(evaluator.judge_stage, counters=a.ncu, tuned=bool(a.tune_points), size_expr=task.size_expr)
+    judge = cascade(evaluator.judge_stage, counters=a.ncu)
     system = (system_message(task) + "\n\n" + setting(task, sets, a.device, tol)
-              + ("\n\n" + TUNE_FACT.format(points=a.tune_points) if a.tune_points else "")
+              + ("\n\n" + TUNE_FACT.format(top=a.retime, points=a.tune_points) if a.tune_points and a.retime else "")
               + ("\n\n" + Path(a.facts).read_text().strip() if a.facts else "")
               + ("\n\n" + other if (other := other_implementations(task.name)) else ""))
     fun = _funnel(a, task, review) if review is not None else None
@@ -150,7 +149,9 @@ def main(argv: list[str] | None = None) -> int:
                             patience=a.patience or None, uct_c=a.uct_c, funnel=fun)
     spent: list = []
     exclude = detect.detector(Claude(a.detector_model, a.effort), spent) if a.detector_model != "none" else None
-    code, metrics, retimed = (retime(out / "trace.jsonl", a.retime, exclude=exclude) if a.retime
+    tuned = (lambda c: tune.tuned(staged(evaluator.judge_stage), c, quick=False, size_expr=task.size_expr)) \
+        if a.tune_points else None
+    code, metrics, retimed = (retime(out / "trace.jsonl", a.retime, exclude=exclude, tune=tuned) if a.retime
                               else (None, None, []))
     cost["usd"] = round(cost["usd"] + sum(spent), 4)
     cost["model_calls"] += len(spent)

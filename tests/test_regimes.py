@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from canaries.cheat_proxy import serve  # noqa: E402
-from fake_engine import make_server, spawn  # noqa: E402
+from fake_engine import fast_arrivals, make_server, spawn  # noqa: E402
 from regimes import runner, suite, workload as W  # noqa: E402
 from regimes.client import Request, send, wall_clock  # noqa: E402
 from regimes.runner import Limits, find_goodput, run_open, summarize  # noqa: E402
@@ -104,23 +104,13 @@ def test_workload_builders():
                         {"role": "user", "content": "e"}]}
     conv = W.conversations([rec])[0]
     assert [len(t["messages"]) for t in conv] == [1, 3, 5] and all(t["messages"][-1]["role"] == "user" for t in conv)
-    reqs = W.sessions([rec], rate=10.0, duration_s=1.0, seed=0, think_s=2.0, system="SYS")
-    assert reqs and reqs[0].messages[0] == {"role": "system", "content": "SYS"}
-    s0 = [r for r in reqs if r.session_id == reqs[0].session_id]
-    assert [round(r.at_s - s0[0].at_s, 6) for r in s0] == [0.0, 2.0, 4.0]
     trace = [{"id": f"t{k}", "prompt": "p", "arrival_s": 100.0 + k, "max_tokens": 8} for k in range(10)]
     assert [r.at_s for r in W.scaled(trace)] == [float(k) for k in range(10)]
-    first = lambda q: q.messages[0]["content"]                       # a reused record shares no prefix
-    assert [first(q) for q in W.poisson(trace[:1], 50.0, 1.0, seed=0)][:3] == ["p", "[1] p", "[2] p"]
-    assert {first(q) for q in W.scaled(trace, 3.0)} == {"p", "[1] p", "[2] p"}
+    first = lambda q: q.messages[0]["content"]                       # every send is salted: no two share a prefix
+    assert [first(q) for q in W.poisson(trace[:1], 50.0, 1.0, seed=0)][:3] == ["[1] p", "[2] p", "[3] p"]
+    assert {first(q) for q in W.scaled(trace, 3.0)} == {"[1] p", "[2] p", "[3] p"}
     cyc = iter(W.Cycle(trace[:2]))
-    assert [first(next(cyc)) for _ in range(5)] == ["p", "p", "[1] p", "[1] p", "[2] p"]
-    turns = W.sessions([rec], rate=20.0, duration_s=1.0, seed=0, think_s=2.0, system="SYS")
-    by = {}
-    for q in turns:
-        by.setdefault(q.session_id, []).append(q.messages[1]["content"])
-    assert len({v[0] for v in by.values()}) == len(by) > 2 and "a" in {v[0] for v in by.values()}
-    assert all(len(set(v)) == 1 for v in by.values())                # one salt for every turn of a session
+    assert [first(next(cyc)) for _ in range(5)] == ["[1] p", "[2] p", "[3] p", "[4] p", "[5] p"]
     double = W.scaled(trace, 2.0)
     assert len(double) == 20 and len({r.id for r in double}) == 20 and max(r.at_s for r in double) < 10.0
     assert all(sum(k <= r.at_s < k + 1 for r in double) == 2 for k in range(10))    # the rate doubles in every gap
@@ -149,9 +139,9 @@ def test_workload_builders():
 
 def test_every_regime_runs_on_a_fake_engine():
     proc, url = spawn(slots=2, token_s=0.005, out_tokens=10)       # ~40 req/s capacity
-    saved, think, lag = dict(suite.TIERS["short"]), suite.THINK_S, runner.MAX_CLIENT_LAG_S
+    saved, think, lag = dict(suite.TIERS["short"]), suite.ARRIVALS, runner.MAX_CLIENT_LAG_S
     suite.TIERS["short"].update(probe_s=1.0, final_s=2.0)
-    suite.THINK_S = 0.3
+    suite.ARRIVALS = fast_arrivals()
     runner.MAX_CLIENT_LAG_S = 0.05      # wiring test; client precision is test_open_loop_keeps_its_schedule's job
     try:
         tight = Limits(ttft_s=0.25, tpot_s=0.05)                  # 1 s probes only see overload against a tight TTFT
@@ -162,7 +152,7 @@ def test_every_regime_runs_on_a_fake_engine():
             assert res["value"] is not None, (name, res)
     finally:
         suite.TIERS["short"].update(saved)
-        suite.THINK_S, runner.MAX_CLIENT_LAG_S = think, lag
+        suite.ARRIVALS, runner.MAX_CLIENT_LAG_S = think, lag
         proc.kill()
 
 
@@ -176,9 +166,9 @@ def test_every_regime_runs_from_a_workload_file():
     path = Path(tempfile.mkdtemp()) / "w.jsonl"
     path.write_text("".join(json.dumps(r) + "\n" for r in recs))
     proc, url = spawn(slots=2, token_s=0.005, out_tokens=10)
-    saved, think, lag = dict(suite.TIERS["short"]), suite.THINK_S, runner.MAX_CLIENT_LAG_S
+    saved, think, lag = dict(suite.TIERS["short"]), suite.ARRIVALS, runner.MAX_CLIENT_LAG_S
     suite.TIERS["short"].update(probe_s=1.0, final_s=2.0)
-    suite.THINK_S = 0.3
+    suite.ARRIVALS = fast_arrivals()
     runner.MAX_CLIENT_LAG_S = 0.05
     try:
         tight = Limits(ttft_s=0.25, tpot_s=0.05)
@@ -196,7 +186,7 @@ def test_every_regime_runs_from_a_workload_file():
         assert not res["valid"] and "multi-turn" in res["invalid_reasons"][0], res
     finally:
         suite.TIERS["short"].update(saved)
-        suite.THINK_S, runner.MAX_CLIENT_LAG_S = think, lag
+        suite.ARRIVALS, runner.MAX_CLIENT_LAG_S = think, lag
         proc.kill()
 
 

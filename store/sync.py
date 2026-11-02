@@ -2,7 +2,8 @@
 are never rewritten:
 
   ledger/<start>-<end>.jsonl.zst      byte range [start, end) of ledger.jsonl, whole lines only
-  blobs/<name>.zst | .tar.zst         one ledger blob (file | directory), named as in the ledger
+  blobs/<name>.zst | .tar.zst         one ledger blob (file | directory), named as in the ledger; once stored, its
+                                      trace.json is removed locally (`pull --blobs` restores a blob dir only if absent)
   archive/<name>-<hash>.tar.zst       anything else kept (GPU run reports, correctness outputs)
   heldout/guard/<version>/state-<n>.json   the holdout guard's state after its n-th query (validity/holdout.py
                                       writes these itself, write-once; nothing here touches them)
@@ -144,6 +145,13 @@ def pull_ledger(root: Path, remote: Remote) -> int:
     return added
 
 
+def _drop_trace(blob: Path, runs: Path | None) -> None:
+    """A stored blob's trace.json (GBs each) is kept only in the store: removed from it and its workspace copies."""
+    copies = Path(runs).glob(f"*/workspace/lab/runs/{blob.name}/trace.json") if runs else []
+    for t in [blob / "trace.json", *copies]:
+        t.unlink(missing_ok=True)
+
+
 def push(root: Path, remote: Remote, runs: Path | None = None, corpus: Path | None = None) -> dict:
     """Ledger, blobs, held-out passive data and held-out traces; returns what went up."""
     root = Path(root)
@@ -152,6 +160,8 @@ def push(root: Path, remote: Remote, runs: Path | None = None, corpus: Path | No
     for p in sorted((root / "blobs").iterdir()) if (root / "blobs").is_dir() else []:
         if ".tmp-" not in p.name:
             out["blobs"] += _put(remote, blob_key(p), p, have)
+            if p.is_dir():
+                _drop_trace(p, runs)
     if runs and Path(runs).is_dir():
         have = set(remote.keys("heldout/private/"))
         for d in sorted(Path(runs).glob("*/heldout-private/*")):
