@@ -3,6 +3,13 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-02 — Decode regions are timed as CUDA-graph replays
+A decode region's task has `graphs=True`, like the hand-written decode tasks: its baseline and programs are captured
+and timed as a graph replay, so host time (the Python station chain, launch overhead) is not timed; prefill regions
+stay eager, as the engine runs them. Why: the first region search (decode attention, lab-gpu-11, 2026-11-02) reached
+2.0x in generation 0 at 1.3% of roofline by removing ~85 us of host overhead per call that the engine never pays,
+since it replays its decode step as a graph.
+
 ## 2026-11-02 — Captures at the regime's steady state; held out is a middle band, the largest shapes stay seen
 A kernel capture (`kernels/pipeline.captures`, `lab.profile --concurrency`) runs closed loop: the regime's load in
 flight (`n`), each request replaced by the next when it ends, over 3x as many requests (all of a class with fewer, a

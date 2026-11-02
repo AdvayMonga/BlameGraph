@@ -337,6 +337,7 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
                 watch=(ENGINE, *_importable(STATION_MODULES)), entry=f"{ENGINE}:{which}", capture_fn=fn,
                 seen_default=tuple(by_shape), constants=consts, reference_stations=reference_stations(which),
                 heldout_axes=_heldout_axes(reads, ins, which == "PREFILL") if calls else (), start_program=start,
+                graphs=which == "DECODE",         # the engine replays its decode step as a CUDA graph: no host time
                 edge_shapes=lambda shape: [])     # inputs come from captures only: no synthetic edge shapes
 
 
