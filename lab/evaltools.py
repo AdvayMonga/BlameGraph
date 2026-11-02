@@ -151,6 +151,8 @@ def heldout_context(seen_cal: dict, base: dict, delta: float | None, better: str
 
 def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
     """What the referee measures against: the parameters the agent cannot read off its ledger. Facts, not advice."""
+    from lab import validate                        # validate imports this module
+
     from regimes import suite
     from regimes.workload import corpus_version
     facts = {
@@ -163,7 +165,8 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
                         "tasks": list(t.tasks)},
         "noise_bands_pct": {n: noise_band_pct(n, t, ledger_root or ledger.ROOT) for n in suite.REGIMES},
         "noise_bands_measured_on": "the base commit's engine with its general config, repeated unchanged runs "
-                                   "(lab.validate, the latest at any engine commit on this corpus version); submit applies them "
+                                   "(lab.validate, the latest at any engine commit on this corpus version; a searched regime's band is at "
+                                   f"least the search's resolution, {validate.RESOLUTION_PCT}%); submit applies them "
                                    "to every candidate and "
                                    "every launch profile; None where no band was measured for this target",
         "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,

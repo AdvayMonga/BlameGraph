@@ -3,6 +3,26 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-01 — Request timing fitted from real conversation traffic; load rises by adding users
+The open-loop regimes get their timing from a model fitted to BurstGPT_3's conversation log (`regimes/arrivals.py`):
+sittings start as a Poisson process at the load's rate, each a run of turns of one conversation (a gap over 30 min
+ends a sitting; 12% of gaps; the user returns as a resumed sitting with history), the gap to the next turn drawn from
+the real gaps by transition index, pooled in buckets at 5, 10, 20 and 40 turns (median 79 s after a first turn,
+106-121 s over the next four, 66 s past 40: long conversations have short gaps; 42% of sittings are one turn), and
+a run starts with users already mid-conversation: the pre-roll reaches back to the p99.99 span of the model's own
+sittings (23,000 s), so all but ~0.2% of turns are there from the first second. Failed requests (0 prompt tokens,
+0.8% of rows) count as turns here, since the user made them; the corpus drops them. Load rises by raising the
+sitting rate and nothing else. Why (the user): the most realistic measurement. The evidence, from the held-out
+weeks (222 busy 20-minute windows): sitting starts are Poisson within a window (inter-arrival CV 0.96 real, 0.93
+model; KS against exponential p 0.70 and 0.75, the rate estimated from the same sample, so a side-by-side, not a
+calibrated p; request-count variance/mean 0.99/0.98/1.07 real against 0.99/0.98/1.07 model at 1/10/60 s), and busy hours have more sittings with the same turns and gaps per sitting
+(turns 2.4-3.5 and median gap 84-155 s at every hour of day while starts per hour range 91-3,978). So within a run
+real conversation traffic is not burstier than Poisson; what the model adds is the multi-turn structure (two thirds
+of requests continue a conversation, with real pauses), which the fixed 3 s think time and per-request Poisson never
+had. Frontier benchmark clients offer Poisson or gamma gaps and a think time the user sets (vLLM, AIPerf, GuideLLM);
+none fits real traffic. This entry adds the model and its comparison; wiring the regimes to it follows. Replaces,
+once wired, Poisson requests and `sessions`' fixed think time (2026-10-02).
+
 ## 2026-11-02 — Captures at the regime's steady state; held out is a middle band, the largest shapes stay seen
 A kernel capture (`kernels/pipeline.captures`, `lab.profile --concurrency`) runs closed loop: the regime's load in
 flight (`n`), each request replaced by the next when it ends, over 3x as many requests (all of a class with fewer, a
@@ -127,25 +147,17 @@ with an idea table, immigrants and an extra judge call, so its loss did not meas
 extra model calls. Arm `search-untyped` keeps the search before this (refine only); `--crossover`/`search-crossover`
 are replaced by the crossover type. Found the same day: no search so far passed `--archive`, so none read past ideas.
 
-## 2026-11-01 — Request timing fitted from real conversation traffic; load rises by adding users
-The open-loop regimes get their timing from a model fitted to BurstGPT_3's conversation log (`regimes/arrivals.py`):
-sittings start as a Poisson process at the load's rate, each a run of turns of one conversation (a gap over 30 min
-ends a sitting; 12% of gaps; the user returns as a resumed sitting with history), the gap to the next turn drawn from
-the real gaps by transition index, pooled in buckets at 5, 10, 20 and 40 turns (median 79 s after a first turn,
-106-121 s over the next four, 66 s past 40: long conversations have short gaps; 42% of sittings are one turn), and
-a run starts with users already mid-conversation: the pre-roll reaches back to the p99.99 span of the model's own
-sittings (23,000 s), so all but ~0.2% of turns are there from the first second. Failed requests (0 prompt tokens,
-0.8% of rows) count as turns here, since the user made them; the corpus drops them. Load rises by raising the
-sitting rate and nothing else. Why (the user): the most realistic measurement. The evidence, from the held-out
-weeks (222 busy 20-minute windows): sitting starts are Poisson within a window (inter-arrival CV 0.96 real, 0.93
-model; KS against exponential p 0.70 and 0.75, the rate estimated from the same sample, so a side-by-side, not a
-calibrated p; request-count variance/mean 0.99/0.98/1.07 real against 0.99/0.98/1.07 model at 1/10/60 s), and busy hours have more sittings with the same turns and gaps per sitting
-(turns 2.4-3.5 and median gap 84-155 s at every hour of day while starts per hour range 91-3,978). So within a run
-real conversation traffic is not burstier than Poisson; what the model adds is the multi-turn structure (two thirds
-of requests continue a conversation, with real pauses), which the fixed 3 s think time and per-request Poisson never
-had. Frontier benchmark clients offer Poisson or gamma gaps and a think time the user sets (vLLM, AIPerf, GuideLLM);
-none fits real traffic. This entry adds the model and its comparison; wiring the regimes to it follows. Replaces,
-once wired, Poisson requests and `sessions`' fixed think time (2026-10-02).
+## 2026-10-28 — Saturated bisects its concurrency; a searched band is never below the search's resolution
+`saturated` doubles concurrency as before, then bisects between the last level that meets the limits and the lowest
+that does not, to the regime's band (else 10%); `lab.validate` runs its searches to 5% (`RESOLUTION_PCT`) and never
+reports a searched regime's band below that. Why: the first calibration on fixed lengths (2026-10-28, H200 spot)
+gave saturated a 53% band (5.37, 9.19, 8.65 req/s) because 256 sat on the 2 s TTFT limit (p99 1.0-2.09 s) and one
+failure there dropped the result to 128; long_prompt read 80, 80, 80 (a 0% band) because every search stopped on
+the same bisection point. Rerun with the fix: saturated 8.57, 10.48, 10.72 (23.7%), long_prompt 83.3, 83.3, 70.8
+(18.2%), single_stream 5.0, 4.7, 3.8 ms (26.7%). Not adopted as bands: the first saturated run after a launch reads
+low in every launch measured (5.37 vs 8.74 on the same seed in one launch), and single_stream's p99 is over 14
+requests at `min`. The raw results are archived in the store, not merged into the ledger. Amends 2026-10-18
+(short gates: searches resolved to the band).
 
 ## 2026-10-28 — Everything from the InferenceBench era is removed
 `logs/`, the InferenceBench diagnostics (`assertions`, `blame`, `claims_audit`, `exploration`, `inject`, `noise`),
