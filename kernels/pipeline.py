@@ -236,7 +236,7 @@ def gate(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict
         sets["ints"] = shapes_mod.ints_from_captures(task, caps)
     cfg = {"task": task.name, "seen": [list(s) for s in sets["seen"]], "heldout": [list(s) for s in sets["heldout"]],
            "weights": sets.get("calls"), "device": "cuda", "tolerances": tolerances(_target_tolerances()),
-           "ints": _ints(sets, ("seen", "heldout")), "options": options_from_target(task),
+           "ints": _ints(sets, ("seen", "heldout")), "options": options_from_target(task), "full": True,
            **({"samples": held["samples"], "shared_weights": held["holder"]} if held else {})}
     path = Path(out) / "gate_config.json"
     path.write_text(json.dumps(cfg))

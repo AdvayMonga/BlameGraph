@@ -249,14 +249,17 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   CUDA C++ build for the GPU's architecture from the config's `arch`, each built kernel's registers, stack, shared and
   local memory from cuobjdump as `compile_report`; only a failed build drops a program, spills are facts, an import
   that needs a device is inconclusive; Triton kernels build on first call, so not here), then a two-stage cascade, each stage a fresh jailed process (`kernels.evolve.jailed`: the jail gets the candidate, its
-  config and a copied harness, never this repo; `core.judge`: stage 1 = two shapes, one seed; stage 2 = the full
-  check on seen shapes + paired timing against the baseline (`kernels.time_pair`: same inputs, random order per
+  config and a copied harness, never this repo; `core.judge`: stage 1 = two shapes, one seed; stage 2 = correctness
+  on every seen shape (one seed, plus memoization, non-finite inputs, inputs unchanged, aliasing) + paired timing against
+  the baseline, and only in the gate (config `full`, or held-out shapes given) the full check: three seeds x 3 repeats, edge shapes and
+  layouts, value scales, the baseline's error, peak memory (decided 2026-11-01) (`kernels.time_pair`: same inputs, random order per
   pair; a task whose callers replay it in CUDA graphs, `Task.graphs`, e.g. `paged_decode`, is captured and timed as a
   graph replay behind a GPU spin so its launch is not timed, and a kernel that cannot be captured scores 0; the
   timed calls' outputs are checked against the reference too, so a kernel that does less only when timed scores 0; every
   plain check case's and timed call's outputs are verified again outside the jail by a process that never loads the
   candidate, `kernels/evolve/verify.py`, gate `verified_outside`, which requires every record the config implies:
-  each seen and held-out shape x dtype x seed, each value scale, each timed buffer; the result is the one stdout line
+  each seen shape x dtype at seed 0 (the gate, `full`: each seen and held-out shape x dtype x seed 0-2 and each value scale),
+  each timed buffer; the result is the one stdout line
   carrying a per-judgment key that core reads and removes before the candidate loads; between judgments only torch's
   build files survive in a program's dir, and the gate has its own), score = call-weighted geometric-mean speedup, a shape counting 1.0 when the middle half of its paired ratios
   includes 1; at the end the top candidates are re-judged 3x and the highest median is promoted, `run --retime`); a program may build CUDA C++ at import with

@@ -3,6 +3,17 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-01 — Selection's exam is correctness and timing; the gate keeps every check
+Stage 2 during a search (and re-timing) checks correctness on every seen shape at one seed, with the cheap anti-gaming
+checks (memoization, non-finite inputs, inputs unchanged, aliasing), times the program against the baseline with the
+timed outputs checked, applies the roofline physics alarm and re-verifies the outputs outside the jail. The rest (seeds
+1-2, three repeats for determinism, edge shapes and layouts, the x3 / x0.01 / x-1 value scales, the baseline's error,
+peak memory) runs only in the held-out gate (its config says `full`, so a split with no held-out shapes still gets
+every check), i.e. on the winner before it ships. Why (the user: make the exam really
+cheap and run the full one only on the winner): across the 474 recorded stage-2 exams, one gate other than correctness
+on stage 1's shapes ever failed (a x3 value scale, once), and the exam was most of a generation's ~17-24 min. Amends
+the stage-2 definition of 2026-10-04 (kernels/evolve/core.judge).
+
 ## 2026-11-01 — Tuning after the search, on the top programs only
 During the search programs are measured as written; after it, each of the `--retime` (4) top programs has its
 `CONFIG` + `TUNABLES` grid tuned on every seen shape and is re-timed with the fastest point written in (`run.retime`'s
