@@ -145,11 +145,35 @@ def test_a_config_read_with_no_holder_is_refused_clearly(tmp_path, monkeypatch):
         regions.from_engine("norm", "add", str(caps))
 
 
-def test_a_region_writing_in_place_is_refused(tmp_path, monkeypatch):
-    regions = engine(tmp_path, monkeypatch)
+def test_a_region_writing_in_place_runs_on_a_copy_and_a_program_must_write_in_place(tmp_path, monkeypatch):
+    """A region with the K/V writer: the engine's stations as they run, each call on a copy of the pool (baseline and
+    program alike, inputs left unchanged); the start program passes; a program returning a new pool is refused."""
     import pytest
+    from kernels.evolve import core
+    regions = engine(tmp_path, monkeypatch)
+    h = held(tmp_path, regions)
+    d = tmp_path / "kvcaps"
+    (d / "samples").mkdir(parents=True)
+    with open(d / "calls.jsonl", "w") as f:
+        for i, t in enumerate((4, 16)):
+            f.write(json.dumps({"fn": "region:kv:kv", "layer": 0, "sample": f"{i}.pt",
+                                "reads": {"h": {"shape": [t, 64], "dtype": "float32"},
+                                          "kv": {"shape": [2], "dtype": "float32"}}}) + "\n")
+            torch.save({"reads": {"h": torch.randn(t, 64), "kv": torch.zeros(2)}, "writes": {}}, d / "samples" / f"{i}.pt")
+    t = regions.from_engine("kv", "kv", str(d), str(h.path), dtypes=(torch.float32,))
+    start = tmp_path / "start.py"
+    start.write_text(t.start_program())
+    assert "_PURE = _st.DECODE" in start.read_text()                  # as the engine runs it: writes in place
+    r = core.judge(t, start, [(4, 64), (16, 64)], [], None, "cpu", None, 2, iters=3)
+    assert r["metrics"]["correct"] == 1.0, r["artifacts"]
+    g = json.loads(r["artifacts"]["gates"])
+    assert g["inputs_unchanged"]["passed"]
+    xs = t.make_inputs((4, 64), torch.float32, "cpu", torch.Generator().manual_seed(0))
     with pytest.raises(ValueError, match="in place"):
-        regions.from_engine("add", "kv")
+        t.bind(lambda hh, kv: (torch.full_like(kv, hh.sum().item()),))(*xs)        # a new pool: refused
+    with pytest.raises(ValueError, match="context"):
+        monkeypatch.setattr(regions, "span", lambda st, a, b: (regions.Station("p", ("paged_ctx",), ("x",), None),))
+        regions._region("kv", "kv")
 
 
 def test_captured_shapes_split_with_a_heldout_region_from_the_holders_layer_only(tmp_path, monkeypatch):

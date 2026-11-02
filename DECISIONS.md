@@ -3,6 +3,14 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-02 — Regions may include the K/V writer
+A region may include `kv_append` (the decode K/V write, in place): its task runs the engine's stations as they run in
+the engine and gives each call a copy of the pool to write (the same work for the baseline and a program, inside the
+timed call), and a program must write the pool in place and return that same tensor, as the engine's override
+contract requires. A region reading the backend's context (`p_kv_store`, which appends through it) is refused. Why
+(the user): fusions like rope + K/V write + attention were out of reach. A capture keeps only the blocks a call
+touches, so the copy is small. Replaces "a region must end before kv_append or start after it" (2026-10-23).
+
 ## 2026-11-02 — Regions are captured at four layers and one layer is held out
 A region is captured at layers 0, 16, 32 and 47 (`regions.LAYERS`), the holder shares each layer's weights
 ("L<i>.w.*"), a call's shape starts with its layer, and layer 32's calls are held out (`Task.heldout_values`).
