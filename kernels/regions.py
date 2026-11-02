@@ -216,12 +216,12 @@ def _pool() -> tuple[str, ...]:
     return tuple(getattr(_engine(), "IN_PLACE", POOL))
 
 
-def engine_stations(which: str = "DECODE") -> tuple[Station, ...]:
+def engine_stations(which: str = "DECODE", functional: bool = True) -> tuple[Station, ...]:
     """The engine's stations of set `which` (DECODE or PREFILL), made pure (`functional`: what writes in place gets a
-    copy)."""
+    copy) unless `functional` is False."""
     st = _engine()
     own = getattr(st, which)
-    pure = st.functional(own) if hasattr(st, "functional") else own
+    pure = st.functional(own) if functional and hasattr(st, "functional") else own
     return tuple(Station(s.name, tuple(s.reads), tuple(s.writes), s.fn) for s in pure)
 
 
@@ -269,15 +269,37 @@ def _consts(entries: dict, constants: dict | None) -> dict:
     return {**{k: v for k, v in entries.items() if not isinstance(v, torch.Tensor)}, **(constants or {})}
 
 
-def _region(first: str, last: str) -> tuple[Station, ...]:
-    """The engine's stations of the region's set, refusing a region that writes the K/V pool in place (see the module
-    docstring)."""
+def _region(first: str, last: str) -> tuple[tuple[Station, ...], tuple[str, ...]]:
+    """(the engine's stations of the region's set, what the region writes in place: the K/V pool, e.g. kv_append). A
+    region with an in-place writer gets the stations as they run in the engine, and its calls a copy of what they
+    write (`_copying`); one whose stations need the backend's context (`p_kv_store`) is refused."""
     stations = engine_stations(station_set(first))
-    inplace = {w for s in span(stations, first, last) for w in s.writes} & set(getattr(_engine(), "IN_PLACE", ()))
-    if inplace:
-        raise ValueError(f"region {first}..{last} writes {sorted(inplace)} in place (kv_append, p_kv_store): a "
-                         "region must end before that station or start after it, for now")
-    return stations
+    region = span(stations, first, last)
+    inplace = tuple(sorted({w for s in region for w in s.writes} & set(getattr(_engine(), "IN_PLACE", ()))))
+    if any("paged_ctx" in s.reads for s in region):
+        raise ValueError(f"region {first}..{last} reads the backend's context (p_kv_store appends through it): it must "
+                         "start after that station")
+    return (engine_stations(station_set(first), functional=False) if inplace else stations), inplace
+
+
+def _copying(ins: tuple[str, ...], outs: tuple[str, ...], inplace: tuple[str, ...]) -> Callable:
+    """A task's `call` for a region writing `inplace` in place: each call writes into a copy of those inputs (the same
+    work for the baseline and a program, inside the timed call), and a program must write them in place and return
+    those same tensors, as the engine's override contract requires."""
+    at = {n: ins.index(n) for n in inplace if n in ins}
+
+    def call(fn, *xs):
+        xs = list(xs)
+        mine = {}
+        for n, i in at.items():
+            xs[i] = mine[n] = xs[i].clone()
+        out = fn(*xs)
+        got = out if isinstance(out, (tuple, list)) else (out,)
+        for n, t in mine.items():
+            if n in outs and got[outs.index(n)] is not t:
+                raise ValueError(f"{n} must be written in place and returned (the engine passes its own pool)")
+        return out
+    return call
 
 
 def from_engine(first: str, last: str, samples: str | None = None, shared_weights: str | None = None,
@@ -288,7 +310,7 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
     non-tensor entries, e.g. `cfg`, are constants); seed 0 is the captured inputs exactly, later seeds perturb the
     activations, never the weights."""
     from kernels.shared_weights import attach
-    stations = _region(first, last)
+    stations, inplace = _region(first, last)
     held = attach(Path(shared_weights), copy_ok=True) if shared_weights else {}   # the jail's IPC may be refused
     consts = _consts(held, constants)
     ins = tuple(i for i in interface(stations, first, last, live())[0] if i not in consts)
@@ -349,6 +371,7 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
                 heldout_values=((0, (HELDOUT_LAYER,)),) if multi and HELDOUT_LAYER in layers else (),
                 start_program=start,
                 graphs=which == "DECODE",         # the engine replays its decode step as a CUDA graph: no host time
+                **({"call": _copying(ins, interface(stations, first, last, live())[1], inplace)} if inplace else {}),
                 edge_shapes=lambda shape: [])     # inputs come from captures only: no synthetic edge shapes
 
 
@@ -356,7 +379,7 @@ def start_program(first: str, last: str, constants: dict | None = None, shared_w
     """The starting program of a region: the engine's own stations, called in order, its constants (the holder's,
     as `from_engine` binds them, and `constants`) written in as values."""
     from kernels import shared_weights as sw
-    stations = _region(first, last)
+    stations, inplace = _region(first, last)
     consts = _consts(sw.constants(Path(shared_weights)) if shared_weights else {}, constants)
     ins, outs = interface(stations, first, last, live())
     ins = tuple(i for i in ins if i not in consts)
@@ -365,8 +388,9 @@ def start_program(first: str, last: str, constants: dict | None = None, shared_w
                     else f"_CONST[{k!r}] = {v!r}\n" for k, v in consts.items())
     return (f"# EVOLVE-BLOCK-START\nimport {ENGINE} as _st\n\n"
             f"_NAMES = {names!r}\n_INPUTS = {list(ins)!r}\n_OUTPUTS = {list(outs)!r}\n_CONST = {{}}\n{bound}"
-            f"_PURE = _st.functional(_st.{station_set(first)}) if hasattr(_st, 'functional') else _st.{station_set(first)}\n"
-            "_STATIONS = [s.fn for s in _PURE if s.name in _NAMES]\n\n\n"
+            + (f"_PURE = _st.{station_set(first)}\n" if inplace else       # writes in place, as the engine runs it
+               f"_PURE = _st.functional(_st.{station_set(first)}) if hasattr(_st, 'functional') else _st.{station_set(first)}\n")
+            + "_STATIONS = [s.fn for s in _PURE if s.name in _NAMES]\n\n\n"
             "def kernel(*xs):\n    ctx = {**_CONST, **dict(zip(_INPUTS, xs))}\n    for fn in _STATIONS:\n"
             "        ctx.update(fn(ctx))\n    return tuple(ctx[o] for o in _OUTPUTS)\n# EVOLVE-BLOCK-END\n")
 
