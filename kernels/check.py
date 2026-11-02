@@ -40,9 +40,10 @@ def _poison(inputs):
     """Write NaN, +Inf and -Inf into the first floating-point input that is not a shared weight (kernels/shared_weights)."""
     from kernels.shared_weights import is_shared_weight
     v = next((t for t in inputs if t.is_floating_point() and not is_shared_weight(t)), None)
-    if v is not None:
-        v = v.view(-1)
-        v[0], v[v.numel() // 2], v[-1] = float("nan"), float("inf"), float("-inf")
+    if v is not None and v.numel():                  # by index, so a non-contiguous input (a transposed q) works too
+        n = v.numel()
+        for i, x in ((0, float("nan")), (n // 2, float("inf")), (n - 1, float("-inf"))):
+            v[tuple(int(j) for j in torch.unravel_index(torch.tensor(i), v.shape))] = x
 
 
 def _edge_shapes(shape):
