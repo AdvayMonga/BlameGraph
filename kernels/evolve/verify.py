@@ -13,17 +13,18 @@ MAX_BYTES = 32 * 2**30
 
 
 def expected(cfg: dict, task, timed: bool) -> set:
-    """The records a full stage-2 judgment under `cfg` keeps (kernels.evolve.core.judge): every seen and held-out
-    shape x dtype x seed 0-2, the two most-called seen shapes at each value scale (seed 7), and with `timed` the
-    four timed buffers of every timed shape. A candidate cannot drop or swap any of them unnoticed."""
+    """The records a stage-2 judgment under `cfg` keeps (kernels.evolve.core.judge): every seen shape x dtype at seed
+    0, and with held-out shapes (the gate) every seen and held-out shape x dtype x seed 0-2 and the two most-called
+    seen shapes at each value scale (seed 7); with `timed` the four timed buffers of every timed shape. A candidate
+    cannot drop or swap any of them unnoticed."""
     import inspect
     from kernels.evolve.core import SCALES
     from kernels.timing import time_pair
     dts = [str(d).removeprefix("torch.") for d in task.dtypes]
     seen, held = [list(x) for x in cfg["seen"]], [list(x) for x in cfg.get("heldout", [])]
-    out = {("check", json.dumps(s), d, sd, None) for s in seen + held for d in dts for sd in (0, 1, 2)}
+    out = {("check", json.dumps(s), d, sd, None) for s in seen + held for d in dts for sd in ((0, 1, 2) if held else (0,))}
     out |= {("check", json.dumps(s), d, 7, k) for k in (SCALES if task.scales is None else task.scales)
-            for s in seen[:2] for d in dts}
+            for s in seen[:2] for d in dts} if held else set()
     if timed:
         n = inspect.signature(time_pair).parameters["n_buffers"].default
         out |= {("time", json.dumps(s), dts[0], i, None) for s in seen + held for i in range(n)}

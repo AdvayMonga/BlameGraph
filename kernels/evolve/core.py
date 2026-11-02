@@ -265,8 +265,9 @@ def _shown(ratio: dict) -> bool:
 
 def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | None, device: str,
           tolerances: dict | None, stage: int, iters: int = 30, points: int = 8) -> dict:
-    """stage 1: correctness on the two most frequent seen shapes, one seed. stage 2: the full check on every seen shape
-    (held-out shapes only when given, which selection never does), then timing against the baseline. A candidate that
+    """stage 1: correctness on the two most frequent seen shapes, one seed. stage 2: correctness on every seen shape and
+    timing against the baseline; with held-out shapes (the gate, never selection) the full check on them and the seen
+    shapes: three seeds, repeats, edge cases and layouts, other value scales, the baseline's error, peak memory. A candidate that
     leaves any function the evaluator watches patched scores 0, whatever it measured. TUNE_STAGE: `points` points of
     the program's grid (kernels/search/tune.py), each loaded with CONFIG rewritten, checked on the first seen shape and
     timed on every one; the rows choose launch parameters and score nothing."""
@@ -309,18 +310,19 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
         return out
     ref = task.reference
     shapes = seen[:2] if stage == 1 else seen
+    full = stage > 1 and bool(heldout)           # the gate: every check; selection: correctness and timing only
     try:
         keep = lambda case, out: _keep("check", case["shape"], case["dtype"], case["seed"], out)    # noqa: E731
-        r = check_kernel(ref, cand, task.make_inputs, shapes, heldout if stage > 1 else [], dtypes=task.dtypes,
-                         device=device, seeds=(0,) if stage == 1 else (0, 1, 2), tolerances=tolerances,
-                         edge_shapes=task.edge_shapes(shapes[0]) if task.edge_shapes else None,
-                         repeats=1 if stage == 1 else 3, layouts=task.layouts, record=keep, **budget)
+        r = check_kernel(ref, cand, task.make_inputs, shapes, heldout if full else [], dtypes=task.dtypes,
+                         device=device, seeds=(0, 1, 2) if full else (0,), tolerances=tolerances,
+                         edge_shapes=(task.edge_shapes(shapes[0]) if task.edge_shapes else None) if full else [],
+                         repeats=3 if full else 1, layouts=task.layouts if full else (), record=keep, **budget)
     except Exception:                            # noqa: BLE001
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
                 "artifacts": {"error": "checker raised:\n" + traceback.format_exc()[-3000:]}}
     gates = {k: {"passed": g["passed"], "reason": g["reason"], "cases": (g.get("evidence") or {}).get("cases")}
              for k, g in r["gates"].items()}
-    if r["passed"] and stage > 1:                 # other value distributions, on the two most frequent seen shapes
+    if r["passed"] and full:                      # other value distributions, on the two most frequent seen shapes
         for k in (SCALES if task.scales is None else task.scales):
             v = check_kernel(ref, cand, _scaled(task.make_inputs, k), seen[:2], [], dtypes=task.dtypes, device=device,
                              seeds=(7,), tolerances=tolerances, edge_shapes=[], repeats=1, layouts=(), **budget,
@@ -336,13 +338,13 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
     base_fn = task.baseline()
     base = task.bind(base_fn) if base_fn else ref
     error = {"candidate": _error(r)}                # a fact, not a gate: lower precision inside a kernel is allowed
-    if base_fn:
+    if base_fn and full:
         error["baseline"] = _error(check_kernel(ref, base, task.make_inputs, seen, [], dtypes=task.dtypes,
                                                 device=device, seeds=(0, 1, 2), tolerances=tolerances,
                                                 edge_shapes=[], repeats=1, layouts=()))
     hw, dtype = _peaks(device), task.dtypes[0]
     inputs0 = task.make_inputs(seen[0], dtype, device, torch.Generator().manual_seed(0))
-    pc, pb = _peak_bytes(timed, inputs0, device), _peak_bytes(base, inputs0, device)
+    pc, pb = (_peak_bytes(timed, inputs0, device), _peak_bytes(base, inputs0, device)) if full else (None, None)
     if checkpoint():
         return {}
     if pc is not None and pc > MEMORY_FACTOR * pb + MEMORY_SLACK:

@@ -344,9 +344,12 @@ def test_value_distributions_catch_a_kernel_tuned_to_one_scale():
                          "    if torch.isfinite(x).all() and x.abs().max() > 8:\n        return x.clone()\n"
                          "    xf = x.float()\n"
                          "    return (xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + 1e-6) * w.float()).to(x.dtype)\n")
-        r = judge(t, clamp, list(t.seen_default), [], None, "cpu", None, 2, iters=3)
+        seen = list(t.seen_default)
+        r = judge(t, clamp, seen, seen[:1], None, "cpu", None, 2, iters=3)     # the gate (held-out shapes): every check
         g = json.loads(r["artifacts"]["gates"])
         assert r["metrics"]["combined_score"] == 0.0 and g["values_x3"]["passed"] is False
+        g = json.loads(judge(t, clamp, seen, [], None, "cpu", None, 2, iters=3)["artifacts"]["gates"])
+        assert "values_x3" not in g and "edge_cases" in g          # selection: correctness and timing, no value scales
 
 
 def load_program_text(src: str):
