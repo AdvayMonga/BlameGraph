@@ -312,7 +312,8 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
         r = check_kernel(ref, cand, task.make_inputs, shapes, heldout if full else [], dtypes=task.dtypes,
                          device=device, seeds=(0, 1, 2) if full else (0,), tolerances=tolerances,
                          edge_shapes=(task.edge_shapes(shapes[0]) if task.edge_shapes else None) if full else [],
-                         repeats=3 if full else 1, layouts=task.layouts if full else (), record=keep, **budget)
+                         repeats=3 if full else 1, layouts=task.layouts if full else (), record=keep,
+                         nonfinite=task.nonfinite, **budget)
     except Exception:                            # noqa: BLE001
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
                 "artifacts": {"error": "checker raised:\n" + traceback.format_exc()[-3000:]}}

@@ -134,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
     a.ncu = a.device.startswith("cuda") if a.ncu is None else a.ncu
     task = load_task(a)
     out = Path(a.out)
-    tol = tolerances(_target_tolerances())
+    tol = tolerances(_target_tolerances(task))
     sets, program = prepare(task, _shapes(task, a), out, a.device, tol, a.timing_shapes, a.initial, region_args(a))
     review = None if a.judge_model == "none" else Claude(a.judge_model, a.effort, tools=a.judge_tools)
     judge = cascade(evaluator.judge_stage, counters=a.ncu)
