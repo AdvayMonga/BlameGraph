@@ -3,6 +3,14 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-03 — Novelty is judged among siblings, by each one's change from their parent
+A new program is refused as a near-duplicate only when its change from its parent is within cosine 0.95 of a
+sibling's change from the same parent (was: its change from the starting program against every program's). Why: a
+child's change from the start holds its parent's change, so against the start any small change to a program looked
+like the program itself. On moe_gemm_fp8 (2026-11-02) 69 of Sonnet's 112 ideas were refused as identical or
+near-duplicates, 32 of those as near-duplicates of their own parent, persist ideas among them, the step that builds on
+a winner. Generation 0 is unchanged (every parent is the start). Amends 2026-10-30 (ShinkaEvolve's novelty rejection).
+
 ## 2026-11-03 — The kernel search's model mix is 1 Opus : 3 Sonnet, and its cost is the budget
 `kernels.search` makes each change with Sonnet 5.5 and every fourth call with Opus 5.5 (was Opus with Sonnet every
 fourth). The gaming detector stays Opus (one call per would-be winner). The cost of this mix is the search's model

@@ -10,9 +10,9 @@ From the parents:
      tree; the compiler's report; rotated across a slot's calls) and the memory
      (kernels/search/memory.py), and answers with its hypothesis and the change as SEARCH/REPLACE blocks. A round's
      slots (a parent, an idea type and a count, kernels/search/generations.py) say how many calls each parent gets
-     and of which type. The calls cycle through `Models.judges` (3 Opus : 1 Sonnet by default), for diversity.
-  2. edits that do not apply, repeat a program already written, or whose change from the start is within NOVEL cosine
-     of one already written (local embeddings, ShinkaEvolve's novelty rejection) are dropped; with `precheck`, what fails to build in
+     and of which type. The calls cycle through `Models.judges` (1 Opus : 3 Sonnet by default), for diversity.
+  2. edits that do not apply, repeat a program already written, or whose change from its parent is within NOVEL cosine
+     of a sibling's (local embeddings, ShinkaEvolve's novelty rejection) are dropped; with `precheck`, what fails to build in
      a jail with no GPU is dropped too, and the compiler's report is kept
   3. correctness on the GPU (stage 1), `parallel` at a time
   4. every correct program takes the full exam (stage 2) and joins the tree; every idea and how far it got go to
@@ -37,7 +37,7 @@ from kernels.search.llm import CACHE_SPLIT
 from kernels.search.tree import Node, Tree, fingerprint
 
 SLICES = ("measurements", "winners", "compiler")
-NOVEL = 0.95                 # cosine of two programs' changes from the start at which the later one is a near-duplicate
+NOVEL = 0.95                 # cosine of two siblings' changes from their parent at which the later one is a near-duplicate
                              # (ShinkaEvolve's novelty rejection threshold)
 
 
@@ -59,7 +59,7 @@ class Funnel:
     workers: int = 8                         # model calls at once
     library: list = field(default_factory=list)            # kernels.archive entries for every task (the memory's)
     embedder: object | None = None           # lab.search's embedder: near-duplicate programs refused before any GPU time
-    vectors: dict = field(default_factory=dict)            # each program's fingerprint -> (its id or "", its vector)
+    vectors: dict = field(default_factory=dict)            # each program's fingerprint -> (id or "", parent id, vector)
     spent: float = 0.0
     calls: int = 0
     judge_calls: int = 0                     # calls so far: picks the model from the mix
@@ -157,33 +157,37 @@ def written(f: Funnel, results: list[tuple[str | None, str]], seen: set) -> list
     return out
 
 
-def change_text(tree: Tree, code: str) -> str:
-    """A program's lines changed from the starting program: what its embedding compares."""
-    return "".join(x for x in difflib.unified_diff(tree.root().code.splitlines(True), code.splitlines(True), n=0)
+def change_text(base: str, code: str) -> str:
+    """A program's lines changed from `base` (its parent's code): what its embedding compares."""
+    return "".join(x for x in difflib.unified_diff(base.splitlines(True), code.splitlines(True), n=0)
                    if x[:1] in "+-" and not x.startswith(("+++", "---")))
 
 
-def near_duplicates(f: Funnel, tree: Tree, codes: list[str]) -> list[str | None]:
-    """For each new program, why it repeats one already written (its change from the start within NOVEL cosine of
-    that one's), else None; the novel ones join `f.vectors`, so a later program in the same batch is compared too."""
+def near_duplicates(f: Funnel, tree: Tree, drafts: list[tuple[str, str]]) -> list[str | None]:
+    """For each new (program, parent id), why it repeats a sibling already written (its change from the parent within
+    NOVEL cosine of that one's), else None; the novel ones join `f.vectors`, so a later program in the same batch is
+    compared too. Only siblings: a child's change from the start holds its parent's, so against the start every small
+    change to a program looked like the program itself (decided 2026-11-03)."""
     from lab.search import _cosine
     if f.embedder is None:
-        return [None] * len(codes)
+        return [None] * len(drafts)
     for n in tree.nodes.values():                # a program written earlier has since joined the tree: name it
         if f.vectors.get(fingerprint(n.code), ("x",))[0] == "":
-            f.vectors[fingerprint(n.code)] = (n.id, f.vectors[fingerprint(n.code)][1])
+            f.vectors[fingerprint(n.code)] = (n.id, *f.vectors[fingerprint(n.code)][1:])
     old = [n for n in tree.nodes.values() if n.parent and fingerprint(n.code) not in f.vectors]
-    for n, v in zip(old, f.embedder.passages([change_text(tree, n.code) for n in old]) if old else []):
-        f.vectors[fingerprint(n.code)] = (n.id, v)
+    for n, v in zip(old, f.embedder.passages([change_text(tree.nodes[n.parent].code, n.code) for n in old])
+                    if old else []):
+        f.vectors[fingerprint(n.code)] = (n.id, n.parent, v)
     out = []
-    for c, v in zip(codes, f.embedder.passages([change_text(tree, c) for c in codes]) if codes else []):
-        best = max(((_cosine(v, w), i) for i, w in f.vectors.values()), default=(0.0, ""))
+    for (c, p), v in zip(drafts, f.embedder.passages([change_text(tree.nodes[p].code, c) for c, p in drafts])
+                         if drafts else []):
+        best = max(((_cosine(v, w), i) for i, q, w in f.vectors.values() if q == p), default=(0.0, ""))
         if best[0] >= NOVEL:
             out.append(f"a near-duplicate of {'program ' + best[1] if best[1] else 'a program written this run'} "
-                       f"(cosine {best[0]:.3f} between their changes from the start)")
+                       f"(cosine {best[0]:.3f} between their changes from the same parent)")
         else:
             out.append(None)
-            f.vectors[fingerprint(c)] = ("", v)
+            f.vectors[fingerprint(c)] = ("", p, v)
     return out
 
 
@@ -306,7 +310,7 @@ def generation(f: Funnel, tree: Tree, slots: list[Slot], system: str, it: int,
     counts["named"] = len(made)
     ideas = [h for h, _ in made]
     drafts = written(f, [cw for _, cw in made], seen)
-    near = iter(near_duplicates(f, tree, [c for c, _ in drafts if c is not None]))
+    near = iter(near_duplicates(f, tree, [(c, h["parent_id"]) for h, (c, _) in zip(ideas, drafts) if c is not None]))
     drafts = [(c, w) if c is None else ((None, why) if (why := next(near)) else (c, w)) for c, w in drafts]
     wrote = []
     for h, (code, why) in zip(ideas, drafts):

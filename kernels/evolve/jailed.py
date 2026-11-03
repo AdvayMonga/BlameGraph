@@ -19,6 +19,7 @@ from pathlib import Path
 
 from kernels import shared_weights
 from kernels.evolve import ncu
+from kernels.evolve.evaluator import tail
 from kernels.evolve.verify import verify
 from kernels.tasks import load
 from lab import engine
@@ -254,7 +255,7 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
     if p.returncode != 0 or r is None:
         return {**fail, "artifacts": {"error": f"evaluation process exited {p.returncode}"
                                                f"{'; ' + why if p.returncode == 0 else ''}:\n"
-                                               f"{(p.stderr or p.stdout)[-3000:]}"}}
+                                               f"{tail(p.stderr or p.stdout)}"}}
     return r
 
 
