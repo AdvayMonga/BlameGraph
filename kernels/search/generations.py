@@ -4,8 +4,9 @@ Generation 0 is a round from the start program alone (GEN0 changes); other imple
 competitors' source (`starts`, kernels/competitors.py) are judged beside it and join the population. Every later generation splits its `gen_size`
 changes over four idea types (decided 2026-10-29), one call each:
   refine     new ideas on `parents` programs drawn from the population (the POPULATION best correct, scored programs
-             still open; the best always among them, the rest drawn without replacement with weight = percentile
-             reward + FLOOR, so a weaker program keeps a chance: soft fitness-weighted selection)
+             still open, and the elites: the fastest open program on each seen shape, MAP-Elites with the shape as
+             the niche, decided 2026-11-03; the best always among them, the rest drawn without replacement with
+             weight = percentile reward + FLOOR, an elite's as the best's, so a weaker program keeps a chance)
   persist    take a line's last change further: every child that beat its parent heads a line, which moves to a
              persist child that beats it and closes after LINE_MISSES generations of persist children without one
              (K-Search's persistence); the best-scoring open lines get the slots
@@ -38,7 +39,7 @@ from kernels.search.loop import trace_row
 from kernels.search.tree import Node, Tree
 
 GEN0 = 40                    # the first generation's changes, from the start program alone
-POPULATION = 32              # programs parents are drawn from
+POPULATION = 32              # programs parents are drawn from, beside the elites
 FLOOR = 0.05                 # added to each percentile reward: the weakest still has a chance
 TYPES = {"refine": 8, "persist": 6, "fresh": 6, "crossover": 4}   # a generation's ideas by type, before adapting
 TYPE_FLOOR = 2               # ideas every available type keeps, however it has done
@@ -46,14 +47,32 @@ LINE_MISSES = 3              # generations of persist children without a better 
 NEW_BEST = 0.5               # share of the next generation's ideas refining a new best
 
 
+def elites(tree: Tree) -> set[str]:
+    """The ids of the fastest open program on each seen shape (by its exam's per-shape speedup)."""
+    best: dict[str, tuple[float, str]] = {}
+    for x in tree.open():
+        for t in json.loads((x.artifacts or {}).get("timings") or "[]"):
+            k, s = json.dumps(t["shape"]), t.get("speedup") or 0.0
+            if s > best.get(k, (0.0, ""))[0]:
+                best[k] = (s, x.id)
+    return {i for _, i in best.values()}
+
+
+def population(tree: Tree) -> list[Node]:
+    """The POPULATION best open programs, best first, then the elites not among them."""
+    ranked = sorted(tree.open(), key=lambda x: (-x.score, x.iteration))
+    top, best = ranked[:POPULATION], elites(tree)
+    return top + [x for x in ranked[POPULATION:] if x.id in best]
+
+
 def parents(tree: Tree, n: int, rng: random.Random) -> list[Node]:
     """The best open program, then up to n - 1 more drawn from the population without replacement by weight."""
-    pop = sorted(tree.open(), key=lambda x: (-x.score, x.iteration))[:POPULATION]
+    pop, best = population(tree), elites(tree)
     if not pop:
         return []
     out, rest = [pop[0]], pop[1:]
     while rest and len(out) < n:
-        w = [tree.reward(x) + FLOOR for x in rest]
+        w = [(1.0 if x.id in best else tree.reward(x)) + FLOOR for x in rest]
         pick = rng.choices(range(len(rest)), weights=w)[0]
         out.append(rest.pop(pick))
     return out
@@ -88,7 +107,7 @@ def slots(tree: Tree, ps: list[Node], q: dict[str, int], lines: dict[str, int], 
     heads = sorted((tree.nodes[h] for h in lines), key=lambda x: -x.score)[:max(1, q.get("persist", 0) // 3)]
     out += [Slot(h, "persist", n) for h, n in zip(heads, shares(q.get("persist", 0), {h.id: 1 for h in heads}).values())
             if n]
-    fresh, pop = q.get("fresh", 0), [x for x in sorted(tree.open(), key=lambda x: -x.score)[:POPULATION] if x.parent]
+    fresh, pop = q.get("fresh", 0), [x for x in population(tree) if x.parent]
     other = fresh // 2 if pop else 0
     out += [s for s in (Slot(tree.root(), "fresh", fresh - other), Slot(rng.choice(pop), "fresh", other) if other
                         else None) if s and s.n]

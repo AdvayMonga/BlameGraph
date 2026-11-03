@@ -258,3 +258,20 @@ def test_a_new_best_gets_half_the_next_generations_ideas_as_refine_ideas(tmp_pat
              generations=2)
     assert all("new_best" not in r for r in rows_of(tmp_path / "flat")[1:])      # no new best: no boost
 
+
+
+def test_the_fastest_program_on_each_shape_stays_in_the_population_and_is_drawn_like_the_best():
+    t = Tree()
+
+    def node(i, score, a, b):
+        timings = json.dumps([{"shape": [1], "speedup": a}, {"shape": [64], "speedup": b}])
+        return t.add(Node(f"n{i}", "n0" if i else None, f"a = {i}\n", {"correct": 1.0, "combined_score": score,
+                                                                          "stage": 2}, {"timings": timings}, 0))
+    for i in range(G.POPULATION + 2):
+        node(i, 1.0 + i / 100, 1.0 + i / 100, 1.0)
+    small = node(99, 0.5, 0.4, 3.0)                     # the worst overall, the fastest on the large shape
+    assert G.elites(t) == {small.id, f"n{G.POPULATION + 1}"}
+    pop = G.population(t)
+    assert len(pop) == G.POPULATION + 1 and pop[-1] is small and pop[0].id == f"n{G.POPULATION + 1}"
+    drawn = sum(small in G.parents(t, 2, random.Random(s)) for s in range(200))
+    assert drawn > 200 / (G.POPULATION + 1)             # weighted as the best: well above the uniform share

@@ -3,6 +3,14 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-03 — Per-shape elites in the kernel search's population
+The population parents are drawn from is the 32 best open programs plus the fastest open program on each seen shape,
+and an elite is drawn with the best program's weight. Why (the user, after comparing with OpenEvolve's MAP-Elites
+archive, which keeps the best program per cell of a feature grid so different approaches survive): our population
+was the top 32 by score alone, which collapses onto one lineage; a program fastest on some shapes and slower
+overall was pushed out. The shape is the niche: different sizes want different tiles and structure, and the elites
+are what a crossover can join. OpenEvolve's own features are generic (code length, edit diversity).
+
 ## 2026-11-03 — Novelty is judged among siblings, by each one's change from their parent
 A new program is refused as a near-duplicate only when its change from its parent is within cosine 0.95 of a
 sibling's change from the same parent (was: its change from the starting program against every program's). Why: a
