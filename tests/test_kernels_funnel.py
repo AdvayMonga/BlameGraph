@@ -156,6 +156,18 @@ def test_a_program_whose_change_is_like_one_already_written_is_refused_before_an
     assert first.startswith(f"not applied: a near-duplicate of program {named}")          # named by its id
 
 
+def test_a_change_is_compared_with_its_siblings_changes_never_with_its_parents():
+    from kernels.search.funnel import near_duplicates
+    t = Tree()
+    root = root_of(t)
+    kid = t.add(Node("p5", root.id, START.replace("a = 1", "a = 5"), {"correct": 1.0, "combined_score": 0.2,
+                                                                       "stage": 2}, {}, 1))
+    f = Funnel(Models(Model()), stage, embedder=Bag())
+    eight = START.replace("a = 1", "a = 8")                  # 8 % 3 == 5 % 3: Bag gives both changes one vector
+    assert near_duplicates(f, t, [(kid.code.replace("a = 5", "a = 8"), kid.id)]) == [None]   # the parent's child
+    assert near_duplicates(f, t, [(eight, root.id)])[0].startswith("a near-duplicate of program p5")   # its sibling
+
+
 def test_ncu_is_not_asked_for_again_once_the_host_refuses_and_programs_are_never_written_twice():
     from kernels.search.loop import REFUSED
     calls = []

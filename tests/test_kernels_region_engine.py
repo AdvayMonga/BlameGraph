@@ -208,6 +208,8 @@ def test_the_pools_block_count_is_not_part_of_a_calls_shape(tmp_path, monkeypatc
     large = {**small, "kv": {"shape": [4000, 2, 16, 8]}}
     assert regions._signature(small) == regions._signature(large) == (4, 7, 4, 64)
     assert regions._heldout_axes(small, ("h", "kv", "attn_block_tables")) == (2, 1)
+    wave = {"q": {"shape": [1, 32, 2048, 128]}, "fi_kv_indices": {"shape": [142]}, "fi_qo_indptr": {"shape": [2]}}
+    assert regions._heldout_axes(wave, ("q", "fi_qo_indptr", "fi_kv_indices"), prefill=True) == (0,)   # the context
     monkeypatch.delattr(regions._engine(), "IN_PLACE")                      # no IN_PLACE: the engine's pool names
     assert regions._signature({"h": {"shape": [4, 64]}, "k_cache": {"shape": [9, 2, 16, 8]}}) == (4, 64)
 

@@ -416,7 +416,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   persist, fresh and crossover calls read the measurements). The slices: measurements, winners elsewhere in the tree,
   compiler report (the PTX cards moved into every call's system message with `kernels/library`); a slice with no facts is skipped; the type's request ends the prompt (`loop.MODES`).
   Calls cycle through the mix (`--judge-model` Sonnet 5.5, `--second-judge-model` Opus 5.5 one call in `--second-judge-share` 4; decided 2026-11-03). Then edits that
-  do not apply, repeat a program, or change the start within cosine `NOVEL` (0.95) of a program already written
+  do not apply, repeat a program, or change their parent within cosine `NOVEL` (0.95) of a sibling's change (decided 2026-11-03)
   (fastembed on the changed lines, `near_duplicates`; ShinkaEvolve) are dropped, the no-GPU precheck (`--precheck`, default on) drops what fails to
   build and keeps the compiler's report on the program (the compiler slice of its children), stage 1 in `--parallel`
   jails, and every correct program takes the full exam and joins the tree. A parent gets its ncu

@@ -253,11 +253,14 @@ def _signature(reads: dict) -> tuple[int, ...]:
 
 def _heldout_axes(reads: dict, ins: tuple[str, ...], prefill: bool = False) -> tuple[int, ...]:
     """Where in the flat signature the held-out axes are: the rows of the region's first activation (its tokens, the
-    second axis, for a prefill wave, packed into one row), and the attention block tables' width (the context, in
-    blocks) when the region reads them."""
+    second axis, for a prefill wave, packed into one row), and the context when the region reads it: the attention
+    block tables' width (in blocks), or a prefill wave's page list (`fi_kv_indices`), whose queries are padded to the
+    wave's size, so their token axis never varies."""
     at, pos = {}, 0
     for k in _shaped(reads):
         at[k], pos = pos, pos + len(reads[k]["shape"])
+    if prefill and "fi_kv_indices" in ins and "fi_kv_indices" in at:
+        return (at["fi_kv_indices"],)
     first = next((i for i in ins if i in at and len(reads[i]["shape"]) > int(prefill)), None)
     ctx = "attn_block_tables" in ins and len(reads.get("attn_block_tables", {}).get("shape", ())) == 2
     return tuple(([at[first] + int(prefill)] if first else []) + ([at["attn_block_tables"] + 1] if ctx else []))
