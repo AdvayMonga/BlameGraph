@@ -9,7 +9,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from lab import corpus, experiments, ledger
+from data import corpus
+from lab import experiments
+from data.knowledge import ledger
 from targets import engine, target
 from lab.agent import ToolSpec
 from lab.budget import Budget, BudgetExceeded, gpu_rate
@@ -277,7 +279,7 @@ class Toolbox(EvalTools, ProfTools):
         return "\n".join(json.dumps(r) for r in rows[-last:]) or "(no records)"
 
     def query(self, args: dict) -> str:
-        from store import index
+        from data.knowledge import index
         try:
             out = index.query(index.agent_db(self.s.ledger_root), args["sql"])
         except Exception as e:                      # a bad query is the agent's to read, never a crash
@@ -290,7 +292,7 @@ class Toolbox(EvalTools, ProfTools):
         return text
 
     def search(self, args: dict) -> str:
-        from lab import search
+        from data.knowledge import search
         if not hasattr(self, "_embedder"):         # loaded once per toolbox; a missing model is a fact in each reply
             try:
                 self._embedder, self._no_embedder = search.FastEmbed(self.s.ledger_root / "index" / "models"), None

@@ -8,7 +8,7 @@ import shutil
 import sqlite3
 from pathlib import Path
 
-from lab import ledger
+from data.knowledge import ledger
 
 ROWS = "client_rows.jsonl"
 

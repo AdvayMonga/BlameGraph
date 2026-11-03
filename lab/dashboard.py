@@ -13,10 +13,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from targets import engine
-from lab import experiments, ledger
+from lab import experiments
+from data.knowledge import ledger
 
 PAGE = Path(__file__).parent / "dashboard.html"
-RUNS_DIR = engine.ENV_ROOT / "lab" / "runs"
+RUNS_DIR = engine.ENV_ROOT / "local" / "runs"
 MEASURED_KINDS = ("baseline", "bench", "equiv", "submit", "profile", "test")
 FEED = 60                                   # agent events shown, newest first
 

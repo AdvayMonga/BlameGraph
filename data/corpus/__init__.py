@@ -1,7 +1,7 @@
 """The workload corpus: frozen, hashed traces per workload class, split seen / held-out.
 
 The corpus defines the landscape the lab measures — anything not in it is invisible. Traces are
-data committed to `corpus/`, never generated at run time, and every file is hashed into a
+data committed to `data/corpus/`, never generated at run time, and every file is hashed into a
 `corpus_version` that travels with every measurement so a comparison across corpus drift can be
 refused. A modified trace is a new version, never a silent change: `load_manifest`
 raises on any hash mismatch.
@@ -18,10 +18,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 CORPUS_SCHEMA_VERSION = 1
-CORPUS_DIR = REPO_ROOT / "corpus"
+CORPUS_DIR = REPO_ROOT / "data" / "corpus"
 SPLITS = ("seen", "heldout")
 
 
@@ -99,7 +99,7 @@ class Manifest:
     notes: str = ""
     # relative path -> factor every real inter-arrival was stretched by; absent = not recorded
     dilation: dict[str, float] = field(default_factory=dict)
-    # the version before measured answer lengths were added (corpus/lengths.py): the same prompts, so the held-out
+    # the version before measured answer lengths were added (data/corpus/lengths.py): the same prompts, so the held-out
     # budget stays keyed to it; None = no lengths, `corpus_version` is that key
     prompts_version: str | None = None
 
@@ -202,7 +202,7 @@ def load_trace(class_name: str, split: str,
     rel = m.classes[class_name].trace_file(split)
     if not (corpus_dir / rel).exists():
         raise CorpusError(f"trace {rel} listed in the manifest is missing"
-                          + ("; held-out traces are not in git: `python -m store pull --corpus`" if split == "heldout" else ""))
+                          + ("; held-out traces are not in git: `python -m data.knowledge pull --corpus`" if split == "heldout" else ""))
     return m, read_trace(corpus_dir / rel)
 
 

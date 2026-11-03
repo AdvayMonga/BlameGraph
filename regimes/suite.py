@@ -51,8 +51,8 @@ def arrivals() -> Model:
 class Ctx:
     url: str
     model: str
-    corpus: str | None = None          # a corpus/ dir; None = synthetic prompts (tests, smoke runs)
-    workload: str | None = None        # a workloads/ JSONL file instead of the corpus: every regime draws from all of it
+    corpus: str | None = None          # a data/corpus/ dir; None = synthetic prompts (tests, smoke runs)
+    workload: str | None = None        # a data/workloads/ JSONL file instead of the corpus: every regime draws from all of it
     split: str = "seen"
     synthetic: bool = False            # every pool generated fresh from the corpus's seen split (regimes/synth.py)
     tier: str = "short"

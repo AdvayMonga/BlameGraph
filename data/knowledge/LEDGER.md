@@ -1,7 +1,7 @@
 # The ledger: the environment's public interface
 
 Any loop that writes these records gets a verdict and facts back (`python -m feedback <ledger dir>`); the lab's
-tools are one writer. Append-only JSONL, one record per line, `lab/ledger/ledger.jsonl`; `lab/ledger.py` validates
+tools are one writer. Append-only JSONL, one record per line, `local/ledger/ledger.jsonl`; `data/knowledge/ledger.py` validates
 on write. Every record: `id`, `at`, `schema` (set by the writer), `kind`, `run`, `session`, `snapshot`
 (content hash of the agent's workspace), `snapshot_blob`, `patch`, `cost: {usd}`. Tool records' `cost` also has
 `seconds` (wall time of the call); GPU tools add `gpu_seconds`, `usd_per_hour` and `rate_known`. Tool records add `tool`, `args`,

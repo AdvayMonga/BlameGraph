@@ -32,7 +32,7 @@ from kernels.search.tree import UCT_C
 
 def _blob(path: Path, root: str | None = None) -> str | None:
     """The run's hypothesis log as a ledger blob: every change the judge named and what became of it."""
-    from lab import ledger
+    from data.knowledge import ledger
     return ledger.put_blob(path, Path(root) if root else ledger.ROOT, ".jsonl") if path.exists() and path.stat().st_size \
         else None
 
@@ -72,8 +72,8 @@ def _funnel(a, task, review):
     from kernels.search.funnel import Funnel, Models
     if review is None:
         raise SystemExit("--funnel needs a judge (--judge-model)")
-    from lab import ledger
-    from lab.search import FastEmbed
+    from data.knowledge import ledger
+    from data.knowledge.search import FastEmbed
     library = archive.load(Path(a.archive)) if a.archive else []      # every task's ideas: the memory
     second = Claude(a.second_judge_model, a.effort, tools=a.judge_tools) if a.second_judge_model != "none" else None
     mix = (review,) * (a.second_judge_share - 1) + (second,) if second and a.second_judge_share > 1 else ()

@@ -112,7 +112,7 @@ def parse(path: Path) -> Target:
         min_score_ratio=float(c.get("min_score_ratio", 0.99)), min_length_ratio=float(c.get("min_length_ratio", 0.90)),
         submit_tier=_submit_tier(c.get("submit_tier", "full")),
         layers={k: tuple(v) for k, v in (raw.get("layers") or {}).items()},
-        corpus_dir=ENV_ROOT / raw.get("corpus", {}).get("dir", "corpus"), raw=raw)
+        corpus_dir=ENV_ROOT / raw.get("corpus", {}).get("dir", "data/corpus"), raw=raw)
 
 
 _cache: dict[str, Target] = {}

@@ -14,7 +14,7 @@ from targets import target
 from validity import ceiling, peaks
 from validity.ceiling import ModelSpec, Shape
 
-REFERENCE_DIR = target.ENV_ROOT / "knowledge" / "reference"
+REFERENCE_DIR = target.ENV_ROOT / "data" / "calibration" / "reference"
 FINGERPRINT_KEYS = ("model", "w_dtype", "kv_dtype", "max_model_len", "tier", "split", "corpus_version", "gpu")
 DETERMINISM_ENV = ("VLLM_BATCH_INVARIANT",)
 DETERMINISM_FLAGS = ("--enable-deterministic-inference",)

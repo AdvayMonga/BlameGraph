@@ -12,7 +12,8 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lab import agent, experiments, ledger, live, worker
+from lab import agent, experiments, live, worker
+from data.knowledge import ledger
 from targets import engine, target
 from lab.budget import Budget, BudgetExceeded
 from lab.evaltools import BENCH_TIER
@@ -51,7 +52,7 @@ class RunConfig:
     task: Task | None = None              # the objective and constraints; `goal` is its text when given
     repo: Path = field(default_factory=engine.repo)     # the engine; the agent's workspace is exported from it
     base: str = "HEAD"
-    runs_dir: Path = engine.ENV_ROOT / "lab" / "runs"
+    runs_dir: Path = engine.ENV_ROOT / "local" / "runs"
     ledger_root: Path = ledger.ROOT
     run_id: str | None = None             # resume an earlier run's workspace and spend
     max_sessions: int = 50

@@ -96,7 +96,7 @@ def _gate(a, program: Path) -> dict:
 
 
 def _cost(arm_dir: Path) -> dict:
-    from lab import ledger
+    from data.knowledge import ledger
     rid = json.loads((arm_dir / "result.json").read_text()).get("ledger")
     rec = next((r for r in ledger.records(ledger.ROOT) if r.get("id") == rid), None) if rid else None
     return (rec or {}).get("cost") or {}

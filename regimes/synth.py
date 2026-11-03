@@ -23,7 +23,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-from lab.corpus import CORPUS_DIR, TraceRequest, load_manifest, load_trace
+from data.corpus import CORPUS_DIR, TraceRequest, load_manifest, load_trace
 
 JITTER = 0.1                # each gap scaled by exp(N(0, JITTER)): the same pattern, never the same instants
 MIN_REQUESTS = 2000         # a generated pool holds at least this many, so a full-tier run rarely cycles it

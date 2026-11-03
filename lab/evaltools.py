@@ -23,7 +23,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from lab import artifacts, calibrate, ledger, live, profiles, serve, worker
+from lab import artifacts, calibrate, live, profiles, serve, worker
+from data.knowledge import ledger
 from targets import target
 from validity.holdout import HoldoutGuard, Refused
 
@@ -187,12 +188,12 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
 def holdout_guard(t: target.Target) -> HoldoutGuard:
     """The one Thresholdout guard of the target's corpus prompts (`Manifest.budget_key`), shared by every run and machine through the store
     (LAB_STORE). Refused where there is no store: a local budget would start over on every machine."""
-    from store.remote import NoRemote, open_remote
+    from data.knowledge.remote import NoRemote, open_remote
     try:
         remote = open_remote()
     except NoRemote as e:
         raise Refused(f"no shared held-out budget on this host ({e})") from None
-    from lab.corpus import load_manifest
+    from data.corpus import load_manifest
     version = load_manifest(t.corpus_dir).budget_key if t.corpus_dir.is_dir() else "no-corpus"   # synthetic workloads
     return HoldoutGuard(remote, f"heldout/guard/{version}", HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT)
 

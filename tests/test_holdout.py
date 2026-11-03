@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from store.remote import DirRemote  # noqa: E402
+from data.knowledge.remote import DirRemote  # noqa: E402
 from validity.holdout import HoldoutGuard, Refused, SealedSplit  # noqa: E402
 
 

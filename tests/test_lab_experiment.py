@@ -8,7 +8,8 @@ import subprocess
 
 import pytest
 
-from lab import experiment, experiments, ledger
+from lab import experiment, experiments
+from data.knowledge import ledger
 pytest_plugins = ["tests.test_lab_proftools"]   # its `tb` fixture: an agent Toolbox with fake instruments
 
 EXPECT = {"metric": "kernel_ms", "value": 1.0, "unit": "absolute", "why": "half the launches"}
@@ -60,7 +61,7 @@ def test_a_researcher_measurement_follows_the_agents_rules(tb, tmp_path, run):
 
 
 def test_no_agent_view_shows_a_researcher_run(tb, tmp_path, run):
-    from store import index
+    from data.knowledge import index
     rb = experiment.toolbox(run, tb.s.ledger_root, tmp_path / "runs")
     experiment.call(rb, "hypothesis", {"hypothesis": "a person's belief", "rationale": "r", "layer": "kernels"})
     tb.note({"text": "the agent's own"})

@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from lab.corpus import TraceRequest, WorkloadClass, build_manifest, load_trace, write_trace  # noqa: E402
+from data.corpus import TraceRequest, WorkloadClass, build_manifest, load_trace, write_trace  # noqa: E402
 from regimes import synth  # noqa: E402
 
 

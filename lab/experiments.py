@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from lab import ledger
+from data.knowledge import ledger
 
 MEASURED = ("bench", "equiv", "submit", "profile", "trace", "kernel", "hostprof", "kernel_search")
 PROFILERS = ("profile", "trace", "kernel", "hostprof")      # results with no `metrics`: predictions name a path

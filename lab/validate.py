@@ -27,7 +27,8 @@ import sys
 import time
 from pathlib import Path
 
-from lab import calibrate, gpu, ledger, serve
+from lab import calibrate, gpu, serve
+from data.knowledge import ledger
 from targets import engine, target
 from lab.evaltools import BENCH_TIER
 
@@ -60,7 +61,7 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
     from correctness import client, run as crun, tasks
     from correctness.gate import Thresholds
     from regimes import suite
-    out = out or (target.ENV_ROOT / "data" / "validate" / t.name)
+    out = out or (target.ENV_ROOT / "local" / "validate" / t.name)
     out.mkdir(parents=True, exist_ok=True)
     log_dir = log_dir or out
     enc = encoder or crun.HFEncoder(t.model, t.chat_kwargs)

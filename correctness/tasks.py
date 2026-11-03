@@ -1,6 +1,6 @@
 """Task sets for the flip test: loaders, prompts (non-thinking), and the code and long-context scorers.
 
-Every item: {"id", "task", "messages", "gold", "max_tokens"}. Files are fetched from the Hub into data/tasks/
+Every item: {"id", "task", "messages", "gold", "max_tokens"}. Files are fetched from the Hub into local/tasks/
 (gitignored). Scorers only need to be consistent: reference and candidate are scored by the same function, and only
 answers that differ between them carry information.
 """
@@ -15,7 +15,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-DATA = Path(__file__).resolve().parents[1] / "data" / "tasks"
+DATA = Path(__file__).resolve().parents[1] / "local" / "tasks"
 LETTERS = "ABCDEFGHIJ"
 
 

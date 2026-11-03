@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from lab import ledger, session
+from data.knowledge import ledger
+from lab import session
 from lab.agent import AgentReply, AgentSpec
 from lab.session import RunConfig
 from tests.lab_fixtures import make_repo

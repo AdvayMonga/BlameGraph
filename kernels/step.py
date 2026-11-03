@@ -1,6 +1,6 @@
 """The whole decode step as one region (`region:embed:argmax`, lab.capture.STEP): the engine's decode-step megakernel
 (`inference_server.models.megakernel.decode_step`: embedding, every layer, final norm, lm_head, greedy argmax, each
-layer's K/V written into the paged cache) as a kernel task (data/notes/handoff-megakernel-framework.md).
+layer's K/V written into the paged cache) as a kernel task (local/notes/handoff-megakernel-framework.md).
 
 Inputs, captured at a step's start (lab.capture.step): tokens [B], pos [B] (each row's length so far), the block
 table [B, cols] and every layer's K/V of the blocks the rows touch, stacked [layers, blocks, kv heads, 16, head dim].

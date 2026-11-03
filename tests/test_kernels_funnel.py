@@ -80,7 +80,7 @@ def test_a_call_sees_the_starting_program_other_programs_as_full_code_the_memory
 
 
 def test_the_search_runs_rounds_and_the_archive_reads_them_back(tmp_path):
-    from lab import ledger
+    from data.knowledge import ledger
     tree, cost = search(START, "SYS", Model(), lambda c: stage(c, 2), tmp_path, evals=5, funnel=funnel())
     assert tree.best().score >= 2.2 and cost["usd"] > 0
     root = tmp_path / "ledger"

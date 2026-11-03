@@ -1,4 +1,4 @@
-"""inference-server lab ledger (lab/ledger/ledger.jsonl) -> agent-facing facts and integrity verdict.
+"""inference-server lab ledger (local/ledger/ledger.jsonl) -> agent-facing facts and integrity verdict.
 
 The lab changes engine source, so a workspace snapshot id plays the role of a config, and every bench launches a
 fresh server. Records are lab/tools.py `_record` lines (kind, run, session, tool, args, snapshot, snapshot_blob,

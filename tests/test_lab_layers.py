@@ -10,7 +10,7 @@ import pytest
 
 from lab import layers
 
-REAL = Path(__file__).resolve().parents[1] / "data" / "engine-h200-20261017" / "session6" / "prof6-b1"
+REAL = Path(__file__).resolve().parents[1] / "local" / "engine-h200-20261017" / "session6" / "prof6-b1"
 
 
 def bundle(tmp_path: Path, kernel_s: float = 0.4, with_steps: bool = True) -> Path:

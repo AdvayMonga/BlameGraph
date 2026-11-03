@@ -7,7 +7,7 @@ are never rewritten:
   archive/<name>-<hash>.tar.zst       anything else kept (GPU run reports, correctness outputs)
   heldout/guard/<version>/state-<n>.json   the holdout guard's state after its n-th query (validity/holdout.py
                                       writes these itself, write-once; nothing here touches them)
-  heldout/private/<run>/<dir>.tar.zst submit's held-out passive data (lab/LEDGER.md)
+  heldout/private/<run>/<dir>.tar.zst submit's held-out passive data (data/knowledge/LEDGER.md)
   heldout/corpus/<version>/<class>/heldout.jsonl.zst   the held-out traces, which are not in git
   heldout/corpus/<version>/seed.zst   the corpus build seed, which reproduces them
   heldout/archive/...                 archive of held-out material
@@ -25,8 +25,8 @@ from pathlib import Path
 
 import zstandard
 
-from lab import ledger
-from store.remote import Remote
+from data.knowledge import ledger
+from data.knowledge.remote import Remote
 
 SEGMENT = re.compile(r"ledger/(\d+)-(\d+)\.jsonl\.zst$")
 

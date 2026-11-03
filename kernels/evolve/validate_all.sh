@@ -11,14 +11,14 @@
 # 4. the gated tasks ranked by share x headroom (kernels.evolve share)
 # 5. the shipped paged_decode kernel gated at the engine's block-table width
 # Each step reuses only complete results. Then fetch the small files (rsync -a --include='*.json' --include='*.py'
-# --include='*.log' --include='*/' --exclude='*' VM:~/BlameGraph/lab/runs/kernels-validate-all/ ./...) and run the
+# --include='*.log' --include='*/' --exclude='*' VM:~/BlameGraph/local/runs/kernels-validate-all/ ./...) and run the
 # search from the controller: python -m kernels.search --task T --shapes shapes-T.json --initial START.py --out DIR
 # --device cuda --evals N, with KERNEL_EVAL_SSH / KERNEL_EVAL_REMOTE (LAB_TARGET, the engine venv on PATH)
 # set; then gate its winner on the VM (python -m kernels.evolve gate ... --device cuda).
 set -euo pipefail
 SHIPPED="${1:?the shipped program to re-gate}"
 TASKS="${TASKS:-paged_decode moe_gemm_fp8 moe_gemm_scatter_fp8 rmsnorm add_rmsnorm rmsnorm_rope silu_mul topk_softmax}"
-OUT=lab/runs/kernels-validate-all
+OUT=local/runs/kernels-validate-all
 export LAB_TARGET="${LAB_TARGET:-targets/inference-server.toml}"
 eval "$(python -c 'from lab import target; import shlex; print(" ".join(f"export {k}={shlex.quote(v)};" for k, v in target.load().engine.env.items()))')"
 ENGINE="${LAB_ENGINE_REPO:-$HOME/inference-server}"

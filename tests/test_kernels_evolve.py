@@ -853,7 +853,7 @@ def test_the_jail_sees_a_fresh_tree_and_a_copied_harness_never_this_repo():
         h = jailed.stage_harness(Path(d) / "h")
         names = {p.relative_to(h).as_posix() for p in h.rglob("*") if p.is_file()}
         assert "kernels/evolve/core.py" in names and "targets/target.py" in names and "validity/peaks.py" in names
-        assert not any(n.startswith(("lab/ledger", "lab/runs", "corpus", "data")) or n.endswith(".env") for n in names)
+        assert not any(n.startswith(("local", "data/corpus", "data/knowledge", "data/workloads")) or n.endswith(".env") for n in names)
     seen, saved = {}, (jail.backend, container.available, container._docker, grader.subprocess.run)
 
     def fake_run(argv, **kw):                       # stands in for docker: `run` answers, cleanup is a no-op
@@ -933,7 +933,7 @@ def test_openevolve_finds_the_known_good_edit_and_rejects_the_cheat():
         seed = judge(t, SEED, list(t.seen_default), [], None, "cpu", None, 2, iters=3)["metrics"]["combined_score"]
         assert res.metrics.get("correct") == 1.0 and res.best_score > 3 * seed     # the naive seed is ~0.1x
         from kernels.evolve.run import record
-        from lab import ledger
+        from data.knowledge import ledger
         best = Path(d) / "best.py"
         best.write_text(res.best_code)
         rec = record(t, {"seen": list(t.seen_default)}, [{"name": "scripted", "weight": 1.0}], 4, "cpu",

@@ -7,7 +7,7 @@ FlashInfer baseline's latency over the solution's, 0 if any workload fails. Rese
 and it is no agent tool.
 
 `python -m kernels.flashinfer_bench fetch [--definitions A,B]` downloads the dataset at REVISION (every definition,
-workload list and baseline solution; the named definitions' safetensors too) into data/flashinfer_bench/<revision>/,
+workload list and baseline solution; the named definitions' safetensors too) into local/flashinfer_bench/<revision>/,
 laid out as the benchmark's own TraceSet, with a manifest of every file's sha256; nothing is re-hosted. Each
 definition the default evaluator judges is a kernel task `fib:NAME` (`kernels.tasks.load`): a shape is a workload,
 (its variable axes..., k) with k telling apart workloads with equal axes; recorded tensors from its safetensors, the rest
@@ -46,7 +46,7 @@ EVALUATOR = "flashinfer-ai/flashinfer-bench"
 EVALUATOR_COMMIT = "15618a67e8d7b7f49ca61b5ba3b9f26a876d0bee"  # main, 2026-09-25
 TREE = f"https://huggingface.co/api/datasets/{DATASET}/tree/{REVISION}"
 RAW = f"https://huggingface.co/datasets/{DATASET}/resolve/{REVISION}"
-DATA = Path(__file__).resolve().parents[1] / "data" / "flashinfer_bench"
+DATA = Path(__file__).resolve().parents[1] / "local" / "flashinfer_bench"
 ATOL = RTOL = 1e-2                # the default evaluator's at EVALUATOR_COMMIT (bench/config.py ResolvedEvalConfig)
 INT_RANGES = {torch.int8: (-128, 128), torch.int16: (-1024, 1024), torch.int32: (-1024, 1024),
               torch.int64: (-1024, 1024)}

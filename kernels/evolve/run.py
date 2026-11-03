@@ -417,7 +417,7 @@ def record(task, sets: dict, models: list[dict], iterations: int, device: str, t
     """One `kernels` ledger record per run: every evaluated candidate's seen-shape metrics and lineage, the trace and
     the best program as blobs. Held-out shapes stay out (`gate` judges them; its output stays in the run dir)."""
     import time
-    from lab import ledger
+    from data.knowledge import ledger
     root = root or ledger.ROOT
     rows = [json.loads(x) for x in trace.read_text().splitlines() if x.strip()] if trace.exists() else []
     cands = [{"id": r["child_id"], "parent": r["parent_id"], "iteration": r["iteration"],

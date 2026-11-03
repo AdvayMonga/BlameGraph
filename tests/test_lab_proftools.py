@@ -11,7 +11,8 @@ import time
 
 import pytest
 
-from lab import gpu, ledger, proftools, serve
+from lab import gpu, proftools, serve
+from data.knowledge import ledger
 from lab import tools as labtools
 from lab.budget import Budget, BudgetExceeded
 from lab.safety import container, jail

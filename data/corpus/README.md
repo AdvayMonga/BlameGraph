@@ -1,4 +1,4 @@
-# corpus/ — frozen workload traces
+# data/corpus/ — frozen workload traces
 
 The corpus defines the landscape the lab measures. Anything not in it is invisible.
 
@@ -26,7 +26,7 @@ only — `messages`.
 - `max_tokens` is 2048 everywhere: the cap under which the reference's answers end on their own
   stop token (the trace's response tokens are NOT used). `expected_output_tokens` is the length
   of that answer, and on a multi-turn record `expected_turn_output_tokens` the same for each
-  user-turn prefix of its messages, measured on a served reference by `python -m corpus.lengths
+  user-turn prefix of its messages, measured on a served reference by `python -m data.corpus.lengths
   --url URL` (both splits, a new corpus version; the manifest's `prompts_version` keeps the
   held-out budget's key); unset until then. Once set, the regimes send every request at that
   fixed length with `ignore_eos`.
@@ -118,12 +118,12 @@ policy tuned on this corpus should be re-checked against a smoother, longer-cont
 
 ```bash
 uv sync --extra dev --extra corpus                          # pyarrow, for the WildChat shards
-.venv/bin/python corpus/fetch_traces.py              # ~1.8 GB into ~/.cache/inference-server/traces
-.venv/bin/python corpus/build_corpus.py               # the secret seed in corpus/.seed
+.venv/bin/python data/corpus/fetch_traces.py              # ~1.8 GB into ~/.cache/inference-server/traces
+.venv/bin/python data/corpus/build_corpus.py               # the secret seed in data/corpus/.seed
 ```
 
 Since 2026-10-09 the held-out traces and the seed are not in git: the build is deterministic in the seed, so a
-public seed would publish the held-out split. Both live in the store (`python -m store push` / `pull --corpus`);
+public seed would publish the held-out split. Both live in the store (`python -m data.knowledge push` / `pull --corpus`);
 the manifest keeps their hashes, so the loader still refuses a changed file.
 
 `fetch_traces.py` pins every URL to a release or revision and every file to a sha256, refuses

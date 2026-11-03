@@ -150,7 +150,7 @@ def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_node():
     from kernels.evolve.run import record, retime, system_message
     from kernels.search.loop import cascade, search
     from kernels.tasks import load
-    from lab import ledger
+    from data.knowledge import ledger
     t = load("toy_rmsnorm")
     naive = iter([WRONG, "no diff here", FAST])                         # answers when shown the naive seed
     comment = "<<<<<<< SEARCH\n    xf = x.float()\n=======\n    # same\n    xf = x.float()\n>>>>>>> REPLACE"
@@ -594,7 +594,7 @@ def test_selection_carries_each_buckets_sources():
 
 def test_a_query_tool_that_cannot_run_answers_the_model_instead_of_crashing_the_search():
     from kernels.search import llm
-    with mock.patch.dict(sys.modules, {"store.index": None, "store": None}):
+    with mock.patch.dict(sys.modules, {"data.knowledge.index": None}):
         out = llm.run_query("SELECT 1")
     assert out.startswith("query failed: ") and "Error" in out
 
@@ -610,8 +610,8 @@ def test_the_cli_builds_its_funnel_with_every_task_in_the_memory(monkeypatch, tm
     a = SimpleNamespace(archive=str(path), second_judge_model="none", second_judge_share=4, effort="high",
                         judge_tools=False, model="m", per_call=20, parallel=4, ncu=False, precheck=True,
                         workers=8)
-    import lab.search
-    monkeypatch.setattr(lab.search, "FastEmbed", lambda cache: "EMBEDDER")
+    import data.knowledge.search
+    monkeypatch.setattr(data.knowledge.search, "FastEmbed", lambda cache: "EMBEDDER")
     f = cli._funnel(a, SimpleNamespace(name="moe_gemm_fp8"), lambda s, u: ("", 0.0))
     assert [e.id for e in f.library] == ["i1", "i2"] and f.embedder == "EMBEDDER"
     assert f.task == "moe_gemm_fp8" and f.precheck and f.workers == 8 and f.parallel == 4

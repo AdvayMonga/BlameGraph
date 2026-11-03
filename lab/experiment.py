@@ -21,12 +21,13 @@ import uuid
 from pathlib import Path
 
 from targets import engine
-from lab import experiments, ledger
+from lab import experiments
+from data.knowledge import ledger
 from lab.budget import Budget
 from lab.safety.surfaces import may_write
 from lab.workspace import Workspace
 
-RUNS = engine.ENV_ROOT / "lab" / "runs"
+RUNS = engine.ENV_ROOT / "local" / "runs"
 
 
 def _git(repo: Path, *args: str) -> str:

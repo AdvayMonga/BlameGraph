@@ -1,5 +1,5 @@
 """Hardware peaks the ceilings are computed against: HBM bandwidth and bf16 tensor-core throughput, measured once
-per GPU + driver (`python -m validity peaks`, run by lab/vm-setup.sh) into knowledge/peaks/<gpu>-<driver>.json. Spec-sheet
+per GPU + driver (`python -m validity peaks`, run by lab/vm-setup.sh) into data/calibration/peaks/<gpu>-<driver>.json. Spec-sheet
 numbers are the fallback, labelled `source: spec`; a ceiling from them says so."""
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 
 from targets import target
 
-PEAKS_DIR = target.ENV_ROOT / "knowledge" / "peaks"
+PEAKS_DIR = target.ENV_ROOT / "data" / "calibration" / "peaks"
 
 # Vendor spec sheets: dense bf16 tensor-core FLOP/s (no sparsity), HBM bytes/s, HBM bytes.
 SPEC = {

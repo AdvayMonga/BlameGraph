@@ -3,7 +3,7 @@
 # Container Toolkit): the three engines' images and both checkpoints, pulled once. Idempotent. From the laptop:
 #   LAB_VM_PROVIDER=nebius LAB_TARGET=targets/inference-server.toml python -m lab.vm start --minutes 720
 #   python -m lab.vm setup                                  # engine venv + docker (lab/vm-setup.sh)
-#   rsync data/equiv/ref to ~/BlameGraph/data/equiv/ref       # equiv's reference outputs (gitignored)
+#   rsync local/equiv/ref to ~/BlameGraph/data/equiv/ref       # equiv's reference outputs (gitignored)
 #   ssh: bash ~/BlameGraph/compare/vm-setup.sh
 #   ssh: cd ~/BlameGraph && ulimit -n 65536 && setsid nohup ~/inference-server/.venv/bin/python -m compare.run \
 #        --out ~/compare > ~/compare.log 2>&1 < /dev/null &
@@ -28,7 +28,7 @@ for ck in $checkpoints; do
 done
 
 echo "== reference outputs for equiv"
-[ -f "$here/../data/equiv/ref/outputs.jsonl" ] && echo ok || { echo "missing data/equiv/ref: rsync it from the laptop"; exit 1; }
+[ -f "$here/../local/equiv/ref/outputs.jsonl" ] && echo ok || { echo "missing local/equiv/ref: rsync it from the laptop"; exit 1; }
 
 echo "== facts"
 nvidia-smi --query-gpu=name,driver_version,clocks.max.sm,clocks.max.mem,power.limit --format=csv,noheader

@@ -19,7 +19,7 @@ ALWAYS_DENY = (
     "*ruff.toml", "*pyproject.toml", "*setup.cfg", "*pytest.ini", "*tox.ini",
 )
 # Removed from the agent's workspace; it can neither read nor recreate them.
-HIDDEN = ("corpus/*/heldout.jsonl",)
+HIDDEN = ("data/corpus/*/heldout.jsonl",)
 
 
 # The parts of a pyproject.toml that are dependencies; everything else in it (test and lint config) is protected.

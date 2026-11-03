@@ -19,7 +19,7 @@ _ids = itertools.count(1)
 
 
 def rec(kind: str, snapshot: str, result: dict, tool: str | None = None, run: str = RUN) -> dict:
-    """A record as lab/tools.py `_record` writes it, stamped as lab/ledger.py `append` does."""
+    """A record as lab/tools.py `_record` writes it, stamped as data/knowledge/ledger.py `append` does."""
     return {"id": f"ev-20261002-{next(_ids):012x}", "at": "2026-10-02T12:00:00+00:00", "schema": 1,
             "kind": kind, "run": run, "session": f"{run}-s1", "tool": tool or kind, "args": {},
             "snapshot": snapshot, "snapshot_blob": f"blobs/{snapshot}", "patch": f"blobs/{snapshot}x.patch",

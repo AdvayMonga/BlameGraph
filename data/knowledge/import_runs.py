@@ -5,8 +5,8 @@ DIR/equiv.json` becomes a `bench` or `equiv` record under a `manual-<date>` run:
 as its config, the numbers as its result, the regimes' full results kept, no text. The agent sees it like any
 measurement (`ledger`, `query`; `search` has nothing to index). `cost` is unknown for a manual run and stays null.
 
-    python -m lab.import_runs --run manual-20261018 --commit 9c6b79a --env PREFILL_MODE=mixed --env ASYNC_DECODE=1 \\
-        --label s9packed data/engine-h200-20261018/s9packed
+    python -m data.knowledge.import_runs --run manual-20261018 --commit 9c6b79a --env PREFILL_MODE=mixed --env ASYNC_DECODE=1 \\
+        --label s9packed local/engine-h200-20261018/s9packed
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import argparse
 import json
 from pathlib import Path
 
-from lab import ledger
+from data.knowledge import ledger
 from lab.evaltools import headline
 
 SESSION = "manual"

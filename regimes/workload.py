@@ -1,5 +1,5 @@
-"""Workloads: the corpus (`corpus/`, real BurstGPT timing + WildChat text; built by corpus/build_corpus.py) and seeded
-schedules built from it. Trace format (corpus/README.md): one request per line with `arrival_s`, `session_id`,
+"""Workloads: the corpus (`data/corpus/`, real BurstGPT timing + WildChat text; built by data/corpus/build_corpus.py) and seeded
+schedules built from it. Trace format (data/corpus/README.md): one request per line with `arrival_s`, `session_id`,
 `turn_index`, `prompt`, `max_tokens`, `build_prompt_tokens`, `messages` on multi-turn requests, and
 `expected_output_tokens` (the reference's answer length) once measured.
 """
@@ -20,7 +20,7 @@ WORDS = ("river stone lantern harbor meadow copper signal winter garden orbit le
 def corpus(root: str | Path, cls: str, split: str = "seen") -> list[dict]:
     """Records of one (class, split) through the verified loader (every trace hash is checked against the
     manifest; a changed trace refuses), each with a stable `id` (`<class>-<split>-<line>`)."""
-    from lab.corpus import load_trace
+    from data.corpus import load_trace
     _, reqs = load_trace(cls, split, Path(root))
     out = []
     for k, r in enumerate(reqs):
@@ -33,19 +33,19 @@ def corpus(root: str | Path, cls: str, split: str = "seen") -> list[dict]:
 
 
 def workload_file(path: str | Path) -> list[dict]:
-    """Records of a `python -m workloads` file (frontier benchmark data): same record shape, no classes or splits."""
+    """Records of a `python -m data.workloads` file (frontier benchmark data): same record shape, no classes or splits."""
     return [json.loads(x) for x in Path(path).read_text().splitlines() if x.strip()]
 
 
 def corpus_classes(root: str | Path) -> list[str]:
-    from lab.corpus import load_manifest
+    from data.corpus import load_manifest
     return list(load_manifest(Path(root)).classes)
 
 
 def corpus_version(root: str | Path | None) -> str | None:
     if root is None:
         return None
-    from lab.corpus import load_manifest
+    from data.corpus import load_manifest
     return load_manifest(Path(root)).corpus_version
 
 

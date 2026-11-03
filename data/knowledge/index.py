@@ -26,7 +26,8 @@ from typing import Iterable, Iterator
 
 import duckdb
 
-from lab import artifacts, experiments, gpu, ledger
+from lab import artifacts, experiments, gpu
+from data.knowledge import ledger
 
 QUERY_TIMEOUT_S = 60
 MAX_ROWS = 200

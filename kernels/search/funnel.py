@@ -58,7 +58,7 @@ class Funnel:
     precheck: bool = False                   # the no-GPU build check (jailed stage 5) before stage 1
     workers: int = 8                         # model calls at once
     library: list = field(default_factory=list)            # kernels.archive entries for every task (the memory's)
-    embedder: object | None = None           # lab.search's embedder: near-duplicate programs refused before any GPU time
+    embedder: object | None = None           # data.knowledge.search's embedder: near-duplicate programs refused before any GPU time
     vectors: dict = field(default_factory=dict)            # each program's fingerprint -> (id or "", parent id, vector)
     spent: float = 0.0
     calls: int = 0
@@ -168,7 +168,7 @@ def near_duplicates(f: Funnel, tree: Tree, drafts: list[tuple[str, str]]) -> lis
     NOVEL cosine of that one's), else None; the novel ones join `f.vectors`, so a later program in the same batch is
     compared too. Only siblings: a child's change from the start holds its parent's, so against the start every small
     change to a program looked like the program itself (decided 2026-11-03)."""
-    from lab.search import _cosine
+    from data.knowledge.search import _cosine
     if f.embedder is None:
         return [None] * len(drafts)
     for n in tree.nodes.values():                # a program written earlier has since joined the tree: name it
