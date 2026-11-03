@@ -94,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="each --captures dir (one traffic, e.g. a scored regime) weighs the same in the shape counts")
     ap.add_argument("--evals", type=int, default=30, help="with --mcts or no judge: programs judged, the root included")
     ap.add_argument("--model", default="claude-opus-5-5", help="the model alone, with --judge-model none")
-    ap.add_argument("--judge-model", default="claude-opus-5-5", help="the model making each change; `none`: --model alone")
+    ap.add_argument("--judge-model", default="claude-sonnet-5-5", help="the model making each change; `none`: --model alone")
     ap.add_argument("--judge-tools", action=argparse.BooleanOptionalAction, default=True,
                     help="the judge may search the web and query the ledger (its choice when)")
     ap.add_argument("--ncu", action=argparse.BooleanOptionalAction, default=None,
@@ -119,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--types", action=argparse.BooleanOptionalAction, default=True,
                     help="split each generation's ideas over refine, persist, fresh and crossover (kernels/search/"
                          "generations.py); --no-types: refine only")
-    ap.add_argument("--second-judge-model", default="claude-sonnet-5-5",
+    ap.add_argument("--second-judge-model", default="claude-opus-5-5",
                     help="a second model making changes, one call in --second-judge-share; `none`: the judge alone")
     ap.add_argument("--second-judge-share", type=int, default=4, help="every nth call goes to the second judge")
     ap.add_argument("--per-call", type=int, default=20, help="changes per expansion with --mcts")

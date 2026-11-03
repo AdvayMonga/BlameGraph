@@ -3,6 +3,15 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-03 — The kernel search's model mix is 1 Opus : 3 Sonnet, and its cost is the budget
+`kernels.search` makes each change with Sonnet 5.5 and every fourth call with Opus 5.5 (was Opus with Sonnet every
+fourth). The gaming detector stays Opus (one call per would-be winner). The cost of this mix is the search's model
+budget: further gains come from elsewhere in the search, not from more or stronger model calls. Why (the user, to cut
+cost): on moe_gemm_fp8 (same shapes and start, 3 generations) Sonnet alone reached 1.024x for $14.44; Opus alone
+reached 1.027x and 1.032x in generation 0 for $11.53 and $12.87, about 7x Sonnet's $1.65 per generation, the best
+scores within ~1%; the two Opus runs differed 9 vs 3 in children that beat their parent, so the improvement rates are
+not resolved. Not yet run as a mix on a GPU. Replaces the default of 2026-10-26 (3 Opus : 1 Sonnet).
+
 ## 2026-11-03 — The kernel search tunes nothing itself; a new best gets half the next generation
 Two changes from the post-mortem of OpenEvolve's 2026-10-27 win on moe_gemm_fp8:
 1. The grid search over a program's declared `CONFIG` + `TUNABLES` is removed (`kernels/search/tune.py`, the
