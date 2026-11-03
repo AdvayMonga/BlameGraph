@@ -19,7 +19,7 @@ def main():
     a = ap.parse_args()
     if a.kind == "peaks":
         from pathlib import Path
-        from validity import peaks
+        from measure.context import peaks
         p = peaks.measure(a.seconds)
         print(peaks.write(p, Path(a.out) if a.out else None), json.dumps(p.__dict__), sep="\n")
         return

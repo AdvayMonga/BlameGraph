@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The layer-1 validation session, on the GPU VM from this environment's dir (~/BlameGraph) after `lab.vm setup`:
-#   scp SHIPPED.py VM:~/shipped.py        # outside both trees: lab.vm's push deletes what it does not know
+# The layer-1 validation session, on the GPU VM from this environment's dir (~/BlameGraph) after `measure.cloud.vm setup`:
+#   scp SHIPPED.py VM:~/shipped.py        # outside both trees: measure.cloud.vm's push deletes what it does not know
 #   ssh VM 'cd ~/BlameGraph && PATH=$HOME/inference-server/.venv/bin:$PATH setsid nohup \
 #           bash kernels/evolve/validate_all.sh ~/shipped.py > ~/va.log 2>&1 < /dev/null &'   # then poll ~/va.log
 # 0. what the jails need: GPU counters open, a CUDA C++ extension built and judged, ncu counters reaching the judge
@@ -42,7 +42,7 @@ for spec in ${CAPTURE_SPECS:-mixed_1:256 mixed_3:64 long_context:60}; do
   cls=${spec%%:*}; n=${spec##*:}
   ls "$OUT/profile-$cls"/*/captures/calls.jsonl >/dev/null 2>&1 && continue
   rm -rf "$OUT/profile-$cls"
-  CUSTOM_BACKEND_CUDA_GRAPH=0 python -m lab.profile --corpus-class "$cls" --requests "$n" --max-tokens 128 --warmup 0 \
+  CUSTOM_BACKEND_CUDA_GRAPH=0 python -m measure.profile.profile --corpus-class "$cls" --requests "$n" --max-tokens 128 --warmup 0 \
     --profiler cuda-range $ENTRIES --out "$OUT/profile-$cls" > "$OUT/profile-$cls.log" 2>&1 \
     || { tail -20 "$OUT/profile-$cls.log"; exit 1; }
   grep -o "megakernel[^)]*" "$OUT/profile-$cls.log" | sort -u | head -2 || true
@@ -52,7 +52,7 @@ CAPS=$(ls -d "$OUT"/profile-*/*/captures | sed 's/^/--captures /' | tr '\n' ' ')
 echo "== 2. a served profile for the shares"
 if ! ls "$OUT"/served/*/kernels.json >/dev/null 2>&1; then
   rm -rf "$OUT/served"
-  python -m lab.profile --corpus-class mixed_1 --requests 64 --max-tokens 128 --out "$OUT/served" > "$OUT/served.log" 2>&1 \
+  python -m measure.profile.profile --corpus-class mixed_1 --requests 64 --max-tokens 128 --out "$OUT/served" > "$OUT/served.log" 2>&1 \
     || { tail -20 "$OUT/served.log"; exit 1; }
 fi
 

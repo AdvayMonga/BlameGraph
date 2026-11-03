@@ -10,8 +10,8 @@ from lab import dashboard, evaltools, live, session
 from data.knowledge import ledger
 from targets import target
 from lab.agent import AgentReply
-from regimes import suite
-from regimes.client import Row
+from measure.loadgen import suite
+from measure.loadgen.client import Row
 from tests.test_lab_runtime import ScriptedProvider
 
 pytest_plugins = ["tests.test_lab_runtime"]     # its `cfg` fixture: a run on a tiny repo

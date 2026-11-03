@@ -8,7 +8,7 @@ from collections import Counter
 from pathlib import Path
 
 from kernels.tasks import Task
-from lab import capture
+from measure.profile import capture
 
 
 def _ours(task: Task, call: dict) -> bool:

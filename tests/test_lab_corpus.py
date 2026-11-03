@@ -220,7 +220,7 @@ def _multi_turn_corpus(d: Path):
 
 
 def _fake_reference(monkeypatch, fail=lambda req: False):
-    from regimes import client
+    from measure.loadgen import client
     sent = []
 
     def fake_send(url, model, req, scheduled, clock, chat_kwargs=None, **k):

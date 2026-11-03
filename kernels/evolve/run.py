@@ -142,7 +142,7 @@ def _hardware(device: str) -> str:
         v = getattr(p, k, None)
         if v is not None:
             facts[k] = v
-    from validity import peaks
+    from measure.context import peaks
     pk = peaks.load(p.name)
     if pk:
         facts.update(peak_hbm_gb_s=round(pk.bw_bytes_s / 1e9), peak_bf16_tflops=round(pk.bf16_flops / 1e12),

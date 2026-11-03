@@ -26,7 +26,9 @@ from typing import Iterable, Iterator
 
 import duckdb
 
-from lab import artifacts, experiments, gpu
+from measure.runner import artifacts
+from lab import experiments
+from measure.profile import gpu
 from data.knowledge import ledger
 
 QUERY_TIMEOUT_S = 60

@@ -8,8 +8,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from validity import ceiling, peaks  # noqa: E402
-from validity.ceiling import ModelSpec, Shape  # noqa: E402
+from measure.context import ceiling, peaks  # noqa: E402
+from measure.context.ceiling import ModelSpec, Shape  # noqa: E402
 
 QWEN3_30B_A3B = {"num_hidden_layers": 48, "hidden_size": 2048, "num_attention_heads": 32, "num_key_value_heads": 4,
                  "head_dim": 128, "vocab_size": 151936, "intermediate_size": 6144, "num_experts": 128,

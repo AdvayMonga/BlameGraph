@@ -38,7 +38,7 @@ class Task:
         regimes = tuple(obj.get("regimes") or ())
         if not regimes:
             raise ValueError(f"{p}: [objective].regimes is empty")
-        from regimes import suite
+        from measure.loadgen import suite
         bad = [r for r in regimes if r not in suite.REGIMES] + [r for r in (raw.get("constraints") or {}) if r not in suite.REGIMES]
         if bad:
             raise ValueError(f"{p}: unknown regime(s) {bad}; one of {list(suite.REGIMES)}")
@@ -68,7 +68,7 @@ def score(metrics: dict, task: Task, better: dict | None = None) -> dict:
     """From a submit record's metrics ({regime: {base, new, delta_pct, band_pct, verdict}}) and each regime's
     measured direction (`better`, as submit reports it): per-regime gains, the combined objective, constraint
     checks, and whether this is a win."""
-    from regimes import suite
+    from measure.loadgen import suite
     better = {**{n: ("lower" if n in LOWER_IS_BETTER else "higher") for n in suite.REGIMES}, **(better or {})}
     gains, verdicts, missing = {}, {}, []
     for r in task.regimes:

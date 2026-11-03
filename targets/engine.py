@@ -22,7 +22,7 @@ _using: list[str] = []
 
 @contextmanager
 def using(py: str):
-    """`python()` is `py` inside the block: the venv a tree's own dependency files were built into (lab/build.py)."""
+    """`python()` is `py` inside the block: the venv a tree's own dependency files were built into (measure/sandbox/build.py)."""
     _using.append(py)
     try:
         yield

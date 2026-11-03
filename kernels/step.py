@@ -1,8 +1,8 @@
-"""The whole decode step as one region (`region:embed:argmax`, lab.capture.STEP): the engine's decode-step megakernel
+"""The whole decode step as one region (`region:embed:argmax`, measure.profile.capture.STEP): the engine's decode-step megakernel
 (`inference_server.models.megakernel.decode_step`: embedding, every layer, final norm, lm_head, greedy argmax, each
 layer's K/V written into the paged cache) as a kernel task (local/notes/handoff-megakernel-framework.md).
 
-Inputs, captured at a step's start (lab.capture.step): tokens [B], pos [B] (each row's length so far), the block
+Inputs, captured at a step's start (measure.profile.capture.step): tokens [B], pos [B] (each row's length so far), the block
 table [B, cols] and every layer's K/V of the blocks the rows touch, stacked [layers, blocks, kv heads, 16, head dim].
 Outputs: logits [B, V], next tokens [B], and the K/V after the step. A pure function: the K/V comes back as new
 tensors, so the baseline and every program copy it per call (the engine writes in place). The weights are not inputs:
@@ -24,7 +24,7 @@ import torch
 
 from kernels.regions import ERROR_BUDGET
 from kernels.tasks import Task, randn
-from lab.capture import STEP, STEP_ENTRY
+from measure.profile.capture import STEP, STEP_ENTRY
 
 INPUTS = ("tokens", "pos", "bt", "k_cache", "v_cache")
 OUTPUTS = ("logits", "next", "k_cache", "v_cache")
@@ -117,11 +117,11 @@ def _cost(w: dict):
 
 
 def task(samples: str | None = None, shared_weights: str | None = None) -> Task:
-    """The step as a task: inputs from a capture's samples (`samples`: lab.capture.step's dir, its first call per
+    """The step as a task: inputs from a capture's samples (`samples`: measure.profile.capture.step's dir, its first call per
     (rows, block-table width) kept whole), the weights attached from a holder (`shared_weights`, `weights`'s
     entries); seed 0 is the capture exactly, later seeds perturb the K/V."""
     from kernels.shared_weights import attach
-    from lab import capture
+    from measure.profile import capture
     w = attach(Path(shared_weights)) if shared_weights else {}
     calls = [c for c in capture.load(Path(samples)) if c.get("fn") == STEP] if samples else []
     by_shape: dict[tuple, Path] = {}

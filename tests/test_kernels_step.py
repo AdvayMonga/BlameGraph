@@ -1,4 +1,4 @@
-"""The whole decode step as one region (kernels/step.py, lab.capture.step): a step captured from a fake megakernel,
+"""The whole decode step as one region (kernels/step.py, measure.profile.capture.step): a step captured from a fake megakernel,
 the task built from it and a CPU holder (shapes, inputs, the weights passed uncloned), and, where the engine imports
 (run with LAB_ENGINE_REPO set), the fp32 reference through the engine's stations on a tiny model and the starting
 program built from the engine's decode_step.cu. The megakernel itself needs an H200: not run here."""
@@ -17,7 +17,7 @@ import pytest  # noqa: E402
 torch = pytest.importorskip("torch")
 
 from kernels import step  # noqa: E402
-from lab import capture  # noqa: E402
+from measure.profile import capture  # noqa: E402
 
 L, NB, NKV, BS, D, H, NQ, E, K, I, V = 2, 12, 2, 16, 16, 64, 4, 4, 2, 32, 50
 

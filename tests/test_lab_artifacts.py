@@ -1,10 +1,10 @@
-"""lab.artifacts: blobs round-trip, and client rows join engine rows by trace id (SQLite and JSONL)."""
+"""measure.runner.artifacts: blobs round-trip, and client rows join engine rows by trace id (SQLite and JSONL)."""
 from __future__ import annotations
 
 import json
 import sqlite3
 
-from lab import artifacts
+from measure.runner import artifacts
 
 
 def test_store_load_and_join(tmp_path):
@@ -36,7 +36,7 @@ def test_absent_telemetry_is_none(tmp_path):
 
 
 def test_timeline_events_are_not_read_as_request_rows(tmp_path):
-    from lab import artifacts
+    from measure.runner import artifacts
     d = tmp_path / "telemetry"; (d / "timeline").mkdir(parents=True)
     (d / "requests.jsonl").write_text(json.dumps({"trace_id": "bg-1", "tokens_out": 3}) + "\n")
     (d / "timeline" / "events.jsonl").write_text(json.dumps({"kind": "finish", "trace_id": "bg-1", "step": 4}) + "\n")

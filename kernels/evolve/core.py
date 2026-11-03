@@ -200,7 +200,7 @@ def load_program(path: Path):
 def _peaks(device: str):
     if torch.device(device).type != "cuda":
         return None
-    from validity import peaks
+    from measure.context import peaks
     return peaks.load(torch.cuda.get_device_name(torch.device(device)))
 
 

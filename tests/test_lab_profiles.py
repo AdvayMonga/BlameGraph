@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from lab import profiles
+from measure.runner import profiles
 from targets import target
 
 SPEC = '''

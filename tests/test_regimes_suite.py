@@ -8,8 +8,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from regimes import suite  # noqa: E402
-from regimes.runner import find_goodput  # noqa: E402
+from measure.loadgen import suite  # noqa: E402
+from measure.loadgen.runner import find_goodput  # noqa: E402
 
 
 def test_a_hinted_search_starts_at_the_base_and_stops_at_the_band():
@@ -44,8 +44,8 @@ def test_the_search_reports_its_bracket_and_never_stops_on_its_budget_first():
 def test_open_loop_probes_are_scored_under_steady_load_and_a_failed_confirmation_backs_off_by_the_resolution():
     """Arrivals start one request's time at the limits before the scored window and run as long after it; a load that
     passes its probe but fails the confirmation steps down by the search's resolution and counts as failing."""
-    from regimes.client import Request, Row
-    from regimes.runner import Limits
+    from measure.loadgen.client import Request, Row
+    from measure.loadgen.runner import Limits
     load, _, found = suite._search_and_confirm(lambda x, final: {"valid": True, "meets_limits": x <= (7.0 if final else 8.0)},
                                                {"start": 1.0, "rel_tol": 0.05})
     assert 7.0 * 0.95 <= load <= 7.0 and found["fails_at"] <= 8.0
@@ -151,7 +151,7 @@ def _fast():
 
 
 def test_realistic_maps_sittings_to_conversations_and_salts_each():
-    from regimes import workload as W
+    from measure.loadgen import workload as W
     convs = [{"id": f"c{k}", "session_id": f"s{k}", "max_tokens": 16, "expected_output_tokens": 8,
               "expected_turn_output_tokens": [3, 4, 5],
               "messages": [{"role": "user", "content": f"a{k}"}, {"role": "assistant", "content": f"b{k}"},
@@ -184,7 +184,7 @@ def test_realistic_maps_sittings_to_conversations_and_salts_each():
 
 
 def test_once_salts_every_request_and_splits_over_parts():
-    from regimes import workload as W
+    from measure.loadgen import workload as W
     order = [{"id": f"r{k}", "prompt": "p", "max_tokens": 4} for k in range(7)]
     reqs = list(W.Once(order))
     assert [q.id for q in reqs] == [f"r{k}#{k}" for k in range(7)]

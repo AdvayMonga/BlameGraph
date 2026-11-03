@@ -1,4 +1,4 @@
-"""regimes.arrivals: the timing model fitted from a conversation log. A fake log with known sessions is read into
+"""measure.loadgen.arrivals: the timing model fitted from a conversation log. A fake log with known sessions is read into
 sittings by split, fitted, drawn from at steady state, and compared. Run: python tests/test_regimes_arrivals.py"""
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from regimes import arrivals  # noqa: E402
+from measure.loadgen import arrivals  # noqa: E402
 
 
 def _log(path: Path, seed: int = 0) -> None:

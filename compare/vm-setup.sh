@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# The engine comparison's extra setup on a GPU VM that lab/vm-setup.sh has bootstrapped (engine venv, docker, NVIDIA
+# The engine comparison's extra setup on a GPU VM that measure/cloud/vm-setup.sh has bootstrapped (engine venv, docker, NVIDIA
 # Container Toolkit): the three engines' images and both checkpoints, pulled once. Idempotent. From the laptop:
-#   LAB_VM_PROVIDER=nebius LAB_TARGET=targets/inference-server.toml python -m lab.vm start --minutes 720
-#   python -m lab.vm setup                                  # engine venv + docker (lab/vm-setup.sh)
+#   LAB_VM_PROVIDER=nebius LAB_TARGET=targets/inference-server.toml python -m measure.cloud.vm start --minutes 720
+#   python -m measure.cloud.vm setup                                  # engine venv + docker (measure/cloud/vm-setup.sh)
 #   rsync local/equiv/ref to ~/BlameGraph/data/equiv/ref       # equiv's reference outputs (gitignored)
 #   ssh: bash ~/BlameGraph/compare/vm-setup.sh
 #   ssh: cd ~/BlameGraph && ulimit -n 65536 && setsid nohup ~/inference-server/.venv/bin/python -m compare.run \

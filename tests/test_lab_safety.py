@@ -7,8 +7,8 @@ import subprocess
 
 import pytest
 
-from lab.safety import container, grader, jail
-from lab.safety.surfaces import may_write
+from measure.sandbox import container, grader, jail
+from measure.sandbox.surfaces import may_write
 from tests.lab_fixtures import make_repo
 
 
@@ -75,7 +75,7 @@ def test_evaluator_config_added_anywhere_is_a_violation(tmp_path):
 
 
 def test_write_hook_lets_the_agent_edit_its_own_new_test(tmp_path):
-    from lab.safety.hooks import allowed
+    from lab.hooks import allowed
     repo = make_repo(tmp_path)
     ws = tmp_path / "ws"
     grader.export(repo, "HEAD", ws)
@@ -99,7 +99,7 @@ def test_jailed_timeout_is_a_failed_run(tmp_path, monkeypatch):
 
 def test_jailed_names_its_processes_to_a_watcher(tmp_path, monkeypatch):
     import sys
-    from lab import gpu
+    from measure.profile import gpu
     monkeypatch.setenv("LAB_NO_JAIL", "1")
     repo = make_repo(tmp_path)
     tree = tmp_path / "t"
@@ -167,7 +167,7 @@ addopts = "-q"
 
 
 def test_a_pyproject_may_change_its_dependencies_and_nothing_else(tmp_path):
-    from lab.safety.surfaces import deps_only
+    from measure.sandbox.surfaces import deps_only
     assert deps_only(PYPROJECT, PYPROJECT.replace('["a"]', '["a", "b>=2"]'))
     assert deps_only(PYPROJECT, PYPROJECT + '\n[tool.uv.sources]\nb = { index = "x" }\n')
     assert not deps_only(PYPROJECT, PYPROJECT.replace('"-q"', '"-q -k nothing"'))   # test config is the evaluator's
@@ -204,7 +204,7 @@ def test_a_venv_in_scratch_is_left_out_but_a_link_in_the_surface_is_a_violation(
 
 
 def test_srt_never_reads_the_jailed_command_as_its_own_options(tmp_path, monkeypatch):
-    from lab.safety import jail
+    from measure.sandbox import jail
     monkeypatch.setattr(jail.shutil, "which", lambda name: "/bin/srt" if name == "srt" else None)
     argv = jail.wrap({"network": {}, "filesystem": {}}, tmp_path / "srt.json", ["python", "-c", "print(1)"])
     assert argv == ["/bin/srt", "--settings", str(tmp_path / "srt.json"), "--", "python", "-c", "print(1)"]

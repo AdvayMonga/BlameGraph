@@ -1,7 +1,7 @@
 """Kernel tasks: what a candidate kernel must compute, on which shapes, against which reference.
 
 A task names the engine function it can replace (`entry`, the baseline), a reference implementation, an input
-builder, how to read a shape from a captured call (lab/capture.py), how to split shapes into seen and held-out
+builder, how to read a shape from a captured call (measure/profile/capture.py), how to split shapes into seen and held-out
 regions, and the bytes and FLOPs a call must move (the roofline bound). Tensors only cross the candidate boundary;
 scalars a call needs (e.g. an attention scale) are derived from the shapes inside `call`."""
 from __future__ import annotations
@@ -109,7 +109,7 @@ def load(name: str, **region) -> Task:
         return task(name, region.get("source"))
     if name.startswith("region:"):
         from kernels import regions
-        from lab.capture import STEP
+        from measure.profile.capture import STEP
         if not region:                           # no samples or holder here: what the controller knows of it
             return regions.light(name)
         if name == STEP:

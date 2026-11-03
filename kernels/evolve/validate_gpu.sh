@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Layer-1 GPU validation, run on the VM from this environment's dir with the engine's venv on PATH:
-#   python -m lab.vm run --env --keep -- bash kernels/evolve/validate_gpu.sh [ITERATIONS] [TASK]   (TASK: paged_decode)
+#   python -m measure.cloud.vm run --env --keep -- bash kernels/evolve/validate_gpu.sh [ITERATIONS] [TASK]   (TASK: paged_decode)
 # 1. capture the engine's calls to the task's entry point under real corpus traffic at several concurrencies, CUDA graphs off:
 #    replayed graphs never reach Python, so with them on most calls would be invisible
 # 2. split them into seen / held-out regions
@@ -30,7 +30,7 @@ for spec in ${CAPTURE_SPECS:-mixed_1:256 mixed_3:64 long_context:60}; do
   cls=${spec%%:*}; n=${spec##*:}
   ls -d "$OUT/profile-$cls"/*/captures >/dev/null 2>&1 && continue      # already captured
   CUSTOM_BACKEND_CUDA_GRAPH=0 \
-  python -m lab.profile --corpus-class "$cls" --requests "$n" --max-tokens 128 --capture "$ENTRY" --out "$OUT/profile-$cls" \
+  python -m measure.profile.profile --corpus-class "$cls" --requests "$n" --max-tokens 128 --capture "$ENTRY" --out "$OUT/profile-$cls" \
     > "$OUT/profile-$cls.log" 2>&1 || { tail -20 "$OUT/profile-$cls.log"; exit 1; }
 done
 CAPS=$(ls -d "$OUT"/profile-*/*/captures | sed 's/^/--captures /' | tr '\n' ' ')

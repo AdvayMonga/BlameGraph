@@ -1,4 +1,4 @@
-"""lab.worker: tree hashes, and the Remote transport end to end through a local shell (the same CLI ssh would run)."""
+"""measure.runner.worker: tree hashes, and the Remote transport end to end through a local shell (the same CLI ssh would run)."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 
 from targets import engine, target
-from lab import serve, worker
-from lab.safety import grader
+from measure.runner import serve, worker
+from measure.sandbox import grader
 from tests.lab_fixtures import make_repo
 from tests.test_lab_evaltools import _target
 
@@ -151,7 +151,7 @@ def test_remote_pause_thaws_only_what_it_froze(said, unpaused):
 
 def test_a_capture_profile_runs_with_the_targets_capture_env(tmp_path, monkeypatch):
     from lab import tools as T
-    from lab import worker
+    from measure.runner import worker
     seen = {}
     monkeypatch.setattr(T, "stage_harness", lambda tree: tmp_path / "h")
     monkeypatch.setattr(T, "workload_flags", lambda a, h, n: [])

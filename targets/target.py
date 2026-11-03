@@ -45,8 +45,8 @@ class Target:
     test: str
     lint: str
     deps: tuple[str, ...]          # dependency files the agent may change (pyproject: its dependency tables only)
-    build: str | None              # installs `deps` into $UV_PROJECT_ENVIRONMENT (lab/build.py)
-    profiles: str | None           # the engine tree's launch-profiles file (lab/profiles.py), relative to the tree
+    build: str | None              # installs `deps` into $UV_PROJECT_ENVIRONMENT (measure/sandbox/build.py)
+    profiles: str | None           # the engine tree's launch-profiles file (measure/runner/profiles.py), relative to the tree
     profile_env: str | None        # the env var that names the profile of a launch
     reference: Server | None
     reference_dir: Path | None

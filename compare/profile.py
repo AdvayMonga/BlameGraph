@@ -35,7 +35,7 @@ POINTS = {
 
 
 def _pool(ctx, cls: str | None, length: int | None) -> list[dict]:
-    from regimes import suite
+    from measure.loadgen import suite
     if cls == "short":
         allp = ctx.pool(None)
         pool = [r for r in allp if (r.get("build_prompt_tokens") or 0) <= suite.SHORT_PROMPT_TOKENS and not r.get("messages")]
@@ -46,7 +46,7 @@ def _pool(ctx, cls: str | None, length: int | None) -> list[dict]:
 
 
 def _drive(ctx, point, duration_s: float, rows: list):
-    from regimes import workload as W
+    from measure.loadgen import workload as W
     loop, cls, load, length = POINTS[point]
     pool = _pool(ctx, cls, length)
     if loop == "closed":
@@ -71,8 +71,8 @@ def _server_pid(engine: str, srv) -> int:
 
 def profile(out: Path, engines: list[str], precision: str, points: list[str], plain: bool = False) -> None:
     from targets import target
-    from regimes import runner, suite
-    from regimes.__main__ import _cpus
+    from measure.loadgen import runner, suite
+    from measure.loadgen.__main__ import _cpus
     spec, t = R.load(), target.load()
     c = spec["common"]
     exe, root = _nsys()

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from lab.safety import container, grader, jail
+from measure.sandbox import container, grader, jail
 from tests.lab_fixtures import make_repo
 
 
@@ -122,7 +122,7 @@ def test_timeout_removes_the_container(tmp_path, monkeypatch):
 
 @live
 def test_served_port_reaches_the_host_and_nothing_else(tmp_path, monkeypatch):
-    from lab import serve
+    from measure.runner import serve
     monkeypatch.delenv("LAB_NO_JAIL", raising=False)
     tree = tmp_path / "t"
     grader.export(make_repo(tmp_path), "HEAD", tree)
@@ -162,7 +162,7 @@ def test_the_workbench_has_network_gpu_and_root_inside(docker_named, tmp_path, m
 
 
 def test_quiet_kills_the_workbenchs_gpu_holders_then_pauses_and_thaws(monkeypatch):
-    from lab import gpu
+    from measure.profile import gpu
     calls, killed = [], []
     monkeypatch.setattr(container, "_docker", lambda: "docker")
     monkeypatch.setattr(container, "running", lambda n: True)

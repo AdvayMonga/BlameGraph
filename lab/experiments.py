@@ -15,7 +15,7 @@ MEASURED = ("bench", "equiv", "submit", "profile", "trace", "kernel", "hostprof"
 PROFILERS = ("profile", "trace", "kernel", "hostprof")      # results with no `metrics`: predictions name a path
 PROFILE_WORKLOAD = ("requests", "max_tokens", "prompt_len", "synthetic", "corpus_class", "seed", "capture", "profile")
 UNITS = ("absolute", "change_pct")
-LAYERS = ("kernels", "model_execution", "runtime", "serving")      # lab/layers.py's four layers
+LAYERS = ("kernels", "model_execution", "runtime", "serving")      # measure/context/layers.py's four layers
 # Runs made outside the lab by a researcher (`python -m lab.experiment`): their text is a person's, so no agent view
 # (the `ledger` tool, the agent's SQL index) shows any of their records.
 RESEARCHER = "researcher-"

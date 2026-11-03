@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from lab import calibrate
+from measure.context import calibrate
 from targets import target
 from tests.test_validity_ceiling import QWEN3_30B_A3B
 
