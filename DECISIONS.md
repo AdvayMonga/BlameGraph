@@ -3,6 +3,17 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-02 — Sonnet against Opus for the kernel search, measured before any switch
+Each idea in a search's log records the model that wrote it, and one task is searched by Opus alone and by Sonnet alone
+(`kernels.search.ab --model`, same shapes, start and generations) before the default mix (Opus with Sonnet one call in
+four) changes. Why (the user, to cut cost): model calls were ~90% of a region search's cost (decode attention: $40.80
+of calls against ~$5 of GPU), and nothing measured whether Sonnet's changes beat their parent less often.
+
+## 2026-11-02 — A region capture keeps its samples to a byte budget
+The engine's region capture (`models/region_capture.py`, inference-server) keeps samples to 16 GB in all, and a sample
+over 32 MB only every 32 calls, so they spread over the run. Why: a region reading the K/V pool has a new shape at
+almost every decode step; capturing decode attention at 256 rows wrote 2,500 samples (286 GB) and filled the VM's disk.
+
 ## 2026-11-02 — Regions may include the K/V writer
 A region may include `kv_append` (the decode K/V write, in place): its task runs the engine's stations as they run in
 the engine and gives each call a copy of the pool to write (the same work for the baseline and a program, inside the

@@ -131,11 +131,12 @@ def change(f: Funnel, system: str, base: str, parent: Node, facts: str, mode: st
     """One call: (its hypothesis, the program it wrote or None, why not). `facts` (a slice, a note, another program)
     goes between the cached `base` and the request `mode` (loop.MODES, formatted with `kw`)."""
     from kernels.search.loop import MODES, hypotheses
-    text = f._ask(f._judge(), judging(f, system), base + CACHE_SPLIT + "".join(
+    model = f._judge()
+    text = f._ask(model, judging(f, system), base + CACHE_SPLIT + "".join(
         f"\n\n{t}" for t in (facts, MODES[mode].format(**kw)) if t))
     head = text.split("<<<<<<< SEARCH")[0]
     got = hypotheses(head, 1)
-    idea = got[0] if got else {}
+    idea = {**(got[0] if got else {}), **({"model": model.model} if getattr(model, "model", None) else {})}
     code, why = diff.apply(parent.code, text) if text else (None, "the model returned no text")
     if code is not None and fingerprint(code) in seen:
         code, why = None, "identical to a program already judged (comments and whitespace aside)"

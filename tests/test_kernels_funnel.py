@@ -26,7 +26,7 @@ def h(n):
 class Model:
     """The k-th call sets `a` to the k-th of `values` and says so in its hypothesis; its code has braces in it."""
     def __init__(self, values=(5, 13, 22, 7)):
-        self.values, self.calls, self.systems = values, [], []
+        self.values, self.calls, self.systems, self.model = values, [], [], "claude-test"
 
     def __call__(self, system, user):
         self.calls.append(user)
@@ -62,6 +62,7 @@ def test_one_call_per_change_and_every_correct_program_joins_the_tree():
     fates = {x["idea"]["modification_plan"]: x["fate"] for x in row["ideas"]}
     assert fates["set a = 13"] == "failed correctness" and fates["set a = 22"] == "full exam"
     assert all(json.loads(k.judge)["bottleneck"] for k in kids)     # the hypothesis, braces in code
+    assert all(x["idea"]["model"] == "claude-test" for x in row["ideas"])   # which model wrote each idea
     assert sum("compiler's report" in u for u in f.models.judge.calls) == 2             # slices rotated over the calls
 
 
