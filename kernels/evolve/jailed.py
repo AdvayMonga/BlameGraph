@@ -2,7 +2,7 @@
 
 The candidate runs as agent code (lab/safety/grader.jailed: a container with no network on Linux, srt elsewhere;
 LAB_NO_JAIL=1 waives it). The jail sees a fresh tree holding only the candidate and its config, a read-only copy of
-the harness core needs (kernels/, validity.peaks, lab.target, the measured peaks), and the engine's source read-only
+the harness core needs (kernels/, validity.peaks, targets.target, the measured peaks), and the engine's source read-only
 when the task's baseline lives there; never this repo, which holds the held-out shapes, the ledger and .env."""
 from __future__ import annotations
 
@@ -22,12 +22,12 @@ from kernels.evolve import ncu, sanitize
 from kernels.evolve.evaluator import tail
 from kernels.evolve.verify import verify
 from kernels.tasks import load
-from lab import engine
+from targets import engine
 from lab.safety import container, grader
 
 ROOT = Path(__file__).resolve().parents[2]
-HARNESS = {"kernels": None, "validity": ("__init__.py", "peaks.py"),
-           "lab": ("__init__.py", "target.py", "capture.py")}   # capture: a region reads its samples (regions.from_engine)
+HARNESS = {"kernels": None, "validity": ("__init__.py", "peaks.py"), "targets": ("__init__.py", "target.py"),
+           "lab": ("__init__.py", "capture.py")}   # capture: a region reads its samples (regions.from_engine)
 TIMEOUT_S = float(os.environ.get("KERNEL_EVAL_TIMEOUT_S", "600"))
 NCU_STAGE = 3                    # not a judging stage: ncu counters for a program that passed stage 2 (kernels/evolve/ncu.py)
 QUICK_STAGE = 4                  # stage 2 on the most-called seen shape only: the funnel's quick speed test

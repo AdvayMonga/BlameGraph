@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fnmatch import fnmatch
 
-from lab import target
+from targets import target
 
 
 def write_surface() -> tuple[tuple[str, ...], tuple[str, ...]]:

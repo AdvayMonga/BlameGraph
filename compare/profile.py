@@ -70,7 +70,7 @@ def _server_pid(engine: str, srv) -> int:
 
 
 def profile(out: Path, engines: list[str], precision: str, points: list[str], plain: bool = False) -> None:
-    from lab import target
+    from targets import target
     from regimes import runner, suite
     from regimes.__main__ import _cpus
     spec, t = R.load(), target.load()

@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib.parse import urlsplit
 
-from lab import apiproxy, engine, live
+from lab import apiproxy, live
+from targets import engine
 from lab.safety import container, jail
 from lab.safety.grader import HF_HUB
 from lab.safety.hooks import WRITE_TOOLS, write_guard

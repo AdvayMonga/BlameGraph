@@ -20,7 +20,8 @@ import time
 import uuid
 from pathlib import Path
 
-from lab import engine, experiments, ledger
+from targets import engine
+from lab import experiments, ledger
 from lab.budget import Budget
 from lab.safety.surfaces import may_write
 from lab.workspace import Workspace

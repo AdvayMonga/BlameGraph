@@ -9,7 +9,7 @@ import json
 import sys
 import time
 
-from lab import target
+from targets import target
 
 from . import suite
 from .workload import corpus_version

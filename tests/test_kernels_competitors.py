@@ -309,8 +309,8 @@ def test_step_times_by_batch_and_the_faster_path(tmp_path):
 
 
 def test_crossover_reruns_on_a_changed_setting_and_marks_a_megakernel_that_never_ran(tmp_path, monkeypatch):
-    import lab.target
-    monkeypatch.setattr(lab.target, "load", lambda: types.SimpleNamespace(engine=types.SimpleNamespace(env={"W": "1"})))
+    import targets.target
+    monkeypatch.setattr(targets.target, "load", lambda: types.SimpleNamespace(engine=types.SimpleNamespace(env={"W": "1"})))
     ran = []
 
     def run(argv, env, **k):
@@ -403,7 +403,7 @@ def test_every_ported_task_starts_from_its_competitor_with_the_engines_signature
 
 
 def test_the_ports_apply_to_the_engines_own_modules_when_it_is_here():
-    from lab import engine, target
+    from targets import engine, target
     try:
         src = engine.repo() / "src"
     except target.NoTarget:

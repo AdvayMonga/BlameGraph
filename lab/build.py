@@ -20,7 +20,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from lab import engine, target
+from targets import engine, target
 from lab.safety import container
 
 # PyPI, plus the wheel hosts that CUDA builds of torch pull from (its nvidia-* dependencies live on NVIDIA's index);

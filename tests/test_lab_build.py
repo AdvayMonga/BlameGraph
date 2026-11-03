@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from lab import build, engine, target
+from lab import build
+from targets import engine, target
 from lab.safety import container, jail
 
 

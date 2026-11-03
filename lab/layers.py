@@ -155,7 +155,7 @@ def _decode_distance(t, gpu: dict | None, batch: float | None, context: float | 
 
 
 def main(argv: list[str] | None = None) -> int:
-    from lab import target
+    from targets import target
     ap = argparse.ArgumentParser(prog="python -m lab.layers", description=__doc__.split("\n\n")[0])
     target.add_argument(ap)
     ap.add_argument("bundle", type=Path)

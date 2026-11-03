@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from lab import engine, serve, target, worker
+from targets import engine, target
+from lab import serve, worker
 from lab.safety import grader
 from tests.lab_fixtures import make_repo
 from tests.test_lab_evaltools import _target

@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from lab import target
+from targets import target
 from validity.repeat_audit import PROMPTS, repeat_audit
 
 

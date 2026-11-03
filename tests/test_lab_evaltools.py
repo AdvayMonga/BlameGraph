@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from lab import ledger, serve, target
+from lab import ledger, serve
+from targets import target
 from lab.budget import Budget
 from lab.session import Session
 from lab.tools import Toolbox

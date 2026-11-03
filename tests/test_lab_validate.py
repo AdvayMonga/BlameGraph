@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from lab import ledger, target, validate
+from lab import ledger, validate
+from targets import target
 from regimes import suite
 
 FAKE = Path(__file__).resolve().parent / "fake_engine.py"

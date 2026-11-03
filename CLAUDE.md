@@ -47,13 +47,13 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   A profile launch that fails makes its regimes invalid with the reason (`profiles_failed`) and the rest is kept; a
   busy GPU, contamination or the general launch failing still fail the measurement. The profiler tools take
   `profile` too. Noise bands stay the base engine's general config (the latest per target, any engine commit, same corpus version), stated in the harness facts.
-- `targets/<name>.toml` + `lab/target.py` — **the target spec** (since 2026-10-06): model + chat kwargs, engine
+- `targets/<name>.toml` + `targets/target.py` — **the target spec** (since 2026-10-06): model + chat kwargs, engine
   (repo, python, launch command with `{port}`, health path, env, logprobs `api` vllm|sglang|none, write surface,
   add-only globs, test and lint commands, optional `[engine.telemetry] env` with `{dir}`, optional `profiles` +
   `profile_env`: launch profiles, `lab/profiles.py`), reference server + its outputs dir, MLPerf latency limits, correctness
   tasks and policy (`submit_tier`: the equiv tier submit requires, `dev` for the example engine until full fits), corpus dir. Selected by `LAB_TARGET` or `--target`; `target.load()` raises `NoTarget` otherwise.
   Nothing defaults to the user's engine or to Qwen3; `targets/inference-server.toml` is the committed example and
-  what `tests/conftest.py` points at. Surfaces, grader commands, `lab/engine.py`, and the `correctness`,
+  what `tests/conftest.py` points at. Surfaces, grader commands, `targets/engine.py`, and the `correctness`,
   `regimes`, `validity` CLIs all read it.
 - `lab/` — moved from inference-server 2026-10-06. `session.py` (the loop over a dollar budget),
   `agent.py` (the one place a model is called; the agent's jailed shell gets the engine's python on PATH;
@@ -578,7 +578,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   no token: MLPerf files from the public `inference.mlcommons-storage.org` bucket (`metadata/<name>.uri` + `.md5`),
   ShareGPT from the Hub. Not re-hosted (GPQA asks not to be; ShareGPT's license is unclear). Chat templates are
   stripped. Llama-3.1-405B (404 on the bucket) and edge-agentic (tool-call transcripts) are not imported.
-- `tests/test_*.py` — all synthetic, no GPU, each runnable with `python3 tests/<file>.py`, named after the module they cover; `test_correctness_run.py` is the full reference→candidate→verdict flow on fake servers; `test_kernels.py` also runs on MPS; `test_regimes.py` drives `tests/fake_engine.py` (fixed decode slots, run out of process) through every regime (~4 min in CI, where PRs run it only if they touch `regimes/`, `canaries/`, `corpus/`, `lab/corpus.py`, `lab/target.py`, its fake engine or the workflows; main pushes and the weekly run always do).
+- `tests/test_*.py` — all synthetic, no GPU, each runnable with `python3 tests/<file>.py`, named after the module they cover; `test_correctness_run.py` is the full reference→candidate→verdict flow on fake servers; `test_kernels.py` also runs on MPS; `test_regimes.py` drives `tests/fake_engine.py` (fixed decode slots, run out of process) through every regime (~4 min in CI, where PRs run it only if they touch `regimes/`, `canaries/`, `corpus/`, `lab/corpus.py`, `targets/target.py`, its fake engine or the workflows; main pushes and the weekly run always do).
 - `data/` is gitignored and local only: `data/tasks/` (correctness task sets), `data/equiv*/` and `data/h200-run-*/` (GPU run outputs and reports), `data/archive/research-loop/runs/` (the removed research loop's run panels and temp worktrees, Sept 2026), `data/notes/` (the user's notes). Live lab state is `lab/ledger/` and `lab/runs/`, also gitignored, kept in the store by `python -m store push`.
 
 ## The engine repo (inference-server, after the 2026-10-06 split)

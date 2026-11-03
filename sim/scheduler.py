@@ -8,7 +8,7 @@ timestamps, TTFT/TPOT as the regimes define them. What is modelled: how long a p
 of B rows over K KV tokens take, and how many tokens each request generates (`CostModel`; its defaults are stand-ins
 until fitted from a GPU run's step telemetry: `fit` is phase 2).
 
-Imports the engine, so it runs with the engine's python (`lab.engine.python()`), the engine's `src` on sys.path."""
+Imports the engine, so it runs with the engine's python (`targets.engine.python()`), the engine's `src` on sys.path."""
 from __future__ import annotations
 
 import json

@@ -19,7 +19,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from lab import engine, gpu, target
+from targets import engine, target
+from lab import gpu
 from lab.safety import grader
 
 TELEMETRY_SUBDIR = "lab-telemetry"        # inside the served tree, the one place a jailed engine may write

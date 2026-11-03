@@ -17,7 +17,8 @@ import shutil
 import time
 from pathlib import Path
 
-from lab import calibrate, layers, profiles, serve, target
+from lab import calibrate, layers, profiles, serve
+from targets import target
 from lab.agent import ToolSpec
 from lab.evaltools import _failed, _killed
 

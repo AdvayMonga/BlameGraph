@@ -9,7 +9,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from lab import corpus, engine, experiments, ledger, target
+from lab import corpus, experiments, ledger
+from targets import engine, target
 from lab.agent import ToolSpec
 from lab.budget import Budget, BudgetExceeded, gpu_rate
 from lab.evaltools import BENCH_TIER, EvalTools

@@ -10,7 +10,7 @@ import re
 import statistics
 from pathlib import Path
 
-from lab import target
+from targets import target
 from validity import ceiling, peaks
 from validity.ceiling import ModelSpec, Shape
 

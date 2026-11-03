@@ -27,7 +27,8 @@ import sys
 import time
 from pathlib import Path
 
-from lab import calibrate, engine, gpu, ledger, serve, target
+from lab import calibrate, gpu, ledger, serve
+from targets import engine, target
 from lab.evaltools import BENCH_TIER
 
 
