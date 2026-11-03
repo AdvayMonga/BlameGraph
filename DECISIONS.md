@@ -3,6 +3,21 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-03 — The kernel search tunes nothing itself; a new best gets half the next generation
+Two changes from the post-mortem of OpenEvolve's 2026-10-27 win on moe_gemm_fp8:
+1. The grid search over a program's declared `CONFIG` + `TUNABLES` is removed (`kernels/search/tune.py`, the
+   evaluator's tune stages 6 and 7, `--tune-points`, the per-size dispatcher, `Task.size_expr`). A program tunes itself
+   at run time if it does (e.g. `triton.autotune`); the system message states that the checks and warm-up calls run
+   before each shape's timed window. Why: OpenEvolve's winner autotuned per shape at run time and its held-out shapes
+   were uniformly ~7% faster than ours, most of the held-out gap (1.478x vs 1.391x); our grid gained a median +0.3%
+   over 18 programs (2026-11-01). In the engine the autotune runs during warm-up, before CUDA-graph capture.
+2. A generation that found a new best gives it half of the next generation's ideas as refine ideas, before the
+   type split (`generations.NEW_BEST`). Why: OpenEvolve found its fp16 trick (about 21 of its 24.5 points) at iteration
+   10 and refined it in ~80 of its 130 programs; ours found the same trick twice and gave it one parent's share (about
+   6 of 24 ideas), and in one run never built on it.
+Replaces the 2026-11-01 entry (tuning only for winners, later only the top 4 after the search) and amends 2026-10-29
+(the type split now applies to the ideas left after a new best's share).
+
 ## 2026-11-02 — Sonnet against Opus for the kernel search, measured before any switch
 Each idea in a search's log records the model that wrote it, and one task is searched by Opus alone and by Sonnet alone
 (`kernels.search.ab --model`, same shapes, start and generations) before the default mix (Opus with Sonnet one call in
