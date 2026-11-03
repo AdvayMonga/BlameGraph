@@ -2,7 +2,7 @@
 
 A region's GPU-host side, for a search whose controller cannot load it (kernels/pipeline.py): loads the engine as it
 serves (its target's env, a token K/V pool, no CUDA graphs), shares the region's weights from this process
-(kernels/shared_weights.Holder: one layer's, `regions.LAYER`, for a stretch of stations; every layer's and the head's
+(kernels/shared_weights.Holder: the layers of `regions.LAYERS`, each as "L<i>.w.*", for a stretch of stations; every layer's and the head's
 for the decode step), then loads the task from its samples (a packed capture dir, kernels/pipeline.pack) and the
 holder, and prints one JSON line: the holder file, its shapes split seen / held-out with the held-out axes, the
 starting program and the engine's station names. It keeps the weights shared until its stdin closes."""
@@ -24,7 +24,11 @@ def held(name: str, model) -> tuple[dict, dict]:
     if name == STEP:
         return step.weights(model)
     st = regions._engine()
-    return st.layer_weights(model, regions.LAYER), {"cfg": st.layer_config(model), "layer": regions.LAYER}
+    tensors = {}
+    for i in regions.LAYERS:
+        for k, v in st.layer_weights(model, i).items():
+            tensors.update({f"L{i}.{k}": v} if v is not None else {k: None})     # a None (bf16 scale) is every layer's
+    return tensors, {"cfg": st.layer_config(model), "layers": list(regions.LAYERS)}
 
 
 def describe(name: str, samples: Path, holder: Path) -> dict:
@@ -39,11 +43,15 @@ def describe(name: str, samples: Path, holder: Path) -> dict:
     counts = shapes.from_captures(task, caps, equal=True)
     if not counts:
         raise SystemExit(f"the captures in {samples} hold no sampled call of {name}")
+    names = [s.name for s in regions.engine_stations()] if name == STEP else \
+        [s.name for s in regions.span(regions.engine_stations(regions.station_set(name.split(":")[1])),
+                                      *name.split(":")[1:3])]
     sets = {**shapes.split(task, counts), "ints": shapes.ints_from_captures(task, caps),
-            "sources": shapes.sources_from_captures(task, caps), "heldout_axes": list(task.heldout_axes)}
+            "sources": shapes.sources_from_captures(task, caps), "heldout_axes": list(task.heldout_axes),
+            "stations": names}                   # the controller's prompt shows the libraries implementing them
     return {"holder": str(holder), "samples": str(samples), "start": initial_program(task),
             "shapes": {k: [list(s) for s in v] if k in ("seen", "heldout") else v for k, v in sets.items()},
-            "stations": [] if name == STEP else [s.name for s in regions.engine_stations()]}
+            "stations": names}
 
 
 def main(argv: list[str] | None = None) -> int:

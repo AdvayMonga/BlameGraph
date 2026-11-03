@@ -109,7 +109,7 @@ def test_counters_are_not_asked_for_again_once_the_host_refuses_them():
 
 def test_every_ab_arm_gets_the_same_promotion():
     from kernels.search import ab
-    assert ab.SAME_PROMOTION == ("--retime", "3", "--detector-model", "none", "--tune-points", "0")   # same for both
+    assert ab.SAME_PROMOTION == ("--retime", "3", "--detector-model", "none")   # same for both
 
 
 def test_share_with_gates_ranks_only_the_gated_tasks():
@@ -281,71 +281,6 @@ def test_ncu_counters_parse_and_a_host_without_ncu_says_so():
     assert "ncu counters" in facts(Node("n", None, "", r["metrics"], r["artifacts"], 0))
 
 
-def _staged(judge_stage, code, n):
-    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
-        f.write(code)
-    try:
-        return judge_stage(f.name, n)
-    finally:
-        Path(f.name).unlink()
-
-
-CHUNKED = """import torch
-
-CONFIG = {"chunk": 1, "eps": 1e-6}
-TUNABLES = {"chunk": [1, 16, 64]}
-
-
-def kernel(x, w):
-    out = torch.empty_like(x)
-    c = CONFIG["chunk"]
-    for i in range(0, x.shape[0], c):
-        r = x[i:i + c].float()
-        out[i:i + c] = (r * torch.rsqrt(r.pow(2).mean(-1, keepdim=True) + CONFIG["eps"]) * w.float()).to(x.dtype)
-    return out
-"""
-
-
-def test_the_grid_search_picks_launch_parameters_and_rewrites_them_as_constants():
-    from kernels.evolve import evaluator
-    from kernels.evolve.run import retime
-    from kernels.search import tune
-    from kernels.search.loop import cascade
-    from kernels.tasks import load
-    assert tune.params(CHUNKED) == ({"chunk": 1, "eps": 1e-6}, {"chunk": [1, 16, 64]})
-    assert tune.params("CONFIG = {}\n") is None and tune.params("CONFIG = {'a': 1}\nTUNABLES = {'b': [2]}\n") is None
-    moved = tune.with_config(CHUNKED, {"chunk": 64, "eps": 1e-6})
-    assert "CONFIG = {'chunk': 64, 'eps': 1e-06}\n" in moved and moved.count("CONFIG =") == 1 and "TUNABLES" in moved
-    g = tune.grid({"a": 1, "b": 1}, {"a": [1, 2], "b": [1, 2, 3]}, points=3)
-    assert g[0] == {"a": 1, "b": 1} and len(g) == 3 and len({json.dumps(x, sort_keys=True) for x in g}) == 3
-    t = load("toy_rmsnorm")
-    with tempfile.TemporaryDirectory() as d:
-        cfg = Path(d) / "eval.json"
-        cfg.write_text(json.dumps({"task": t.name, "seen": [[64, 256], [64, 512]], "device": "cpu", "iters": 5}))
-        os.environ["KERNEL_EVAL_CONFIG"] = str(cfg)
-        cfg.write_text(json.dumps({**json.loads(cfg.read_text()), "tune_points": 3}))
-        stage = lambda code, n: _staged(evaluator.judge_stage, code, n)          # noqa: E731
-        r = stage(CHUNKED, 6)                                # the evaluator's tune stage, in the jail
-        rows = json.loads(r["artifacts"]["tune"])
-        assert [x["config"]["chunk"] for x in rows][0] == 1 and len(rows) == 3 and all(x["timings"] for x in rows)
-        best = max(rows, key=lambda x: x["score"])
-        assert best["config"]["chunk"] > 1 and best["score"] > rows[0]["score"]          # chunk 1 is the slow one
-        one = json.loads(stage(CHUNKED, 7)["artifacts"]["tune"])                     # quick: the first shape only
-        assert len(one) == 3 and all(len(x["timings"]) == 1 for x in one)
-        code, got = tune.tuned(stage, CHUNKED, quick=False)
-        assert "'chunk': 1," not in code and len(got) == 3 and "TUNABLES" in code
-        assert tune.tuned(stage, "def kernel(x, w): ...\n", quick=True) == ("def kernel(x, w): ...\n", [])
-        broken = CHUNKED.replace('c = CONFIG["chunk"]', 'c = CONFIG["chunk"]\n    assert c == 1')   # only chunk 1 runs
-        code, got = tune.tuned(stage, broken, quick=False)
-        assert "'chunk': 1," in code and sum(x["score"] > 0 for x in got) == 1 and any("error" in x for x in got)
-        assert cascade(evaluator.judge_stage)(CHUNKED)["code"] == CHUNKED              # the search measures as written
-        trace = Path(d) / "trace.jsonl"
-        trace.write_text(json.dumps({"child_id": "c", "child_code": CHUNKED,
-                                     "child_metrics": {"combined_score": 1.0, "correct": 1.0}}) + "\n")
-        code, _, timed = retime(trace, 1, tune=lambda c: tune.tuned(stage, c, quick=False))   # the top ones tuned
-        assert "'chunk': 1," not in code and timed[0]["tuned_points"] == 3
-
-
 def test_the_ab_harness_runs_both_arms_and_gates_each_winner_on_held_out_shapes():
     from kernels.search import ab
     from kernels.tasks import load
@@ -439,43 +374,6 @@ def test_openevolve_calls_are_priced_into_a_usage_log():
         log.write_text(json.dumps({"model": "claude-opus-5-5", "usd": 0.5}) + "\n" +
                        json.dumps({"model": "claude-opus-5-5", "usd": 0.25}) + "\n")
         assert usage(log) == {"usd": 0.75, "model_calls": 2} and usage(Path(d) / "none") == {"usd": 0, "model_calls": 0}
-
-
-def test_regions_pick_a_config_per_size_and_the_dispatcher_sets_it_per_call():
-    import torch
-    from kernels.evolve import evaluator
-    from kernels.search import tune
-    from kernels.search.loop import cascade
-    from kernels.tasks import load
-    small, big = {"chunk": 1, "eps": 1e-6}, {"chunk": 64, "eps": 1e-6}
-    rows = [{"config": small, "score": 1.0, "timings": [{"shape": [4, 256], "speedup": 2.0, "weight": 0.5},
-                                                         {"shape": [512, 256], "speedup": 0.5, "weight": 0.5}]},
-            {"config": big, "score": 1.0, "timings": [{"shape": [4, 256], "speedup": 0.8, "weight": 0.5},
-                                                       {"shape": [512, 256], "speedup": 3.0, "weight": 0.5}]}]
-    table = tune.regions(rows)
-    assert table == [(4, small), (None, big)]
-    assert tune.regions([rows[0], {**rows[1], "timings": rows[0]["timings"]}]) is None       # one point wins everywhere
-    t = load("toy_rmsnorm")
-    for prog in (CHUNKED, "# EVOLVE-BLOCK-START\n" + CHUNKED.replace("def kernel(", "def entry(") +
-                 "# EVOLVE-BLOCK-END\n\nkernel = entry\n"):
-        code = tune.dispatch(prog, t.size_expr, table)
-        ns = {}
-        exec(compile(code, "<dispatched>", "exec"), ns)
-        for rows_, want in ((4, 1), (512, 64)):
-            x, w = t.make_inputs((rows_, 256), torch.float32, "cpu", torch.Generator().manual_seed(0))
-            assert torch.allclose(ns["kernel"](x, w), t.reference(x, w), atol=1e-5) and ns["CONFIG"]["chunk"] == want
-    with tempfile.TemporaryDirectory() as d:
-        cfg = Path(d) / "eval.json"
-        cfg.write_text(json.dumps({"task": t.name, "seen": [[4, 256], [512, 256]], "device": "cpu", "iters": 3}))
-        os.environ["KERNEL_EVAL_CONFIG"] = str(cfg)
-        r = cascade(evaluator.judge_stage)(tune.dispatch(CHUNKED, t.size_expr, table))
-    assert r["metrics"]["correct"] == 1.0, r["artifacts"]                  # passes the screen and every gate
-    from kernels.evolve.ship import module_source
-    marked = "# EVOLVE-BLOCK-START\n" + CHUNKED.replace("def kernel(", "def entry(") + "# EVOLVE-BLOCK-END\n\nkernel = entry\n"
-    shipped = module_source(tune.dispatch(marked, t.size_expr, table), "entry")
-    assert "_dispatch_impl = entry" in shipped and shipped.rstrip().endswith("entry = _dispatched")    # ships wrapped
-    assert all(load(n).size_expr for n in ("paged_decode", "moe_gemm", "rmsnorm", "add_rmsnorm", "rmsnorm_rope",
-                                           "silu_mul", "topk_softmax"))
 
 
 def test_the_judge_can_query_the_ledger_and_search_the_web_across_turns():
@@ -711,7 +609,7 @@ def test_the_cli_builds_its_funnel_with_every_task_in_the_memory(monkeypatch, tm
                         workers=8)
     import lab.search
     monkeypatch.setattr(lab.search, "FastEmbed", lambda cache: "EMBEDDER")
-    f = cli._funnel(a, SimpleNamespace(name="moe_gemm_fp8", size_expr=None), lambda s, u: ("", 0.0))
+    f = cli._funnel(a, SimpleNamespace(name="moe_gemm_fp8"), lambda s, u: ("", 0.0))
     assert [e.id for e in f.library] == ["i1", "i2"] and f.embedder == "EMBEDDER"
     assert f.task == "moe_gemm_fp8" and f.precheck and f.workers == 8 and f.parallel == 4
 

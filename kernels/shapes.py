@@ -107,6 +107,7 @@ def split(task: Task, counts: Counter) -> dict:
         for ax, (c, region) in sorted(bands.items(), key=lambda kv: sum(counts[s] for s in kv[1][1])):
             if region and sum(counts[s] for s in held | region) <= total / 2:
                 held, cut[ax] = held | region, c
+    held |= {s for s in counts if any(s[ax] in vals for ax, vals in task.heldout_values)}   # e.g. a region's layer
     order = sorted(counts, key=lambda s: -counts[s])
     seen = [s for s in order if s not in held]
     return {"seen": seen, "heldout": [s for s in order if s in held], "source": "captures",

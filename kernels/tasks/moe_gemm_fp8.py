@@ -74,7 +74,7 @@ def cost(shape, dtype, inputs=None):
 
 
 TASK = Task("moe_gemm_fp8", "inference_server.models.moe_kernel:moe_gemm", reference, make_inputs, shape_of, cost,
-            call=_call, make_real=make_real, graphs=True, kernel_names=(r"_moe_gemm_kernel",), size_expr="args[5]",
+            call=_call, make_real=make_real, graphs=True, kernel_names=(r"_moe_gemm_kernel",),
             heldout_axes=(0,), edge_shapes=edge_shapes, dtypes=(torch.bfloat16,), layouts=(),
             seen_default=((8, 64, 96, 8, 4, 1), (16, 64, 96, 8, 16, 1), (32, 64, 96, 8, 16, 1)),
             heldout_default=((64, 64, 96, 8, 32, 1), (128, 64, 96, 8, 128, 1)))
