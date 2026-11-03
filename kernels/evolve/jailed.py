@@ -188,7 +188,9 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
         if stage == 2:                           # outputs to verify outside the jail
             cfg = {**cfg, "record": str(tree / "outputs.pt")}
         (tree / "eval_config.json").write_text(json.dumps(cfg))
-        src = _engine_src(load(cfg["task"], **({"source": cfg["source"]} if cfg.get("source") else {})))
+        bench = {k: cfg[k] for k in ("source", "samples") if cfg.get(k)} if cfg["task"].startswith(("kb:", "fib:")) \
+            else {}                              # a public benchmark's problem; a region stays light here
+        src = _engine_src(load(cfg["task"], **bench))
         path = os.pathsep.join(str(p) for p in (harness, src) if p)
         read = [harness] + ([src] if src else [])
         gpu = None

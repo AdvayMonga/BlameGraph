@@ -66,6 +66,19 @@ for its stations (FlashInfer's batch prefill added for `p_attention`). vLLM and 
 dependencies (the user): a program reads their source and ports from it; FlashInfer, already a dependency, stays
 callable. Why (the user): most of a region's gain may come from what specialized libraries already do; regions, the
 kernel layer's unit since today, had no library block.
+## 2026-11-02 — The kernel search competes on FlashInfer-Bench, under its own evaluator
+Every FlashInfer-Bench definition its default evaluator judges (`flashinfer-ai/flashinfer-trace`, pinned revision; 95
+of 190: the rest have no workloads or are judged by another evaluator) is a kernel task `fib:NAME`
+(`kernels/flashinfer_bench.py`), and winners are scored by the benchmark's own evaluator (pinned commit), jailed, on
+every workload beside the FlashInfer baseline, with the leaderboard's score; a winner is written as the Solution JSON
+the leaderboard takes. The search follows the benchmark's contract (its inputs and workloads, recorded tensors as
+recorded, each workload's scalars; no layouts, scalings, NaN/Inf or edge shapes; no roofline, since definitions state
+no work) at half its tolerance, which implies its rule, and keeps our anti-gaming gates; a held-out band of workloads
+over every variable axis is ours. Why (the user): compete on the credible public leaderboards rather than build our
+own benchmark now; FlashInfer-Bench is the one built from real serving workloads (Qwen3-30B-A3B among its models) with
+production kernels as the baseline. The gap no published kernel benchmark covers, comparing generation methods at an
+equal budget and scoring what survives deployment, is noted as a possible contribution, not built.
+
 ## 2026-11-02 — Decode regions are timed as CUDA-graph replays
 A decode region's task has `graphs=True`, like the hand-written decode tasks: its baseline and programs are captured
 and timed as a graph replay, so host time (the Python station chain, launch overhead) is not timed; prefill regions

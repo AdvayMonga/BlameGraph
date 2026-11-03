@@ -530,6 +530,18 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `score`: the benchmark's `eval_kernel_against_ref` jailed (its package imported without the LLM clients), both
   tolerances, static checker, torch.compile time; `run`: problems through `kernels.search.ab` arms then `score`,
   fast_p per arm in `kernelbench.json`. Level 3 problems 48-49 need einops.
+- `kernels/flashinfer_bench.py` — FlashInfer-Bench as kernel tasks, researcher-only (2026-11-02): `python -m
+  kernels.flashinfer_bench fetch [--definitions]|list|solution|score|run`; the HF dataset `flashinfer-ai/flashinfer-trace`
+  at a pinned revision into `data/flashinfer_bench/<rev>/` laid out as its TraceSet (sha256 manifest; safetensors only
+  for the definitions named). `fib:NAME` tasks: a shape is a workload (its variable axes + an ordinal), recorded tensors
+  from its safetensors, the rest drawn as the benchmark draws them, each workload's scalars as 0-d CPU tensors handed
+  to a program as numbers; reference, baseline and start program = the definition's `run`; the checker at half the
+  benchmark's atol/rtol (which implies its rule); held out = `shapes.split`'s band over every variable axis; the eval
+  config's `samples` is the dataset dir, mounted in the jail. Refused: no workloads, sampling, low-bit MoE, DSA (other
+  evaluators), random scalars. `score`: the benchmark's own evaluator (flashinfer-bench at a pinned commit, checked)
+  jailed on a TraceSet of the definition, the program as a Solution and the FlashInfer baseline: correct, the
+  leaderboard's score (mean baseline/ours, 0 on any failure), speedup over the reference; `solution`: the Solution JSON
+  the leaderboard takes. 95 of 190 definitions at the pinned revision are taken. Never run on a GPU yet.
 - `workloads/` — frontier benchmark request data, researcher-only (never reaches the agent: nothing in `lab/` reads
   it), for manual runs: overfitting checks on data the agent never saw, the corpus's missing shapes, engine vs
   vLLM/SGLang on identical requests. One module per benchmark, docstring = source, sizes, output limit, MLPerf
