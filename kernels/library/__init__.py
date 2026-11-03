@@ -147,6 +147,16 @@ def _dump(so: str) -> str:
     return cuobjdump(so)
 
 
+def _names(so: Path, pattern: str) -> bool:
+    """Whether a kernel matching `pattern` can be in `so`: host code registers every kernel by its mangled name, a
+    plain string in the file, so a file without a match holds none (and is never disassembled)."""
+    import mmap
+    if not so.stat().st_size:
+        return False
+    with open(so, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as m:
+        return re.search(pattern.encode(), m) is not None
+
+
 def _package_sass(package: str, pattern: str, arch: str | None) -> str:
     """SASS of the functions matching `pattern` in every .so of an installed package."""
     from kernels.competitors import sass
@@ -156,6 +166,8 @@ def _package_sass(package: str, pattern: str, arch: str | None) -> str:
     texts = []
     for d in spec.submodule_search_locations:
         for so in sorted(Path(d).rglob("*.so")):
+            if not _names(so, pattern):
+                continue
             try:
                 texts.append(sass(str(so), pattern, arch=arch, dump=_dump))
             except RuntimeError:
