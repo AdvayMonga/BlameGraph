@@ -230,7 +230,6 @@ def _keep(kind: str, shape, dtype: str, seed: int, outputs, scale: float | None 
 SCALES = (3.0, 0.01, -1.0)
 PHYSICS_MARGIN_PCT = 105          # measured faster than the bound (beyond timer error) = the kernel skipped work
 MEMORY_FACTOR, MEMORY_SLACK = 1.5, 64 * 2**20
-TUNE_STAGE = 6                    # every point of the program's grid timed, to choose its launch parameters (tune.py)
 
 
 def _scaled(make_inputs, k: float):
@@ -264,13 +263,11 @@ def _shown(ratio: dict) -> bool:
 
 
 def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | None, device: str,
-          tolerances: dict | None, stage: int, iters: int = 30, points: int = 8, full: bool = False) -> dict:
+          tolerances: dict | None, stage: int, iters: int = 30, full: bool = False) -> dict:
     """stage 1: correctness on the two most frequent seen shapes, one seed. stage 2: correctness on every seen shape and
     timing against the baseline; with `full` or held-out shapes (the gate, never selection) the full check on them and
     the seen shapes: three seeds, repeats, edge cases and layouts, other value scales, the baseline's error, peak memory. A candidate that
-    leaves any function the evaluator watches patched scores 0, whatever it measured. TUNE_STAGE: `points` points of
-    the program's grid (kernels/search/tune.py), each loaded with CONFIG rewritten, checked on the first seen shape and
-    timed on every one; the rows choose launch parameters and score nothing."""
+    leaves any function the evaluator watches patched scores 0, whatever it measured."""
     refused = screen(Path(program).read_text())
     if refused:
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
@@ -282,8 +279,7 @@ def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | 
         """Record anything patched since the snapshot; True once anything has been."""
         patched.extend(n for n in _patched(before, task) if n not in patched)
         return bool(patched)
-    out = (_tune(task, program, seen, weights, device, tolerances, iters, points, checkpoint) if stage == TUNE_STAGE
-           else _judge(task, program, seen, heldout, weights, device, tolerances, stage, iters, checkpoint, full))
+    out = _judge(task, program, seen, heldout, weights, device, tolerances, stage, iters, checkpoint, full)
     if checkpoint():
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
                 "artifacts": {"error": "patched what the evaluator uses: " + ", ".join(patched[:20])}}
@@ -382,46 +378,6 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
     return {"metrics": metrics, "artifacts": artifacts}
 
 
-def _tune(task: Task, program: Path, seen: list, weights: dict | None, device: str, tolerances: dict | None,
-          iters: int, points: int, checkpoint) -> dict:
-    """{artifacts: {tune: rows}}: per grid point its config, call-weighted score and per-shape speedups (0 with the
-    reason when it fails to load, the check on the first shape, or its timed outputs' check). Each point is its own
-    module, so a kernel that reads CONFIG at import is tuned too."""
-    from kernels.search import tune
-    bfn = task.baseline() if task.error_budget else None                 # bound before any point loads
-    budget = {"baseline": task.bind(bfn), "budget": task.error_budget} if bfn else {}
-    base_fn = task.baseline()
-    base = task.bind(base_fn) if base_fn else task.reference
-    source, rows = Path(program).read_text(), []
-    p = tune.params(source)
-    hw, dtype = _peaks(device), task.dtypes[0]
-    for i, cfg in enumerate(tune.grid(*p, points) if p else []):
-        row = {"config": cfg, "score": 0.0, "timings": []}
-        variant = Path(program).with_name(f"{Path(program).stem}_point{i}.py")
-        variant.write_text(tune.with_config(source, cfg))
-        try:
-            fn = task.bind(load_program(variant))
-            if checkpoint():
-                return {}
-            r = check_kernel(task.reference, fn, task.make_inputs, seen[:1], [], dtypes=task.dtypes, device=device,
-                             seeds=(0,), tolerances=tolerances, edge_shapes=None, repeats=1, layouts=task.layouts,
-                             **budget)
-            if checkpoint():
-                return {}
-            if not r["passed"]:
-                row["error"] = "failed the check on the first seen shape"
-            else:
-                timed, score, _ = _timed(task, fn, base, seen, weights, dtype, device, iters, hw, tolerances)
-                row.update(score=score, timings=[{k: t.get(k) for k in ("shape", "speedup", "weight")}
-                                                 for t in timed])
-        except Exception as e:                   # noqa: BLE001  a point that breaks is a fact, not a crash
-            row["error"] = f"{type(e).__name__}: {e}"[:500]
-        if checkpoint():
-            return {}
-        rows.append(row)
-    return {"metrics": {"stage": TUNE_STAGE}, "artifacts": {"tune": json.dumps(rows)}}
-
-
 def _timed(task, cand, base, shapes, weights, dtype, device, iters, hw, tolerances=None) -> tuple[list, float, float]:
     """Per-shape paired timings against the baseline, and the call-weighted geometric-mean speedup with gains inside
     the noise counted as 1.0 (and without that rule). Raises if the timed calls' output differs from the reference:
@@ -474,7 +430,7 @@ def main() -> int:
     tol = {getattr(torch, k): tuple(v) for k, v in (cfg.get("tolerances") or {}).items()}
     out = judge(task, program, [tuple(s) for s in cfg["seen"]], [tuple(s) for s in cfg.get("heldout", [])],
                 cfg.get("weights"), cfg.get("device", "cpu"), tol or None, stage, cfg.get("iters", 30),
-                cfg.get("tune_points", 8), bool(cfg.get("full")))
+                bool(cfg.get("full")))
     if cfg.get("record"):
         _save({"records": RECORDS}, cfg["record"])
     sys.stdout.write("\n" + json.dumps({**out, "result_key": key} if key else out) + "\n")

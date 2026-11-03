@@ -284,7 +284,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   persist (a line's last change taken further; every child that beat its parent heads a line, which moves to a persist
   child that beats it and closes after 3 generations without one), fresh (a different overall structure, half from the
   start, half from a random program) and crossover (a parent shown another parent's full code), 8/6/6/4 adapted each
-  generation by each type's Laplace-smoothed rate of new bests (floor 2); every correct program takes the full exam,
+  generation by each type's Laplace-smoothed rate of new bests (floor 2), after a new best found by the last generation
+  takes half of the ideas as refine ideas (`NEW_BEST`, decided 2026-11-03); every correct program takes the full exam,
   children under their own parent with their type (`Node.kind`); every call gets
   the memory (`kernels/search/memory.py`, cached blocks: ideas that beat their parent on other tasks with their best gain
   and bound type, then every idea tried on this task, earlier runs from `--archive` and this run so far, with measured
@@ -301,14 +302,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   (`kernels/evolve/ncu.py`, stage 3 of the jailed evaluator; collected in the jail since 2026-10-27, on a Nebius H200
   whose driver had them open: the earlier refusals, ERR_NVGPUCTRPERM, were on hosts with them closed, which
   `vm-setup.sh` never opened because it grepped the module option's name, not the driver's `RmProfilingAdminOnly`; a
-  run stops asking after the first refusal); launch parameters a program declares as `CONFIG` + `TUNABLES` are chosen by a measured grid
-  search after the search, on each of the `--retime` (4) top programs before it is re-timed (decided 2026-11-01; during
-  the search programs are measured as written; `kernels/search/tune.py` `tuned`, `run.retime(tune=)`; `--tune-points`
-  (8), 0: off): the evaluator's tune stage (jailed stage 6; `core._tune`) loads each point with CONFIG rewritten,
-  checks it on the most-called shape and times it on every seen shape, and the program is re-timed with the fastest
-  point written in; where different points win in different size regions, a dispatcher between
-  `# TUNED-DISPATCH-START/END` picks CONFIG per call from the call's size (`Task.size_expr`, tensor shapes only, so
-  CUDA graphs bake it per captured size); the gate measures the tuned program as it is; the prompt states the best program's % of its call-weighted roofline bound as a fact, and with
+  run stops asking after the first refusal); the harness tunes nothing (decided 2026-11-03, its grid search removed): a
+  program tunes itself at run time if it does (e.g. `triton.autotune`), and the system message states that the checks
+  and warm-up calls run before each shape's timed window; the prompt states the best program's % of its call-weighted roofline bound as a fact, and with
   `--mcts` the search stops after `--patience` (16) judged programs with no new best (MANTIS; no roofline stop since
   2026-10-27);
   each timed shape carries its bound type (memory or compute) and the achieved % of peak bandwidth and of peak FLOPs,

@@ -134,7 +134,7 @@ def test_each_generation_splits_its_ideas_over_the_four_types(tmp_path):
     for r in rows[1:]:
         q = r["types"]
         assert set(q) == {"refine", "persist", "fresh", "crossover"} and sum(q.values()) == 12   # generation 0 opened lines
-        assert all(n >= G.TYPE_FLOOR for n in q.values())
+        assert all(n >= min(G.TYPE_FLOOR, (12 - 6 * ("new_best" in r)) // 4) for n in q.values())
         named = {t: sum(x["idea"]["type"] == t for x in r["ideas"]) for t in q}
         assert named == q                                          # every idea tagged with the type it was made for
         kids = [n for n in tree.nodes.values() if n.iteration == r["iteration"]]
@@ -237,3 +237,24 @@ if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
             fn(*[Path(tempfile.mkdtemp()) for _ in inspect.signature(fn).parameters]); print("ok", name)
+
+
+def test_a_new_best_gets_half_the_next_generations_ideas_as_refine_ideas(tmp_path):
+    f = funnel()
+    tree, _ = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, gen_size=12, n_parents=2, generations=2)
+    rows = rows_of(tmp_path)
+    for prev, r in zip(rows, rows[1:]):
+        best = max((n for n in tree.nodes.values() if n.iteration <= prev["iteration"]),
+                   key=lambda n: (n.score, -n.iteration))
+        assert r["new_best"]["id"] == best.id and r["new_best"]["refine"] >= 6     # every generation here improves
+        mine = [x for x in r["ideas"] if x["idea"]["type"] == "refine" and x["idea"]["parent_id"] == best.id]
+        assert len(mine) == r["new_best"]["refine"] and sum(r["types"].values()) == 12
+    flat = funnel()
+    orig = flat.stage
+    flat.stage = lambda code, n: {**orig(code, n), "metrics": {"correct": 1.0, "combined_score": 0.001, "stage": n}} \
+        if n == 2 else orig(code, n)                                            # every child below the start
+    G.search(START, "SYS", flat, lambda c: {"metrics": {"correct": 1.0, "combined_score": 1.0, "stage": 2},
+                                              "artifacts": {}}, tmp_path / "flat", gen_size=12, n_parents=2,
+             generations=2)
+    assert all("new_best" not in r for r in rows_of(tmp_path / "flat")[1:])      # no new best: no boost
+
