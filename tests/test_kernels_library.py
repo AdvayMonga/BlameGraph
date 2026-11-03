@@ -20,6 +20,7 @@ sass = { package = "a", pattern = "k" }
 [[kernel]]
 name = "a.py"
 tasks = ["t", "u"]
+stations = ["st1"]
 source = ["y.py"]
 """
 
@@ -67,3 +68,18 @@ def test_cards_come_from_a_dump_before_the_package(tmp_path, monkeypatch):
     built, missing = L.build_cards("t", dump, "sm_90")
     assert [c["implementation"] for c in built] == ["engine", "a.k"] and built[1]["per_kernel"]["k"]["mma"] == 1
     assert missing == {"a.py": "no compiled code found"}
+
+
+ENGINE_STATIONS = {"input_norm", "qkv", "qk_norm_rope", "kv_append", "attention", "o_proj", "add_norm", "router", "route",
+                   "gate_up", "silu_mul", "down", "residual", "p_input_norm", "p_qkv", "p_qk_norm_rope", "p_kv_store",
+                   "p_attention", "p_o_proj", "p_add_norm", "p_moe"}       # inference-server's DECODE and PREFILL
+
+
+def test_every_entry_names_engine_stations_and_a_region_gets_the_entries_of_its_stations(tmp_path):
+    assert all(k.stations and set(k.stations) <= ENGINE_STATIONS for k in L.index())
+    assert {k.name for k in L.for_stations(["p_attention"])} == {"flashinfer.batch_prefill"}
+    assert {"vllm.fused_moe", "sglang.fused_moe"} <= {k.name for k in L.for_stations(["router", "route", "gate_up"])}
+    idx, src, cards = make(tmp_path)
+    b = L.block("region:x:y", idx, src, cards, stations=["st1"])
+    assert b.startswith("# Other implementations of these operations") and "## a.py" in b and "## a.k" not in b
+    assert "## The starting program's card" not in b                 # a task's engine card is not the region's

@@ -38,6 +38,6 @@ def cost(shape, dtype, inputs=None):
 
 TASK = Task("paged_decode_fp8", pd.TASK.entry, pd.reference, make_inputs, shape_of, cost, call=pd._call,
             make_real=make_real, graphs=True, options=("context_window",), kernel_names=pd.TASK.kernel_names,
-            size_expr=pd.TASK.size_expr, heldout_axes=pd.TASK.heldout_axes, edge_shapes=pd.edge_shapes,
+            heldout_axes=pd.TASK.heldout_axes, edge_shapes=pd.edge_shapes,
             dtypes=(torch.bfloat16,), layouts=(), capture_env=(("KV_CACHE_DTYPE", "fp8"),),
             seen_default=pd.TASK.seen_default, heldout_default=pd.TASK.heldout_default)

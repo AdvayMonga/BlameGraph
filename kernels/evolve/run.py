@@ -68,7 +68,8 @@ def system_message(task) -> str:
     base = f"the engine's current `{task.entry}`" if task.entry else \
         "the problem's eager PyTorch `Model`" if task.name.startswith("kb:") else "the task's reference"
     scales = core.SCALES if task.scales is None else task.scales
-    cases = ", ".join(["three seeds"] + (["edge shapes"] if task.edge_shapes is None else [])
+    none = task.name.startswith(("kb:", "region:"))   # inputs from the problem or captures only: no edge shapes
+    cases = ", ".join(["three seeds"] + ([] if none else ["edge shapes"])
                       + (["NaN/Inf inputs"] if task.nonfinite else [])
                       + ([f"inputs scaled by {', '.join(f'{k:g}' for k in scales)}"] if scales else []))
     refused = "; ".join(dict.fromkeys(core.FORBIDDEN.values()))
@@ -89,7 +90,7 @@ How a program is judged:
 baseline's + {core.MEMORY_SLACK // 2**20} MiB; then timing against {base}{graphs}.
 - Score: the call-weighted geometric mean of the speedup over the seen shapes, the program and the baseline timed \
 in pairs on the same inputs; a shape where the middle half of the paired ratios includes 1 counts as 1.0. A failed gate scores 0; so does a time at which the kernel would run at \
-over {core.PHYSICS_MARGIN_PCT}% of its roofline bound. Held-out shapes are judged separately and are not part of the score.
+over {core.PHYSICS_MARGIN_PCT}% of its roofline bound. Nothing before a shape's timed window is timed: the correctness checks and warm-up calls run first, so tuning a program does at run time (e.g. `triton.autotune`) is done by then. Held-out shapes are judged separately and are not part of the score.
 - Refused before running: source that uses {refused}, or writes into anything it imports. Scores 0: anything the \
 evaluator uses found patched.
 - Lower precision inside the kernel is allowed while the output stays within tolerance; each result reports its \
@@ -358,12 +359,11 @@ def prepare(task, sets: dict, out: Path, device: str, tol: dict, timing_shapes: 
     return sets, program
 
 
-def retime(trace: Path, k: int, repeats: int = 3, exclude=None, tune=None) -> tuple[str | None, dict | None, list]:
+def retime(trace: Path, k: int, repeats: int = 3, exclude=None) -> tuple[str | None, dict | None, list]:
     """The top `k` candidates by score re-judged `repeats` times through the evaluator (stage 2, local or remote);
     the one with the highest median score is promoted. One timing of each is what selection saw, and one timing can
     win by noise. `exclude(code, row) -> reason | None` passes over a candidate (e.g. flagged as gaming the
-    evaluator), the next-best taking its place. `tune(code) -> (code, grid rows)` tunes each candidate first, and it is
-    re-judged as tuned (kernels/search/tune.py). Returns (code, metrics of its median run, every re-timing, the
+    evaluator), the next-best taking its place. Returns (code, metrics of its median run, every re-timing, the
     excluded ones included with their reason)."""
     import statistics
     import tempfile
@@ -383,7 +383,7 @@ def retime(trace: Path, k: int, repeats: int = 3, exclude=None, tune=None) -> tu
         else:
             top.append(r)
     for r in top:
-        code, rows = tune(r["child_code"]) if tune else (r["child_code"], [])
+        code = r["child_code"]
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
             f.write(code)
         runs = [evaluator.judge_stage(f.name, 2)["metrics"] for _ in range(repeats)]
@@ -395,7 +395,7 @@ def retime(trace: Path, k: int, repeats: int = 3, exclude=None, tune=None) -> tu
             continue
         med = statistics.median(scores)
         out.append({"id": r["child_id"], "selected_score": r["child_metrics"]["combined_score"], "scores": scores,
-                    "median": med, "code": code, **({"tuned_points": len(rows)} if rows else {}),
+                    "median": med, "code": code,
                     "metrics": min(runs, key=lambda m: abs(m.get("combined_score", 0.0) - med))})
     timed = [x for x in out if "median" in x]
     if not timed:

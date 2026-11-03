@@ -86,6 +86,6 @@ def edge_shapes(shape):
 # Qwen3-30B-A3B's down projection: K = 768 (expert width), N = 2048 (hidden), 128 experts, 8 pairs per token.
 TASK = Task("moe_gemm_scatter_fp8", "inference_server.models.moe_kernel:moe_gemm_scatter", reference, make_inputs,
             shape_of, cost, call=_call, make_real=make_real, graphs=True, kernel_names=(r"_moe_gemm_scatter_kernel",),
-            size_expr="args[4]", heldout_axes=(0,), edge_shapes=edge_shapes, dtypes=(torch.bfloat16,), layouts=(),
+            heldout_axes=(0,), edge_shapes=edge_shapes, dtypes=(torch.bfloat16,), layouts=(),
             seen_default=((8, 48, 64, 8, 1), (32, 48, 64, 8, 4), (64, 48, 64, 8, 8)),
             heldout_default=((128, 48, 64, 8, 16), (256, 48, 64, 8, 32)))

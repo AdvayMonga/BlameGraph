@@ -3,6 +3,69 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-03 — Novelty is judged among siblings, by each one's change from their parent
+A new program is refused as a near-duplicate only when its change from its parent is within cosine 0.95 of a
+sibling's change from the same parent (was: its change from the starting program against every program's). Why: a
+child's change from the start holds its parent's change, so against the start any small change to a program looked
+like the program itself. On moe_gemm_fp8 (2026-11-02) 69 of Sonnet's 112 ideas were refused as identical or
+near-duplicates, 32 of those as near-duplicates of their own parent, persist ideas among them, the step that builds on
+a winner. Generation 0 is unchanged (every parent is the start). Amends 2026-10-30 (ShinkaEvolve's novelty rejection).
+
+## 2026-11-03 — The kernel search's model mix is 1 Opus : 3 Sonnet, and its cost is the budget
+`kernels.search` makes each change with Sonnet 5.5 and every fourth call with Opus 5.5 (was Opus with Sonnet every
+fourth). The gaming detector stays Opus (one call per would-be winner). The cost of this mix is the search's model
+budget: further gains come from elsewhere in the search, not from more or stronger model calls. Why (the user, to cut
+cost): on moe_gemm_fp8 (same shapes and start, 3 generations) Sonnet alone reached 1.024x for $14.44; Opus alone
+reached 1.027x and 1.032x in generation 0 for $11.53 and $12.87, about 7x Sonnet's $1.65 per generation, the best
+scores within ~1%; the two Opus runs differed 9 vs 3 in children that beat their parent, so the improvement rates are
+not resolved. Not yet run as a mix on a GPU. Replaces the default of 2026-10-26 (3 Opus : 1 Sonnet).
+
+## 2026-11-03 — The kernel search tunes nothing itself; a new best gets half the next generation
+Two changes from the post-mortem of OpenEvolve's 2026-10-27 win on moe_gemm_fp8:
+1. The grid search over a program's declared `CONFIG` + `TUNABLES` is removed (`kernels/search/tune.py`, the
+   evaluator's tune stages 6 and 7, `--tune-points`, the per-size dispatcher, `Task.size_expr`). A program tunes itself
+   at run time if it does (e.g. `triton.autotune`); the system message states that the checks and warm-up calls run
+   before each shape's timed window. Why: OpenEvolve's winner autotuned per shape at run time and its held-out shapes
+   were uniformly ~7% faster than ours, most of the held-out gap (1.478x vs 1.391x); our grid gained a median +0.3%
+   over 18 programs (2026-11-01). In the engine the autotune runs during warm-up, before CUDA-graph capture.
+2. A generation that found a new best gives it half of the next generation's ideas as refine ideas, before the
+   type split (`generations.NEW_BEST`). Why: OpenEvolve found its fp16 trick (about 21 of its 24.5 points) at iteration
+   10 and refined it in ~80 of its 130 programs; ours found the same trick twice and gave it one parent's share (about
+   6 of 24 ideas), and in one run never built on it.
+Replaces the 2026-11-01 entry (tuning only for winners, later only the top 4 after the search) and amends 2026-10-29
+(the type split now applies to the ideas left after a new best's share).
+
+## 2026-11-02 — Sonnet against Opus for the kernel search, measured before any switch
+Each idea in a search's log records the model that wrote it, and one task is searched by Opus alone and by Sonnet alone
+(`kernels.search.ab --model`, same shapes, start and generations) before the default mix (Opus with Sonnet one call in
+four) changes. Why (the user, to cut cost): model calls were ~90% of a region search's cost (decode attention: $40.80
+of calls against ~$5 of GPU), and nothing measured whether Sonnet's changes beat their parent less often.
+
+## 2026-11-02 — A region capture keeps its samples to a byte budget
+The engine's region capture (`models/region_capture.py`, inference-server) keeps samples to 16 GB in all, and a sample
+over 32 MB only every 32 calls, so they spread over the run. Why: a region reading the K/V pool has a new shape at
+almost every decode step; capturing decode attention at 256 rows wrote 2,500 samples (286 GB) and filled the VM's disk.
+
+## 2026-11-02 — Regions may include the K/V writer
+A region may include `kv_append` (the decode K/V write, in place): its task runs the engine's stations as they run in
+the engine and gives each call a copy of the pool to write (the same work for the baseline and a program, inside the
+timed call), and a program must write the pool in place and return that same tensor, as the engine's override
+contract requires. A region reading the backend's context (`p_kv_store`, which appends through it) is refused. Why
+(the user): fusions like rope + K/V write + attention were out of reach. A capture keeps only the blocks a call
+touches, so the copy is small. Replaces "a region must end before kv_append or start after it" (2026-10-23).
+
+## 2026-11-02 — Regions are captured at four layers and one layer is held out
+A region is captured at layers 0, 16, 32 and 47 (`regions.LAYERS`), the holder shares each layer's weights
+("L<i>.w.*"), a call's shape starts with its layer, and layer 32's calls are held out (`Task.heldout_values`).
+Why (the user, on the limits of regions): all 48 layers share shapes and code but not values (outlier channels, each
+layer's expert routing), so a program chosen on layer 0 alone could fail a tolerance or slow down on another layer;
+a held-out layer tests exactly that. Replaces capturing and holding layer 0 only (2026-10-23).
+## 2026-11-02 — Regions get the other libraries' kernels for their stations; no library becomes an engine dependency
+Every `kernels/library` entry names the engine stations it implements, and a region's search prompt shows every entry
+for its stations (FlashInfer's batch prefill added for `p_attention`). vLLM and SGLang do not become engine
+dependencies (the user): a program reads their source and ports from it; FlashInfer, already a dependency, stays
+callable. Why (the user): most of a region's gain may come from what specialized libraries already do; regions, the
+kernel layer's unit since today, had no library block.
 ## 2026-11-02 — The kernel search competes on FlashInfer-Bench, under its own evaluator
 Every FlashInfer-Bench definition its default evaluator judges (`flashinfer-ai/flashinfer-trace`, pinned revision; 95
 of 190: the rest have no workloads or are judged by another evaluator) is a kernel task `fib:NAME`

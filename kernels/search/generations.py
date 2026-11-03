@@ -14,8 +14,10 @@ changes over four idea types (decided 2026-10-29), one call each:
   crossover  one parent shown another parent's full code
 The split starts at TYPES and adapts: TYPE_FLOOR ideas each, the rest by each type's base share times its rate of
 children that beat the best score their generation started from (Laplace-smoothed over the run); a type with nothing
-to work on (no open line, one parent) gives its ideas to the others. Every correct program takes the full exam and
-joins the population. Every call gets the memory (kernels/search/memory.py), rebuilt before each generation. The search
+to work on (no open line, one parent) gives its ideas to the others. A generation that found a new best gives it
+NEW_BEST of the next generation's ideas as refine ideas before the split (decided 2026-11-03: OpenEvolve spread its
+fp16 program through ~80 of its 130 programs; ours gave it one parent's share, about 6 of 24). Every correct program
+takes the full exam and joins the population. Every call gets the memory (kernels/search/memory.py), rebuilt before each generation. The search
 runs exactly `generations` generations after generation 0; nothing stops it sooner (decided 2026-10-30). Why many small generations: Kevin's 16 x 8 beat 128 x 1 (1.10x against 0.65x) and ShinkaEvolve's archive
 of 40 under 150 evaluations; why weighted parents rather than MCTS: every tree of the 2026-10-24/25 runs stayed one
 level deep.
@@ -41,6 +43,7 @@ FLOOR = 0.05                 # added to each percentile reward: the weakest stil
 TYPES = {"refine": 8, "persist": 6, "fresh": 6, "crossover": 4}   # a generation's ideas by type, before adapting
 TYPE_FLOOR = 2               # ideas every available type keeps, however it has done
 LINE_MISSES = 3              # generations of persist children without a better one before a line closes
+NEW_BEST = 0.5               # share of the next generation's ideas refining a new best
 
 
 def parents(tree: Tree, n: int, rng: random.Random) -> list[Node]:
@@ -119,6 +122,7 @@ def search(initial: str, system: str, funnel: Funnel, judge: Callable[[str], dic
     general, rows = memory.general(funnel.library, funnel.task), []
     stats = {t: [0, 0] for t in TYPES}           # per type: children examined, children that beat their generation's start
     lines: dict[str, int] = {}                   # each open line's head -> generations of persist children with no better
+    found: Node | None = None                    # the new best the last generation found, if any
 
     with open(out / "trace.jsonl", "w") as trace, open(out / "hypotheses.jsonl", "w") as hyplog:
         def keep_node(node: Node, cost: float) -> None:
@@ -151,8 +155,14 @@ def search(initial: str, system: str, funnel: Funnel, judge: Callable[[str], dic
             elif types:
                 available = {"refine", "fresh"} | ({"persist"} if lines else set()) | ({"crossover"} if len(ps) > 1
                                                                                       else set())
-                q = split(gen_size, stats, available)
+                boost = round(gen_size * NEW_BEST) if found else 0
+                q = split(gen_size - boost, stats, available)
                 plan, extra = slots(tree, ps, q, lines, rng), {"types": q, "open_lines": len(lines)}
+                if boost:
+                    mine = [s for s in plan if s.kind == "refine" and s.parent.id == found.id]
+                    plan = [Slot(found, "refine", boost + sum(s.n for s in mine))] + [s for s in plan if s not in mine]
+                    extra["types"] = {**q, "refine": q["refine"] + boost}
+                    extra["new_best"] = {"id": found.id, "refine": plan[0].n}
             else:
                 quota = max(1, math.ceil(gen_size / n_parents))
                 plan = [Slot(p, "refine", quota) for p in ps]
@@ -164,6 +174,7 @@ def search(initial: str, system: str, funnel: Funnel, judge: Callable[[str], dic
                     stats[c.kind][0] += 1
                     stats[c.kind][1] += c.score > start
             lines = advance(tree, lines, plan, kids)
+            found = tree.best() if tree.best().score > start and tree.expandable(tree.best()) else None
             gen += 1
     return tree, {"usd": round(funnel.spent, 4), "model_calls": funnel.calls, "evals": judged, "generations": gen,
                   "types": {t: {"examined": e, "new_best": b} for t, (e, b) in stats.items()}}

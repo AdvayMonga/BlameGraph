@@ -145,11 +145,35 @@ def test_a_config_read_with_no_holder_is_refused_clearly(tmp_path, monkeypatch):
         regions.from_engine("norm", "add", str(caps))
 
 
-def test_a_region_writing_in_place_is_refused(tmp_path, monkeypatch):
-    regions = engine(tmp_path, monkeypatch)
+def test_a_region_writing_in_place_runs_on_a_copy_and_a_program_must_write_in_place(tmp_path, monkeypatch):
+    """A region with the K/V writer: the engine's stations as they run, each call on a copy of the pool (baseline and
+    program alike, inputs left unchanged); the start program passes; a program returning a new pool is refused."""
     import pytest
+    from kernels.evolve import core
+    regions = engine(tmp_path, monkeypatch)
+    h = held(tmp_path, regions)
+    d = tmp_path / "kvcaps"
+    (d / "samples").mkdir(parents=True)
+    with open(d / "calls.jsonl", "w") as f:
+        for i, t in enumerate((4, 16)):
+            f.write(json.dumps({"fn": "region:kv:kv", "layer": 0, "sample": f"{i}.pt",
+                                "reads": {"h": {"shape": [t, 64], "dtype": "float32"},
+                                          "kv": {"shape": [2], "dtype": "float32"}}}) + "\n")
+            torch.save({"reads": {"h": torch.randn(t, 64), "kv": torch.zeros(2)}, "writes": {}}, d / "samples" / f"{i}.pt")
+    t = regions.from_engine("kv", "kv", str(d), str(h.path), dtypes=(torch.float32,))
+    start = tmp_path / "start.py"
+    start.write_text(t.start_program())
+    assert "_PURE = _st.DECODE" in start.read_text()                  # as the engine runs it: writes in place
+    r = core.judge(t, start, [(4, 64), (16, 64)], [], None, "cpu", None, 2, iters=3)
+    assert r["metrics"]["correct"] == 1.0, r["artifacts"]
+    g = json.loads(r["artifacts"]["gates"])
+    assert g["inputs_unchanged"]["passed"]
+    xs = t.make_inputs((4, 64), torch.float32, "cpu", torch.Generator().manual_seed(0))
     with pytest.raises(ValueError, match="in place"):
-        regions.from_engine("add", "kv")
+        t.bind(lambda hh, kv: (torch.full_like(kv, hh.sum().item()),))(*xs)        # a new pool: refused
+    with pytest.raises(ValueError, match="context"):
+        monkeypatch.setattr(regions, "span", lambda st, a, b: (regions.Station("p", ("paged_ctx",), ("x",), None),))
+        regions._region("kv", "kv")
 
 
 def test_captured_shapes_split_with_a_heldout_region_from_the_holders_layer_only(tmp_path, monkeypatch):
@@ -184,6 +208,8 @@ def test_the_pools_block_count_is_not_part_of_a_calls_shape(tmp_path, monkeypatc
     large = {**small, "kv": {"shape": [4000, 2, 16, 8]}}
     assert regions._signature(small) == regions._signature(large) == (4, 7, 4, 64)
     assert regions._heldout_axes(small, ("h", "kv", "attn_block_tables")) == (2, 1)
+    wave = {"q": {"shape": [1, 32, 2048, 128]}, "fi_kv_indices": {"shape": [142]}, "fi_qo_indptr": {"shape": [2]}}
+    assert regions._heldout_axes(wave, ("q", "fi_qo_indptr", "fi_kv_indices"), prefill=True) == (0,)   # the context
     monkeypatch.delattr(regions._engine(), "IN_PLACE")                      # no IN_PLACE: the engine's pool names
     assert regions._signature({"h": {"shape": [4, 64]}, "k_cache": {"shape": [9, 2, 16, 8]}}) == (4, 64)
 
@@ -352,7 +378,7 @@ def test_a_prefill_region_binds_the_prefill_stations_and_a_none_read_becomes_a_c
                                   **({"tokens": torch.arange(t - 2)} if padded else {})}, "writes": {}},
                        d / "samples" / f"{i}.pt")
     assert regions.station_set("p_norm") == "PREFILL" and regions.light("region:p_norm:p_scale").entry.endswith(":PREFILL")
-    assert dict(regions.light("region:p_norm:p_scale").capture_env) == {"CAPTURE_REGION_LAYERS": "0"}
+    assert dict(regions.light("region:p_norm:p_scale").capture_env) == {"CAPTURE_REGION_LAYERS": "0,16,32,47"}
     t = regions.from_engine("p_norm", "p_scale", str(d), str(h.path), dtypes=(torch.float32,))
     assert set(t.seen_default) == {(1, 8, 64), (1, 24, 64)} and t.heldout_axes == (1,)    # the tokens axis
     assert not t.graphs                                # prefill runs eagerly: its host time is real
@@ -368,3 +394,21 @@ def test_a_prefill_region_binds_the_prefill_stations_and_a_none_read_becomes_a_c
     st = regions._engine()
     want = st.PREFILL[1].fn({**c, **st.PREFILL[0].fn(c)})["h"]
     assert torch.equal(got, want)
+
+
+def test_a_region_held_for_several_layers_keys_shapes_by_layer_and_holds_one_layer_out(tmp_path, monkeypatch):
+    """Each layer's calls are its own shapes, with that layer's weights; the held-out layer's calls are held out."""
+    from kernels import shapes
+    from kernels.shared_weights import Holder
+    regions = engine(tmp_path, monkeypatch)
+    w = {i: torch.randn(64, 64) / 8 for i in (0, 32)}
+    h = Holder({"L0.w.mm": w[0], "L32.w.mm": w[32], "w.mm_scale": None}, tmp_path / "w.pkl",
+               {"cfg": regions._engine().LayerConfig(1e-6), "layers": [0, 32]})
+    monkeypatch.setattr(regions, "HELDOUT_LAYER", 32)
+    caps = captures(tmp_path, [(4, 64, 0, True), (16, 64, 0, True), (4, 64, 32, True), (8, 64, 7, True)])
+    t = regions.from_engine("norm", "add", str(caps), str(h.path), dtypes=(torch.float32,))
+    assert set(t.seen_default) == {(0, 4, 64), (0, 16, 64), (32, 4, 64)}           # layer 7 is not held
+    xs = t.make_inputs((32, 4, 64), torch.float32, "cpu", torch.Generator().manual_seed(0))
+    assert torch.equal(xs[1], w[32]) and t.heldout_values == ((0, (32,)),) and t.heldout_axes == (1,)
+    sets = shapes.split(t, shapes.from_captures(t, [caps]))
+    assert (32, 4, 64) in sets["heldout"] and (0, 4, 64) in sets["seen"]

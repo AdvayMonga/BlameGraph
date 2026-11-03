@@ -27,6 +27,7 @@ class Task:
                                             # move; with inputs, for those exact inputs (e.g. real sequence lengths)
     call: Callable = None                   # call(fn, *inputs) -> fn's output (adds scalars); default fn(*inputs)
     heldout_axes: tuple[int, ...] = ()      # shape axes whose largest values are held out as a region
+    heldout_values: tuple = ()              # (axis, values) pairs: a shape with one of those values there is held out
     edge_shapes: Callable = None            # edge_shapes(shape) -> shapes; default: the checker's
     dtypes: tuple = (torch.bfloat16,)
     layouts: tuple = ("strided", "transposed")  # non-contiguous variants its callers pass (lab/capture records it)
@@ -34,8 +35,6 @@ class Task:
                                             # as a graph replay (no host launch overhead)
     scales: tuple | None = None            # value scalings checked beyond the task's own (None: the evaluator's; ties in
                                             # bf16 make ×0.01 meaningless for an exact top-k)
-    size_expr: str | None = None            # the call's size along heldout_axes[0], as Python over the entry's `args`,
-                                            # from tensor shapes only (no device sync): per-region dispatch reads it
     kernel_names: tuple[str, ...] = ()      # regexes of the device kernels its entry launches (kernels/share.py)
     make_real: Callable = None              # make_real(shape, dtype, device, generator, ints) -> inputs, `ints` being a
                                             # captured call's 1-D int args by value (e.g. its real sequence lengths)

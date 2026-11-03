@@ -26,7 +26,7 @@ def h(n):
 class Model:
     """The k-th call sets `a` to the k-th of `values` and says so in its hypothesis; its code has braces in it."""
     def __init__(self, values=(5, 13, 22, 7)):
-        self.values, self.calls, self.systems = values, [], []
+        self.values, self.calls, self.systems, self.model = values, [], [], "claude-test"
 
     def __call__(self, system, user):
         self.calls.append(user)
@@ -62,6 +62,7 @@ def test_one_call_per_change_and_every_correct_program_joins_the_tree():
     fates = {x["idea"]["modification_plan"]: x["fate"] for x in row["ideas"]}
     assert fates["set a = 13"] == "failed correctness" and fates["set a = 22"] == "full exam"
     assert all(json.loads(k.judge)["bottleneck"] for k in kids)     # the hypothesis, braces in code
+    assert all(x["idea"]["model"] == "claude-test" for x in row["ideas"])   # which model wrote each idea
     assert sum("compiler's report" in u for u in f.models.judge.calls) == 2             # slices rotated over the calls
 
 
@@ -153,6 +154,18 @@ def test_a_program_whose_change_is_like_one_already_written_is_refused_before_an
     first = rows2[0]["ideas"][0]["fate"]
     named = next(n.id for n in t.nodes.values() if "a = 5" in n.code)
     assert first.startswith(f"not applied: a near-duplicate of program {named}")          # named by its id
+
+
+def test_a_change_is_compared_with_its_siblings_changes_never_with_its_parents():
+    from kernels.search.funnel import near_duplicates
+    t = Tree()
+    root = root_of(t)
+    kid = t.add(Node("p5", root.id, START.replace("a = 1", "a = 5"), {"correct": 1.0, "combined_score": 0.2,
+                                                                       "stage": 2}, {}, 1))
+    f = Funnel(Models(Model()), stage, embedder=Bag())
+    eight = START.replace("a = 1", "a = 8")                  # 8 % 3 == 5 % 3: Bag gives both changes one vector
+    assert near_duplicates(f, t, [(kid.code.replace("a = 5", "a = 8"), kid.id)]) == [None]   # the parent's child
+    assert near_duplicates(f, t, [(eight, root.id)])[0].startswith("a near-duplicate of program p5")   # its sibling
 
 
 def test_ncu_is_not_asked_for_again_once_the_host_refuses_and_programs_are_never_written_twice():
