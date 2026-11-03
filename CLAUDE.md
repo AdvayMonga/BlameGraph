@@ -2,7 +2,7 @@
 
 The environment for autoresearch loops that optimize LLM inference: the lab (agent loop, tools, ledger, sandbox,
 GPU VMs), the workload corpus, the data store, load regimes, the correctness gate, canaries, and the referee
-(integrity verdict, session feedback). Design in `ENVIRONMENT.md`. The engine under optimization is a separate repo,
+(integrity verdict, session feedback). The engine under optimization is a separate repo,
 github.com/AdvayMonga/inference-server (engine + stack only since the 2026-10-06 split); the lab finds it via
 `LAB_ENGINE_REPO` (default `../inference-server`) and runs it with its own `.venv/bin/python`. See the parent
 `../CLAUDE.md` for coding guidelines.
@@ -55,7 +55,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   Nothing defaults to the user's engine or to Qwen3; `targets/inference-server.toml` is the committed example and
   what `tests/conftest.py` points at. Surfaces, grader commands, `lab/engine.py`, and the `correctness`,
   `regimes`, `validity` CLIs all read it.
-- `lab/` — moved from inference-server 2026-10-06 (`lab/README.md`). `session.py` (the loop over a dollar budget),
+- `lab/` — moved from inference-server 2026-10-06. `session.py` (the loop over a dollar budget),
   `agent.py` (the one place a model is called; the agent's jailed shell gets the engine's python on PATH;
   `LAB_AGENT_PROVIDER` claude = Agent SDK CLI, openai = `agent_openai.py`: any OpenAI-compatible API with its own
   key, https public hosts only, `LAB_MODEL_PRICE` required, loop outside the jail, Bash jailed with no network; on
@@ -141,8 +141,6 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   its commit (which `submit` reads for runs on that base commit only), its load searches resolved to
   `RESOLUTION_PCT` (5%), below which a searched regime's band is never reported. Exit 0 only if both hold. Needs a GPU for a real target; tested on fakes. `lab/LEDGER.md` is the
   record-format spec: the environment's public interface.
-- `lab/RUNTIME.md` — design (2026-10-08): controller (laptop: ledger, referee, secrets) and worker (GPU VM: jails,
-  clients, profilers) behind a job interface; trust zones and rules; why srt cannot jail GPU code on Linux.
 - `lab/build.py` — the dependency build step: a tree whose change touched the target's `deps` (pyproject: dependency
   tables only, checked by the audit) gets a venv built by the target's `build` command in a no-GPU, `--network none`
   container whose only way out is a CONNECT proxy to the package-index hosts; cached by the files' hash; jobs run
@@ -157,12 +155,12 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   kernel run. With
   `ssh` the agent works on the VM too: its workspace mirrored by rsync (pulled before every audit), its workbench
   built there (`workbench`), its CLI's stdio over `ssh -R`, the API proxy tunnelled to a unix socket in the workbench.
-- `lab/TRACE.md` + `lab/trace_contract.py` — the request-trace contract: per-request engine rows (trace_id = the
+- `lab/trace_contract.py` — the request-trace contract: per-request engine rows (trace_id = the
   client's `X-Trace-Id`, `arrival_ts` epoch s, `*_s` monotonic durations, TPOT = (E2E − TTFT)/(n − 1)) in a dir of
   `*.sqlite` (`requests` + `meta`) or `*.jsonl` + `<stem>.meta.json`, with schema version and drop counts;
   `python -m lab.trace_contract DIR`. Diagnostics only, never scored. inference-server's `TELEMETRY_DIR` conforms
   natively (schema 1, inference-server#102); the target names its env vars in `[engine.telemetry] env` (`{dir}`); serve collects
-  the files after every bench/equiv/submit and the contract check's report is stored beside them. vLLM OTel span mapping is in the spec, not implemented.
+  the files after every bench/equiv/submit and the contract check's report is stored beside them.
 - `corpus/` — frozen workload traces (BurstGPT timing, WildChat text), seen/heldout, hashed, `manifest.json`;
   `build_corpus.py` / `fetch_traces.py` rebuild it; any change is a new `corpus_version`. `lengths.py` (`python -m
   corpus.lengths --url URL`, decided 2026-10-25) writes each record's `expected_output_tokens` (and a multi-turn
@@ -189,11 +187,11 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   blobs: records, regimes, heldout_aggregates, noise, client_rows, engine_rows, device_samples, kernels, ops;
   `all.duckdb` adds heldout_rows for the researcher; the agent's `agent.duckdb` never has them nor researcher runs'
   records, and is queried with
-  external access off and configuration locked). Controller-only: VMs never hold store keys (`lab/RUNTIME.md`).
+  external access off and configuration locked). Controller-only: VMs never hold store keys.
   CLI: `python -m store push|pull [--blobs] [--corpus]|index|sql "..." [--agent]|archive PATH.. [--heldout]`.
 - `feedback/` — what each side gets after a session of a lab ledger. `report.py`: `feedback(path, run_id)` / `lab_feedback` → `{for_agent: {integrity, facts: {harness}}, for_researcher: {activity, process}}` (`for_researcher.activity` holds the derived facts, `for_researcher.process` the process evals); `python -m feedback PATH [--run RUN_ID] [--agent-text]`. Integrity carries `evidence` per violated rule (rule, plain detail, concrete refs: hashes, measurement ids, offending values and limits).
   - `lab_verdict.py` — lab ledger → integrity + derived activity facts. Record shapes are in `lab/LEDGER.md`; `gain()` reads submit aggregates (improved / regressed / within_band). Submitted snapshot must have a completed short-tier seen bench, tests passed, a passing equiv and no failing equiv (inconclusive is neither; retrying a statistical gate until it passes would let bad changes through).
-  - `claim_facts.py` — claim-vs-evidence facts from ledger `claim` text (regex, no LLM): unrecorded numbers, contradicted speedups, verification words with no matching record, unknown record ids. Facts only; never part of the verdict (their lab/README rule).
+  - `claim_facts.py` — claim-vs-evidence facts from ledger `claim` text (regex, no LLM): unrecorded numbers, contradicted speedups, verification words with no matching record, unknown record ids. Facts only; never part of the verdict.
 - `diagnostics/` — researcher-only, never fed to the agent. `lab_process.py` (lab ledgers: whether each
   prediction's direction held, outcome and mechanism, in four cases; bundles never measured apart; numbers in
   reflections that match no record; in `for_researcher.process`).
@@ -598,8 +596,9 @@ them from existing records meanwhile.
 - GPU runs go into the ledger, not a file (decided 2026-10-18). A run made through the lab's tools records itself;
   a run made by hand (`python -m regimes run --out DIR`, `python -m correctness candidate --out DIR/equiv.json`) is
   imported with `python -m lab.import_runs --run manual-<date> --commit SHA [--env K=V ...] DIR...` (`bench` / `equiv`
-  records, numbers only, visible to the agent), then `python -m store push`. `RUNS.md` is the frozen history of the
-  runs before that (2026-10-04 to 2026-10-18); nothing is added to it.
+  records, numbers only, visible to the agent), then `python -m store push`. The runs before that
+  (2026-10-04 to 2026-10-18) are in `RUNS.md` at tag `archive/docs`, with the old design docs (`ENVIRONMENT.md`,
+  `lab/README.md`, `lab/RUNTIME.md`, `lab/TRACE.md`).
 
 There is no status file: what works now is the code, the merged PRs and the ledger (`python -m store sql`).
 

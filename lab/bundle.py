@@ -1,4 +1,4 @@
-"""One directory per profile run: the raw outputs of every layer plus the provenance they were taken under (files: lab/README.md)."""
+"""One directory per profile run: the raw outputs of every layer plus the provenance they were taken under."""
 
 from __future__ import annotations
 

@@ -31,7 +31,7 @@ def store(work: Path, root: Path) -> dict:
         p = Path(work) / name
         return ledger.put_blob(p, root, suffix) if p.exists() else None
     for tel in [Path(work) / "telemetry", *Path(work).glob("profiles/*/telemetry")]:
-        if tel.is_dir() and any(tel.iterdir()):   # the request-trace contract check travels with the data (lab/TRACE.md)
+        if tel.is_dir() and any(tel.iterdir()):   # the request-trace contract check travels with the data
             from lab.trace_contract import validate
             rep = validate(tel)
             (tel / "contract.json").write_text(json.dumps({"valid": rep.valid, "errors": rep.errors[:50],

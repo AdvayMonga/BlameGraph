@@ -1,4 +1,4 @@
-"""Where the GPU work runs (lab/RUNTIME.md). A job takes input trees and JSON arguments, writes files into an output
+"""Where the GPU work runs. A job takes input trees and JSON arguments, writes files into an output
 dir and returns JSON; the tools keep the policy, the ledger and the budget. `Local` runs a job in this process.
 `Remote` ships each input by content hash, runs `python -m lab.worker run JOB` on the worker host over SSH and brings
 the output dir back; the worker re-hashes every tree right before using it and refuses one that does not match, so

@@ -29,7 +29,7 @@ def lab_feedback(recs: list[dict], run_id: str | None, source: str, harness: dic
     (activity counts, best measured, claims vs evidence) is the researcher's."""
     integrity = lab_verdict.integrity(recs)
     activity = lab_verdict.facts(recs)
-    activity["claims"] = claim_facts(recs)   # facts only: claims never decide the verdict (lab/README.md)
+    activity["claims"] = claim_facts(recs)   # facts only: claims never decide the verdict
     try:                                     # researcher-only: never stops the session start that also calls this
         proc = process(recs)
     except Exception as e:                   # noqa: BLE001

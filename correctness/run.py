@@ -84,7 +84,7 @@ def _jsonl_read(path: Path) -> list[dict]:
 
 TRACE_PREFIX = "eq"          # X-Trace-Id of a gate request: eq-<item id>, so equiv rows join engine telemetry
 RETRIES = 12                # a 429/503 (the server shedding under the gate's load) is retried with backoff, ~6 min in all:
-                            # 6 (~1 min) left 12/1,585 unanswered on inference-server #107 at 32 in flight (RUNS.md 2026-10-15)
+                            # 6 (~1 min) left 12/1,585 unanswered on inference-server #107 at 32 in flight (RUNS.md 2026-10-15, tag archive/docs)
 
 
 def _retrying(fn, *args, **kw):

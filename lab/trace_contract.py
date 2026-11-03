@@ -1,4 +1,4 @@
-"""The request-trace contract (lab/TRACE.md): load an engine's trace directory and check every row and file against it."""
+"""The request-trace contract: load an engine's trace directory and check every row and file against it."""
 
 from __future__ import annotations
 
@@ -158,7 +158,7 @@ def validate(directory: str | Path, now: float | None = None) -> Report:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Check an engine's request-trace directory against lab/TRACE.md")
+    ap = argparse.ArgumentParser(description="Check an engine's request-trace directory against the request-trace contract")
     ap.add_argument("dir")
     rep = validate(ap.parse_args(argv).dir)
     for e in rep.errors:

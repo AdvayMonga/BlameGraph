@@ -55,7 +55,7 @@ fi
 nsys --version 2>/dev/null || true
 ncu --version 2>/dev/null | head -1 || true
 
-echo "== py-spy (hostprof) and srt, the agent CLI's jail until lab/RUNTIME.md's split (Node >= 20, bubblewrap, socat, ripgrep)"
+echo "== py-spy (hostprof) and srt, the agent CLI's jail until the controller/worker split (Node >= 20, bubblewrap, socat, ripgrep)"
 uv pip install -q --python .venv/bin/python py-spy && .venv/bin/py-spy --version
 uv pip install -q --python .venv/bin/python duckdb zstandard    # the agent's query tool (store/index.py)
 uv pip install -q --python .venv/bin/python ninja    # torch C++ extensions: the engine's megakernel builds on first use
@@ -94,8 +94,8 @@ $SUDO docker run --rm lab-jail python3 -c "import socket; socket.create_connecti
   2>/dev/null && echo "workbench: internet ok (DNS and egress)" || echo "workbench: NO INTERNET (DNS or egress)"
 
 echo "== counters: open GPU performance counters to non-admin users (the jails run as one)"
-# ncu needs NVreg_RestrictProfilingToAdminUsers=0 or root; the jails are neither. A single-use VM may open them
-# (lab/RUNTIME.md): the option is set for the driver, which is reloaded when nothing holds the GPU, else at reboot.
+# ncu needs NVreg_RestrictProfilingToAdminUsers=0 or root; the jails are neither. A single-use VM may open them:
+# the option is set for the driver, which is reloaded when nothing holds the GPU, else at reboot.
 # The driver lists the option as RmProfilingAdminOnly (every setup before 2026-10-27 grepped the module option's name,
 # found nothing, and left the counters closed).
 restrict() { grep -oE '(RmProfilingAdminOnly|RestrictProfilingToAdminUsers): [0-9]' /proc/driver/nvidia/params 2>/dev/null \

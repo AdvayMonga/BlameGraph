@@ -1,4 +1,4 @@
-"""The Linux jails (lab/RUNTIME.md). A measurement room: one container per jailed command (NVIDIA runtime for the
+"""The Linux jails. A measurement room: one container per jailed command (NVIDIA runtime for the
 GPU), no network at all, read-only root, non-root user, no capabilities; a served engine's port reaches the host
 through a socket bridge. The agent's workbench: one container per session with the GPU, the internet and root
 inside it (writable system dirs, Docker's default capabilities), paused by `quiet` while anything is measured.
