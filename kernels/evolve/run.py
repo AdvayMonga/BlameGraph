@@ -68,7 +68,8 @@ def system_message(task) -> str:
     base = f"the engine's current `{task.entry}`" if task.entry else \
         "the problem's eager PyTorch `Model`" if task.name.startswith("kb:") else "the task's reference"
     scales = core.SCALES if task.scales is None else task.scales
-    cases = ", ".join(["three seeds"] + (["edge shapes"] if task.edge_shapes is None else [])
+    none = task.name.startswith(("kb:", "region:"))   # inputs from the problem or captures only: no edge shapes
+    cases = ", ".join(["three seeds"] + ([] if none else ["edge shapes"])
                       + (["NaN/Inf inputs"] if task.nonfinite else [])
                       + ([f"inputs scaled by {', '.join(f'{k:g}' for k in scales)}"] if scales else []))
     refused = "; ".join(dict.fromkeys(core.FORBIDDEN.values()))
