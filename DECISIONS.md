@@ -10,6 +10,9 @@ archive, which keeps the best program per cell of a feature grid so different ap
 was the top 32 by score alone, which collapses onto one lineage; a program fastest on some shapes and slower
 overall was pushed out. The shape is the niche: different sizes want different tiles and structure, and the elites
 are what a crossover can join. OpenEvolve's own features are generic (code length, edit diversity).
+Two more from the same audit of OpenEvolve 0.4.0 : 8 parents per generation (was 4), so
+each refine call has its own parent (OpenEvolve drew 67 parents for 130 programs, we 1-8 per run's generation); and
+a SEARCH text that occurs once when trailing whitespace is ignored is applied (still all blocks or none).
 
 ## 2026-11-03 — Novelty is judged among siblings, by each one's change from their parent
 A new program is refused as a near-duplicate only when its change from its parent is within cosine 0.95 of a

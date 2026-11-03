@@ -279,7 +279,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   it and joined to the population), then exactly `--generations` (10) generations (decided 2026-10-30:
   nothing stops it sooner), each a round whose `--gen-size` (24) changes are split over
   four idea types (decided 2026-10-29;
-  `--no-types` = refine only, arm `search-untyped`): refine (new ideas on `--parents` (4) programs drawn from the
+  `--no-types` = refine only, arm `search-untyped`): refine (new ideas on `--parents` (8; was 4 until 2026-11-03) programs drawn from the
   population: the 32 best open programs and the fastest open program on each seen shape (`elites`, MAP-Elites with the
   shape as the niche, decided 2026-11-03), the best always, the rest by percentile reward + 0.05 (an elite's as the
   best's) without replacement),

@@ -115,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="one parent per round, chosen by MCTS (the 2026-10-24 A/B's search), instead of generations")
     ap.add_argument("--generations", type=int, default=10, help="generations after generation 0 (the start alone)")
     ap.add_argument("--gen-size", type=int, default=24, help="ideas written per generation, over its parents")
-    ap.add_argument("--parents", type=int, default=4, help="parents per generation, drawn by fitness")
+    ap.add_argument("--parents", type=int, default=8, help="parents per generation, drawn by fitness")
     ap.add_argument("--types", action=argparse.BooleanOptionalAction, default=True,
                     help="split each generation's ideas over refine, persist, fresh and crossover (kernels/search/"
                          "generations.py); --no-types: refine only")

@@ -46,6 +46,9 @@ def test_diff_applies_exact_blocks_and_refuses_the_rest():
     assert diff.apply(code, "no blocks")[0] is None
     assert "2 times" in diff.apply(code, "<<<<<<< SEARCH\nb = 2\n=======\nb = 4\n>>>>>>> REPLACE")[1]
     assert "0 times" in diff.apply(code, "<<<<<<< SEARCH\nc = 1\n=======\nc = 4\n>>>>>>> REPLACE")[1]
+    spaced = "def f():\n    x = 1   \n    return x\n"                    # trailing spaces the model did not copy
+    assert diff.apply(spaced, "<<<<<<< SEARCH\n    x = 1\n    return x\n=======\n    return 2\n>>>>>>> REPLACE") == \
+        ("def f():\n    return 2\n", "")
 
 
 def test_mcts_descends_by_uct_widens_progressively_and_skips_closed_nodes():

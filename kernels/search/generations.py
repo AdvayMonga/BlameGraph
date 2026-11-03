@@ -131,7 +131,7 @@ def advance(tree: Tree, lines: dict[str, int], plan: list[Slot], kids: list[Node
     return lines | {c.id: 0 for c in kids if c.score > tree.nodes[c.parent].score}
 
 
-def search(initial: str, system: str, funnel: Funnel, judge: Callable[[str], dict], out: Path, seed: int = 0, gen_size: int = 24, n_parents: int = 4, generations: int = 10,
+def search(initial: str, system: str, funnel: Funnel, judge: Callable[[str], dict], out: Path, seed: int = 0, gen_size: int = 24, n_parents: int = 8, generations: int = 10,
            types: bool = True, starts: dict[str, str] | None = None) -> tuple[Tree, dict]:
     """Returns the tree and the run's cost {usd, model_calls, evals, generations, types}. `types=False`: every idea is
     a refine idea (the search before 2026-10-29; an A/B arm). `starts`: competitor name -> program, each judged as a
