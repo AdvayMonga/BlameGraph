@@ -62,7 +62,7 @@ def _fingerprint(inputs) -> torch.Tensor:
         w = b[:n].view(torch.int64)
         pos = torch.arange(1, w.numel() + 1, device=t.device, dtype=torch.int64)
         out.append(torch.stack([w.sum(), (w * pos).sum(), b[n:].to(torch.int64).sum()]))     # overflow wraps
-    return torch.stack(out).cpu() if out else torch.zeros(0, 3, dtype=torch.int64)
+    return torch.stack([x.cpu() for x in out]) if out else torch.zeros(0, 3, dtype=torch.int64)   # inputs may mix devices
 
 
 def _unchanged(inputs, before: torch.Tensor, who: str, buffer: int) -> None:
