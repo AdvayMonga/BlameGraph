@@ -42,6 +42,17 @@ def unstart(task, src: str) -> str:
     return src
 
 
+def no_live_autotune(src: str, base: str | None) -> str:
+    """`src`, refused when it would autotune while serving where `base` (the engine module it replaces) does not:
+    a winner ships with its autotune frozen (kernels/evolve/freeze.py, which `gate` and `kernel_search` apply)."""
+    from kernels.evolve.freeze import introduced
+    live = introduced(src, base)
+    if live:
+        raise ValueError(f"the program still autotunes at run time (`{live[0][:100]}`): ship the program "
+                         "`gate` froze beside it (<program>.frozen.py), whose tuning is a table")
+    return src
+
+
 def gate_passed(gate: dict) -> bool:
     """Every gate passed (correctness, physics, memory, timing/capture) and the held-out check judged > 0 cases."""
     gates = json.loads(gate.get("artifacts", {}).get("gates") or "{}")
@@ -110,7 +121,7 @@ def region_files(task, program: str, pkg: str, overrides: list, names: list[str]
             raise ValueError(f"the override {a}..{b} in {path} names a station this engine lacks")
         if names.index(a) <= names.index(last) and names.index(first) <= names.index(b):
             raise ValueError(f"region {first}..{last} overlaps the override {a}..{b} already in {path}")
-    files = {f"{pkg}/{first}_{last}.py": regions.override_module(program, first, last)}
+    files = {f"{pkg}/{first}_{last}.py": no_live_autotune(regions.override_module(program, first, last), None)}
     if not has_init:
         files[f"{pkg}/__init__.py"] = '"""Region overrides from the layer-1 loop (models/stations.py: `overrides`)."""\n'
     return files
@@ -127,7 +138,7 @@ def ship(task, program: str, gate: dict, repo: Path, base: str = "HEAD", branch:
     else:
         module, _, attr = task.entry.partition(":")
         path = _module_path(repo, base, module)
-        files = {path: unstart(task, module_source(program, attr))}
+        files = {path: no_live_autotune(unstart(task, module_source(program, attr)), _git(repo, "show", f"{base}:{path}"))}
     with tempfile.TemporaryDirectory() as d:
         env = {"GIT_INDEX_FILE": str(Path(d) / "index")}
         _git(repo, "read-tree", base, env=env)

@@ -3,6 +3,19 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-04 — A winner's autotune is frozen into a table before it is gated and shipped
+Before the held-out gate (`kernels.evolve gate`, `kernel_search`), the winner runs once on every seen shape in the
+jail, and the config each of its `triton.autotune`s chose for each key is recorded; each autotune is replaced by a
+table lookup (the call's key, else the nearest tuned one: the smallest tuned sizes at or above the call's, beyond the
+table its largest), written into the module. The frozen program is what the gate judges and what ships; ship and
+`kernel_search`'s patch refuse a live autotune the engine module did not already have as written. Why (the user):
+the shipped moe_gemm_fp8 winner lost 28% of saturated goodput end to end (10.98 to 7.89 req/s) because its
+`triton.autotune` was keyed on `M`, the batch's rows, so it tuned again for every new row count while serving; the
+gate never saw it, since tuning happens in the warm-up before each timed window. Production engines ship offline
+tables (vLLM's and SGLang's fused-MoE configs by batch size). The table is tuned on seen shapes only, so the gate's
+held-out shapes measure its lookup beyond them. Amends 2026-11-03 (the harness tunes nothing): run-time autotune stays
+allowed during the search.
+
 ## 2026-11-03 — Novelty is judged among siblings, by each one's change from their parent
 A new program is refused as a near-duplicate only when its change from its parent is within cosine 0.95 of a
 sibling's change from the same parent (was: its change from the starting program against every program's). Why: a

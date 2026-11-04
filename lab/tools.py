@@ -227,7 +227,7 @@ class Toolbox(EvalTools, ProfTools):
                                         device=device, held=held,
                                         facts_text=pipeline.facts(task, _layer_facts(self.s.ledger_root,
                                                                                      "kernel_tasks"), scored))
-                best = out / "search" / "best_program.py"
+                best = pipeline.freeze(task, caps, out / "search" / "best_program.py", out, env, held)
                 g = pipeline.gate(task, caps, best, out, env, held)
         except Exception as e:                   # noqa: BLE001  a tool never crashes the session
             model_cost = self._charge_models(pipeline.spent(out / "search"))

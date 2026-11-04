@@ -304,7 +304,12 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `vm-setup.sh` never opened because it grepped the module option's name, not the driver's `RmProfilingAdminOnly`; a
   run stops asking after the first refusal); the harness tunes nothing (decided 2026-11-03, its grid search removed): a
   program tunes itself at run time if it does (e.g. `triton.autotune`), and the system message states that the checks
-  and warm-up calls run before each shape's timed window; the prompt states the best program's % of its call-weighted roofline bound as a fact, and with
+  and warm-up calls run before each shape's timed window; before the held-out gate (`kernels.evolve gate`, and
+  `kernel_search` via `pipeline.freeze`) the winner's autotune is frozen (decided 2026-11-04, `kernels/evolve/freeze.py`:
+  jailed stage 6 runs it on every seen shape and records each autotuner's choice per key; each module-level
+  `triton.autotune` becomes `_FrozenTune` over that table, the call's key or the nearest tuned one: equal non-numeric
+  values, then the smallest sizes at or above, then the closest), and the frozen program is what the gate judges and
+  ship commits; ship and the patch refuse an autotune the engine module did not already have as written; the prompt states the best program's % of its call-weighted roofline bound as a fact, and with
   `--mcts` the search stops after `--patience` (16) judged programs with no new best (MANTIS; no roofline stop since
   2026-10-27);
   each timed shape carries its bound type (memory or compute) and the achieved % of peak bandwidth and of peak FLOPs,
