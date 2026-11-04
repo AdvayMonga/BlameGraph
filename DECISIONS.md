@@ -3,6 +3,16 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-04 — The whole step is not checked on NaN/Inf inputs
+`region:embed:argmax` sets `Task.nonfinite` False, and the judge's value-scale and baseline-error checks follow a
+task's `nonfinite` too (they always wrote NaN/Inf before). Why: the whole-step gate crashed on the H200 (2026-11-03,
+illegal memory access) on the NaN/Inf case: NaN written into the K cache reaches the router, and the engine's
+megakernel picks expert index E (128) when a row's logits are all NaN (`decode_step.cu`, P6's `int idx = E`) and then
+reads gate_up and down past the expert stack. The baseline is that same kernel, so the case judged the engine's own
+step invalid, by faulting rather than by a wrong answer; the step is judged as the engine runs it, where the K/V
+never holds NaN. Amends the checker's NaN/Inf edge case (every task had it; public benchmarks turned it off with #171
+and #189).
+
 ## 2026-11-03 — Novelty is judged among siblings, by each one's change from their parent
 A new program is refused as a near-duplicate only when its change from its parent is within cosine 0.95 of a
 sibling's change from the same parent (was: its change from the starting program against every program's). Why: a

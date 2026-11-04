@@ -386,9 +386,12 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   decode_step on a Model namespace built from the held weights; reference: the engine's `stations.reference()` in
   fp32 over every layer, error budget 2x; bytes bound: every non-expert weight + top-k experts per layer + lm_head + the
   K/V. Start program: decode_step.cu as a raw literal (its globaltimer stamp edited to 0, `START_EDITS`) built with
-  load_inline under the engine's build flags. Shapes (rows, bt width), both held-out axes. A winner does not ship: the
+  load_inline under the engine's build flags. Shapes (rows, bt width), both held-out axes. No NaN/Inf inputs
+  (`Task.nonfinite` False, decided 2026-11-04): the megakernel's top-8 picks expert E on all-NaN router logits and
+  reads past the expert stack, the gate's crash of 2026-11-03. A winner does not ship: the
   engine has no hook for a whole-step override (`ship.region_files` refuses it, kernel_search reports `patch_refused`).
-  Tested on the CPU with a fake megakernel and the engine's stations; never run on a GPU.
+  Tested on the CPU with a fake megakernel and the engine's stations; on the H200 the search judged the start and its
+  children, and the gate crashed on the NaN case.
 - `kernels/ptx.py` — the PTX comparison's cards (decided 2026-10-22, after Standard Kernel): each implementation's
   kernels counted from its PTX (or `cuobjdump -sass` output, for libraries that ship no PTX): instruction classes,
   widest vector access, declared registers, static shared memory, and the Hopper features in use (wgmma, TMA,

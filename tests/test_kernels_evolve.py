@@ -353,6 +353,19 @@ def test_value_distributions_catch_a_kernel_tuned_to_one_scale():
         assert "values_x3" not in g and "edge_cases" in g          # selection: correctness and timing, no value scales
 
 
+def test_a_task_without_nonfinite_inputs_gets_none_in_any_check_of_the_gate():
+    import dataclasses
+    from kernels.evolve import core
+    t = dataclasses.replace(load("toy_rmsnorm"), nonfinite=False)
+    seen, orig = [], core.check_kernel
+    core.check_kernel = lambda *a, **kw: (seen.append(kw.get("nonfinite", True)), orig(*a, **kw))[1]
+    try:
+        r = judge(t, SEED, list(t.seen_default), [], None, "cpu", None, 2, iters=3, full=True)
+    finally:
+        core.check_kernel = orig
+    assert r["metrics"]["correct"] == 1.0 and len(seen) > 1 and not any(seen)
+
+
 def load_program_text(src: str):
     from kernels.evolve.core import load_program
     with tempfile.TemporaryDirectory() as d:

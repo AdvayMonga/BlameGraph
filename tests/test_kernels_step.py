@@ -64,6 +64,35 @@ def test_a_captured_step_keeps_the_touched_blocks_of_every_layer_before_and_afte
     assert not (s["reads"]["v_cache"][:, blocks.index(3), :, 4] == 2).all()
 
 
+def test_a_captured_step_reads_as_the_megakernel_indexes_its_pools(tmp_path, monkeypatch):
+    """decode_step.cu's layout: each layer's pool [blocks, NKV, BS, D] contiguous, row b's position t at block
+    bt[b, t // BS], slot t % BS, flat offset ((bid * NKV + g) * BS + slot) * D; every id in range, padding included."""
+    ps = pools(torch.Generator().manual_seed(0))
+    before = [SimpleNamespace(k=p.k.clone(), v=p.v.clone()) for p in ps]
+    mk = fake_megakernel(ps)
+    monkeypatch.setitem(__import__("sys").modules, "inference_server.models.megakernel", mk)
+    bt, pos = torch.tensor([[7, 3, -1], [5, 9, 11]]), torch.tensor([31, 32])     # row 1's new token opens block 11
+    with capture.step(ps, tmp_path / "caps"):
+        mk.decode_step(None, torch.tensor([1, 2]), pos, bt)
+    s = torch.load(tmp_path / "caps" / "samples" / capture.load(tmp_path / "caps")[0]["sample"], weights_only=True)
+    r = s["reads"]
+    k, v, sbt, n = r["k_cache"], r["v_cache"], r["bt"], r["k_cache"].shape[1]
+    assert sbt.dtype == bt.dtype and ((sbt >= 0) & (sbt < n)).all()
+    assert all(x[i].is_contiguous() and x[i].shape == (n, NKV, BS, D) for x in (k, v) for i in range(L))
+    for b, p in enumerate(pos.tolist()):
+        for t in range(p + 1):
+            bid, slot = int(sbt[b, t // BS]), t % BS
+            for i in range(L):
+                for g in range(NKV):
+                    off = ((bid * NKV + g) * BS + slot) * D
+                    assert torch.equal(k[i].reshape(-1)[off:off + D], before[i].k[bt[b, t // BS], g, slot])
+                    assert torch.equal(v[i].reshape(-1)[off:off + D], before[i].v[bt[b, t // BS], g, slot])
+
+
+def test_the_step_is_never_given_nonfinite_inputs():
+    assert step.task().nonfinite is False      # the megakernel reads past its experts on all-NaN router logits
+
+
 def held_step(tmp, cfg=None):
     from kernels.shared_weights import Holder
     g = torch.Generator().manual_seed(1)
