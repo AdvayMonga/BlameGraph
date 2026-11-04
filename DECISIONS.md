@@ -3,6 +3,18 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-04 — A would-be winner must run clean under compute-sanitizer at the held-out gate
+The held-out gate (`kernels.evolve gate`, `kernel_search`'s gate, the A/B's) runs a program that passed it under
+NVIDIA's `compute-sanitizer` (`kernels/evolve/sanitize.py`, stage 6 of the jailed evaluator): memcheck, racecheck,
+initcheck and synccheck, each in its own jail, one call per shape on the smallest and largest seen shape and the
+largest held-out one, PyTorch's caching allocator off so an access past a tensor's end leaves its allocation. Any
+error the sanitizer reports fails the gate (gate `sanitizer`, its report as evidence: tool, error kind, kernel, first
+lines); a host without the sanitizer records "not run: compute-sanitizer not found" as a fact and does not fail.
+Selection never runs it (10-100x slower). Why (the user): output checks on chosen inputs miss an out-of-bounds read
+that returns a harmless value, a race won by luck on this GPU and uninitialized memory that happens to be zero; the
+whole-step region's illegal memory access was found late. A sanitizer error is a measurement of the program, not a
+heuristic.
+
 ## 2026-11-03 — Novelty is judged among siblings, by each one's change from their parent
 A new program is refused as a near-duplicate only when its change from its parent is within cosine 0.95 of a
 sibling's change from the same parent (was: its change from the starting program against every program's). Why: a

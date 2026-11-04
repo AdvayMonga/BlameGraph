@@ -130,6 +130,19 @@ def ncu(tmp: Path) -> str:
     return r["head"][:300]
 
 
+@check("sanitizer")
+def sanitizer(tmp: Path) -> str:
+    """compute-sanitizer around a jailed kernel call: the held-out gate's stage 6, every tool clean on a plain program."""
+    from kernels.evolve import jailed
+    assert jailed.sanitizer(), "compute-sanitizer not found (CUDA toolkit bin/ or PATH)"
+    src = "import torch\ndef kernel(x, w, eps=1e-6):\n    return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * w\n"
+    a = jailed.judge_jailed({"task": "toy_rmsnorm", "seen": [[8, 256]], "heldout": [], "device": "cuda"}, src,
+                            jailed.SANITIZE_STAGE)["artifacts"]
+    runs = json.loads(a["sanitizer"])
+    assert all(r["passed"] for r in runs), runs
+    return f"{jailed.sanitizer()}: " + ", ".join(r["tool"] for r in runs) + " clean"
+
+
 @check("hostprof")
 def hostprof(tmp: Path) -> str:
     """py-spy inside a measurement room."""
@@ -158,7 +171,7 @@ def build_step(tmp: Path) -> str:
     return f"built in {time.monotonic() - t0:.0f}s: {py}: torch {out.stdout.strip()}"
 
 
-CHECKS = [jail_gpu, workbench, quiet, exclusive, ncu, hostprof, build_step]
+CHECKS = [jail_gpu, workbench, quiet, exclusive, ncu, sanitizer, hostprof, build_step]
 
 
 def main(argv: list[str] | None = None) -> int:
