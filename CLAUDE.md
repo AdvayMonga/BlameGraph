@@ -630,8 +630,9 @@ corpus lacks (short/long output, overload, shared prefix) belong in `data/corpus
 them from existing records meanwhile.
 
 ## Decisions and runs
-- `DECISIONS.md` — append-only, one dated entry per decision (what, why, what it replaced), newest first. The eval
-  conventions (2026-10-02) are there; change any decision only with the user.
+- `~/Desktop/BlameGraph-notes/DECISIONS.md` — private, not in git (decided 2026-11-04): append-only, one dated entry
+  per decision (what, why, what it replaced), newest first. The eval conventions (2026-10-02) are there; change any
+  decision only with the user. A new decision is added there, never to a file in this repo.
 - GPU runs go into the ledger, not a file (decided 2026-10-18). A run made through the lab's tools records itself;
   a run made by hand (`lab regimes run --out DIR`, `lab correctness candidate --out DIR/equiv.json`) is
   imported with `lab import-runs --run manual-<date> --commit SHA [--env K=V ...] DIR...` (`bench` / `equiv`
@@ -641,6 +642,6 @@ them from existing records meanwhile.
 
 There is no status file: what works now is the code, the merged PRs and the ledger (`lab store sql`).
 
-@DECISIONS.md
+@~/Desktop/BlameGraph-notes/DECISIONS.md
 
 The agent's tool set is the user's design: ask first. README stays a few one-line feature bullets, not a dev doc.
