@@ -37,7 +37,7 @@ import tempfile
 from pathlib import Path
 
 from targets import engine, target
-from lab import live
+from evals.researcher import live
 from measure.runner import serve
 from measure.sandbox import container
 
@@ -131,8 +131,8 @@ def job_measure(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
 def job_equiv(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     """`args`: tier, concurrency, jailed, profile (None = general). The gate's outputs land in `out` as equiv.json and
     equiv.outputs.jsonl; answers already in `prior`'s equiv.outputs.jsonl are reused, not asked again."""
-    from correctness import client, run as crun
-    from correctness.gate import Thresholds
+    from evals.agent.correctness import client, run as crun
+    from evals.agent.correctness.gate import Thresholds
     from measure.sandbox import build
     from measure.runner import profiles
     t = target.load()

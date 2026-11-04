@@ -2,10 +2,10 @@
 under nsys (`nsys launch`, kernels inside CUDA graphs traced), driven by the comparison's client at each point of
 POINTS; at each point a WINDOW_S nsys capture once the load is steady, then WINDOW_S of py-spy over the server's
 processes, then the client's own numbers for the point. Run on the GPU VM, from the BlameGraph checkout with the
-engine's python, with nothing else on the GPU; `python -m compare.gap DIR` reads the result. `--plain`: no profiler,
+engine's python, with nothing else on the GPU; `python -m evals.benches.compare.gap DIR` reads the result. `--plain`: no profiler,
 the client's numbers over the same windows (for A/B runs; the engine's environment is this process's).
 
-    python -m compare.profile --out ~/gap [--engines ours,vllm,trtllm] [--precision fp8] [--points decode1,sat256] [--plain]
+    python -m evals.benches.compare.profile --out ~/gap [--engines ours,vllm,trtllm] [--precision fp8] [--points decode1,sat256] [--plain]
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ import threading
 import time
 from pathlib import Path
 
-from compare import run as R
+from evals.benches.compare import run as R
 
 WARM_S, WINDOW_S = 30.0, 10.0
 NSYS_TRACE = "--trace=cuda,nvtx --cuda-graph-trace=node"          # at launch; sampling is chosen at start

@@ -67,7 +67,7 @@ dir = "{tmp_path / 'no-corpus'}"
 
 
 def _reference(url: str, out: Path, n: int = 40):
-    from correctness import run as crun
+    from evals.agent.correctness import run as crun
     items = [{"id": f"mc-{k}", "task": "mmlu_pro", "gold": "C", "max_tokens": 6,
               "messages": [{"role": "user", "content": f"question {k} pick one"}]} for k in range(n)]
     crun.reference(url, "fake", out, items, Enc(), top_k=3, div_n=8, concurrency=4)
@@ -164,7 +164,7 @@ def test_equiv_judges_against_the_reference(lab):
     from measure.runner import artifacts
     rows = artifacts.load(rec, s.ledger_root)["client_rows"]
     assert len(rows) == 40 and all("text" not in r for r in rows)
-    from correctness.run import TRACE_PREFIX
+    from evals.agent.correctness.run import TRACE_PREFIX
     joined = artifacts.joined(rec, s.ledger_root, prefix=TRACE_PREFIX)
     assert all(j["engine"] for j in joined)                    # every gate request has its engine row (X-Trace-Id)
 
@@ -247,7 +247,7 @@ def test_submit_is_refused_where_there_is_no_shared_heldout_budget(lab, monkeypa
 
 
 def test_inconclusive_equiv_is_neither_passing_nor_failing(lab, monkeypatch):
-    from correctness import run as crun
+    from evals.agent.correctness import run as crun
     tb, s = lab
     real = crun.candidate
 
@@ -259,7 +259,7 @@ def test_inconclusive_equiv_is_neither_passing_nor_failing(lab, monkeypatch):
     assert json.loads(tb.equiv({}))["verdict"] == "inconclusive"
     rec = list(ledger.records(s.ledger_root, kind="equiv"))[-1]
     assert rec["result"]["passed"] is None                              # lab_verdict counts neither pass nor fail
-    from feedback.lab_verdict import passed
+    from evals.researcher.feedback.lab_verdict import passed
     assert passed(rec) is None
 
 

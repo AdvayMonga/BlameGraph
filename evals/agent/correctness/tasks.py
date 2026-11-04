@@ -15,7 +15,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-DATA = Path(__file__).resolve().parents[1] / "local" / "tasks"
+DATA = Path(__file__).resolve().parents[3] / "local" / "tasks"
 LETTERS = "ABCDEFGHIJ"
 
 

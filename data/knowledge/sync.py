@@ -5,7 +5,7 @@ are never rewritten:
   blobs/<name>.zst | .tar.zst         one ledger blob (file | directory), named as in the ledger; once stored, its
                                       trace.json is removed locally (`pull --blobs` restores a blob dir only if absent)
   archive/<name>-<hash>.tar.zst       anything else kept (GPU run reports, correctness outputs)
-  heldout/guard/<version>/state-<n>.json   the holdout guard's state after its n-th query (validity/holdout.py
+  heldout/guard/<version>/state-<n>.json   the holdout guard's state after its n-th query (evals/agent/holdout.py
                                       writes these itself, write-once; nothing here touches them)
   heldout/private/<run>/<dir>.tar.zst submit's held-out passive data (data/knowledge/LEDGER.md)
   heldout/corpus/<version>/<class>/heldout.jsonl.zst   the held-out traces, which are not in git

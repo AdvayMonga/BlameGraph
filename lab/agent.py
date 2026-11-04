@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib.parse import urlsplit
 
-from lab import apiproxy, live
+from lab import apiproxy
+from evals.researcher import live
 from targets import engine
 from measure.sandbox import container, jail
 from measure.sandbox.grader import HF_HUB
@@ -123,7 +124,7 @@ def workbench_command(name: str, ws: Path, scratch: Path, cli: Path, base_url: s
 
 
 def _live(msg, spent_usd: float) -> None:
-    """What the agent just said or called, for the dashboard (`lab.live`)."""
+    """What the agent just said or called, for the dashboard (`evals.researcher.live`)."""
     from claude_agent_sdk import AssistantMessage, TextBlock, ThinkingBlock, ToolResultBlock, ToolUseBlock, UserMessage
     if isinstance(msg, AssistantMessage):
         for b in msg.content:

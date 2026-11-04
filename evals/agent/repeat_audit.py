@@ -2,10 +2,11 @@
 Prefix caching legitimately cuts a repeat's TTFT, so only decode-side timing is judged: TPOT = (E2E - TTFT)/(n - 1),
 streamed and timed client-side. Stdlib only.
 
-  python -m validity repeat --url http://127.0.0.1:8000 [--model M] [--n 20] [--api chat|completions]
+  python -m evals.agent.repeat_audit --url http://127.0.0.1:8000 [--model M] [--n 20] [--api chat|completions]
 """
 from __future__ import annotations
 
+import argparse
 import json
 import statistics
 import time
@@ -77,3 +78,21 @@ def repeat_audit(base_url: str, model: str, requests: list[str], repeats: int = 
                 "noise": noise, "e2e_ratio_median": statistics.median(e2e_r),
                 "ttft_ratio_median": statistics.median(ttft_r), "instant_repeats": instant}
     return {"passed": not reasons, "reasons": reasons, "evidence": evidence, "rows": rows}
+
+
+def main():
+    from targets import target
+    ap = argparse.ArgumentParser(prog="python -m evals.agent.repeat_audit",
+                                 description="the repeated-request audit against a live server")
+    target.add_argument(ap)
+    ap.add_argument("--url", required=True)
+    ap.add_argument("--n", type=int, default=20)
+    ap.add_argument("--api", choices=("chat", "completions"), default="chat")
+    a = ap.parse_args()
+    t = target.load(a.target)
+    res = repeat_audit(a.url, t.model, PROMPTS[:a.n], api=a.api, chat_kwargs=t.chat_kwargs)
+    print("PASS" if res["passed"] else "FAIL", *res["reasons"], json.dumps(res["evidence"]), sep="\n  ")
+
+
+if __name__ == "__main__":
+    main()

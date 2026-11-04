@@ -1,6 +1,6 @@
 # The ledger: the environment's public interface
 
-Any loop that writes these records gets a verdict and facts back (`python -m feedback <ledger dir>`); the lab's
+Any loop that writes these records gets a verdict and facts back (`python -m evals.researcher.feedback <ledger dir>`); the lab's
 tools are one writer. Append-only JSONL, one record per line, `local/ledger/ledger.jsonl`; `data/knowledge/ledger.py` validates
 on write. Every record: `id`, `at`, `schema` (set by the writer), `kind`, `run`, `session`, `snapshot`
 (content hash of the agent's workspace), `snapshot_blob`, `patch`, `cost: {usd}`. Tool records' `cost` also has
@@ -16,7 +16,7 @@ on write. Every record: `id`, `at`, `schema` (set by the writer), `kind`, `run`,
 | `equiv` | `equiv` | `config: {split: seen, tier: quick\|dev\|full, profile?}` (`profile` absent = the general launch); `verdict: pass\|fail\|inconclusive` (tier `quick`: `facts`, `passed: null`, `metrics` = the divergence summary only), `passed`, `reasons`, `gates`, `metrics` (accuracy with CI, length, per-task flips (consistency and divergence only in records before 2026-10-28), unanswered, sample: {items, of, looks}: how many of the tier's items, in their fixed order, were answered before the gate stopped), `thresholds`, `artifacts` |
 | `submit` | `submit` | **held-out shape**: no `result`; top-level `config: {split: heldout, tier: short, profiles?}` (the regimes measured under their own launch profile) and `metrics: {regime: {base, new, delta_pct, band_pct, verdict}}`, scalars only. The ledger refuses anything else that mentions the held-out split. |
 | `baseline` | the loop, once per run before the first session | `config: {split: seen, tier: min, commit}`; `verdict: ok` with `metrics` and `calibrated` shaped like `bench`'s (the base commit under bench's default regimes: saturated plus the task's objective and constrained ones, from the cache submit compares against), plus `profiled` as in `bench` (always), or `verdict: error`, `reason` |
-| `noise` | `lab.validate` | `config: {split: seen, tier}`; `result`: regime, band_pct (at least `lab.validate.RESOLUTION_PCT` for a searched regime), values, runs, model, target, server, corpus_version, measured_at, engine_commit (None when the engine tree had uncommitted changes); `submit`, experiment records and the brief use the latest band for the target, at any engine commit, on the current corpus version (a record without one counts) |
+| `noise` | `evals.agent.validate` | `config: {split: seen, tier}`; `result`: regime, band_pct (at least `evals.agent.validate.RESOLUTION_PCT` for a searched regime), values, runs, model, target, server, corpus_version, measured_at, engine_commit (None when the engine tree had uncommitted changes); `submit`, experiment records and the brief use the latest band for the target, at any engine commit, on the current corpus version (a record without one counts) |
 | `note` | `note`, `restore`, refusals | free text, or `{verdict: refused, reason}` |
 | `note` (`tool: start`) | `python -m lab.experiment start` | a researcher run: `args: {repo, base, change, budget_usd}`, `result: {author, applied, left_out}` |
 | `hypothesis` | `hypothesis` | the agent's text: `hypothesis` (bottleneck and proposed change), `rationale`, `layer` (kernels, model_execution, runtime or serving; older records have none), optional `abandon_if`, `from_record` |
@@ -43,7 +43,7 @@ the GPU (no engine launched) and `contaminated` when a process other than the se
 measurement; both carry `gpu_processes: [{pid, used_mib, name}]`. A contaminated run is never evidence and never
 cached as the base. A measurement that killed processes in the agent's workbench (they held the GPU) lists them
 as `workbench_killed: [{pid, used_mib, name}]` (bench, equiv, profile records; submit's reply). A `session`'s
-`cost.usd` is what the API proxy priced, and `cost.tokens` its token counts. The integrity verdict (`feedback/lab_verdict.py`) reads only these records: a run is valid
+`cost.usd` is what the API proxy priced, and `cost.tokens` its token counts. The integrity verdict (`evals/researcher/feedback/lab_verdict.py`) reads only these records: a run is valid
 iff a completed `submit` exists whose snapshot also has a completed seen-split `bench`, a passing `test`, a
 passing `equiv` and no failing `equiv`, and no record reports a write-surface violation.
 

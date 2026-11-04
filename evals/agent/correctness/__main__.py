@@ -1,6 +1,6 @@
-"""python -m correctness reference --url URL --out DIR [--tier dev|full] [--tasks a,b] [--target T]
-python -m correctness candidate --url URL --out FILE.json [--ref DIR] [--api vllm|sglang|none] [--target T]
-python -m correctness verdict A.json [B.json ...] [--target T]   (re-judge saved results, no server)
+"""python -m evals.agent.correctness reference --url URL --out DIR [--tier dev|full] [--tasks a,b] [--target T]
+python -m evals.agent.correctness candidate --url URL --out FILE.json [--ref DIR] [--api vllm|sglang|none] [--target T]
+python -m evals.agent.correctness verdict A.json [B.json ...] [--target T]   (re-judge saved results, no server)
 The model, chat kwargs, tasks, reference dir, logprobs API and policy come from the target spec ($LAB_TARGET)."""
 from __future__ import annotations
 
@@ -25,8 +25,8 @@ def main():
     v = sub.add_parser("verdict"); v.add_argument("results", nargs="+")
     a = ap.parse_args()
     t = target.load(a.target)
-    from correctness import client, run, tasks
-    from correctness.gate import Thresholds
+    from evals.agent.correctness import client, run, tasks
+    from evals.agent.correctness.gate import Thresholds
     th = Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio)
     enc = lambda: run.HFEncoder(t.model, t.chat_kwargs)
     if a.step == "reference":

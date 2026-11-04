@@ -12,7 +12,8 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lab import agent, experiments, live
+from lab import agent, experiments
+from evals.researcher import live
 from measure.runner import worker
 from data.knowledge import ledger
 from targets import engine, target
@@ -67,7 +68,7 @@ class RunConfig:
 def referee(s: Session) -> dict:
     """What the agent gets from the referee at the start of every session: the integrity verdict on this run so
     far, with evidence, and the harness facts it cannot read off its ledger. Nothing judged, nothing advised."""
-    from feedback.report import lab_feedback
+    from evals.researcher.feedback.report import lab_feedback
     from lab.evaltools import harness_facts
     recs = list(ledger.records(s.ledger_root, run=s.run_id))
     try:

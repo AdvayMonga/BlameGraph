@@ -1,6 +1,6 @@
 """Does the harness mean anything on *this* target? Run once per model + hardware, before trusting a verdict.
 
-  python -m lab.validate --target T [--tier dev] [--noise-runs 3] [--regimes a,b] [--out DIR]
+  python -m evals.agent.validate --target T [--tier dev] [--noise-runs 3] [--regimes a,b] [--out DIR]
 
 1. Serves the target's reference and writes the reference outputs (`correctness reference`) to reference.dir.
 2. Serves each launch in the target's [validation] good and bad tables, judges it (`correctness candidate`), and
@@ -60,8 +60,8 @@ def write_noise(regime: str, values: list[float], t: target.Target, extra: dict 
 def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: list[str] | None = None,
              out: Path | None = None, encoder=None, log_dir: Path | None = None,
              reference_regimes: bool = True, root: Path = ledger.ROOT) -> dict:
-    from correctness import client, run as crun, tasks
-    from correctness.gate import Thresholds
+    from evals.agent.correctness import client, run as crun, tasks
+    from evals.agent.correctness.gate import Thresholds
     from measure.loadgen import suite
     out = out or (target.ENV_ROOT / "local" / "validate" / t.name)
     out.mkdir(parents=True, exist_ok=True)
@@ -129,7 +129,7 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m lab.validate", description=__doc__.split("\n")[0])
+    ap = argparse.ArgumentParser(prog="python -m evals.agent.validate", description=__doc__.split("\n")[0])
     target.add_argument(ap)
     ap.add_argument("--tier", choices=("dev", "full"), default="dev")
     ap.add_argument("--noise-runs", type=int, default=3)

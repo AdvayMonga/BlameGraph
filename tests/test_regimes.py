@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from canaries.cheat_proxy import serve  # noqa: E402
+from evals.researcher.canaries.cheat_proxy import serve  # noqa: E402
 from fake_engine import fast_arrivals, make_server, spawn  # noqa: E402
 from measure.loadgen import runner, suite, workload as W  # noqa: E402
 from measure.loadgen.client import Request, send, wall_clock  # noqa: E402

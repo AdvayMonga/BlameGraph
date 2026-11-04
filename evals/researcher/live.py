@@ -1,4 +1,4 @@
-"""Progress lines for the researcher's dashboard (`lab/dashboard.py`): one JSON line per event appended to `path`, the
+"""Progress lines for the researcher's dashboard (`evals/researcher/dashboard.py`): one JSON line per event appended to `path`, the
 running run's `<run_dir>/live.jsonl`. Nothing in the run reads them; with no run going, `emit` does nothing."""
 
 from __future__ import annotations

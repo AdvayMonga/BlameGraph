@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
-from lab import live
+from evals.researcher import live
 from lab.agent import OUTPUT_SCHEMA, AgentReply, AgentSpec
 from measure.sandbox import grader
 from lab.hooks import allowed

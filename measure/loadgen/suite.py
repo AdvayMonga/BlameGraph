@@ -69,7 +69,7 @@ class Ctx:
     tol: float | None = None                    # the search's relative resolution for every regime, over the bands
     client_procs: int | None = None             # client processes (default: 4 open loop, 1 closed loop)
     client_cpus: list | None = None             # cores the client runs on (Linux), apart from the server's
-    on_rows: object = None             # called with each run_open/run_closed call's rows (lab.live progress)
+    on_rows: object = None             # called with each run_open/run_closed call's rows (evals.researcher.live progress)
     _pools: dict = field(default_factory=dict)
     _calls: int = 0
     _warm: bool = False
