@@ -173,7 +173,7 @@ def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     if a.get("capture"):                         # calls replayed from CUDA graphs never reach the capture's wrappers
         prof["env"] = {**prof.get("env", {}), **((target.load().raw.get("kernels") or {}).get("capture_env") or {})}
     if a.get("capture_task"):                    # what the task's calls need to occur at all (e.g. fp8 KV pools)
-        from kernels.tasks import load as load_task
+        from generate.kernels.tasks import load as load_task
         prof["env"] = {**prof.get("env", {}), **dict(load_task(a["capture_task"]).capture_env)}
     if args.get("timeout_s"):
         prof["timeout_s"] = args["timeout_s"]

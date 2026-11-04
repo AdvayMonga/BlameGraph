@@ -18,12 +18,12 @@ os.environ.setdefault("LAB_NO_JAIL", "1")          # no srt or container jail on
 
 import torch  # noqa: E402
 
-from kernels import shapes  # noqa: E402
-from kernels.evolve.core import judge  # noqa: E402
-from kernels.tasks import load  # noqa: E402
+from generate.kernels.tasks import shapes  # noqa: E402
+from evals.kernels.core import judge  # noqa: E402
+from generate.kernels.tasks import load  # noqa: E402
 from measure.profile import capture  # noqa: E402
 
-SEED = ROOT / "kernels" / "evolve" / "seeds" / "toy_rmsnorm.py"
+SEED = ROOT / "generate" / "kernels" / "evolve" / "seeds" / "toy_rmsnorm.py"
 FAST = '''<<<<<<< SEARCH
     out = torch.empty_like(x)
     for i in range(x.shape[0]):
@@ -58,10 +58,11 @@ def test_judge_scores_a_correct_kernel_and_zeroes_a_wrong_one():
 
 
 def test_the_screen_refuses_exploit_routes_and_passes_real_kernels():
-    from kernels.evolve.core import screen
+    from evals.kernels.core import screen
     for src in ("import gc\n", "torch.cuda.Stream()\n", "x.elapsed_time(y)\n", "import threading\n",
                 "torch.save(out, 'memo.pt')\n", "Path('m').write_bytes(b)\n", "import pickle\n", "np.load('m.npy')\n",
-                "import time\n", "sys.modules['kernels'].timing = 1\n", "from kernels import timing\n",
+                "import time\n", "sys.modules['evals.kernels'].timing = 1\n", "from evals.kernels import timing\n",
+                "import generate.kernels.tasks\n",
                 "os.system('id')\n", "open('/etc/passwd')\n", "import ctypes\n", "inspect.stack()\n"):
         assert screen(src), src
     ev = ROOT / "tests" / "fixtures" / "paged_decode_evolved.py"     # the best program of the 2026-10-14 run
@@ -107,9 +108,9 @@ def kernel(x):
 
 
 def test_the_screen_passes_a_cuda_extension_and_refuses_its_cpp_routes():
-    from kernels.evolve.core import screen
+    from evals.kernels.core import screen
     assert screen(CUDA_PROGRAM) == []
-    for bad in ('PyObject* m = PyImport_ImportModule("kernels.timing");', "py::module_::import(\"gc\");",
+    for bad in ('PyObject* m = PyImport_ImportModule("evals.kernels.timing");', "py::module_::import(\"gc\");",
                 'void* h = dlopen("libc.so.6", 1);', "std::thread t(f);", 'FILE* f = fopen("/proc/self/mem", "r");',
                 "cudaStream_t s; cudaStreamCreate(&s);", "cudaEventRecord(e, 0);", "cudaGraphLaunch(g, 0);",
                 'popen("id", "r");', "std::ofstream f(\"memo\");"):
@@ -117,7 +118,7 @@ def test_the_screen_passes_a_cuda_extension_and_refuses_its_cpp_routes():
 
 
 def test_a_programs_cpp_builds_once_for_all_its_stages_and_only_for_that_source():
-    from kernels.evolve import jailed
+    from evals.kernels import jailed
     seen = []
 
     def fake(tree, argv, *, timeout_s, env_extra, read, memory=None):
@@ -148,8 +149,8 @@ def test_a_programs_cpp_builds_once_for_all_its_stages_and_only_for_that_source(
 
 
 def test_a_result_line_the_candidate_prints_is_ignored():
-    from kernels.evolve.core import screen
-    from kernels.evolve.jailed import judge_jailed
+    from evals.kernels.core import screen
+    from evals.kernels.jailed import judge_jailed
 
     def screen_ok(src):
         return screen(src) == []
@@ -161,7 +162,7 @@ def test_a_result_line_the_candidate_prints_is_ignored():
 
 
 def test_cpp_must_be_literal_and_records_out_of_reach():
-    from kernels.evolve.core import screen
+    from evals.kernels.core import screen
     lit = 'from torch.utils.cpp_extension import load_inline\nSRC = "int f();"\n'
     assert screen(lit + 'm = load_inline("m", cpp_sources=SRC, cuda_sources="__global__ void k(){}")\n') == []
     assert screen(lit + 'm = load_inline("m", SRC + "x")\n')                              # built at run time
@@ -174,9 +175,9 @@ def test_cpp_must_be_literal_and_records_out_of_reach():
 
 
 def test_the_gate_is_judged_in_its_own_dir():
-    from kernels.evolve.jailed import _eval_dir
+    from evals.kernels.jailed import _eval_dir
     with tempfile.TemporaryDirectory() as d:
-        import kernels.evolve.jailed as j
+        import evals.kernels.jailed as j
         saved, j.EVAL_DIRS = j.EVAL_DIRS, Path(d)
         try:
             assert _eval_dir("x", None)[0] != _eval_dir("x", None, "gate")[0] == _eval_dir("x", None, "gate")[0]
@@ -186,8 +187,8 @@ def test_the_gate_is_judged_in_its_own_dir():
 
 def test_a_cuda_extension_builds_in_the_jail_and_is_judged_on_the_gpu():
     import shutil
-    from kernels.evolve.core import screen
-    from kernels.evolve.jailed import judge_jailed
+    from evals.kernels.core import screen
+    from evals.kernels.jailed import judge_jailed
     src = (ROOT / "tests" / "fixtures" / "cuda_toy_rmsnorm.py").read_text()
     assert screen(src) == []
     if not torch.cuda.is_available() or not (shutil.which("nvcc") or Path("/usr/local/cuda/bin/nvcc").exists()):
@@ -200,7 +201,7 @@ def test_a_cuda_extension_builds_in_the_jail_and_is_judged_on_the_gpu():
 
 def test_ncu_counters_reach_the_judge_on_the_gpu():
     import shutil
-    from kernels.evolve.jailed import judge_jailed
+    from evals.kernels.jailed import judge_jailed
     if not torch.cuda.is_available() or not shutil.which("ncu"):
         print("skip: no CUDA GPU or no ncu")
         return
@@ -214,8 +215,8 @@ def test_the_fused_tasks_start_launches_what_the_engine_module_launches():
     """The start edits only change how the kernels module is reached: with a stand-in kernels module, the original
     fused.py and the edited start make the same launches with the same arguments, and the start passes the screen."""
     import types
-    from kernels.evolve.core import screen
-    from kernels.evolve.run import _start
+    from evals.kernels.core import screen
+    from generate.kernels.evolve.run import _start
     from targets import engine
     try:
         src = (engine.repo() / "src" / "inference_server" / "models" / "fused.py").read_text()
@@ -269,14 +270,14 @@ def test_the_fused_tasks_start_launches_what_the_engine_module_launches():
         for k, v in saved.items():
             sys.modules.pop(k, None) if v is None else sys.modules.__setitem__(k, v)
     assert len(runs[0]) == 5 and runs[0] == runs[1] and enabled == [True, True]   # same launches, args, switch
-    from kernels.evolve.ship import unstart
+    from evals.kernels.ship import unstart
     assert unstart(load("rmsnorm"), start).rstrip() == src.rstrip()      # shipping undoes the edits
 def test_the_fp8_moe_tasks_judge_the_engines_calls():
     """References against an independent per-pair computation; an engine-shaped kernel passes every gate and the value
     scalings (fp8 weights kept, their scales scaled); a 5% scale error fails; each task reads only its own calls."""
-    from kernels.check import _gen, check_kernel
-    from kernels.evolve.core import _scaled
-    from kernels.tasks.moe_gemm import _block_m
+    from evals.kernels.check import _gen, check_kernel
+    from evals.kernels.core import _scaled
+    from generate.kernels.tasks.moe_gemm import _block_m
     t, u = load("moe_gemm_fp8"), load("moe_gemm_scatter_fp8")
 
     def pairs(sid, eid, M, E):
@@ -318,7 +319,7 @@ def test_the_fp8_moe_tasks_judge_the_engines_calls():
     assert t.shape_of(fp8) == load("moe_gemm").shape_of(bf16) == (32, 2048, 1536, 128, 4, 1)
     assert t.shape_of(bf16) is None and load("moe_gemm").shape_of(fp8) is None
 def test_the_evaluators_modules_are_out_of_reach():
-    from kernels.evolve import core
+    from evals.kernels import core
     for bad in ("import sys as s\n", "from sys import modules as M\n", "import os, sys\n", "import os\nm = os.sys\n",
                 "import atexit\n", "import weakref\n", "import torch\nwith torch.profiler.profile(): pass\n",
                 "import pynvml\n", 'C = "cuptiSubscribe(&s, cb, 0);"\n', "import torch\nD = torch.ops\nD['x'] = 1\n",
@@ -327,12 +328,12 @@ def test_the_evaluators_modules_are_out_of_reach():
     assert core.screen("def k(x):\n    out = x.clone()\n    out[0] = 1\n    return out\n") == []   # its own tensors
     t = load("toy_rmsnorm")
     before = core._watched(t)
-    real = sys.modules["kernels.check"]
-    sys.modules["kernels.check"] = type(sys)("kernels.check")                    # a module swapped under its name
+    real = sys.modules["evals.kernels.check"]
+    sys.modules["evals.kernels.check"] = type(sys)("evals.kernels.check")                    # a module swapped under its name
     try:
-        assert "sys.modules[kernels.check]" in core._patched(before, t)
+        assert "sys.modules[evals.kernels.check]" in core._patched(before, t)
     finally:
-        sys.modules["kernels.check"] = real
+        sys.modules["evals.kernels.check"] = real
     assert core._patched(before, t) == [] and core._compare is real._compare      # compare bound at import
 
 
@@ -355,7 +356,7 @@ def test_value_distributions_catch_a_kernel_tuned_to_one_scale():
 
 def test_a_task_without_nonfinite_inputs_gets_none_in_any_check_of_the_gate():
     import dataclasses
-    from kernels.evolve import core
+    from evals.kernels import core
     t = dataclasses.replace(load("toy_rmsnorm"), nonfinite=False)
     seen, orig = [], core.check_kernel
     core.check_kernel = lambda *a, **kw: (seen.append(kw.get("nonfinite", True)), orig(*a, **kw))[1]
@@ -367,7 +368,7 @@ def test_a_task_without_nonfinite_inputs_gets_none_in_any_check_of_the_gate():
 
 
 def load_program_text(src: str):
-    from kernels.evolve.core import load_program
+    from evals.kernels.core import load_program
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / "k.py"
         p.write_text(src)
@@ -375,10 +376,10 @@ def load_program_text(src: str):
 
 
 def test_noise_rule_and_physics_alarm():
-    from kernels.evolve import core
+    from evals.kernels import core
     assert not core._shown({"median": 1.05, "p25": 0.97, "p75": 1.1})
     assert core._shown({"median": 2.0, "p25": 1.8, "p75": 2.2}) and core._shown({"median": 0.5, "p25": 0.4, "p75": 0.6})
-    from kernels import time_pair
+    from evals.kernels import time_pair
     t0 = load("toy_rmsnorm")
     slow = load_program_text("import torch\ndef kernel(x, w):\n    for _ in range(20):\n        y = x.float() @ x.float().T\n"
                              "    return x\n")
@@ -404,8 +405,8 @@ def test_noise_rule_and_physics_alarm():
 
 
 def test_paged_decode_tables_are_as_wide_as_the_engines_graphs():
-    from kernels.check import _gen
-    from kernels.tasks import from_config
+    from evals.kernels.check import _gen
+    from generate.kernels.tasks import from_config
     t, shape = load("paged_decode"), (3, 8, 2, 16, 16, 40)
     wide = from_config({"task": "paged_decode", "options": {"context_window": 32768}})
     narrow_in, wide_in = t.make_inputs(shape, torch.float32, "cpu", _gen(0)), wide.make_inputs(shape, torch.float32,
@@ -417,7 +418,7 @@ def test_paged_decode_tables_are_as_wide_as_the_engines_graphs():
 
 
 def test_paged_decode_checks_with_no_edge_shapes_do_not_fall_back_to_the_defaults():
-    from kernels import check_kernel
+    from evals.kernels import check_kernel
     t = load("paged_decode")                    # its default edge shapes (Hq = 1 < Hkv) are not valid GQA inputs
     r = check_kernel(t.reference, t.reference, t.make_inputs, [(2, 8, 2, 16, 4, 11)], [], dtypes=(torch.float32,),
                      edge_shapes=[], repeats=1, layouts=())
@@ -426,7 +427,7 @@ def test_paged_decode_checks_with_no_edge_shapes_do_not_fall_back_to_the_default
 
 def test_split_holds_out_a_region_even_when_calls_pile_up_at_the_largest_value():
     from collections import Counter
-    from kernels.tasks import randn
+    from generate.kernels.tasks import randn
     t = load("moe_gemm")
     counts = Counter({(m, 64, 96, 8, m, 1): (1000 if m == 512 else 3) for m in range(8, 513, 8)})
     s = shapes.split(t, counts)
@@ -458,9 +459,9 @@ def test_real_sequence_lengths_replace_synthetic_ones_where_captured():
 
 def test_graph_timing_is_cuda_only_and_a_kernel_that_cannot_be_timed_scores_zero():
     import dataclasses
-    from kernels import time_pair
-    from kernels.evolve import core
-    from kernels.evolve.run import system_message
+    from evals.kernels import time_pair
+    from evals.kernels import core
+    from generate.kernels.evolve.run import system_message
     t = load("toy_rmsnorm")
     p = time_pair(t.reference, t.reference, t.make_inputs, (8, 256), torch.float32, iters=3, warmup=1, graphs=True)
     assert p["clock"] == "host"                                  # no CUDA here: timed eagerly
@@ -481,8 +482,8 @@ def test_graph_timing_is_cuda_only_and_a_kernel_that_cannot_be_timed_scores_zero
 
 
 def test_share_of_the_window_per_task_and_the_kernels_no_task_covers():
-    from kernels.evolve.run import main
-    from kernels.share import shares
+    from generate.kernels.evolve.run import main
+    from generate.kernels.tasks.share import shares
     with tempfile.TemporaryDirectory() as d:
         b = Path(d)
         (b / "meta.json").write_text(json.dumps({"window": {"wall_s": 1.0}}))
@@ -503,8 +504,8 @@ def test_share_of_the_window_per_task_and_the_kernels_no_task_covers():
 def test_ship_commits_the_module_on_a_new_engine_branch_without_touching_its_tree():
     import dataclasses
     import subprocess
-    from kernels.evolve.run import initial_program
-    from kernels.evolve.ship import module_source, ship
+    from generate.kernels.evolve.run import initial_program
+    from evals.kernels.ship import module_source, ship
     with tempfile.TemporaryDirectory() as d:
         repo = Path(d) / "engine"
         (repo / "src" / "fake_pkg").mkdir(parents=True)
@@ -535,7 +536,7 @@ def test_ship_commits_the_module_on_a_new_engine_branch_without_touching_its_tre
         assert git("diff", "--name-only", out["base"], "kernels/test").split() == ["src/fake_pkg/mod.py"]
         assert "the user's edit" in (repo / "src" / "fake_pkg" / "mod.py").read_text()       # working tree untouched
         assert git("rev-parse", "--abbrev-ref", "HEAD").strip() != "kernels/test"
-        from kernels.evolve.ship import gate_passed
+        from evals.kernels.ship import gate_passed
         flagged = json.loads(ok["artifacts"]["gates"])
         assert not gate_passed({**ok, "artifacts": {"gates": json.dumps({**flagged, "physics": {"passed": False}})}})
         assert not gate_passed({**ok, "artifacts": {"gates": json.dumps(
@@ -549,7 +550,7 @@ def test_ship_commits_the_module_on_a_new_engine_branch_without_touching_its_tre
 
 def test_moe_gemm_task_reference_routing_capture_and_judge():
     import dataclasses
-    from kernels.tasks import moe_gemm as mg
+    from generate.kernels.tasks import moe_gemm as mg
     g = torch.Generator().manual_seed(0)
     M, K, N, E, T = 37, 32, 24, 8, 9
     sorted_e = torch.sort(torch.randint(0, E, (M,), generator=g)).values
@@ -601,7 +602,7 @@ def test_moe_gemm_task_reference_routing_capture_and_judge():
 def test_the_starting_program_can_come_from_an_older_engine_commit():
     import dataclasses
     import subprocess
-    from kernels.evolve.run import initial_program_at
+    from generate.kernels.evolve.run import initial_program_at
     with tempfile.TemporaryDirectory() as d:
         repo = Path(d) / "engine"
         (repo / "src" / "fake_pkg").mkdir(parents=True)
@@ -620,8 +621,8 @@ def test_the_starting_program_can_come_from_an_older_engine_commit():
 
 
 def test_the_fused_kernel_tasks_check_their_own_references_and_read_captured_shapes():
-    from kernels import check_kernel
-    from kernels.tasks import rmsnorm_rope
+    from evals.kernels import check_kernel
+    from generate.kernels.tasks import rmsnorm_rope
     for name in ("rmsnorm", "add_rmsnorm", "rmsnorm_rope", "silu_mul", "topk_softmax"):
         t = load(name)
         r = check_kernel(t.reference, lambda *x, t=t: t.reference(*x), t.make_inputs, list(t.seen_default)[:2],
@@ -720,7 +721,7 @@ def test_prompts_carry_facts_never_advice():
     except ImportError:
         print("skip: openevolve not installed")
         return
-    from kernels.evolve.run import HERE, system_message
+    from generate.kernels.evolve.run import HERE, system_message
     cfg = load_config(str(HERE / "config.yaml"))
     cfg.prompt.system_message = system_message(load("paged_decode"))
     s = PromptSampler(cfg.prompt)
@@ -736,7 +737,7 @@ def test_prompts_carry_facts_never_advice():
 
 
 def test_remote_evaluation_sends_the_source_on_stdin_and_never_a_key():
-    from kernels.evolve import evaluator
+    from evals.kernels import evaluator
     t = load("toy_rmsnorm")
     with tempfile.TemporaryDirectory() as d:
         cfg = Path(d) / "eval.json"
@@ -774,7 +775,7 @@ CANARIES = {
     "checker's tensor op patched during the call": ("import torch\nmods = [torch]\ndef kernel(x, w):\n"
                                                     "    mods[0].Tensor.abs = lambda self: self * 0\n"
                                                     "    return x.clone()\n", "patched"),
-    "the reference imported": ("from kernels.tasks.toy_rmsnorm import reference as kernel\n", "refused"),
+    "the reference imported": ("from generate.kernels.tasks.toy_rmsnorm import reference as kernel\n", "refused"),
     "background thread": ("import threading, torch\ndef kernel(x, w):\n" + RIGHT, "refused"),
     "output never written": ("import torch\ndef kernel(x, w):\n    return torch.empty_like(x)\n", "correctness"),
     "answers cached by pointer": ("import torch\n_c = {}\ndef kernel(x, w):\n    k = (x.data_ptr(), tuple(x.shape))\n"
@@ -788,7 +789,7 @@ CANARIES = {
 
 
 def test_exploit_canaries_all_score_zero():
-    from kernels.evolve.jailed import judge_jailed
+    from evals.kernels.jailed import judge_jailed
     t = load("toy_rmsnorm")
     cfg = {"task": t.name, "seen": [list(s) for s in t.seen_default], "heldout": [list(s) for s in t.heldout_default],
            "device": "cpu", "iters": 3}
@@ -802,7 +803,7 @@ def test_exploit_canaries_all_score_zero():
 
 
 def test_a_kernel_right_while_checked_and_wrong_while_timed_scores_zero():
-    from kernels.evolve.jailed import judge_jailed
+    from evals.kernels.jailed import judge_jailed
     t = load("toy_rmsnorm")                      # wrong from the 5th call on one input object: only timing gets there
     src = ("import torch\n_seen = []\ndef kernel(x, w):\n    n = sum(1 for t in _seen if t is x)\n"
            "    _seen.append(x)\n    if n >= 4:\n        return torch.zeros_like(x)\n" + RIGHT)
@@ -813,17 +814,17 @@ def test_a_kernel_right_while_checked_and_wrong_while_timed_scores_zero():
 
 
 def test_outputs_are_verified_again_outside_the_candidates_process():
-    from kernels.check import _gen
-    from kernels.evolve.jailed import judge_jailed
-    from kernels.evolve.verify import verify
+    from evals.kernels.check import _gen
+    from evals.kernels.jailed import judge_jailed
+    from evals.kernels.verify import verify
     t = load("toy_rmsnorm")
     cfg = {"task": t.name, "seen": [list(s) for s in t.seen_default], "heldout": [list(s) for s in t.heldout_default],
            "device": "cpu", "iters": 3}
     r = judge_jailed(cfg, "import torch\ndef kernel(x, w):\n" + RIGHT, 2)
     g = json.loads(r["artifacts"]["gates"])["verified_outside"]
     assert r["metrics"]["correct"] == 1.0 and g["passed"] and "recomputed outside" in g["reason"]
-    from kernels.evolve.core import _scaled
-    from kernels.evolve.verify import expected
+    from evals.kernels.core import _scaled
+    from evals.kernels.verify import expected
     recs = []
     for kind, shape, dt, seed, scale in sorted(expected(cfg, t, False), key=str):
         make = t.make_inputs if scale is None else _scaled(t.make_inputs, scale)
@@ -847,19 +848,19 @@ def test_outputs_are_verified_again_outside_the_candidates_process():
 
 
 def test_the_jail_sees_a_fresh_tree_and_a_copied_harness_never_this_repo():
-    from kernels.evolve import jailed
+    from evals.kernels import jailed
     from measure.sandbox import container, grader, jail
     with tempfile.TemporaryDirectory() as d:
         h = jailed.stage_harness(Path(d) / "h")
         names = {p.relative_to(h).as_posix() for p in h.rglob("*") if p.is_file()}
-        assert "kernels/evolve/core.py" in names and "targets/target.py" in names and "measure/context/peaks.py" in names
+        assert "evals/kernels/core.py" in names and "targets/target.py" in names and "measure/context/peaks.py" in names
         assert not any(n.startswith(("local", "data/corpus", "data/knowledge", "data/workloads")) or n.endswith(".env") for n in names)
     seen, saved = {}, (jail.backend, container.available, container._docker, grader.subprocess.run)
 
     def fake_run(argv, **kw):                       # stands in for docker: `run` answers, cleanup is a no-op
         if argv[1] != "run":
             return grader.subprocess.CompletedProcess(argv, 0, "", "")
-        seen["argv"], seen["config"] = argv, json.loads(Path(argv[argv.index("kernels.evolve.core") + 1]).read_text())
+        seen["argv"], seen["config"] = argv, json.loads(Path(argv[argv.index("evals.kernels.core") + 1]).read_text())
         key = Path(seen["config"]["result_key"]).read_text()
         line = json.dumps({"metrics": {"combined_score": 1.0}, "artifacts": {}, "result_key": key})
         return grader.subprocess.CompletedProcess(argv, 0, '\n{"metrics": {"combined_score": 9.0}}\n' + line + "\n", "")
@@ -927,12 +928,12 @@ def test_openevolve_finds_the_known_good_edit_and_rejects_the_cheat():
         c.evaluator.parallel_evaluations = 1
         c.database.num_islands, c.database.in_memory = 1, True
         c.evolution_trace.enabled, c.evolution_trace.include_code = True, True
-        res = run_evolution(str(SEED), str(ROOT / "kernels" / "evolve" / "evaluator.py"), c, iterations=4,
+        res = run_evolution(str(SEED), str(ROOT / "evals" / "kernels" / "evaluator.py"), c, iterations=4,
                             output_dir=str(Path(d) / "oe"), cleanup=False)
         assert "rsqrt" in res.best_code and "return x.clone()" not in res.best_code
         seed = judge(t, SEED, list(t.seen_default), [], None, "cpu", None, 2, iters=3)["metrics"]["combined_score"]
         assert res.metrics.get("correct") == 1.0 and res.best_score > 3 * seed     # the naive seed is ~0.1x
-        from kernels.evolve.run import record
+        from generate.kernels.evolve.run import record
         from data.knowledge import ledger
         best = Path(d) / "best.py"
         best.write_text(res.best_code)
@@ -942,7 +943,7 @@ def test_openevolve_finds_the_known_good_edit_and_rejects_the_cheat():
         assert stored and stored[0]["id"] == rec["id"] and len(rec["result"]["candidates"]) >= 1
         assert all({"id", "parent", "metrics"} <= x.keys() for x in rec["result"]["candidates"])
         assert (Path(d) / "ledger" / rec["result"]["trace"]).exists() and rec["config"]["split"] == "seen"
-        from kernels.evolve.run import retime
+        from generate.kernels.evolve.run import retime
         code, metrics, retimed = retime(Path(d) / "oe" / "evolution_trace.jsonl", 2)
         assert "rsqrt" in code and metrics["correct"] == 1.0 and all(len(x["scores"]) == 3 for x in retimed)
         print("best", res.best_score)
@@ -956,7 +957,7 @@ if __name__ == "__main__":
 
 def test_captures_with_no_call_of_the_task_are_refused_not_replaced_by_defaults(tmp_path):
     from types import SimpleNamespace
-    from kernels.evolve.run import _shapes
+    from generate.kernels.evolve.run import _shapes
     (tmp_path / "calls.jsonl").write_text("")                   # every call replayed from a CUDA graph: none seen
     try:
         _shapes(load("toy_rmsnorm"), SimpleNamespace(shapes=None, captures=[str(tmp_path)], equal_captures=False))

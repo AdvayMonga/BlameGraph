@@ -1,4 +1,4 @@
-"""Regions (kernels/regions.py): the interface, the generated baseline and fp32 reference, the bytes a region moves,
+"""Regions (generate/kernels/tasks/regions.py): the interface, the generated baseline and fp32 reference, the bytes a region moves,
 and the error budget in the checker (a candidate may be at most 2x as wrong as the baseline). CPU, fake stations."""
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import torch
 
-from kernels import check_kernel
-from kernels.regions import Station, bytes_moved, functions, interface, task
+from evals.kernels import check_kernel
+from generate.kernels.tasks.regions import Station, bytes_moved, functions, interface, task
 
 
 def _norm(c):
@@ -78,7 +78,7 @@ def test_the_reference_keeps_the_baselines_experts_and_weighs_them_in_fp32():
 
 
 def test_pair_weights_read_the_routes_block_layout_and_renormalize_per_token():
-    from kernels.regions import pair_weights
+    from generate.kernels.tasks.regions import pair_weights
     logits = torch.tensor([[1.0, 2.0, 0.0], [0.0, 1.0, 3.0]])
     # pairs 0,1 = token 0 (experts 1, 0), pairs 2,3 = token 1 (experts 2, 1); blocks of 2 by expert, padded with M=4
     sorted_ids = torch.tensor([1, 4, 0, 3, 2, 4], dtype=torch.int32)
@@ -182,7 +182,7 @@ def test_a_non_finite_mismatch_is_within_budget_only_where_the_baseline_has_it_t
 def test_a_region_is_judged_end_to_end_by_the_evaluator(tmp_path):
     """Stage 2 on the CPU: the stations as the program pass and time against themselves; a program off by far more
     than the budget fails."""
-    from kernels.evolve import core
+    from evals.kernels import core
     t = task("toy_region", STATIONS, "norm", "add", ctx, lambda call: None, live=("x",), dtypes=(torch.float32,))
     good = tmp_path / "good.py"
     good.write_text("import torch\n\ndef kernel(x, w):\n    xf = x.float()\n"

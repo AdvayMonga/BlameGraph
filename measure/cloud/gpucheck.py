@@ -135,7 +135,7 @@ def ncu(tmp: Path) -> str:
 @check("sanitizer")
 def sanitizer(tmp: Path) -> str:
     """compute-sanitizer around a jailed kernel call: the held-out gate's stage 6, every tool clean on a plain program."""
-    from kernels.evolve import jailed
+    from evals.kernels import jailed
     assert jailed.sanitizer(), "compute-sanitizer not found (CUDA toolkit bin/ or PATH)"
     src = "import torch\ndef kernel(x, w, eps=1e-6):\n    return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * w\n"
     a = jailed.judge_jailed({"task": "toy_rmsnorm", "seen": [[8, 256]], "heldout": [], "device": "cuda"}, src,

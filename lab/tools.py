@@ -169,14 +169,14 @@ class Toolbox(EvalTools, ProfTools):
 
 
     def kernel_search(self, args: dict) -> str:
-        """The kernel layer in one blocking call (kernels/pipeline.py): capture the task's calls under real traffic,
+        """The kernel layer in one blocking call (generate/kernels/tasks/pipeline.py): capture the task's calls under real traffic,
         search, gate the winner on the held-out shapes; the winner comes back as a patch of the engine module (a
         region's: its override module), saved in the workspace (left out of your change) for you to apply."""
         import argparse
         import contextlib
-        from kernels import pipeline
-        from kernels.evolve.run import task_name
-        from kernels.tasks import TASKS, load
+        from generate.kernels.tasks import pipeline
+        from generate.kernels.evolve.run import task_name
+        from generate.kernels.tasks import TASKS, load
         try:
             task_name(str(args.get("task")))
         except argparse.ArgumentTypeError:
@@ -237,7 +237,7 @@ class Toolbox(EvalTools, ProfTools):
             result = {"verdict": "error", "reason": f"{type(e).__name__}: {e}"[-2000:], "model_usd": model_cost}
             self._record("kernels", "kernel_search", args, result, snap)
             return f"kernel_search failed: {result['reason']}"
-        from kernels.evolve.ship import gate_passed
+        from evals.kernels.ship import gate_passed
         passed = gate_passed(g)
         rel, refused = None, None
         try:
@@ -483,7 +483,7 @@ class Toolbox(EvalTools, ProfTools):
             ToolSpec("kernel_search", "Search for a faster version of one engine kernel: `task` (one of the kernel "
                      "tasks, the engine entry point it replaces), `budget` (USD: model calls plus GPU time, charged to "
                      "the run). Captures the task's calls under real seen-split traffic at several concurrencies, splits "
-                     "the shapes seen / held-out, searches from your workspace's version of the kernel (kernels.search), "
+                     "the shapes seen / held-out, searches from your workspace's version of the kernel (generate.kernels.search), "
                      "and gates the winner on the held-out shapes. Returns the winner's seen-shape speedup, the gate's "
                      "verdict and held-out speedup, the `kernels` ledger record of the search, and, if the gate passed, "
                      "the path of a patch of the engine module in your workspace (not applied). Blocks until done. "
@@ -549,10 +549,10 @@ def workload_flags(args: dict, harness: Path, n: int) -> list[str]:
 
 def task_shares(bundle: Path) -> dict:
     """Each kernel task's share of the profiled window, the kernels it launches and the speedup bound if they took no
-    time (kernels/share.py), plus the kernels no task covers; or why there is none."""
+    time (generate/kernels/tasks/share.py), plus the kernels no task covers; or why there is none."""
     try:
-        from kernels import share
-        from kernels.tasks import TASKS, load
+        from generate.kernels.tasks import share
+        from generate.kernels.tasks import TASKS, load
         tasks = [load(n) for n in TASKS]
     except ImportError as e:                    # the kernel tasks import torch, which the controller may lack
         return {"missing": f"the kernel tasks do not import here: {e}"}

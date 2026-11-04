@@ -8,7 +8,7 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from kernels import check_kernel, check_memoization, time_kernel  # noqa: E402
+from evals.kernels import check_kernel, check_memoization, time_kernel  # noqa: E402
 
 SEEN, HELDOUT = [(8, 64), (16, 128)], [(5, 96), (3, 200)]
 DTYPES = (torch.float32, torch.float16, torch.bfloat16)
@@ -149,7 +149,7 @@ def test_content_memoization_flagged_by_timing():
 
 
 def test_a_call_that_writes_an_input_after_computing_fails_the_timing():
-    from kernels import time_pair
+    from evals.kernels import time_pair
 
     def bumps(x, w):                             # right answer, then an input changed to slow the other call down
         out = reference(x, w)
@@ -180,7 +180,7 @@ if __name__ == "__main__":
 
 
 def test_poison_marks_a_non_contiguous_input():
-    from kernels.check import _poison
+    from evals.kernels.check import _poison
     q = torch.zeros(2, 3, 4).transpose(1, 2)          # a transposed q, as the prefill stations pass it
     _poison([q])
     flat = q.contiguous().view(-1)
