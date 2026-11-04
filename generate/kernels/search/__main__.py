@@ -1,4 +1,4 @@
-"""python -m generate.kernels.search --task T [--shapes SHAPES.json | --captures DIR ...] --out DIR [--evals N]
+"""lab kernels search --task T [--shapes SHAPES.json | --captures DIR ...] --out DIR [--evals N]
                           [--samples DIR --shared-weights FILE]   (T = region:FIRST:LAST: its captures, its holder)
                           [--model CODER] [--judge-model JUDGE|none] [--effort E] [--[no-]ncu] [--device cuda]
                           [--initial PROGRAM.py] [--retime K] [--generations N --gen-size N
@@ -6,7 +6,7 @@
 
 Our own layer-1 generator on one kernel task: by default the genetic search (generate/kernels/search/generations.py: generations
 of rounds from fitness-sampled parents); with --mcts one round per MCTS-chosen parent (generate/kernels/search/
-loop.py). Judged by generate.kernels.evolve's evaluator exactly as `python -m generate.kernels.evolve run` is: the
+loop.py). Judged by generate.kernels.evolve's evaluator exactly as `lab kernels evolve run` is: the
 same run dir, selection config (seen shapes only), re-timed promotion and `kernels` ledger record, so the generators
 compare like for like."""
 from __future__ import annotations
@@ -83,7 +83,7 @@ def _funnel(a, task, review):
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="generate.kernels.search")
+    ap = argparse.ArgumentParser(prog="lab kernels search")
     task_args(ap)
     ap.add_argument("--shapes")
     ap.add_argument("--captures", action="append")
@@ -126,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
                                     "time and the regimes it is scored under), appended to the system message")
     ap.add_argument("--parallel", type=int, default=4, help="correctness checks run at once")
     ap.add_argument("--workers", type=int, default=8, help="the funnel's model calls run at once")
-    ap.add_argument("--archive", help="an exported idea archive (python -m generate.kernels.archive export)")
+    ap.add_argument("--archive", help="an exported idea archive (lab kernels archive export)")
     ap.add_argument("--precheck", action=argparse.BooleanOptionalAction, default=True,
                     help="the funnel's no-GPU build check and compiler report before stage 1")
     a = ap.parse_args(argv)

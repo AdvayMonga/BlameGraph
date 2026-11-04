@@ -1,6 +1,6 @@
-"""python -m measure.loadgen run REGIME[,REGIME...]|all --url URL [--split seen|heldout] [--tier short|full] [--seed N]
+"""lab regimes run REGIME[,REGIME...]|all --url URL [--split seen|heldout] [--tier short|full] [--seed N]
                        [--corpus DIR | --workload FILE] [--synthetic] [--tokenizer] [--out FILE] [--target T]
-python -m measure.loadgen cold-start --url URL --cmd "launch command" [--expect 42] [--no-warm] [--out FILE] [--target T]
+lab regimes cold-start --url URL --cmd "launch command" [--expect 42] [--no-warm] [--out FILE] [--target T]
 The model, chat kwargs, latency limits and corpus come from the target spec ($LAB_TARGET)."""
 from __future__ import annotations
 
@@ -27,14 +27,14 @@ def _cpus(spec: str | None) -> list[int] | None:
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="regimes", description="measure a live server under the ten regimes")
+    ap = argparse.ArgumentParser(prog="lab regimes", description="measure a live server under the ten regimes")
     target.add_argument(ap)
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")
     r.add_argument("regimes", help=f"comma-separated, or 'all': {', '.join(suite.REGIMES)}")
     r.add_argument("--url", required=True)
     r.add_argument("--corpus", help="corpus dir (default: the target's; synthetic prompts if it does not exist)")
-    r.add_argument("--workload", help="a local/workloads/*.jsonl file (python -m data.workloads) instead of the corpus")
+    r.add_argument("--workload", help="a local/workloads/*.jsonl file (lab workloads) instead of the corpus")
     r.add_argument("--synthetic", action="store_true",
                    help="traffic generated fresh from the corpus's seen split (measure/loadgen/synth.py), by --seed; nothing kept")
     r.add_argument("--split", choices=("seen", "heldout"), default="seen")

@@ -4,7 +4,7 @@ the server's (from the server's own send times) is the client's error; a level i
 under `max_error_s`, the send lag under the runner's limit and no client process is saturated. Run it on the machine
 and cores the comparison will use, with nothing on the GPU:
 
-    python -m measure.loadgen.clientcheck [--client-procs 8] [--client-cpus 8-15] [--server-cpus 0-7] [--out F]
+    lab clientcheck [--client-procs 8] [--client-cpus 8-15] [--server-cpus 0-7] [--out F]
 """
 from __future__ import annotations
 

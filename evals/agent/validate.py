@@ -1,6 +1,6 @@
 """Does the harness mean anything on *this* target? Run once per model + hardware, before trusting a verdict.
 
-  python -m evals.agent.validate --target T [--tier dev] [--noise-runs 3] [--regimes a,b] [--out DIR]
+  lab validate --target T [--tier dev] [--noise-runs 3] [--regimes a,b] [--out DIR]
 
 1. Serves the target's reference and writes the reference outputs (`correctness reference`) to reference.dir.
 2. Serves each launch in the target's [validation] good and bad tables, judges it (`correctness candidate`), and
@@ -129,7 +129,7 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m evals.agent.validate", description=__doc__.split("\n")[0])
+    ap = argparse.ArgumentParser(prog="lab validate", description=__doc__.split("\n")[0])
     target.add_argument(ap)
     ap.add_argument("--tier", choices=("dev", "full"), default="dev")
     ap.add_argument("--noise-runs", type=int, default=3)

@@ -8,7 +8,7 @@ eagerly), then the path's: the megakernel forced for every batch it takes (MEGAK
 run's bundle is reused only when its env and max tokens match (`crossover-meta.json` in it). Run on the GPU host from
 this repo with the engine's venv:
 
-  python -m measure.profile.crossover --out DIR [--batches 1,2,4,8] [--prompt-lens 512,4096,16384] [--max-tokens 256]
+  lab crossover --out DIR [--batches 1,2,4,8] [--prompt-lens 512,4096,16384] [--max-tokens 256]
 
 DIR gets each run's bundle and `crossover.json`: per prompt length and batch, each path's median step and the faster."""
 from __future__ import annotations
@@ -71,7 +71,7 @@ def table(runs: dict[tuple[str, int, int], dict[int, list[float]]], not_on=froze
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="measure.profile.crossover")
+    ap = argparse.ArgumentParser(prog="lab crossover")
     ap.add_argument("--out", required=True)
     ap.add_argument("--batches", default="1,2,4,8")
     ap.add_argument("--prompt-lens", default="512,4096,16384")

@@ -371,7 +371,7 @@ def load(**hooks):
     v = vm.VM()
     record = v.provider.get(v.name)
     if record is None or record.state != "running":
-        raise WorkerError(f"{v.name} is not running: start it with `python -m measure.cloud.vm start` and set it up first")
+        raise WorkerError(f"{v.name} is not running: start it with `lab vm start` and set it up first")
     spec = Path(os.environ.get("LAB_TARGET", "")).resolve()
     if not spec.is_relative_to(engine.ENV_ROOT):
         raise WorkerError(f"LAB_TARGET must be inside this repo to be found on the worker: {spec}")

@@ -3,7 +3,7 @@ worker runs (`sudo`), with the engine's venv first on PATH. Each check prints PA
 status is the number of failures. `--only NAME,...` runs a subset; `--skip-build` leaves out the dependency build.
 
     sudo -n env HOME="$HOME" PATH="$HOME/inference-server/.venv/bin:$PATH" LAB_ENGINE_REPO="$HOME/inference-server" \\
-        LAB_TARGET=targets/inference-server.toml python -m measure.cloud.gpucheck
+        LAB_TARGET=targets/inference-server.toml lab gpucheck
 """
 
 from __future__ import annotations
@@ -177,7 +177,7 @@ CHECKS = [jail_gpu, workbench, quiet, exclusive, ncu, sanitizer, hostprof, build
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m measure.cloud.gpucheck", description=__doc__.split("\n\n")[0])
+    ap = argparse.ArgumentParser(prog="lab gpucheck", description=__doc__.split("\n\n")[0])
     ap.add_argument("--only", help="comma-separated: " + ",".join(c.check for c in CHECKS))
     ap.add_argument("--skip-build", action="store_true")
     a = ap.parse_args(argv)

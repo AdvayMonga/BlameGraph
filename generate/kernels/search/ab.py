@@ -1,4 +1,4 @@
-"""python -m generate.kernels.search.ab --task T --shapes SHAPES.json --out DIR [--initial PROGRAM.py] [--evals N]
+"""lab kernels ab --task T --shapes SHAPES.json --out DIR [--initial PROGRAM.py] [--evals N]
                              [--model M] [--seeds K] [--device cuda] [--arms A,B,...]
 
 OpenEvolve against generate.kernels.search on one task, everything else equal: the same shapes, starting program, evaluator,
@@ -103,7 +103,7 @@ def _cost(arm_dir: Path) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="generate.kernels.search.ab")
+    ap = argparse.ArgumentParser(prog="lab kernels ab")
     ap.add_argument("--task", required=True)
     ap.add_argument("--shapes", required=True)
     ap.add_argument("--out", required=True)

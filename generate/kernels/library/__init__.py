@@ -2,8 +2,8 @@
 kernel for a task and the upstream source it is (files kept verbatim under src/), and `block` is what every search
 prompt shows of them: their source and, when built on a GPU host, their compiled code's PTX/SASS card. No timings.
 
-  python -m generate.kernels.library fetch                       (re-download every indexed file at its library's version)
-  python -m generate.kernels.library cards --task T --out generate/kernels/library/ptx/T.txt [--dump DIR]   (on the GPU host: each entry's card
+  lab kernels library fetch                       (re-download every indexed file at its library's version)
+  lab kernels library cards --task T --out generate/kernels/library/ptx/T.txt [--dump DIR]   (on the GPU host: each entry's card
       from its library's .so (`sass` in the index) or from DIR, a `generate.kernels.library.competitors` dump (<name>.ptx|.sass,
       ours.ptx for the engine's kernel))
 """
@@ -207,7 +207,7 @@ def build_cards(task: str, dump: Path | None, arch: str | None) -> tuple[list[di
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="generate.kernels.library")
+    ap = argparse.ArgumentParser(prog="lab kernels library")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("fetch")
     c = sub.add_parser("cards")

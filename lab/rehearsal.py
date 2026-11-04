@@ -1,7 +1,7 @@
 """A rehearsal of the whole loop on a laptop, no GPU: a practice engine (a small OpenAI-compatible server the agent
 can edit and measure), a target spec for it, a task, and the reference answers equiv compares against.
 
-  python -m lab.rehearsal setup DIR
+  lab rehearsal setup DIR
     DIR/engine/       the practice engine: a git repo (src/inference_server/server.py, tests, ruff config), whose decoder
                       refolds its state over the whole output every step (the reference keeps it): the same words,
                       slower, so there is something to win
@@ -11,8 +11,8 @@ can edit and measure), a target spec for it, a task, and the reference answers e
 
 Then, from this repo (the ledger and run dirs are this checkout's own):
   export LAB_TARGET=DIR/target.toml LAB_STORE=DIR/store LAB_ENGINE_REPO=DIR/engine
-  python -m evals.agent.validate --regimes single_stream --noise-runs 3 --tier dev      # noise bands, the gate on good/bad
-  python -m lab.session --task DIR/task.toml --budget 2                         # the loop, with the real model
+  lab validate --regimes single_stream --noise-runs 3 --tier dev      # noise bands, the gate on good/bad
+  lab session --task DIR/task.toml --budget 2                         # the loop, with the real model
 
 The model's tokenizer counts tokens on both sides of every check, so the server streams words that are one token
 each in it (checked at setup)."""
@@ -113,7 +113,7 @@ def make_reference(script: Path, out: Path, n: int, encoder) -> dict:
 
 def target_toml(d: Path, python: str) -> str:
     ref = d / "reference.py"
-    return f'''# The rehearsal target (python -m lab.rehearsal): the practice engine in {d / "engine"}.
+    return f'''# The rehearsal target (lab rehearsal): the practice engine in {d / "engine"}.
 [model]
 name = "{MODEL}"                             # its tokenizer counts tokens; nothing loads the weights
 chat_kwargs = {{ enable_thinking = false }}
@@ -183,7 +183,7 @@ def setup(d: Path, python: str = sys.executable, n_dev: int = 200, n_full: int =
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m lab.rehearsal", description=__doc__.split("\n\n")[0])
+    ap = argparse.ArgumentParser(prog="lab rehearsal", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("setup")
     p.add_argument("dir", type=Path)

@@ -1,6 +1,6 @@
-"""python -m evals.agent.correctness reference --url URL --out DIR [--tier dev|full] [--tasks a,b] [--target T]
-python -m evals.agent.correctness candidate --url URL --out FILE.json [--ref DIR] [--api vllm|sglang|none] [--target T]
-python -m evals.agent.correctness verdict A.json [B.json ...] [--target T]   (re-judge saved results, no server)
+"""lab correctness reference --url URL --out DIR [--tier dev|full] [--tasks a,b] [--target T]
+lab correctness candidate --url URL --out FILE.json [--ref DIR] [--api vllm|sglang|none] [--target T]
+lab correctness verdict A.json [B.json ...] [--target T]   (re-judge saved results, no server)
 The model, chat kwargs, tasks, reference dir, logprobs API and policy come from the target spec ($LAB_TARGET)."""
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from targets import target
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="correctness", description="correctness gate against live servers")
+    ap = argparse.ArgumentParser(prog="lab correctness", description="correctness gate against live servers")
     target.add_argument(ap)
     sub = ap.add_subparsers(dest="step", required=True)
     r = sub.add_parser("reference"); r.add_argument("--url", required=True); r.add_argument("--out", required=True)

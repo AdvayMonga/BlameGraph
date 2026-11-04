@@ -332,7 +332,7 @@ class EvalTools:
         ref = t.reference_dir_for("dev" if tier == "quick" else tier)
         if not target.reference_complete(ref):
             self._record("equiv", "equiv", args, {"verdict": "refused", "reason": f"no {tier}-tier reference outputs; "
-                         "run `python -m evals.agent.correctness reference` for this target first"}, snap, config=config)
+                         "run `lab correctness reference` for this target first"}, snap, config=config)
             return "equiv refused: no reference outputs for this target"
         tree = self._pristine()
         why = profiles.refusal(tree, t, profile)

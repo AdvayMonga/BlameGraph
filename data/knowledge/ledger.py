@@ -213,7 +213,7 @@ def merge(src: Path, root: Path = ROOT) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m data.knowledge.ledger")
+    ap = argparse.ArgumentParser(prog="lab records")
     ap.add_argument("--root", type=Path, default=ROOT)
     sub = ap.add_subparsers(dest="cmd", required=True)
     ls = sub.add_parser("list", help="print records as JSONL")

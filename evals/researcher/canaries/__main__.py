@@ -1,10 +1,10 @@
-"""python -m evals.researcher.canaries --upstream URL [--port 8100] --cheat NAME [--seed 0]"""
+"""lab cheat-proxy --upstream URL [--port 8100] --cheat NAME [--seed 0]"""
 import argparse
 import threading
 
 from evals.researcher.canaries.cheat_proxy import CHEATS, serve
 
-ap = argparse.ArgumentParser(prog="canaries")
+ap = argparse.ArgumentParser(prog="lab cheat-proxy")
 ap.add_argument("--upstream", required=True); ap.add_argument("--port", type=int, default=8100)
 ap.add_argument("--cheat", required=True, choices=CHEATS); ap.add_argument("--seed", type=int, default=0)
 a = ap.parse_args()

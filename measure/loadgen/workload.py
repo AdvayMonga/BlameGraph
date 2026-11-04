@@ -33,7 +33,7 @@ def corpus(root: str | Path, cls: str, split: str = "seen") -> list[dict]:
 
 
 def workload_file(path: str | Path) -> list[dict]:
-    """Records of a `python -m data.workloads` file (frontier benchmark data): same record shape, no classes or splits."""
+    """Records of a `lab workloads` file (frontier benchmark data): same record shape, no classes or splits."""
     return [json.loads(x) for x in Path(path).read_text().splitlines() if x.strip()]
 
 

@@ -12,7 +12,7 @@ context; layer 1 = the kernels' call-weighted % of their roofline bounds when ga
 (generate.kernels.tasks.share.weighted_pct), else missing and why; layers 3 and 4 have no single ceiling, so the facts beside them
 are what a change there moves. Every number names its basis; a missing one says why.
 
-  python -m measure.context.layers BUNDLE [--target T]
+  lab layers BUNDLE [--target T]
 """
 from __future__ import annotations
 
@@ -156,7 +156,7 @@ def _decode_distance(t, gpu: dict | None, batch: float | None, context: float | 
 
 def main(argv: list[str] | None = None) -> int:
     from targets import target
-    ap = argparse.ArgumentParser(prog="python -m measure.context.layers", description=__doc__.split("\n\n")[0])
+    ap = argparse.ArgumentParser(prog="lab layers", description=__doc__.split("\n\n")[0])
     target.add_argument(ap)
     ap.add_argument("bundle", type=Path)
     a = ap.parse_args(argv)

@@ -30,9 +30,9 @@ HAVE_RAW = all(os.path.exists(RAW / f)
 REQUIRE_RAW = os.environ.get("CORPUS_REQUIRE_RAW") == "1"
 needs_raw = pytest.mark.skipif(not HAVE_RAW and not REQUIRE_RAW, reason=f"raw traces absent "
                                f"from {RAW}; run data/corpus/fetch_traces.py")
-# held-out traces are not in git (`python -m data.knowledge pull --corpus`); tests that read them skip without them
+# held-out traces are not in git (`lab store pull --corpus`); tests that read them skip without them
 HAVE_HELDOUT = all(os.path.exists(CORPUS_DIR / name / "heldout.jsonl") for name in CLASSES)
-needs_heldout = pytest.mark.skipif(not HAVE_HELDOUT, reason="held-out traces absent; python -m data.knowledge pull --corpus")
+needs_heldout = pytest.mark.skipif(not HAVE_HELDOUT, reason="held-out traces absent; lab store pull --corpus")
 BUDGET_FLOOR = 1024
 CONTEXT = 32768             # Qwen3-30B-A3B native context: prompt + budget must fit
 
@@ -79,7 +79,7 @@ def test_committed_corpus_is_what_the_builder_produces(tmp_path):
     pinned raw inputs, byte for byte, plus the measured reference lengths (data/corpus/lengths.py) when they are set.
     A changed input or class table is a new version."""
     if not (CORPUS_DIR / ".seed").exists():
-        pytest.skip("no data/corpus/.seed: pull it with `python -m data.knowledge pull --corpus`")
+        pytest.skip("no data/corpus/.seed: pull it with `lab store pull --corpus`")
     rebuilt = bc.build_corpus(tmp_path, int((CORPUS_DIR / ".seed").read_text()))
     measured = lengths.read(CORPUS_DIR)
     if any(n is not None for ns in measured.values() for n in ns):
@@ -260,7 +260,7 @@ def test_a_missing_heldout_trace_is_named_before_any_request(tmp_path, monkeypat
     _mini_corpus(tmp_path)
     (tmp_path / "long_context" / "heldout.jsonl").unlink()
     sent = _fake_reference(monkeypatch)
-    with pytest.raises(CorpusError, match="data.knowledge pull --corpus"):
+    with pytest.raises(CorpusError, match="lab store pull --corpus"):
         lengths.measure("http://ref", "m", {}, tmp_path, log=tmp_path / "l.jsonl")
     assert sent == []
 

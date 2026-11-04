@@ -1,5 +1,5 @@
 # Other implementations of our kernel tasks: each library's upstream source, kept verbatim under src/<library>/<path>
-# (python -m generate.kernels.library fetch writes them from these entries), and the parts every search prompt shows.
+# (lab kernels library fetch writes them from these entries), and the parts every search prompt shows.
 # All four libraries are Apache-2.0. `source`: upstream paths, each optionally with a line range ("#L62-L172").
 # `stations`: the engine's stations (models/stations.py, DECODE and PREFILL) the entry implements, for a region's prompt.
 # `sass`: where a GPU host finds the compiled kernel for its card (the package whose .so files hold it, and a regex of

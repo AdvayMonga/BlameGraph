@@ -4,7 +4,7 @@ fusions, level 3: 50 full architectures. The benchmark kernel-generation work re
 evolutionary searches); metrics: correct, speedup over eager PyTorch, fast_p = share of problems correct and more than
 p times faster. Researcher-only: nothing in `lab/` reads it, and it is no agent tool.
 
-`python -m generate.kernels.tasks.kernelbench fetch` downloads the repo at COMMIT (the problems and the benchmark's own evaluation
+`lab kernels kernelbench fetch` downloads the repo at COMMIT (the problems and the benchmark's own evaluation
 code) into local/kernelbench/<commit>/, with a manifest of every file's sha256; nothing is re-hosted. Each problem is a
 kernel task `kb:LEVEL:ID` (`generate.kernels.tasks.load`): inputs from its own get_inputs (made on the device), weights from
 `Model(*get_init_inputs())` under WEIGHT_SEED, fp32, reference and baseline its eager forward under no_grad,
@@ -55,7 +55,7 @@ SCORE_TIMEOUT_S = 1800.0
 def root() -> Path:
     d = DATA / COMMIT[:12]
     if not (d / "manifest.json").exists():
-        raise SystemExit(f"KernelBench is not fetched: python -m generate.kernels.tasks.kernelbench fetch (into {d})")
+        raise SystemExit(f"KernelBench is not fetched: lab kernels kernelbench fetch (into {d})")
     return d
 
 
@@ -349,7 +349,7 @@ def run(names: list[str], arms: str, out: Path, extra: list[str]) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m generate.kernels.tasks.kernelbench", description=__doc__.split("\n")[0])
+    ap = argparse.ArgumentParser(prog="lab kernels kernelbench", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("fetch")
     ls = sub.add_parser("list")

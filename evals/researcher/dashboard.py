@@ -1,4 +1,4 @@
-"""A live view of lab runs for the researcher: `python -m evals.researcher.dashboard [--port 8080]`, then open the printed URL.
+"""A live view of lab runs for the researcher: `lab dashboard [--port 8080]`, then open the printed URL.
 
 Reads only the ledger and each run's `live.jsonl` (evals/researcher/live.py), so it touches neither the engine, the GPU nor the
 agent's workspace, and nothing it shows reaches the agent. Served on 127.0.0.1 only."""
@@ -156,7 +156,7 @@ def serve(port: int, ledger_root: Path, runs_dir: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m evals.researcher.dashboard")
+    ap = argparse.ArgumentParser(prog="lab dashboard")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--ledger", type=Path, default=ledger.ROOT)
     ap.add_argument("--runs", type=Path, default=RUNS_DIR)

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # The engine comparison's extra setup on a GPU VM that measure/cloud/vm-setup.sh has bootstrapped (engine venv, docker, NVIDIA
 # Container Toolkit): the three engines' images and both checkpoints, pulled once. Idempotent. From the laptop:
-#   LAB_VM_PROVIDER=nebius LAB_TARGET=targets/inference-server.toml python -m measure.cloud.vm start --minutes 720
-#   python -m measure.cloud.vm setup                                  # engine venv + docker (measure/cloud/vm-setup.sh)
+#   LAB_VM_PROVIDER=nebius LAB_TARGET=targets/inference-server.toml lab vm start --minutes 720
+#   lab vm setup                                  # engine venv + docker (measure/cloud/vm-setup.sh)
 #   rsync local/equiv/ref to ~/BlameGraph/data/equiv/ref       # equiv's reference outputs (gitignored)
 #   ssh: bash ~/BlameGraph/compare/vm-setup.sh
 #   ssh: cd ~/BlameGraph && ulimit -n 65536 && setsid nohup ~/inference-server/.venv/bin/python -m evals.benches.compare.run \
 #        --out ~/compare > ~/compare.log 2>&1 < /dev/null &
-#   fetch ~/compare, then: python -m evals.benches.compare.report DIR --gpu-usd-per-hour <price>
+#   fetch ~/compare, then: lab compare report DIR --gpu-usd-per-hour <price>
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 SUDO=$([ "$(id -u)" = 0 ] && echo "" || echo sudo)

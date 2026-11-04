@@ -8,7 +8,7 @@ dependencies = []          # the referee and the regimes are stdlib; heavier pie
 [project.optional-dependencies]
 agents = ["claude-agent-sdk>=0.2.161"]                       # lab/agent.py: the Claude provider
 correctness = ["huggingface_hub", "pandas", "pyarrow", "transformers"]   # task sets, tokenizer
-workloads = ["huggingface_hub", "pandas", "pyarrow"]                # python -m data.workloads fetch
+workloads = ["huggingface_hub", "pandas", "pyarrow"]                # lab workloads fetch
 corpus = ["pyarrow>=17", "transformers", "jinja2"]            # WildChat shards; build_corpus tokenizes
 kernels = ["torch>=2.4"]
 evolve = ["torch>=2.4", "openevolve==0.4.0"]           # generate/kernels/evolve: OpenEvolve, the A/B baseline

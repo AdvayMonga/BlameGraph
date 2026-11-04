@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Layer-1 GPU validation, run on the VM from this environment's dir with the engine's venv on PATH:
-#   python -m measure.cloud.vm run --env --keep -- bash evals/kernels/validate_gpu.sh [ITERATIONS] [TASK]   (TASK: paged_decode)
+#   lab vm run --env --keep -- bash evals/kernels/validate_gpu.sh [ITERATIONS] [TASK]   (TASK: paged_decode)
 # 1. capture the engine's calls to the task's entry point under real corpus traffic at several concurrencies, CUDA graphs off:
 #    replayed graphs never reach Python, so with them on most calls would be invisible
 # 2. split them into seen / held-out regions

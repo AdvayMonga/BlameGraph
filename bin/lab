@@ -1,0 +1,6 @@
+#!/bin/sh
+# lab <command> [args]: the environment's one command (lab/cli.py), with this repo's .venv when it has one.
+root=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+py=$root/.venv/bin/python
+[ -x "$py" ] || py=python3
+PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" exec "$py" -m lab "$@"

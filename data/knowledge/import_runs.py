@@ -1,11 +1,11 @@
 """Manual measurements into the ledger as numbers only (decided 2026-10-18).
 
-A run dir written by `python -m measure.loadgen run --out DIR` (`regimes.json`) or `python -m evals.agent.correctness candidate --out
+A run dir written by `lab regimes run --out DIR` (`regimes.json`) or `lab correctness candidate --out
 DIR/equiv.json` becomes a `bench` or `equiv` record under a `manual-<date>` run: the engine commit and the launch env
 as its config, the numbers as its result, the regimes' full results kept, no text. The agent sees it like any
 measurement (`ledger`, `query`; `search` has nothing to index). `cost` is unknown for a manual run and stays null.
 
-    python -m data.knowledge.import_runs --run manual-20261018 --commit 9c6b79a --env PREFILL_MODE=mixed --env ASYNC_DECODE=1 \\
+    lab import-runs --run manual-20261018 --commit 9c6b79a --env PREFILL_MODE=mixed --env ASYNC_DECODE=1 \\
         --label s9packed local/engine-h200-20261018/s9packed
 """
 

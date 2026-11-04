@@ -223,7 +223,7 @@ def _jail_argv(tree: Path, argv: list[str], env_extra: dict | None, domains, loc
         if not container.available():
             if jail.required():
                 raise jail.JailMissing(f"no container jail: needs docker and the {container.IMAGE} image "
-                                       "(python -m measure.sandbox.container build), or LAB_NO_JAIL=1 on a box you trust")
+                                       "(lab jail build), or LAB_NO_JAIL=1 on a box you trust")
             return argv, env, tmp, None
         if domains:
             raise ValueError("the container jail has no network")

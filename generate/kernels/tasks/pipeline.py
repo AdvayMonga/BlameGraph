@@ -217,7 +217,7 @@ def facts(task, kernel_tasks: dict | None, regimes: tuple[str, ...] = ()) -> str
 
 def search(task, caps: list[Path], start: Path, out: Path, evals: int, ledger_root: Path, env: dict,
            device: str = "cuda", facts_text: str | None = None, held: dict | None = None) -> dict:
-    """`python -m generate.kernels.search` on the captures (a region: on its shapes, samples and holder, `hold`'s): its last
+    """`lab kernels search` on the captures (a region: on its shapes, samples and holder, `hold`'s): its last
     JSON line (best, cost, out, ledger record id)."""
     out.mkdir(parents=True, exist_ok=True)
     if facts_text:

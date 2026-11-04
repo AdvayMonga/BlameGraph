@@ -1,4 +1,4 @@
-"""python -m measure.sim run CLASS [--synthetic] [--seed N] [--env JSON] [--cost FILE] [--horizon S] [--out FILE]
+"""lab sim run CLASS [--synthetic] [--seed N] [--env JSON] [--cost FILE] [--horizon S] [--out FILE]
 Simulate one corpus class's traffic (the target's corpus; `--synthetic` generates it fresh, measure/loadgen/synth.py)
 through the engine's scheduler under `--env` (the engine's scheduler env vars, e.g. a profile's) and `--cost`
 (a CostModel JSON; defaults are unfitted stand-ins). Prints the regimes summary under the conversational limits.
@@ -13,7 +13,7 @@ from targets import target
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m measure.sim", description=__doc__.split("\n")[1])
+    ap = argparse.ArgumentParser(prog="lab sim", description=__doc__.split("\n")[1])
     target.add_argument(ap)
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")

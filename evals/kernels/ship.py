@@ -1,4 +1,4 @@
-"""python -m generate.kernels.evolve ship --task T --program BEST.py --gate GATE.json --engine REPO [--base REF] [--budget USD]
+"""lab kernels evolve ship --task T --program BEST.py --gate GATE.json --engine REPO [--base REF] [--budget USD]
 
 A kernel that passed `gate` becomes an engine change: a commit on a new branch of the engine repo whose only change is
 the task's module, built with git plumbing so the engine's working tree and index are never touched. With --budget,
@@ -131,7 +131,7 @@ def region_files(task, program: str, pkg: str, overrides: list, names: list[str]
 def ship(task, program: str, gate: dict, repo: Path, base: str = "HEAD", branch: str | None = None) -> dict:
     """The engine branch: {branch, base, commit, path}. Refuses a program without a passing held-out gate."""
     if not gate_passed(gate):
-        raise ValueError("the program has no fully passing gate on held-out shapes (`python -m generate.kernels.evolve gate`)")
+        raise ValueError("the program has no fully passing gate on held-out shapes (`lab kernels evolve gate`)")
     base = _git(repo, "rev-parse", base)
     if task.name.startswith("region:"):
         files = _region_files(task, program, repo, base)

@@ -257,5 +257,5 @@ class Bridge:
 
 if __name__ == "__main__":
     if sys.argv[1:] != ["build"]:
-        sys.exit("usage: python -m measure.sandbox.container build")
+        sys.exit("usage: lab jail build")
     build()

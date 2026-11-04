@@ -1,4 +1,4 @@
-"""python -m data.knowledge push | pull | index | sql | archive (the remote is LAB_STORE; see data/knowledge/sync.py for its layout)."""
+"""lab store push | pull | index | sql | archive (the remote is LAB_STORE; see data/knowledge/sync.py for its layout)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ RUNS, CORPUS = ENV_ROOT / "local" / "runs", ENV_ROOT / "data" / "corpus"
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m data.knowledge")
+    ap = argparse.ArgumentParser(prog="lab store")
     ap.add_argument("--root", type=Path, default=ledger.ROOT, help="the ledger dir")
     ap.add_argument("--remote", help="s3://<bucket> or a directory (default LAB_STORE)")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "sql":
         db = index.agent_db(a.root) if a.agent else a.root / "index" / "all.duckdb"
         if not db.exists():
-            print("no index yet: run `python -m data.knowledge index`", file=sys.stderr)
+            print("no index yet: run `lab store index`", file=sys.stderr)
             return 1
         out = index.query(db, a.sql, limit=10_000)
         print("\t".join(out["columns"]))
