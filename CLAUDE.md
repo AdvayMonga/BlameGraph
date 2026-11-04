@@ -329,7 +329,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   is a tensor are left out; a shipped override runs the engine's own stations on such a call): `Station(name, reads, writes, fn)`; `interface` (inputs read before written,
   outputs read after the region or `live`), the stations as the baseline (`Task.baseline_fn`), an fp32 run as the
   reference, `bytes_moved` (fused vs one-by-one), and the error budget: `Task.error_budget` (2) lets each element differ from the reference by
-  that many times the baseline's own error there, on top of the dtype's tolerance (`check._compare(base=, k=)`), in the
+  that many times the baseline's own error there, on top of the dtype's tolerance, and a NaN/Inf mismatch is within it
+  where the baseline has one there too (`check._compare(base=, k=)`), in the
   checker, the timed outputs and `verify.py`; the baseline is bound before the candidate loads and its modules (`Task.watch`) are watched for
   patches. The engine's stations (`models/stations.py`) and region capture are merged in the engine (main 0a00b0c); the
   tests use fake stations. `from_engine(first, last, samples, shared_weights)` binds a region to the engine's
