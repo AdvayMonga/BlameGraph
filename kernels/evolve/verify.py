@@ -35,7 +35,7 @@ def expected(cfg: dict, task, timed: bool) -> set:
 def verify(cfg: dict, path: Path, timed: bool = False) -> tuple[bool, str]:
     import stat
     import torch
-    from kernels.check import TOLERANCES, _compare, _flat, _gen
+    from kernels.check import TOLERANCES, _compare, _gen, baseline_envelope
     from kernels.evolve.core import _scaled
     from kernels.tasks import from_config
     path = Path(path)
@@ -59,7 +59,7 @@ def verify(cfg: dict, path: Path, timed: bool = False) -> tuple[bool, str]:
         make = task.make_inputs if r.get("scale") is None else _scaled(task.make_inputs, r["scale"])
         inputs = make(tuple(r["shape"]), dt, device, _gen(r["seed"]))
         ref, (atol, rtol) = task.reference(*[t.clone() for t in inputs]), tol[dt]
-        base = (_flat(task.bind(task.baseline())(*[t.clone() for t in inputs]))    # the engine's own code, never
+        base = (baseline_envelope(task.bind(task.baseline()), inputs, ref)          # the engine's own code, never
                 if task.error_budget else None)                                     # the candidate's
         d = _compare(ref, [o.to(device) for o in r["outputs"]], atol, rtol, base=base, k=task.error_budget or 0.0)
         if not d["ok"]:

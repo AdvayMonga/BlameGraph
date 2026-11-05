@@ -9,9 +9,10 @@ tensors, so the baseline and every program copy it per call (the engine writes i
 the call passes the holder's (kernels/shared_weights, CUDA IPC; a step's do not fit the copy fallback) as a dict `w`
 after the inputs, so the checker never clones them; a write into them voids the judgment (`restore`). The baseline is
 the engine's megakernel; the reference runs the engine's stations in torch (`stations.reference()`) in fp32 over every
-layer, and the error budget is 2x the baseline's error against it. No NaN/Inf inputs: the megakernel's top-8 picks
-expert E for a row whose router logits are all NaN and reads past the expert stack (decode_step.cu, P6), so the
-engine's own step faults on them. A winner does not install: the engine has no hook for a whole-step override yet."""
+layer, and the error budget is 2x the baseline's error against it. No NaN/Inf inputs: a row whose router logits are all
+NaN has no top-8 (the megakernel picked expert E and read past the expert stack until inference-server's fix). A winner
+does not install: the engine's `STEP` hook writes the K/V pools in place, this task's K/V is pure (copied per call), so
+a shipped program would copy the pools every step."""
 from __future__ import annotations
 
 import importlib

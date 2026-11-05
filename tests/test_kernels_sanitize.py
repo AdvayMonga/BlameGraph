@@ -112,6 +112,14 @@ def test_the_gate_fails_on_an_error_and_passes_clean(tmp_path, monkeypatch):
     assert bad["metrics"]["correct"] == 0.0 and bad["metrics"]["combined_score"] == 0.0 and not gate_passed(bad)
 
 
+def test_shared_weights_are_a_fact_not_a_failure(monkeypatch):
+    from kernels.evolve.ship import gate_passed
+    monkeypatch.setattr(jailed, "sanitizer", lambda: 1 / 0)           # never looked for
+    r = jailed._sanitized({**CFG, "shared_weights": "/holder/weights.pkl"}, PROGRAM, PASSED, 600)
+    assert r["artifacts"]["sanitizer"].startswith("not run: the weights are attached over CUDA IPC") and gate_passed(r)
+    assert "sanitizer" not in json.loads(r["artifacts"]["gates"])
+
+
 def test_a_missing_sanitizer_is_a_fact_not_a_failure(monkeypatch):
     from kernels.evolve.ship import gate_passed
     monkeypatch.setattr(jailed, "sanitizer", lambda: None)

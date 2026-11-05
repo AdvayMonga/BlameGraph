@@ -114,7 +114,8 @@ def region_files(task, program: str, pkg: str, overrides: list, names: list[str]
     from kernels import regions
     from lab.capture import STEP
     if task.name == STEP:
-        raise ValueError(f"{STEP} does not ship: the engine has no hook for a whole-step override yet")
+        raise ValueError(f"{STEP} does not ship: the engine's STEP hook writes the K/V pools in place and this task's K/V "
+                         "is pure (copied per call)")
     _, first, last = task.name.split(":")
     for path, (a, b) in overrides:
         if a not in names or b not in names:

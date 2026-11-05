@@ -239,7 +239,7 @@ class Toolbox(EvalTools, ProfTools):
         rel, refused = None, None
         try:
             text = pipeline.patch(task, tree, best.read_text(), held) if passed else None
-        except ValueError as e:                  # e.g. the whole step: the engine has no hook to install it
+        except ValueError as e:                  # e.g. the whole step: pure K/V, the engine's hook writes in place
             text, refused = None, str(e)
         if text:
             dest = self.s.workspace.path / "lab" / "runs" / "kernel_search" / f"{task.name}-{snap.id}.patch"

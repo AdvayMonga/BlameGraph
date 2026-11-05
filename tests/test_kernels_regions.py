@@ -114,6 +114,26 @@ def test_the_error_budget_is_per_element_twice_the_baselines_own_error_there():
                             **{**common, "budget": None})["passed"]       # without the budget the dtype's rule holds
 
 
+def test_the_budget_covers_the_baselines_own_run_to_run_spread():
+    """A baseline whose outputs differ across identical calls (the megakernel's do) has that spread as its error."""
+    import itertools
+    t = task("toy_region", STATIONS, "norm", "add", ctx, lambda call: None, live=("x",),
+             seen_default=((4, 64),))
+    base, ref = t.baseline(), t.reference
+    calls = itertools.count()
+
+    def jittery(*a):                                        # exact on every other call, the baseline's error on the rest
+        return (ref(*a)[0],) if next(calls) % 2 == 0 else base(*a)
+
+    def toward(k):
+        return lambda *a: ((ref(*a)[0].float() + k * (base(*a)[0].float() - ref(*a)[0].float())).to(torch.bfloat16),)
+    common = dict(dtypes=(torch.bfloat16,), tolerances={torch.bfloat16: (1e-6, 0.0)}, edge_shapes=[], layouts=(),
+                  seeds=(0, 1), repeats=1, budget=t.error_budget)
+    assert check_kernel(ref, toward(1.5), t.make_inputs, [(4, 64)], [], baseline=jittery, **common)["passed"]
+    assert not check_kernel(ref, toward(1.5), t.make_inputs, [(4, 64)], [],
+                            baseline=lambda *a: (ref(*a)[0],), **common)["passed"]    # an exact baseline: no slack
+
+
 def test_one_large_value_loosens_nothing_else():
     """Outlier channels (x1000) make the baseline's largest error large; a candidate that zeroes the rest must fail."""
     def outliers(shape, dtype, device, g):
