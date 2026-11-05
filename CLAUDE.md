@@ -279,8 +279,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   it and joined to the population), then exactly `--generations` (10) generations (decided 2026-10-30:
   nothing stops it sooner), each a round whose `--gen-size` (24) changes are split over
   four idea types (decided 2026-10-29;
-  `--no-types` = refine only, arm `search-untyped`): refine (new ideas on `--parents` (4) programs drawn from the
-  population: the 32 best open programs, the best always, the rest by percentile reward + 0.05 without replacement),
+  `--no-types` = refine only, arm `search-untyped`): refine (new ideas on `--parents` (8; was 4 until 2026-11-03) programs drawn from the
+  population: the 32 best open programs and the fastest open program on each seen shape (`elites`, MAP-Elites with the
+  shape as the niche, decided 2026-11-03), the best always, the rest by percentile reward + 0.05 (an elite's as the
+  best's) without replacement),
   persist (a line's last change taken further; every child that beat its parent heads a line, which moves to a persist
   child that beats it and closes after 3 generations without one), fresh (a different overall structure, half from the
   start, half from a random program) and crossover (a parent shown another parent's full code), 8/6/6/4 adapted each
@@ -329,7 +331,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   is a tensor are left out; a shipped override runs the engine's own stations on such a call): `Station(name, reads, writes, fn)`; `interface` (inputs read before written,
   outputs read after the region or `live`), the stations as the baseline (`Task.baseline_fn`), an fp32 run as the
   reference, `bytes_moved` (fused vs one-by-one), and the error budget: `Task.error_budget` (2) lets each element differ from the reference by
-  that many times the baseline's own error there, on top of the dtype's tolerance (`check._compare(base=, k=)`), in the
+  that many times the baseline's own error there, on top of the dtype's tolerance, and a NaN/Inf mismatch is within it
+  where the baseline has one there too (`check._compare(base=, k=)`), in the
   checker, the timed outputs and `verify.py`; the baseline is bound before the candidate loads and its modules (`Task.watch`) are watched for
   patches. The engine's stations (`models/stations.py`) and region capture are merged in the engine (main 0a00b0c); the
   tests use fake stations. `from_engine(first, last, samples, shared_weights)` binds a region to the engine's
