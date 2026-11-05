@@ -353,6 +353,19 @@ def test_value_distributions_catch_a_kernel_tuned_to_one_scale():
         assert "values_x3" not in g and "edge_cases" in g          # selection: correctness and timing, no value scales
 
 
+def test_a_task_without_nonfinite_inputs_gets_none_in_any_check_of_the_gate():
+    import dataclasses
+    from kernels.evolve import core
+    t = dataclasses.replace(load("toy_rmsnorm"), nonfinite=False)
+    seen, orig = [], core.check_kernel
+    core.check_kernel = lambda *a, **kw: (seen.append(kw.get("nonfinite", True)), orig(*a, **kw))[1]
+    try:
+        r = judge(t, SEED, list(t.seen_default), [], None, "cpu", None, 2, iters=3, full=True)
+    finally:
+        core.check_kernel = orig
+    assert r["metrics"]["correct"] == 1.0 and len(seen) > 1 and not any(seen)
+
+
 def load_program_text(src: str):
     from kernels.evolve.core import load_program
     with tempfile.TemporaryDirectory() as d:
@@ -678,6 +691,14 @@ def test_capture_records_calls_and_the_split_holds_out_a_band():
         assert h and not any(min(h) < x[0] < max(h) for x in s["seen"])                           # a band
         ints = shapes.ints_from_captures(task, [Path(d)])
         assert ints[json.dumps([1, 32, 4, 128, 16, 17])] == [[17]] and len(ints) == 9       # first call per shape
+        from unittest import mock
+        with mock.patch.object(capture, "SMALL_INT", 8), tempfile.TemporaryDirectory() as d2:
+            with capture.capture(["fake_engine_kernels:paged_decode_attention"], Path(d2)):
+                for n in (4, 16):                            # 16 lengths: too long to log by value
+                    user.paged_decode_attention(torch.zeros(n, 32, 128), pool, pool, torch.zeros(n, 2, dtype=torch.int32),
+                                                torch.full((n,), 17, dtype=torch.int32), scale=0.1)
+            part = shapes.ints_from_captures(task, [Path(d2)])
+            assert list(part) == [json.dumps([4, 32, 4, 128, 16, 17])]                     # none rather than a part
         kept = shapes.select(task, {**s, "ints": ints}, k=3)["ints"]
         assert set(kept) <= {json.dumps(list(x)) for x in [*shapes.select(task, s, k=3)["seen"], *s["heldout"]]}
         sel = shapes.select(task, s, k=3)
