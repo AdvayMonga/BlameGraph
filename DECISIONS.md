@@ -22,6 +22,18 @@ failed the NaN/Inf case on 6,144 elements (3 rows x 2,048: exactly the three poi
 could pass where the engine itself does not; the finite part of the budget already measured a candidate against the
 engine's own error, element by element. Amends the region error budget (2026-10-23).
 
+## 2026-11-04 — A would-be winner must run clean under compute-sanitizer at the held-out gate
+The held-out gate (`kernels.evolve gate`, `kernel_search`'s gate, the A/B's) runs a program that passed it under
+NVIDIA's `compute-sanitizer` (`kernels/evolve/sanitize.py`, stage 6 of the jailed evaluator): memcheck, racecheck,
+initcheck and synccheck, each in its own jail, one call per shape on the smallest and largest seen shape and the
+largest held-out one, PyTorch's caching allocator off so an access past a tensor's end leaves its allocation. Any
+error the sanitizer reports fails the gate (gate `sanitizer`, its report as evidence: tool, error kind, kernel, first
+lines); a host without the sanitizer records "not run: compute-sanitizer not found" as a fact and does not fail.
+Selection never runs it (10-100x slower). Why (the user): output checks on chosen inputs miss an out-of-bounds read
+that returns a harmless value, a race won by luck on this GPU and uninitialized memory that happens to be zero; the
+whole-step region's illegal memory access was found late. A sanitizer error is a measurement of the program, not a
+heuristic.
+
 ## 2026-11-03 — Per-shape elites in the kernel search's population
 The population parents are drawn from is the 32 best open programs plus the fastest open program on each seen shape,
 and an elite is drawn with the best program's weight. Why (the user, after comparing with OpenEvolve's MAP-Elites
@@ -623,6 +635,16 @@ None and submit says `unknown_band`. Why: a changed engine can be more or less j
 engine was being applied silently. Consequence: after the engine moves, re-run `lab.validate`'s noise step
 (minutes per regime on the GPU) before submits on the new base mean anything.
 
+## 2026-10-18 — Manual measurements enter the ledger as numbers, visible to the agent
+A run measured by hand (`python -m regimes run`, `python -m correctness candidate` on a branch) is imported as a
+`bench` / `equiv` record under a `manual-<date>` run (`python -m lab.import_runs`): the engine commit and launch env
+as its config, the numbers as its result, no text. The agent sees it like any measurement (`ledger`, `query`,
+`search` index the numbers; there is no hypothesis to search). Why: four days of engine sessions had their results
+only in `RUNS.md` prose and `data/` files, where nothing compounds; the 2026-10-15 rule hid a person's runs because
+their *reasoning* would reach the agent — numbers alone carry no judgment. `RUNS.md` is frozen as the history of
+the runs before this; new runs are not added to it (the ledger is the record, `python -m store sql` the view). The
+researcher's reasoning stays out of the ledger. Amends 2026-10-15 for manual runs and 2026-10-16 (`RUNS.md`).
+
 ## 2026-10-17 — Our own layer-1 generator; OpenEvolve becomes the baseline
 `kernels/search/` replaces the `openevolve` package as the generator, taking from what the published systems learned:
 refinement chains in a tree (Kevin, STARK, KernelPro, Kernel Forge), a strong-model judge reading curated facts beside a
@@ -640,16 +662,6 @@ first is `kernels/moe_gemm-20261016-154523`), and `bench` + `equiv` + `submit` r
 can add up past the regimes' noise bands. Why: one kernel's gain (moe_gemm 1.09x on 13.7% of the decode window, ≤ ~1.2%
 end to end) sits inside the bands, so judging it alone costs hours of GPU for a within-band verdict. Each kernel still
 passes its own held-out gate before it ships; a failing stack is bisected with `equiv`.
-
-## 2026-10-18 — Manual measurements enter the ledger as numbers, visible to the agent
-A run measured by hand (`python -m regimes run`, `python -m correctness candidate` on a branch) is imported as a
-`bench` / `equiv` record under a `manual-<date>` run (`python -m lab.import_runs`): the engine commit and launch env
-as its config, the numbers as its result, no text. The agent sees it like any measurement (`ledger`, `query`,
-`search` index the numbers; there is no hypothesis to search). Why: four days of engine sessions had their results
-only in `RUNS.md` prose and `data/` files, where nothing compounds; the 2026-10-15 rule hid a person's runs because
-their *reasoning* would reach the agent — numbers alone carry no judgment. `RUNS.md` is frozen as the history of
-the runs before this; new runs are not added to it (the ledger is the record, `python -m store sql` the view). The
-researcher's reasoning stays out of the ledger. Amends 2026-10-15 for manual runs and 2026-10-16 (`RUNS.md`).
 
 ## 2026-10-16 — No status file
 `STATE.md` is removed; the record is `DECISIONS.md` and `RUNS.md`, both append-only. Why: a rewritten-in-place

@@ -149,7 +149,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   under `engine.using(build.python_for(tree))`.
 - `lab/gpucheck.py` — `python -m lab.gpucheck` on a GPU VM (as root, like the worker): what the jails need from a real
   GPU host, PASS/FAIL each: jail GPU, workbench (GPU, root, apt/pip, metadata blocked), quiet, exclusivity, ncu,
-  hostprof, the dependency build.
+  compute-sanitizer, hostprof, the dependency build.
 - `lab/worker.py` — the job interface, built for the measured jobs: `test`, `measure`, `equiv`, `profile` take input
   trees + JSON args, write an out dir, return JSON; the tools call `self.worker`. `LAB_WORKER=local` (default, in
   process) or `ssh` (the `lab.vm` VM): inputs by content hash, re-hashed on the worker before every job; GpuBusy,
@@ -272,7 +272,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `torch.library`, `TORCH_LIBRARY`, dispatch modes, which could change what the baseline's own ops do) or writes into anything it imported, under any alias
   (`core.screen`), and scores 0 if any function the checker or timer uses is patched, checked after loading and
   after every call the checker makes (`core._watched`; the timer binds its own at import); the exploit canaries in
-  `tests/test_kernels_evolve.py` must all score 0; selection never sees held-out shapes, `gate` judges them (correctness, and their speedup as a fact); `validate_gpu.sh` = the GPU validation (shapes captured under real corpus traffic at several concurrencies, `CAPTURE_SPECS`; never synthetic prompts, whose batches have uniform lengths); tolerances from the target's
+  `tests/test_kernels_evolve.py` must all score 0; selection never sees held-out shapes, `gate` judges them (correctness, and their speedup as a fact), then runs a program that passed under `compute-sanitizer` (`kernels/evolve/sanitize.py`, jailed stage 6, decided 2026-11-04: memcheck, racecheck, initcheck, synccheck, each in its own jail, one call on the smallest and largest seen and the largest held-out shape, caching allocator off; any error fails gate `sanitizer` with the report as evidence; a host without it records "not run" as a fact); `validate_gpu.sh` = the GPU validation (shapes captured under real corpus traffic at several concurrencies, `CAPTURE_SPECS`; never synthetic prompts, whose batches have uniform lengths); tolerances from the target's
   `[kernels]`). `kernels/search/` (extra `kernel-search`; our own layer-1 generator, replacing OpenEvolve, which stays as the A/B baseline: `python -m
   kernels.search`; by default the genetic search (`kernels/search/generations.py`, decided 2026-10-26): generation 0 is
   one round from the start program (40 changes; competitors' ported kernels, `kernels.competitors.starts`, judged beside
