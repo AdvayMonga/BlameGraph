@@ -25,6 +25,7 @@ _BANNER = ("COMPUTE-SANITIZER", "ERROR SUMMARY", "RACECHECK SUMMARY", "Target ap
 def argv(exe: str, tool: str) -> list[str]:
     """The sanitizer's command line for one tool, before the probe's own."""
     return [exe, "--tool", tool, "--error-exitcode", str(EXIT), "--print-limit", "20",
+            "--report-api-errors", "no",         # host API errors are Triton's loader's, the baseline's too
             *(["--leak-check", "no"] if tool == "memcheck" else [])]
 
 
