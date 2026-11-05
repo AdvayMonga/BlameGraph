@@ -9,8 +9,9 @@ tensors, so the baseline and every program copy it per call (the engine writes i
 the call passes the holder's (kernels/shared_weights, CUDA IPC; a step's do not fit the copy fallback) as a dict `w`
 after the inputs, so the checker never clones them; a write into them voids the judgment (`restore`). The baseline is
 the engine's megakernel; the reference runs the engine's stations in torch (`stations.reference()`) in fp32 over every
-layer, and the error budget is 2x the baseline's error against it. A winner does not install: the engine has no hook
-for a whole-step override yet."""
+layer, and the error budget is 2x the baseline's error against it. No NaN/Inf inputs: the megakernel's top-8 picks
+expert E for a row whose router logits are all NaN and reads past the expert stack (decode_step.cu, P6), so the
+engine's own step faults on them. A winner does not install: the engine has no hook for a whole-step override yet."""
 from __future__ import annotations
 
 import importlib
@@ -142,7 +143,7 @@ def task(samples: str | None = None, shared_weights: str | None = None) -> Task:
     ok = bool(w)
     return Task(name=STEP, entry=STEP_ENTRY, reference=reference(w) if ok else _missing, make_inputs=make_inputs,
                 shape_of=shape_of, cost=_cost(w) if ok else _missing, call=lambda fn, *xs: fn(*xs, dict(w)),
-                heldout_axes=(0, 1), edge_shapes=lambda shape: [], layouts=(), error_budget=ERROR_BUDGET,
+                heldout_axes=(0, 1), edge_shapes=lambda shape: [], layouts=(), nonfinite=False, error_budget=ERROR_BUDGET,
                 baseline_fn=baseline, watch=_watch(), capture_fn=STEP, seen_default=tuple(by_shape),
                 start_program=(lambda: start_program()) if ok else None)
 
