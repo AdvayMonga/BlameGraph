@@ -15,6 +15,7 @@ import torch
 
 from kernels import check_kernel, time_pair
 from kernels.check import TOLERANCES, _compare, _flat    # bound here, before any candidate loads
+from kernels.evolve.freeze import FREEZE_STAGE
 from kernels.tasks import Task, from_config
 
 
@@ -183,13 +184,17 @@ def _patched(before: dict, task: Task) -> list[str]:
                   [k for k in now if k not in before and k.startswith(prefixes)])
 
 
-def load_program(path: Path):
+def load_module(path: Path):
     spec = importlib.util.spec_from_file_location(f"candidate_{abs(hash(str(path)))}", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     if not callable(getattr(mod, "kernel", None)):
         raise AttributeError("the program defines no callable `kernel`")
-    return mod.kernel
+    return mod
+
+
+def load_program(path: Path):
+    return load_module(path).kernel
 
 
 def _peaks(device: str):
@@ -267,7 +272,8 @@ def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | 
     """stage 1: correctness on the two most frequent seen shapes, one seed. stage 2: correctness on every seen shape and
     timing against the baseline; with `full` or held-out shapes (the gate, never selection) the full check on them and
     the seen shapes: three seeds, repeats, edge cases and layouts, other value scales, the baseline's error, peak memory. A candidate that
-    leaves any function the evaluator watches patched scores 0, whatever it measured."""
+    leaves any function the evaluator watches patched scores 0, whatever it measured. FREEZE_STAGE: the program run
+    once on every seen shape, the config each of its autotuners chose for each key recorded; it scores nothing."""
     refused = screen(Path(program).read_text())
     if refused:
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
@@ -279,7 +285,8 @@ def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | 
         """Record anything patched since the snapshot; True once anything has been."""
         patched.extend(n for n in _patched(before, task) if n not in patched)
         return bool(patched)
-    out = _judge(task, program, seen, heldout, weights, device, tolerances, stage, iters, checkpoint, full)
+    out = (_freeze(task, program, seen, device, checkpoint) if stage == FREEZE_STAGE
+           else _judge(task, program, seen, heldout, weights, device, tolerances, stage, iters, checkpoint, full))
     if checkpoint():
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
                 "artifacts": {"error": "patched what the evaluator uses: " + ", ".join(patched[:20])}}
@@ -378,6 +385,33 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
         metrics["heldout_speedup"], metrics["heldout_raw_speedup"] = held[1], held[2]
         artifacts["heldout_timings"] = json.dumps(held[0], indent=1)
     return {"metrics": metrics, "artifacts": artifacts}
+
+
+def _freeze(task: Task, program: Path, seen: list, device: str, checkpoint) -> dict:
+    """{artifacts: {frozen: {name: {keys, table}}}}: each autotuner the program binds at module level, run on every
+    seen shape (each dtype, seed 0), with the config it chose for each key it saw."""
+    from kernels.evolve import freeze
+    try:
+        mod = load_module(program)
+    except Exception as e:                       # noqa: BLE001
+        return {"metrics": {"stage": FREEZE_STAGE}, "artifacts": {"error": f"load failed: {type(e).__name__}: {e}"}}
+    if checkpoint():
+        return {}
+    recorded = {n: freeze.record(t) for n, t in freeze.tuners(mod, Path(program).read_text()).items()}
+    fn = task.bind(mod.kernel)
+    try:
+        for s in seen:
+            for dt in task.dtypes:
+                fn(*task.make_inputs(s, dt, device, torch.Generator().manual_seed(0)))
+                if checkpoint():
+                    return {}
+        if torch.device(device).type == "cuda":
+            torch.cuda.synchronize()
+        frozen = json.dumps(freeze.tables(recorded))
+    except Exception as e:                       # noqa: BLE001  a key or config that is not a literal included
+        return {"metrics": {"stage": FREEZE_STAGE},
+                "artifacts": {"error": f"{type(e).__name__}: {e}\n" + traceback.format_exc()[-2000:]}}
+    return {"metrics": {"stage": FREEZE_STAGE}, "artifacts": {"frozen": frozen}}
 
 
 def _timed(task, cand, base, shapes, weights, dtype, device, iters, hw, tolerances=None) -> tuple[list, float, float]:

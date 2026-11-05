@@ -34,6 +34,19 @@ that returns a harmless value, a race won by luck on this GPU and uninitialized 
 whole-step region's illegal memory access was found late. A sanitizer error is a measurement of the program, not a
 heuristic.
 
+## 2026-11-04 — A winner's autotune is frozen into a table before it is gated and shipped
+Before the held-out gate (`kernels.evolve gate`, `kernel_search`), the winner runs once on every seen shape in the
+jail, and the config each of its `triton.autotune`s chose for each key is recorded; each autotune is replaced by a
+table lookup (the call's key, else the nearest tuned one: the smallest tuned sizes at or above the call's, beyond the
+table its largest), written into the module. The frozen program is what the gate judges and what ships; ship and
+`kernel_search`'s patch refuse a live autotune the engine module did not already have as written. Why (the user):
+the shipped moe_gemm_fp8 winner lost 28% of saturated goodput end to end (10.98 to 7.89 req/s) because its
+`triton.autotune` was keyed on `M`, the batch's rows, so it tuned again for every new row count while serving; the
+gate never saw it, since tuning happens in the warm-up before each timed window. Production engines ship offline
+tables (vLLM's and SGLang's fused-MoE configs by batch size). The table is tuned on seen shapes only, so the gate's
+held-out shapes measure its lookup beyond them. Amends 2026-11-03 (the harness tunes nothing): run-time autotune stays
+allowed during the search.
+
 ## 2026-11-03 — Per-shape elites in the kernel search's population
 The population parents are drawn from is the 32 best open programs plus the fastest open program on each seen shape,
 and an elite is drawn with the best program's weight. Why (the user, after comparing with OpenEvolve's MAP-Elites

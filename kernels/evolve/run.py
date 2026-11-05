@@ -292,12 +292,19 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "split":
         print(shapes_mod.write(a.write, sets))
         return 0
-    if a.cmd == "gate":
-        out = judge_jailed({"task": task.name, "seen": [list(s) for s in sets["seen"]],
-                            "heldout": [list(s) for s in sets["heldout"]], "weights": sets.get("calls"),
-                            "device": a.device, "tolerances": tol, "ints": _ints(sets, ("seen", "heldout")),
-                            "options": options_from_target(task), "full": True, **region_args(a)},
-                           Path(a.program).read_text(), 2, timeout_s=3600)
+    if a.cmd == "gate":                          # the program with its autotune frozen is what is judged and shipped
+        from kernels.evolve import freeze
+        cfg = {"task": task.name, "seen": [list(s) for s in sets["seen"]],
+               "heldout": [list(s) for s in sets["heldout"]], "weights": sets.get("calls"),
+               "device": a.device, "tolerances": tol, "ints": _ints(sets, ("seen", "heldout")),
+               "options": options_from_target(task), "full": True, **region_args(a)}
+        src = Path(a.program).read_text()
+        frozen, _ = freeze.freeze(src, lambda s: judge_jailed(cfg, s, freeze.FREEZE_STAGE, timeout_s=3600))
+        if frozen != src:
+            dest = Path(a.program).with_name(Path(a.program).stem + ".frozen.py")
+            dest.write_text(frozen)
+            print(f"frozen program (judged here; ship this one): {dest}", file=sys.stderr)
+        out = judge_jailed(cfg, frozen, 2, timeout_s=3600)
         print(json.dumps(out, indent=1))
         from kernels.evolve.ship import gate_passed
         return 0 if gate_passed(out) else 1

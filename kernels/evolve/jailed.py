@@ -1,4 +1,4 @@
-"""python -m kernels.evolve.jailed CONFIG.json PROGRAM|- STAGE (1, 2, 3: ncu counters, 4: quick, 5: precheck, 6: sanitizer)  (or `- - STAGE`: {config, source} as JSON on stdin)  ->  kernels.evolve.core's JSON, judged in the jail.
+"""python -m kernels.evolve.jailed CONFIG.json PROGRAM|- STAGE (1, 2, 3: ncu counters, 4: quick, 5: precheck, 6: sanitizer, 7: freeze)  (or `- - STAGE`: {config, source} as JSON on stdin)  ->  kernels.evolve.core's JSON, judged in the jail.
 
 The candidate runs as agent code (lab/safety/grader.jailed: a container with no network on Linux, srt elsewhere;
 LAB_NO_JAIL=1 waives it). The jail sees a fresh tree holding only the candidate and its config, a read-only copy of

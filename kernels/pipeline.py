@@ -237,9 +237,28 @@ def search(task, caps: list[Path], start: Path, out: Path, evals: int, ledger_ro
     return json.loads(lines[-1])
 
 
+def freeze(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict | None = None) -> Path:
+    """The winner with its autotune frozen into a table by key (kernels/evolve/freeze.py), from the freeze stage run on
+    the gate's seen shapes where the evaluator runs: what the gate judges and the patch holds (`program` itself when
+    nothing in it autotunes)."""
+    from kernels.evolve import freeze as frozen_by
+    src = Path(program).read_text()
+    new, _ = frozen_by.freeze(src, lambda s: _judged(task, caps, program, out, env, held, frozen_by.FREEZE_STAGE))
+    if new == src:
+        return Path(program)
+    dest = Path(out) / "frozen_program.py"
+    dest.write_text(new)
+    return dest
+
+
 def gate(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict | None = None) -> dict:
     """The held-out gate on the winner, judged where the evaluator runs (here, or the worker over ssh); a region on
     the shapes, samples and holder `hold` described."""
+    return _judged(task, caps, program, out, env, held, 2)
+
+
+def _judged(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict | None, stage: int) -> dict:
+    """`stage` of `program` under the gate's config (every seen and held-out shape)."""
     from kernels import shapes as shapes_mod
     from kernels.evolve import evaluator
     from kernels.evolve.run import _ints, _target_tolerances, options_from_target, tolerances
@@ -261,7 +280,7 @@ def gate(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict
     saved = {k: os.environ.get(k) for k in ("KERNEL_EVAL_CONFIG", *env)}
     os.environ.update({"KERNEL_EVAL_CONFIG": str(path), **env})
     try:
-        return evaluator.judge_stage(str(program), 2)
+        return evaluator.judge_stage(str(program), stage)
     finally:
         for k, v in saved.items():
             os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
@@ -271,7 +290,7 @@ def patch(task, tree: Path, program: str, held: dict | None = None) -> str:
     """The winner as a unified diff of the engine module in `tree`, the task's start edits undone; a region's as the
     override module `kernels.evolve ship` would commit (the overlap checked against the overrides in `tree`, with the
     station names `hold` read from the engine)."""
-    from kernels.evolve.ship import module_source, override_keys, region_files, unstart
+    from kernels.evolve.ship import module_source, no_live_autotune, override_keys, region_files, unstart
     if task.name.startswith("region:"):
         from kernels import regions
         pkg = Path(tree) / "src" / regions.OVERRIDES_PACKAGE.replace(".", "/")
@@ -283,6 +302,6 @@ def patch(task, tree: Path, program: str, held: dict | None = None) -> str:
                        for f, src in files.items())
     path = module_file(task, tree)
     old = path.read_text()
-    new = unstart(task, module_source(program, task.entry.partition(":")[2]))
+    new = no_live_autotune(unstart(task, module_source(program, task.entry.partition(":")[2])), old)
     rel = path.relative_to(tree).as_posix()
     return "".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True), f"a/{rel}", f"b/{rel}"))
