@@ -149,7 +149,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   under `engine.using(build.python_for(tree))`.
 - `lab/gpucheck.py` — `python -m lab.gpucheck` on a GPU VM (as root, like the worker): what the jails need from a real
   GPU host, PASS/FAIL each: jail GPU, workbench (GPU, root, apt/pip, metadata blocked), quiet, exclusivity, ncu,
-  hostprof, the dependency build.
+  compute-sanitizer, hostprof, the dependency build.
 - `lab/worker.py` — the job interface, built for the measured jobs: `test`, `measure`, `equiv`, `profile` take input
   trees + JSON args, write an out dir, return JSON; the tools call `self.worker`. `LAB_WORKER=local` (default, in
   process) or `ssh` (the `lab.vm` VM): inputs by content hash, re-hashed on the worker before every job; GpuBusy,
@@ -272,15 +272,17 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `torch.library`, `TORCH_LIBRARY`, dispatch modes, which could change what the baseline's own ops do) or writes into anything it imported, under any alias
   (`core.screen`), and scores 0 if any function the checker or timer uses is patched, checked after loading and
   after every call the checker makes (`core._watched`; the timer binds its own at import); the exploit canaries in
-  `tests/test_kernels_evolve.py` must all score 0; selection never sees held-out shapes, `gate` judges them (correctness, and their speedup as a fact); `validate_gpu.sh` = the GPU validation (shapes captured under real corpus traffic at several concurrencies, `CAPTURE_SPECS`; never synthetic prompts, whose batches have uniform lengths); tolerances from the target's
+  `tests/test_kernels_evolve.py` must all score 0; selection never sees held-out shapes, `gate` judges them (correctness, and their speedup as a fact), then runs a program that passed under `compute-sanitizer` (`kernels/evolve/sanitize.py`, jailed stage 6, decided 2026-11-04: memcheck, racecheck, initcheck, synccheck, each in its own jail, one call on the smallest and largest seen and the largest held-out shape, caching allocator off; any error fails gate `sanitizer` with the report as evidence; a host without it records "not run" as a fact); `validate_gpu.sh` = the GPU validation (shapes captured under real corpus traffic at several concurrencies, `CAPTURE_SPECS`; never synthetic prompts, whose batches have uniform lengths); tolerances from the target's
   `[kernels]`). `kernels/search/` (extra `kernel-search`; our own layer-1 generator, replacing OpenEvolve, which stays as the A/B baseline: `python -m
   kernels.search`; by default the genetic search (`kernels/search/generations.py`, decided 2026-10-26): generation 0 is
   one round from the start program (40 changes; competitors' ported kernels, `kernels.competitors.starts`, judged beside
   it and joined to the population), then exactly `--generations` (10) generations (decided 2026-10-30:
   nothing stops it sooner), each a round whose `--gen-size` (24) changes are split over
   four idea types (decided 2026-10-29;
-  `--no-types` = refine only, arm `search-untyped`): refine (new ideas on `--parents` (4) programs drawn from the
-  population: the 32 best open programs, the best always, the rest by percentile reward + 0.05 without replacement),
+  `--no-types` = refine only, arm `search-untyped`): refine (new ideas on `--parents` (8; was 4 until 2026-11-03) programs drawn from the
+  population: the 32 best open programs and the fastest open program on each seen shape (`elites`, MAP-Elites with the
+  shape as the niche, decided 2026-11-03), the best always, the rest by percentile reward + 0.05 (an elite's as the
+  best's) without replacement),
   persist (a line's last change taken further; every child that beat its parent heads a line, which moves to a persist
   child that beats it and closes after 3 generations without one), fresh (a different overall structure, half from the
   start, half from a random program) and crossover (a parent shown another parent's full code), 8/6/6/4 adapted each
@@ -306,7 +308,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   program tunes itself at run time if it does (e.g. `triton.autotune`), and the system message states that the checks
   and warm-up calls run before each shape's timed window; before the held-out gate (`kernels.evolve gate`, and
   `kernel_search` via `pipeline.freeze`) the winner's autotune is frozen (decided 2026-11-04, `kernels/evolve/freeze.py`:
-  jailed stage 6 runs it on every seen shape and records each autotuner's choice per key; each module-level
+  jailed stage 7 runs it on every seen shape and records each autotuner's choice per key; each module-level
   `triton.autotune` becomes `_FrozenTune` over that table, the call's key or the nearest tuned one: equal non-numeric
   values, then the smallest sizes at or above, then the closest), and the frozen program is what the gate judges and
   ship commits; ship and the patch refuse an autotune the engine module did not already have as written; the prompt states the best program's % of its call-weighted roofline bound as a fact, and with
@@ -334,7 +336,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   is a tensor are left out; a shipped override runs the engine's own stations on such a call): `Station(name, reads, writes, fn)`; `interface` (inputs read before written,
   outputs read after the region or `live`), the stations as the baseline (`Task.baseline_fn`), an fp32 run as the
   reference, `bytes_moved` (fused vs one-by-one), and the error budget: `Task.error_budget` (2) lets each element differ from the reference by
-  that many times the baseline's own error there, on top of the dtype's tolerance (`check._compare(base=, k=)`), in the
+  that many times the baseline's own error there, on top of the dtype's tolerance, and a NaN/Inf mismatch is within it
+  where the baseline has one there too (`check._compare(base=, k=)`), in the
   checker, the timed outputs and `verify.py`; the baseline is bound before the candidate loads and its modules (`Task.watch`) are watched for
   patches. The engine's stations (`models/stations.py`) and region capture are merged in the engine (main 0a00b0c); the
   tests use fake stations. `from_engine(first, last, samples, shared_weights)` binds a region to the engine's
@@ -391,9 +394,12 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   decode_step on a Model namespace built from the held weights; reference: the engine's `stations.reference()` in
   fp32 over every layer, error budget 2x; bytes bound: every non-expert weight + top-k experts per layer + lm_head + the
   K/V. Start program: decode_step.cu as a raw literal (its globaltimer stamp edited to 0, `START_EDITS`) built with
-  load_inline under the engine's build flags. Shapes (rows, bt width), both held-out axes. A winner does not ship: the
+  load_inline under the engine's build flags. Shapes (rows, bt width), both held-out axes. No NaN/Inf inputs
+  (`Task.nonfinite` False, decided 2026-11-04): the megakernel's top-8 picks expert E on all-NaN router logits and
+  reads past the expert stack, the gate's crash of 2026-11-03. A winner does not ship: the
   engine has no hook for a whole-step override (`ship.region_files` refuses it, kernel_search reports `patch_refused`).
-  Tested on the CPU with a fake megakernel and the engine's stations; never run on a GPU.
+  Tested on the CPU with a fake megakernel and the engine's stations; on the H200 the search judged the start and its
+  children, and the gate crashed on the NaN case.
 - `kernels/ptx.py` — the PTX comparison's cards (decided 2026-10-22, after Standard Kernel): each implementation's
   kernels counted from its PTX (or `cuobjdump -sass` output, for libraries that ship no PTX): instruction classes,
   widest vector access, declared registers, static shared memory, and the Hopper features in use (wgmma, TMA,

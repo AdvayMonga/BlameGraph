@@ -55,12 +55,13 @@ def _edge_shapes(shape):
 def _compare(ref, out, atol, rtol, base=None, k: float = 0.0) -> dict:
     """Max abs/rel error over finite positions; non-finite positions (and Inf signs) must match exactly. With `base`
     (the baseline's outputs on the same inputs), each element may also differ by `k` times the baseline's own error
-    there: a region's error budget, element by element, so one large value's rounding loosens nothing else."""
+    there: a region's error budget, element by element, so one large value's rounding loosens nothing else. A
+    non-finite mismatch is within that budget where the baseline's own output mismatches the reference there too."""
     refs, outs = _flat(ref), _flat(out)
     bases = _flat(base) if base is not None else [None] * len(refs)
     if len(refs) != len(outs):
         return {"ok": False, "error": f"{len(outs)} outputs, expected {len(refs)}"}
-    ok, max_abs, max_rel, nonfinite = True, 0.0, 0.0, 0
+    ok, max_abs, max_rel, nonfinite, budgeted = True, 0.0, 0.0, 0, 0
     for r, o, b in zip(refs, outs, bases):
         if not isinstance(o, torch.Tensor) or o.shape != r.shape or o.dtype != r.dtype:
             got = (tuple(o.shape), str(o.dtype)) if isinstance(o, torch.Tensor) else type(o).__name__
@@ -68,17 +69,30 @@ def _compare(ref, out, atol, rtol, base=None, k: float = 0.0) -> dict:
         dt = torch.float64 if r.dtype == torch.float64 else torch.float32
         r, o = r.to(dt), o.to(dt)
         both = r.isfinite() & o.isfinite()
-        nonfinite += int((~both & ~((r.isnan() & o.isnan()) | (r == o))).sum())
-        d, mag = (r - o).abs()[both], r.abs()[both]
+        miss = _nonfinite_miss(r, o)
         slack = 0.0
         if isinstance(b, torch.Tensor) and k and b.shape == r.shape:
-            bd = (b.to(dt) - r).abs()
+            b = b.to(dt)
+            bd = (b - r).abs()
             slack = k * torch.where(bd.isfinite(), bd, torch.zeros_like(bd))[both]
+            within = miss & _nonfinite_miss(r, b)
+            budgeted += int(within.sum())
+            miss = miss & ~within
+        nonfinite += int(miss.sum())
+        d, mag = (r - o).abs()[both], r.abs()[both]
         if d.numel():
             max_abs = max(max_abs, d.max().item())
             max_rel = max(max_rel, (d / mag.clamp_min(atol)).max().item())
         ok = ok and bool((d <= atol + rtol * mag + slack).all())
-    return {"ok": ok and nonfinite == 0, "max_abs": max_abs, "max_rel": max_rel, "nonfinite_mismatch": nonfinite}
+    res = {"ok": ok and nonfinite == 0, "max_abs": max_abs, "max_rel": max_rel, "nonfinite_mismatch": nonfinite}
+    if budgeted:
+        res["nonfinite_within_budget"] = budgeted
+    return res
+
+
+def _nonfinite_miss(r, o):
+    """Positions where r or o is non-finite and they differ (NaN matches NaN, an Inf only the same-signed Inf)."""
+    return ~(r.isfinite() & o.isfinite()) & ~((r.isnan() & o.isnan()) | (r == o))
 
 
 def _describe(c) -> str:

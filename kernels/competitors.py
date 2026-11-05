@@ -912,14 +912,21 @@ def _signature(name: str) -> str:
     return re.sub(r"\s+", "", s[start:])
 
 
-def sass(module_file: str, pattern: str, names: set[str] | None = None, arch: str | None = None) -> str:
-    """The SASS of the functions in a library's extension whose names match `pattern`, only `arch`'s code when given
-    (e.g. sm_90, which also takes sm_90a); with `names` (from `launched`) only the instantiations that ran, matched on
-    their demangled names (a library holds every template's copy). Raises if cuobjdump fails."""
+def cuobjdump(module_file: str) -> str:
+    """`cuobjdump -sass` of a file. Raises if cuobjdump fails."""
     p = subprocess.run([_tool("cuobjdump"), "-sass", module_file], capture_output=True, text=True)
     if p.returncode != 0:
         raise RuntimeError(f"cuobjdump exited {p.returncode} on {module_file}: {p.stderr.strip()[:300]}")
-    code = p.stdout
+    return p.stdout
+
+
+def sass(module_file: str, pattern: str, names: set[str] | None = None, arch: str | None = None,
+         dump=None) -> str:
+    """The SASS of the functions in a library's extension whose names match `pattern`, only `arch`'s code when given
+    (e.g. sm_90, which also takes sm_90a); with `names` (from `launched`) only the instantiations that ran, matched on
+    their demangled names (a library holds every template's copy). `dump(file)` gives the disassembly (default:
+    `cuobjdump`). Raises if cuobjdump fails."""
+    code = (dump or cuobjdump)(module_file)
     if arch:                                     # cuobjdump heads each architecture's code with "code for sm_XY"
         code = "".join(c for c in re.split(r"(?=\n\s*code for sm_)", code) if re.match(rf"\s*code for {arch}[a-z]?\s", c))
     blocks = [b for b in re.split(r"(?=\n\s+Function : )", code) if re.search(r"Function : \S*(" + pattern + r")", b)]

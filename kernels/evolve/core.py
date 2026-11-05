@@ -329,7 +329,8 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
     if r["passed"] and full:                      # other value distributions, on the two most frequent seen shapes
         for k in (SCALES if task.scales is None else task.scales):
             v = check_kernel(ref, cand, _scaled(task.make_inputs, k), seen[:2], [], dtypes=task.dtypes, device=device,
-                             seeds=(7,), tolerances=tolerances, edge_shapes=[], repeats=1, layouts=(), **budget,
+                             seeds=(7,), tolerances=tolerances, edge_shapes=[], repeats=1, layouts=(),
+                             nonfinite=task.nonfinite, **budget,
                              record=lambda case, out, k=k: _keep("check", case["shape"], case["dtype"], case["seed"],
                                                                  out, k))
             g = v["gates"]["correctness_seen"]
@@ -345,7 +346,7 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
     if base_fn and full:
         error["baseline"] = _error(check_kernel(ref, base, task.make_inputs, seen, [], dtypes=task.dtypes,
                                                 device=device, seeds=(0, 1, 2), tolerances=tolerances,
-                                                edge_shapes=[], repeats=1, layouts=()))
+                                                edge_shapes=[], repeats=1, layouts=(), nonfinite=task.nonfinite))
     hw, dtype = _peaks(device), task.dtypes[0]
     inputs0 = task.make_inputs(seen[0], dtype, device, torch.Generator().manual_seed(0))
     pc, pb = (_peak_bytes(timed, inputs0, device), _peak_bytes(base, inputs0, device)) if full else (None, None)

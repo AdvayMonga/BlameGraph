@@ -63,15 +63,18 @@ def sources_from_captures(task: Task, dirs: list[Path]) -> dict:
 
 def ints_from_captures(task: Task, dirs: list[Path]) -> dict:
     """{json shape: the 1-D int args by value} from the first captured call of each shape (e.g. its real sequence
-    lengths), for `Task.with_ints`. Calls logged by shape only (inside a graph recording) carry none."""
+    lengths), for `Task.with_ints`. Calls logged by shape only (inside a graph recording) carry none, and so does a
+    call with a 1-D int arg too long to be logged by value (capture.SMALL_INT): a part of its ints is not real ints."""
     out: dict = {}
     for d in dirs:
         for call in capture.load(d):
             if not _ours(task, call):
                 continue
             s = task.shape_of(call)
-            vals = [a["values"] for a in call.get("args") or () if "values" in a]   # region calls have none
-            if s is not None and vals and json.dumps(list(s)) not in out:
+            ints = [a for a in call.get("args") or () if len(a.get("shape") or ()) == 1
+                    and a.get("dtype", "").startswith(("int", "uint"))]
+            vals = [a["values"] for a in ints if "values" in a]   # region calls have none
+            if s is not None and vals and len(vals) == len(ints) and json.dumps(list(s)) not in out:
                 out[json.dumps(list(s))] = vals
     return out
 

@@ -14,7 +14,7 @@ import json
 import re
 from typing import Callable
 
-FREEZE_STAGE = 6         # core's stage: every seen shape run once, each autotuner's chosen config recorded
+FREEZE_STAGE = 7         # core's stage: every seen shape run once, each autotuner's chosen config recorded
 
 
 def _frozen_key(arg_names, keys, args, kwargs):

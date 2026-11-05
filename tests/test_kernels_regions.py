@@ -135,6 +135,30 @@ def test_one_large_value_loosens_nothing_else():
     assert not r["passed"]
 
 
+def test_a_non_finite_mismatch_is_within_budget_only_where_the_baseline_has_it_too():
+    """The engine's kernel turns NaN/Inf rows finite (a PTX min/max returns the non-NaN operand); its fp32 reference
+    keeps them. The stations as the program pass the NaN/Inf case; a program adding a non-finite mismatch fails."""
+    def clamp(c):
+        return {"y": torch.nan_to_num(c["n"] @ c["w"], nan=0.0, posinf=448.0, neginf=-448.0)}
+    engine = (*STATIONS[:1], Station("mm", ("n", "w"), ("y",), clamp), *STATIONS[2:])
+    t = task("toy_region", engine, "norm", "add", ctx, lambda call: None, live=("x",), reference_stations=STATIONS)
+    base, ref = t.baseline(), t.reference
+    common = dict(dtypes=(torch.bfloat16,), edge_shapes=[], layouts=(), seeds=(0,), repeats=1, baseline=base,
+                  budget=t.error_budget)
+    r = check_kernel(ref, base, t.make_inputs, [(4, 64)], [], **common)
+    assert r["passed"], r["reasons"]
+    assert r["gates"]["edge_cases"]["evidence"]["cases"] == 1           # the NaN/Inf case alone
+    assert not check_kernel(ref, base, t.make_inputs, [(4, 64)], [], **{**common, "budget": None})["passed"]
+
+    def one_more(*a):                                   # the baseline, plus a NaN where every output was finite
+        o = base(*a)[0].clone()
+        o[1, 3] = float("nan")
+        return (o,)
+    r = check_kernel(ref, one_more, t.make_inputs, [(4, 64)], [], **common)
+    assert not r["passed"]
+    assert r["gates"]["correctness_seen"]["evidence"]["failures"][0]["nonfinite_mismatch"] == 1
+
+
 def test_a_region_is_judged_end_to_end_by_the_evaluator(tmp_path):
     """Stage 2 on the CPU: the stations as the program pass and time against themselves; a program off by far more
     than the budget fails."""

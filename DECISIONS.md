@@ -3,6 +3,37 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-04 — The whole step is not checked on NaN/Inf inputs
+`region:embed:argmax` sets `Task.nonfinite` False, and the judge's value-scale and baseline-error checks follow a
+task's `nonfinite` too (they always wrote NaN/Inf before). Why: the whole-step gate crashed on the H200 (2026-11-03,
+illegal memory access) on the NaN/Inf case: NaN written into the K cache reaches the router, and the engine's
+megakernel picks expert index E (128) when a row's logits are all NaN (`decode_step.cu`, P6's `int idx = E`) and then
+reads gate_up and down past the expert stack. The baseline is that same kernel, so the case judged the engine's own
+step invalid, by faulting rather than by a wrong answer; the step is judged as the engine runs it, where the K/V
+never holds NaN. Amends the checker's NaN/Inf edge case (every task had it; public benchmarks turned it off with #171
+and #189).
+
+## 2026-11-04 — A region's error budget covers NaN/Inf where the engine's own code has them
+In a region's checks (the NaN/Inf edge case, the timed outputs, `verify.py`), a non-finite mismatch against the fp32
+reference is within the error budget at a position where the baseline (the engine's own stations) mismatches the
+reference there too; anywhere else it still fails, and the count within budget is a fact on the case
+(`nonfinite_within_budget`). Why (the user, approving the fix): p_moe's starting program, the engine's own code,
+failed the NaN/Inf case on 6,144 elements (3 rows x 2,048: exactly the three poisoned tokens' rows), so no program
+could pass where the engine itself does not; the finite part of the budget already measured a candidate against the
+engine's own error, element by element. Amends the region error budget (2026-10-23).
+
+## 2026-11-04 — A would-be winner must run clean under compute-sanitizer at the held-out gate
+The held-out gate (`kernels.evolve gate`, `kernel_search`'s gate, the A/B's) runs a program that passed it under
+NVIDIA's `compute-sanitizer` (`kernels/evolve/sanitize.py`, stage 6 of the jailed evaluator): memcheck, racecheck,
+initcheck and synccheck, each in its own jail, one call per shape on the smallest and largest seen shape and the
+largest held-out one, PyTorch's caching allocator off so an access past a tensor's end leaves its allocation. Any
+error the sanitizer reports fails the gate (gate `sanitizer`, its report as evidence: tool, error kind, kernel, first
+lines); a host without the sanitizer records "not run: compute-sanitizer not found" as a fact and does not fail.
+Selection never runs it (10-100x slower). Why (the user): output checks on chosen inputs miss an out-of-bounds read
+that returns a harmless value, a race won by luck on this GPU and uninitialized memory that happens to be zero; the
+whole-step region's illegal memory access was found late. A sanitizer error is a measurement of the program, not a
+heuristic.
+
 ## 2026-11-04 — A winner's autotune is frozen into a table before it is gated and shipped
 Before the held-out gate (`kernels.evolve gate`, `kernel_search`), the winner runs once on every seen shape in the
 jail, and the config each of its `triton.autotune`s chose for each key is recorded; each autotune is replaced by a
@@ -15,6 +46,17 @@ gate never saw it, since tuning happens in the warm-up before each timed window.
 tables (vLLM's and SGLang's fused-MoE configs by batch size). The table is tuned on seen shapes only, so the gate's
 held-out shapes measure its lookup beyond them. Amends 2026-11-03 (the harness tunes nothing): run-time autotune stays
 allowed during the search.
+
+## 2026-11-03 — Per-shape elites in the kernel search's population
+The population parents are drawn from is the 32 best open programs plus the fastest open program on each seen shape,
+and an elite is drawn with the best program's weight. Why (the user, after comparing with OpenEvolve's MAP-Elites
+archive, which keeps the best program per cell of a feature grid so different approaches survive): our population
+was the top 32 by score alone, which collapses onto one lineage; a program fastest on some shapes and slower
+overall was pushed out. The shape is the niche: different sizes want different tiles and structure, and the elites
+are what a crossover can join. OpenEvolve's own features are generic (code length, edit diversity).
+Two more from the same audit of OpenEvolve 0.4.0 : 8 parents per generation (was 4), so
+each refine call has its own parent (OpenEvolve drew 67 parents for 130 programs, we 1-8 per run's generation); and
+a SEARCH text that occurs once when trailing whitespace is ignored is applied (still all blocks or none).
 
 ## 2026-11-03 — Novelty is judged among siblings, by each one's change from their parent
 A new program is refused as a near-duplicate only when its change from its parent is within cosine 0.95 of a
@@ -73,12 +115,14 @@ A region is captured at layers 0, 16, 32 and 47 (`regions.LAYERS`), the holder s
 Why (the user, on the limits of regions): all 48 layers share shapes and code but not values (outlier channels, each
 layer's expert routing), so a program chosen on layer 0 alone could fail a tolerance or slow down on another layer;
 a held-out layer tests exactly that. Replaces capturing and holding layer 0 only (2026-10-23).
+
 ## 2026-11-02 — Regions get the other libraries' kernels for their stations; no library becomes an engine dependency
 Every `kernels/library` entry names the engine stations it implements, and a region's search prompt shows every entry
 for its stations (FlashInfer's batch prefill added for `p_attention`). vLLM and SGLang do not become engine
 dependencies (the user): a program reads their source and ports from it; FlashInfer, already a dependency, stays
 callable. Why (the user): most of a region's gain may come from what specialized libraries already do; regions, the
 kernel layer's unit since today, had no library block.
+
 ## 2026-11-02 — The kernel search competes on FlashInfer-Bench, under its own evaluator
 Every FlashInfer-Bench definition its default evaluator judges (`flashinfer-ai/flashinfer-trace`, pinned revision; 95
 of 190: the rest have no workloads or are judged by another evaluator) is a kernel task `fib:NAME`
@@ -110,6 +154,7 @@ answers, so captures and profiles were prefill-heavy (decode attention 7.7% of t
 in a steady-state profile), and the held-out split removed the shapes a loaded regime runs most (the largest batches,
 the longest waves), which the search then never saw. Replaces the burst captures (2026-10-19, validate_gpu.sh's
 CAPTURE_SPECS) and "held-out = whole regions above the 80th percentile" (2026-10-17).
+
 ## 2026-11-02 — Regions for everything: the prefill path becomes stations
 The kernel layer moves to regions for every kernel, prefill included: the engine declares a CUDA prefill wave as
 stations (`PREFILL`, names "p_": norms, qkv, rope, K/V store, FlashInfer attention from the wave's tensors, o_proj, the
@@ -352,6 +397,7 @@ batch 158 passed at every speed; 512x was voided by the client's own send lag (3
 prompt (80) and shared prefix (0.81) were real break points that both engines reported alike because the search
 stops at a 10% bracket (80 passed, 86.7 failed); the bracket now shows when two results are within it. Replaces the
 time-compressed replay (2026-10-02 eval conventions' bursty).
+
 ## 2026-10-27 — Every program is tuned before it is measured
 `kernels.search` grid-searches a program's declared launch parameters (`CONFIG` + `TUNABLES`, 8 points) before each
 first measurement of its speed: on the most-called shape before the quick timing, on every seen shape before the full
@@ -406,7 +452,6 @@ first real generations run sat ~1 h in generation 0): the checks took ~10 of its
 Opus calls, as the frontier systems avoid by sampling in parallel (AlphaEvolve, OpenEvolve, ShinkaEvolve). Replaces
 the strong coder rewriting every survivor (2026-10-23) and ncu at every full exam (2026-10-17).
 
-
 ## 2026-10-27 — Every profiler's prediction is measured: numbers for trace and hostprof
 `trace` and `hostprof` records get a `calibrated` block like `profile`'s and `kernel`'s (nsys: kernel, memory-copy and
 CUDA API time, top kernels, kernel time's share of the profiled window; py-spy: samples per thread, top functions by
@@ -437,6 +482,7 @@ stays as arm `search-mcts`, the beam as `search-beam`; `search-gen20` (20 x 12 k
 generation's ideas from a judge call shown another parent's diff) are the arms to run. ~$50 of model calls and ~2 GPU
 hours per 10-generation call, about twice the 2026-10-25 round. Replaces one funnel round per MCTS expansion
 (2026-10-25) as the default.
+
 ## 2026-10-25 — Fixed answer lengths: each request runs to the reference's own answer length
 Once the corpus carries each record's `expected_output_tokens` (the reference's greedy answer length, measured by
 `python -m corpus.lengths` on both splits: a new corpus version), every load request is sent with `ignore_eos` at that
@@ -481,6 +527,7 @@ narrow in tiers, but every cheap tier a measurement (a model ranking idea text d
 keep good ideas that lost in one context; one prompt carrying everything dilutes attention. Kernel ideas predict their
 mechanism (ncu counter changes). Multiple rounds stay. It replaces the beam only if it wins the A/B (arm
 `search-funnel`).
+
 ## 2026-10-23 — Regions replace hand-written kernel tasks; a region's error budget is measured
 The kernel layer's unit of work becomes a region: any run of consecutive decode operations (stations), from one kernel
 to the whole step, with its harness generated from the engine's declared stations (inputs, the stations as baseline,
@@ -570,6 +617,7 @@ are hosted-only and cannot be fine-tuned), a fine-tuned local classifier once on
 few hundred; the judge may use web search and read-only ledger SQL, its own choice when, with no research pasted by
 the harness (the facts-only line: the environment hands over facts; what the model chooses to read is its own, as in
 the agent's workbench); a merge hypothesis competing for the beam.
+
 ## 2026-10-18 — The per-layer facts the agent chooses a layer by
 From each `profile` bundle (`lab/layers.py`): the four layers' shares of the profiled window (kernel time; prefill +
 decode phase time beyond it; admit + evict; time outside steps) and a distance where one is defined (the decode
@@ -600,6 +648,16 @@ None and submit says `unknown_band`. Why: a changed engine can be more or less j
 engine was being applied silently. Consequence: after the engine moves, re-run `lab.validate`'s noise step
 (minutes per regime on the GPU) before submits on the new base mean anything.
 
+## 2026-10-18 — Manual measurements enter the ledger as numbers, visible to the agent
+A run measured by hand (`python -m regimes run`, `python -m correctness candidate` on a branch) is imported as a
+`bench` / `equiv` record under a `manual-<date>` run (`python -m lab.import_runs`): the engine commit and launch env
+as its config, the numbers as its result, no text. The agent sees it like any measurement (`ledger`, `query`,
+`search` index the numbers; there is no hypothesis to search). Why: four days of engine sessions had their results
+only in `RUNS.md` prose and `data/` files, where nothing compounds; the 2026-10-15 rule hid a person's runs because
+their *reasoning* would reach the agent — numbers alone carry no judgment. `RUNS.md` is frozen as the history of
+the runs before this; new runs are not added to it (the ledger is the record, `python -m store sql` the view). The
+researcher's reasoning stays out of the ledger. Amends 2026-10-15 for manual runs and 2026-10-16 (`RUNS.md`).
+
 ## 2026-10-17 — Our own layer-1 generator; OpenEvolve becomes the baseline
 `kernels/search/` replaces the `openevolve` package as the generator, taking from what the published systems learned:
 refinement chains in a tree (Kevin, STARK, KernelPro, Kernel Forge), a strong-model judge reading curated facts beside a
@@ -610,22 +668,13 @@ budget. Choices: Opus 5.5 for both judge and coder (a weak coder cost CudaForge 
 time); the judge's text is kept per candidate in the run's trace blob, not inline in the ledger record; the judge sees
 a curated set of ncu counters, starting from CudaForge's 24 (a view of facts, not advice). The evaluator, tasks,
 gate, ship and records are unchanged.
+
 ## 2026-10-17 — The end-to-end judge runs once several shipped kernels stack
 Shipped kernels are stacked on one engine branch (each `kernels.evolve ship --base` the previous shipped branch; the
 first is `kernels/moe_gemm-20261016-154523`), and `bench` + `equiv` + `submit` run once, on the stack, when its gains
 can add up past the regimes' noise bands. Why: one kernel's gain (moe_gemm 1.09x on 13.7% of the decode window, ≤ ~1.2%
 end to end) sits inside the bands, so judging it alone costs hours of GPU for a within-band verdict. Each kernel still
 passes its own held-out gate before it ships; a failing stack is bisected with `equiv`.
-
-## 2026-10-18 — Manual measurements enter the ledger as numbers, visible to the agent
-A run measured by hand (`python -m regimes run`, `python -m correctness candidate` on a branch) is imported as a
-`bench` / `equiv` record under a `manual-<date>` run (`python -m lab.import_runs`): the engine commit and launch env
-as its config, the numbers as its result, no text. The agent sees it like any measurement (`ledger`, `query`,
-`search` index the numbers; there is no hypothesis to search). Why: four days of engine sessions had their results
-only in `RUNS.md` prose and `data/` files, where nothing compounds; the 2026-10-15 rule hid a person's runs because
-their *reasoning* would reach the agent — numbers alone carry no judgment. `RUNS.md` is frozen as the history of
-the runs before this; new runs are not added to it (the ledger is the record, `python -m store sql` the view). The
-researcher's reasoning stays out of the ledger. Amends 2026-10-15 for manual runs and 2026-10-16 (`RUNS.md`).
 
 ## 2026-10-16 — No status file
 `STATE.md` is removed; the record is `DECISIONS.md` and `RUNS.md`, both append-only. Why: a rewritten-in-place
