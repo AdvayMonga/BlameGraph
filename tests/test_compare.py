@@ -27,7 +27,7 @@ def _spec(slots: dict[str, int]) -> dict:
 def test_the_driver_launches_checks_and_measures_each_configuration():
     R.gpu_free = lambda timeout_s=300.0: True
     real = R.command
-    R.command = lambda spec, e, p, out, cache: real(spec, e, p, out, cache).split(" env ", 1)[1]
+    R.command = lambda *a: real(*a).split(" env ", 1)[1]
     try:
         with tempfile.TemporaryDirectory() as d:
             out = Path(d)

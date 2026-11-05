@@ -22,6 +22,8 @@ from . import runner, workload as W
 
 CLOSED = (64, 256, 1024, 2048, 4096)       # concurrency levels
 OPEN = (50.0, 100.0, 200.0, 400.0)         # req/s
+BURST = (100, 200, 400, 800)               # requests arriving within BURST_S (bursty's 32x spike: 453)
+BURST_S = 0.05
 
 
 async def _handle(reader, writer, tpot_s: float, log):
@@ -106,7 +108,8 @@ def _judge(rows, logdir: Path, elapsed: float, max_error_s: float) -> dict:
 
 def check(client_procs: int = 8, client_cpus=None, server_procs: int = 8, server_cpus=None, tpot_s: float = 0.02,
           tokens: int = 128, duration_s: float = 20.0, max_error_s: float = 0.001) -> dict:
-    """Closed loop at each of CLOSED and open loop at each of OPEN; each level's result, and the highest clean one."""
+    """Closed loop at each of CLOSED, open loop at each of OPEN and bursts of BURST; each level's result, and the
+    highest clean one."""
     pool = [{"id": f"cc-{k}", "prompt": "x", "max_tokens": tokens, "expected_output_tokens": tokens} for k in range(64)]
     with tempfile.TemporaryDirectory() as d:
         logdir = Path(d)
@@ -122,11 +125,17 @@ def check(client_procs: int = 8, client_cpus=None, server_procs: int = 8, server
                 reqs = W.poisson(pool, rate, duration_s, seed=0)
                 rows = runner.run_open(url, "m", reqs, procs=client_procs, cpus=client_cpus)
                 opened[rate] = _judge(rows, logdir, duration_s, max_error_s)
+            burst = {}
+            for n in BURST:
+                reqs = [W.to_request(pool[k % len(pool)], 1.0 + k * BURST_S / n, rid=f"b{n}-{k}") for k in range(n)]
+                rows = runner.run_open(url, "m", reqs, procs=client_procs, cpus=client_cpus)
+                burst[n] = _judge(rows, logdir, 1.0 + BURST_S, max_error_s)
         finally:
             for p in ps:
                 p.kill()
     best = lambda res: max((k for k, v in res.items() if v["clean"]), default=None)
-    return {"closed": closed, "open": opened, "max_clean_concurrency": best(closed), "max_clean_rate": best(opened),
+    return {"closed": closed, "open": opened, "burst": burst, "max_clean_concurrency": best(closed),
+            "max_clean_rate": best(opened), "max_clean_burst": best(burst),
             "settings": {"client_procs": client_procs, "client_cpus": client_cpus, "server_procs": server_procs,
                          "server_cpus": server_cpus, "tpot_s": tpot_s, "tokens": tokens, "duration_s": duration_s,
                          "max_error_s": max_error_s, "cpu_count": os.cpu_count()}}

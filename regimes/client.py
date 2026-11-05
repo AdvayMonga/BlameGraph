@@ -6,10 +6,12 @@ reported separately as `lag_s`.
 """
 from __future__ import annotations
 
+import asyncio
 import http.client
 import json
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass, field
 
@@ -50,9 +52,8 @@ class Row:
         return d
 
 
-def send(url: str, model: str, req: Request, scheduled: float, clock, timeout: float = 600,
-         count_tokens=None, trace_prefix: str = "bg", chat_kwargs: dict | None = None) -> Row:
-    """POST req as a streamed chat completion; `clock()` is the run clock and `scheduled` the intended send time."""
+def _encode(model: str, req: Request, chat_kwargs: dict | None, trace_prefix: str) -> tuple[bytes, dict]:
+    """The request's JSON body and headers."""
     body = {"model": model, "messages": req.messages, "max_tokens": req.max_tokens, "temperature": 0.0,
             "stream": True, "stream_options": {"include_usage": True}}
     if chat_kwargs:
@@ -64,63 +65,149 @@ def send(url: str, model: str, req: Request, scheduled: float, clock, timeout: f
         headers["X-Session-Id"] = str(req.session_id)
     if req.turn_index is not None:
         headers["X-Turn-Index"] = str(req.turn_index)
-    http_req = urllib.request.Request(f"{url.rstrip('/')}/v1/chat/completions", data=json.dumps(body).encode(),
-                                      headers=headers)
+    return json.dumps(body).encode(), headers
+
+
+class _Stream:
+    """An SSE response read line by line: the generated text, first-token time, usage and finish reason."""
+
+    def __init__(self):
+        self.parts, self.first, self.usage, self.finish, self.done = [], None, None, None, False
+
+    def feed(self, raw: bytes, clock) -> None:
+        line = raw.strip()
+        if not line.startswith(b"data: "):
+            return
+        if line == b"data: [DONE]":
+            self.done = True                   # keep reading to EOF: closing early breaks the server's last write
+            return
+        chunk = json.loads(line[6:])
+        self.usage = chunk.get("usage") or self.usage
+        for ch in chunk.get("choices") or []:
+            text = (ch.get("delta") or {}).get("content")
+            if text:
+                if self.first is None:
+                    self.first = clock()
+                self.parts.append(text)
+            self.finish = ch.get("finish_reason") or self.finish
+
+    def row(self, row: Row, req: Request, scheduled: float, end: float, count_tokens) -> Row:
+        """The finished row: text, tokens, TTFT and TPOT, and the stream's status."""
+        row.text, row.finish_reason, row.e2e_s = "".join(self.parts), self.finish, end - scheduled
+        usage = self.usage
+        if usage and usage.get("prompt_tokens") is not None:
+            row.prompt_tokens = int(usage["prompt_tokens"])
+            cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
+            row.cached_tokens = int(cached) if cached is not None else None
+        if usage and usage.get("completion_tokens") is not None:
+            row.n_tokens = int(usage["completion_tokens"])
+        else:
+            row.n_tokens = len(self.parts)
+        if self.first is not None:
+            row.ttft_s = self.first - scheduled
+        recount(row, count_tokens)
+        if not row.text:
+            row.status, row.detail = "silent_drop", "200 with no generated text"
+        elif not self.done and self.finish is None:
+            row.status, row.detail = "truncated", "stream ended without a finish reason or [DONE]"
+        elif req.ignore_eos and self.finish != "length":
+            row.status, row.detail = "truncated", f"fixed-length answer ended with finish {self.finish!r} before max_tokens"
+        else:
+            row.status = "ok"
+        return row
+
+
+def _rejected(row: Row, status: int, detail: bytes, clock, scheduled: float) -> Row:
+    explicit = status < 500 or status == 503          # a deliberate rejection; other 5xx is the server failing
+    row.status, row.http_status = ("error" if explicit else "crash"), status
+    row.detail, row.e2e_s = detail[:200].decode("utf-8", "replace"), clock() - scheduled
+    return row
+
+
+def send(url: str, model: str, req: Request, scheduled: float, clock, timeout: float = 600,
+         count_tokens=None, trace_prefix: str = "bg", chat_kwargs: dict | None = None) -> Row:
+    """POST req as a streamed chat completion; `clock()` is the run clock and `scheduled` the intended send time."""
+    data, headers = _encode(model, req, chat_kwargs, trace_prefix)
+    http_req = urllib.request.Request(f"{url.rstrip('/')}/v1/chat/completions", data=data, headers=headers)
     start = clock()
-    row = Row(req.id, "crash", scheduled, start - scheduled)
-    parts, first, usage, finish, done = [], None, None, None, False
+    row, stream = Row(req.id, "crash", scheduled, start - scheduled), _Stream()
     try:
         with urllib.request.urlopen(http_req, timeout=timeout) as r:
             row.http_status = r.status
             for raw in r:
-                line = raw.strip()
-                if not line.startswith(b"data: "):
-                    continue
-                if line == b"data: [DONE]":
-                    done = True                # keep reading to EOF: closing early breaks the server's last write
-                    continue
-                chunk = json.loads(line[6:])
-                usage = chunk.get("usage") or usage
-                for ch in chunk.get("choices") or []:
-                    delta = ch.get("delta") or {}
-                    text = delta.get("content")
-                    if text:
-                        if first is None:
-                            first = clock()
-                        parts.append(text)
-                    finish = ch.get("finish_reason") or finish
+                stream.feed(raw, clock)
     except urllib.error.HTTPError as e:
-        explicit = e.code < 500 or e.code == 503          # a deliberate rejection; other 5xx is the server failing
-        row.status, row.http_status = ("error" if explicit else "crash"), e.code
-        row.detail = e.read()[:200].decode("utf-8", "replace")
-        row.e2e_s = clock() - scheduled
-        return row
+        return _rejected(row, e.code, e.read(), clock, scheduled)
     except (urllib.error.URLError, OSError, http.client.HTTPException, json.JSONDecodeError, ValueError) as e:
         row.detail = f"{type(e).__name__}: {e}"[:200]   # includes a stream that dies mid-way (IncompleteRead)
         row.e2e_s = clock() - scheduled
         return row
-    end = clock()
-    row.text, row.finish_reason, row.e2e_s = "".join(parts), finish, end - scheduled
-    if usage and usage.get("prompt_tokens") is not None:
-        row.prompt_tokens = int(usage["prompt_tokens"])
-        cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
-        row.cached_tokens = int(cached) if cached is not None else None
-    if usage and usage.get("completion_tokens") is not None:
-        row.n_tokens = int(usage["completion_tokens"])
-    else:
-        row.n_tokens = len(parts)
-    if first is not None:
-        row.ttft_s = first - scheduled
-    recount(row, count_tokens)
-    if not row.text:
-        row.status, row.detail = "silent_drop", "200 with no generated text"
-    elif not done and finish is None:
-        row.status, row.detail = "truncated", "stream ended without a finish reason or [DONE]"
-    elif req.ignore_eos and finish != "length":
-        row.status, row.detail = "truncated", f"fixed-length answer ended with finish {finish!r} before max_tokens"
-    else:
-        row.status = "ok"
-    return row
+    return stream.row(row, req, scheduled, clock(), count_tokens)
+
+
+async def asend(url: str, model: str, req: Request, clock, timeout: float = 600, count_tokens=None,
+                trace_prefix: str = "bg", chat_kwargs: dict | None = None, lead_s: float = 0.1) -> Row:
+    """`send` on an event loop, sent at `req.at_s` on `clock`: the body is encoded and the connection opened `lead_s`
+    before, so at the send time only the request's bytes are written. One loop drives a process's whole schedule; a
+    thread per request made a burst's sends queue behind each other (and the interpreter lock)."""
+    scheduled = req.at_s
+    await asyncio.sleep(max(0.0, scheduled - lead_s - clock()))
+    data, headers = _encode(model, req, chat_kwargs, trace_prefix)
+    u = urllib.parse.urlsplit(url)
+    head = "".join(f"{k}: {v}\r\n" for k, v in {**headers, "Host": u.netloc, "Content-Length": len(data),
+                                                 "Connection": "close"}.items())
+    msg = f"POST {u.path.rstrip('/')}/v1/chat/completions HTTP/1.1\r\n{head}\r\n".encode() + data
+    writer, refused = None, None
+    try:
+        reader, writer = await asyncio.open_connection(u.hostname, u.port)
+    except OSError as e:
+        refused = e
+    await asyncio.sleep(max(0.0, scheduled - clock()))
+    row, stream = Row(req.id, "crash", scheduled, clock() - scheduled), _Stream()
+    try:
+        if refused is not None:
+            raise refused
+        writer.write(msg)
+        async with asyncio.timeout(timeout):
+            await writer.drain()
+            status = int((await reader.readline()).split()[1])
+            fields = {}
+            while (line := await reader.readline()) not in (b"\r\n", b"\n", b""):
+                k, _, v = line.decode("latin-1").partition(":")
+                fields[k.strip().lower()] = v.strip()
+            row.http_status = status
+            if status >= 400:
+                return _rejected(row, status, await reader.read(200), clock, scheduled)
+            async for raw in _lines(reader, fields.get("transfer-encoding", "").lower() == "chunked"):
+                stream.feed(raw, clock)
+    except (OSError, TimeoutError, asyncio.IncompleteReadError, json.JSONDecodeError, ValueError, IndexError) as e:
+        row.detail = f"{type(e).__name__}: {e}"[:200]   # includes a stream that dies mid-way
+        row.e2e_s = clock() - scheduled
+        return row
+    finally:
+        if writer is not None:
+            writer.close()
+    return stream.row(row, req, scheduled, clock(), count_tokens)
+
+
+async def _lines(reader, chunked: bool):
+    """The response body's lines, de-chunked; a chunked body that ends without its last chunk raises."""
+    if not chunked:
+        while line := await reader.readline():
+            yield line
+        return
+    buf = b""
+    while True:
+        size = int((await reader.readline()).split(b";")[0], 16)
+        if size == 0:
+            break
+        buf += await reader.readexactly(size)
+        await reader.readexactly(2)
+        *done, buf = buf.split(b"\n")
+        for line in done:
+            yield line + b"\n"
+    if buf:
+        yield buf
 
 
 def recount(row: Row, count_tokens=None) -> Row:

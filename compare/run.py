@@ -32,25 +32,31 @@ def load(path: Path = HERE / "engines.toml") -> dict:
     return tomllib.loads(path.read_text())
 
 
-def command(spec: dict, engine: str, precision: str, out: Path, cache: str) -> str:
-    """The shell command that serves `engine` at `precision`; `cache` is the dir the engine keeps compile caches in."""
+def command(spec: dict, engine: str, precision: str, out: Path, cache: str, prefix: str = "", mounts: str = "") -> str:
+    """The shell command that serves `engine` at `precision`; `cache` is the dir the engine keeps compile caches in.
+    `prefix` runs in front of the server (a profiler's launcher; in a container it replaces the image's entrypoint,
+    which the engine's `entrypoint` names); `mounts` are extra `docker run` flags."""
     c, e = spec["common"], spec["engines"][engine]
     env = e["precision"][precision]
     model = e.get("checkpoint") or spec["precision"][precision]["checkpoint"]
     fill = dict(c, model=model, port=PORT, env=env, cfg="/cfg/llm_api.yaml")
     if e["kind"] == "venv":
         engine_dir = os.environ.get("LAB_ENGINE_REPO", os.path.expanduser("~/inference-server"))
-        return f"cd {engine_dir} && exec taskset -c {c['engine_cpus']} env " + e["cmd"].format(**fill)
+        return f"cd {engine_dir} && exec {prefix + ' ' if prefix else ''}taskset -c {c['engine_cpus']} env " + e["cmd"].format(**fill)
     args = e["cmd"].format(**fill)
     cfg = ""
     if "{cfg}" in e["cmd"]:
         (out / "llm_api.yaml").write_text(env.strip() + "\n")
         args = e["cmd"].format(**{**fill, "env": ""})
         cfg = f"-v {out}:/cfg:ro "
+    entry = ""
+    if prefix:
+        exe, *rest = prefix.split(" ", 1)
+        entry, args = f"--entrypoint {exe} ", " ".join(filter(None, [*rest, e.get("entrypoint", ""), args]))
     hf = os.path.expanduser("~/.cache/huggingface")
     return (f"exec docker run --rm --init --name bgcmp-{engine} --gpus all --network host --ipc host "
             f"--cpuset-cpus {c['engine_cpus']} -e HF_HUB_OFFLINE=1 -e TRITON_CACHE_DIR=/root/.cache/triton "
-            f"-v {cache}:/root/.cache -v {hf}:/root/.cache/huggingface {cfg}{e['image']} {args}")
+            f"-v {cache}:/root/.cache -v {hf}:/root/.cache/huggingface {cfg}{mounts}{entry}{e['image']} {args}")
 
 
 def _sh(*args: str) -> str:
@@ -86,11 +92,11 @@ def facts() -> dict:
 
 
 class Server:
-    def __init__(self, spec, engine, precision, out: Path):
+    def __init__(self, spec, engine, precision, out: Path, prefix: str = "", mounts: str = ""):
         self.engine, self.out = engine, out
         cache = Path(os.path.expanduser(f"~/compare-cache/{engine}-{precision}"))
         cache.mkdir(parents=True, exist_ok=True)
-        self.cmd = command(spec, engine, precision, out, str(cache))
+        self.cmd = command(spec, engine, precision, out, str(cache), prefix, mounts)
         self.health = f"http://127.0.0.1:{PORT}{spec['engines'][engine]['health']}"
         self.proc = None
 
