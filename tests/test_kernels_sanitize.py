@@ -43,6 +43,7 @@ def test_the_command_line_per_tool():
         assert a[:3] == ["/cuda/bin/compute-sanitizer", "--tool", tool]
         assert a[a.index("--error-exitcode") + 1] == str(sanitize.EXIT)
         assert ("--leak-check" in a) == (tool == "memcheck")
+        assert a[a.index("--report-api-errors") + 1] == "no"
 
 
 def test_the_smallest_and_largest_seen_and_the_largest_heldout_shape():
