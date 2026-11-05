@@ -120,6 +120,15 @@ generated from the engine's own code). A prefill wave runs through the stations 
 or captured, so the default path is unchanged. Known limits: one layer captured, writers in place (K/V) outside
 regions, the whole step's weights large to share.
 
+## 2026-11-04 — A region's error budget covers NaN/Inf where the engine's own code has them
+In a region's checks (the NaN/Inf edge case, the timed outputs, `verify.py`), a non-finite mismatch against the fp32
+reference is within the error budget at a position where the baseline (the engine's own stations) mismatches the
+reference there too; anywhere else it still fails, and the count within budget is a fact on the case
+(`nonfinite_within_budget`). Why (the user, approving the fix): p_moe's starting program, the engine's own code,
+failed the NaN/Inf case on 6,144 elements (3 rows x 2,048: exactly the three poisoned tokens' rows), so no program
+could pass where the engine itself does not; the finite part of the budget already measured a candidate against the
+engine's own error, element by element. Amends the region error budget (2026-10-23).
+
 ## 2026-11-01 — The regimes on real conversation timing; `realistic` is the objective, `saturated` the developer's signal; `offline`; a salt on every request
 Four open-loop regimes run on the fitted timing model (`regimes/arrivals.py`, same day): the new `realistic` (the
 corpus mix, sittings added until the limits break; headline good requests/s) replaces Poisson as the regime a task
