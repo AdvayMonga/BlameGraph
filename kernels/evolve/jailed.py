@@ -299,9 +299,13 @@ def sanitizer() -> str | None:
 
 def _sanitized(cfg: dict, source: str, r: dict, timeout_s: float) -> dict:
     """The gate's result with the sanitizer's verdict added as gate `sanitizer` (an error zeroes the program); not
-    run when the program already failed, and a host without the sanitizer says so as a fact, never a failure."""
+    run when the program already failed; a host without the sanitizer, or weights attached over CUDA IPC from the
+    holder's process (which the sanitizer does not instrument), say so as a fact, never a failure."""
     if r["metrics"].get("correct") != 1.0:
         return r
+    if cfg.get("shared_weights"):
+        return {**r, "artifacts": {**r["artifacts"], "sanitizer": "not run: the weights are attached over CUDA IPC "
+                                                                    "from the holder's process, which the sanitizer does not instrument"}}
     a = judge_jailed(cfg, source, SANITIZE_STAGE, timeout_s)["artifacts"]
     if "sanitizer_missing" in a:
         return {**r, "artifacts": {**r["artifacts"], "sanitizer": a["sanitizer_missing"]}}

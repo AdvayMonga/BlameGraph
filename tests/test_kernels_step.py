@@ -132,7 +132,7 @@ def test_the_step_task_reads_its_captures_and_passes_the_weights_uncloned(tmp_pa
 
 def test_the_whole_step_does_not_ship():
     from kernels.evolve import ship
-    with pytest.raises(ValueError, match="no hook for a whole-step override"):
+    with pytest.raises(ValueError, match="does not ship"):
         ship.region_files(SimpleNamespace(name=capture.STEP), "", "pkg", [], [], True)
 
 
@@ -161,10 +161,9 @@ def test_the_reference_runs_the_engines_stations_over_every_layer_in_fp32(tmp_pa
 
 @engine
 def test_the_starting_program_is_the_engines_megakernel_built_inline_and_passes_the_screen():
-    from pathlib import Path
     from kernels.evolve import core
     src = step.start_program()
-    cu = (Path(importlib.util.find_spec(step.MODULE).origin).parent / "decode_step.cu").read_text()
+    cu = importlib.import_module(step.MODULE).source()      # decode_step.cu with common.cuh inlined, as the start is
     assert core.screen(src) == [] and "globaltimer" not in src and "load_inline(" in src
     assert cu.replace(*step.START_EDITS[0]) in src and f"ROW = {step.ROW!r}" in src
 

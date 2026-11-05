@@ -14,7 +14,7 @@ from pathlib import Path
 import torch
 
 from kernels import check_kernel, time_pair
-from kernels.check import TOLERANCES, _compare, _flat    # bound here, before any candidate loads
+from kernels.check import TOLERANCES, _compare, baseline_envelope    # bound here, before any candidate loads
 from kernels.evolve.freeze import FREEZE_STAGE
 from kernels.tasks import Task, from_config
 
@@ -428,7 +428,7 @@ def _timed(task, cand, base, shapes, weights, dtype, device, iters, hw, toleranc
             _keep("time", s, str(dtype).removeprefix("torch."), i, out)     # time_pair's buffer i: seed i
         for inputs, out in zip(p["inputs"], p["outputs_a"]):
             ref = task.reference(*[t.clone() for t in inputs])
-            b = _flat(base(*[t.clone() for t in inputs])) if task.error_budget else None
+            b = baseline_envelope(base, inputs, ref) if task.error_budget else None
             d = _compare(ref, out, atol, rtol, base=b, k=task.error_budget or 0.0)
             if not d["ok"]:
                 raise ValueError(f"the timed calls' output differs from the reference at shape {list(s)}: "

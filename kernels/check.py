@@ -52,6 +52,30 @@ def _edge_shapes(shape):
     return ones + [tuple(d + 1 if d > 1 and d & (d - 1) == 0 else d for d in shape)]
 
 
+BASELINE_CALLS = 3           # the baseline's error is taken over this many calls: its run-to-run spread is its error too
+
+
+def baseline_envelope(baseline, inputs, ref) -> list:
+    """The baseline's outputs with each element as far from the reference as any of `BASELINE_CALLS` calls on clones
+    of `inputs` put it (a NaN or Inf kept): a non-deterministic baseline's own spread counts as its error."""
+    runs = [_flat(baseline(*[t.clone() for t in inputs])) for _ in range(BASELINE_CALLS)]
+    out = []
+    for i, r in enumerate(_flat(ref)):
+        if not all(len(b) > i and isinstance(b[i], torch.Tensor) and b[i].shape == r.shape for b in runs):
+            out.append(runs[0][i] if len(runs[0]) > i else None)
+            continue
+        dt = torch.float64 if r.dtype == torch.float64 else torch.float32
+        r = r.to(dt)
+        bs = torch.stack([b[i].to(dt) for b in runs])
+        d = (bs - r).abs().amax(0)                                    # amax keeps a NaN
+        d = torch.where((bs == r).all(0), torch.zeros_like(d), d)    # Inf - Inf is NaN, not an error
+        pick = bs[0]                                                  # where the reference is non-finite: a run that
+        for b in bs[1:]:                                              # mismatches it there, else the first
+            pick = torch.where(_nonfinite_miss(r, b), b, pick)
+        out.append(torch.where(r.isfinite(), r + d, pick))
+    return out
+
+
 def _compare(ref, out, atol, rtol, base=None, k: float = 0.0) -> dict:
     """Max abs/rel error over finite positions; non-finite positions (and Inf signs) must match exactly. With `base`
     (the baseline's outputs on the same inputs), each element may also differ by `k` times the baseline's own error
@@ -124,7 +148,8 @@ def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes,
     `record(case, outputs)` is called with each plain case's outputs (inputs straight from make_inputs and the seed),
     so they can be checked again outside this process (kernels/evolve/verify.py).
     `budget` (with `baseline`): each element may also differ from the reference by `budget` times the baseline's own
-    error there, on the same inputs (a region's error budget, never stricter than `tolerances`)."""
+    error there, on the same inputs over `BASELINE_CALLS` calls (a region's error budget, never stricter than
+    `tolerances`)."""
     tol = {**TOLERANCES, **(tolerances or {})}
     mutated, aliased, nondet = [], [], []
 
@@ -135,7 +160,7 @@ def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes,
         if variant:
             case["variant"] = variant
         ref = reference(*[t.clone() for t in inputs])
-        base = baseline(*[t.clone() for t in inputs]) if budget and baseline is not None else None
+        base = baseline_envelope(baseline, inputs, ref) if budget and baseline is not None else None
         if base is not None:
             case["budget"] = budget
         before = [t.clone() for t in inputs]

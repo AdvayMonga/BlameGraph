@@ -3,6 +3,22 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-05 — A region's error budget covers the baseline's run-to-run spread
+The baseline's error against the fp32 reference, which a region's budget is 2x of, is taken over 3 calls on the same
+inputs, each element as far from the reference as any call put it (`check.baseline_envelope`; the checker, the timed
+calls and `verify.py` alike). Why: the whole step's start program is the engine's megakernel itself, and on lab-gpu-18
+(2026-11-04) it failed correctness on 3 of 6 cases (max_abs 0.5 on the logits) while the determinism check found the
+megakernel's outputs differ across identical calls; where the baseline's one call happened to land near the reference,
+2x its error there was tighter than its own next call. Amends 2026-10-23 (the baseline's error from one call).
+
+## 2026-11-05 — The sanitizer is not run on shared weights
+A region whose weights are attached over CUDA IPC from the holder's process records `sanitizer: not run` as a fact and
+keeps its gate, like a host without compute-sanitizer. Why: p_moe's gate on lab-gpu-18 (2026-11-04) exceeded its
+3,600 s after passing every correctness gate, and the sanitizer stage is the only one added since that region's
+2026-10-27 pass (four tools, each a fresh jailed process that loads the engine and attaches the weights, under
+instrumentation); the sanitizer instruments one process, and initcheck cannot see memory another process wrote.
+Amends 2026-11-04 (the sanitizer at the gate).
+
 ## 2026-11-04 — The whole step is not checked on NaN/Inf inputs
 `region:embed:argmax` sets `Task.nonfinite` False, and the judge's value-scale and baseline-error checks follow a
 task's `nonfinite` too (they always wrote NaN/Inf before). Why: the whole-step gate crashed on the H200 (2026-11-03,
