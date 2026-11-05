@@ -32,10 +32,10 @@ HERE = Path(__file__).resolve().parent
 
 def initial_program(task) -> str:
     """The engine's module source with `kernel` bound to the entry point, all of it open to evolution."""
-    if task.entry is None:
-        return (HERE / "seeds" / f"{task.name}.py").read_text()
     if task.start_program is not None:
         return task.start_program()
+    if task.entry is None:
+        return (HERE / "seeds" / f"{task.name}.py").read_text()
     if task.name.startswith("region:"):              # its entry is the stations tuple, not a function
         raise ValueError(f"{task.name}: a region's starting program needs its holder (`shared_weights`: the layer "
                          "config and the weights' constants are written into it)")
@@ -65,7 +65,13 @@ def initial_program_at(task, repo: Path, ref: str) -> str:
 def system_message(task) -> str:
     """What the program is and how it is judged, from the evaluator's own constants: facts, never advice."""
     from kernels.evolve import core
-    base = f"the engine's current `{task.entry}`" if task.entry else "the task's reference"
+    base = f"the engine's current `{task.entry}`" if task.entry else \
+        "the problem's eager PyTorch `Model`" if task.name.startswith("kb:") else "the task's reference"
+    scales = core.SCALES if task.scales is None else task.scales
+    none = task.name.startswith(("kb:", "fib:", "region:"))   # inputs from the problem or captures only: no edge shapes
+    cases = ", ".join(["three seeds"] + ([] if none else ["edge shapes"])
+                      + (["NaN/Inf inputs"] if task.nonfinite else [])
+                      + ([f"inputs scaled by {', '.join(f'{k:g}' for k in scales)}"] if scales else []))
     refused = "; ".join(dict.fromkeys(core.FORBIDDEN.values()))
     graphs = (", both captured in CUDA graphs and timed as graph replays, as the engine runs them (a kernel that "
               "cannot be captured scores 0)") if task.graphs else ""
@@ -74,18 +80,17 @@ def system_message(task) -> str:
             "evaluation host's CUDA toolkit at $CUDA_HOME, ninja on PATH, the GPU's own architecture unless the program "
             f"passes flags). The build is not timed; it counts against each stage's {TIMEOUT_S:.0f} s limit and is kept "
             "per program source across its stages and re-timings. Its C++ is screened like the Python.") \
-        if task.entry else ""
+        if task.entry or task.start_program else ""
     return f"""The program defines `kernel`, a replacement for {base}. It must compute what the task's reference \
 computes, on the same inputs, within dtype tolerance ({', '.join(str(d).removeprefix('torch.') for d in task.dtypes)}).
 
 How a program is judged:
-- Stage 1: correctness on the two most-called seen shapes, one seed. Stage 2: correctness on every seen shape (three \
-seeds, edge shapes, NaN/Inf inputs, inputs scaled by {', '.join(f'{k:g}' for k in core.SCALES)}), inputs left \
-unchanged, no output aliasing, no answers kept across calls; then peak memory at most {core.MEMORY_FACTOR}x the \
+- Stage 1: correctness on the two most-called seen shapes, one seed. Stage 2: correctness on every seen shape \
+({cases}), inputs left unchanged, no output aliasing, no answers kept across calls; then peak memory at most {core.MEMORY_FACTOR}x the \
 baseline's + {core.MEMORY_SLACK // 2**20} MiB; then timing against {base}{graphs}.
 - Score: the call-weighted geometric mean of the speedup over the seen shapes, the program and the baseline timed \
 in pairs on the same inputs; a shape where the middle half of the paired ratios includes 1 counts as 1.0. A failed gate scores 0; so does a time at which the kernel would run at \
-over {core.PHYSICS_MARGIN_PCT}% of its roofline bound. Held-out shapes are judged separately and are not part of the score.
+over {core.PHYSICS_MARGIN_PCT}% of its roofline bound. Nothing before a shape's timed window is timed: the correctness checks and warm-up calls run first, so tuning a program does at run time (e.g. `triton.autotune`) is done by then. Held-out shapes are judged separately and are not part of the score.
 - Refused before running: source that uses {refused}, or writes into anything it imports. Scores 0: anything the \
 evaluator uses found patched.
 - Lower precision inside the kernel is allowed while the output stays within tolerance; each result reports its \
@@ -165,10 +170,12 @@ def tolerances(target_tol: dict | None) -> dict:
 
 
 def task_name(s: str) -> str:
-    """--task: a named task or `region:FIRST:LAST`."""
-    if s in TASKS or re.fullmatch(r"region:\w+:\w+", s):
+    """--task: a named task, `region:FIRST:LAST`, `kb:LEVEL:ID` or `fib:NAME`."""
+    if s in TASKS or re.fullmatch(r"region:\w+:\w+", s) or re.fullmatch(r"kb:\d+:\d+", s) \
+            or re.fullmatch(r"fib:\w+", s):
         return s
-    raise argparse.ArgumentTypeError(f"{s!r} is none of {', '.join(TASKS)}, nor region:FIRST:LAST")
+    raise argparse.ArgumentTypeError(f"{s!r} is none of {', '.join(TASKS)}, nor region:FIRST:LAST, kb:LEVEL:ID, "
+                                     f"fib:NAME")
 
 
 def task_args(p) -> None:
@@ -179,14 +186,32 @@ def task_args(p) -> None:
 
 
 def region_args(a) -> dict:
-    """A region task's `samples` and `shared_weights`, absolute: what `load` and the eval config take."""
+    """A region task's `samples` and `shared_weights`, absolute, a KernelBench problem's `source`, or a FlashInfer-Bench
+    definition's dataset dir as `samples` (the jail mounts it): what `load` and the eval config take. With the
+    evaluator on a remote worker (KERNEL_EVAL_SSH) region paths are paths there, kept as given."""
+    if a.task.startswith("kb:"):
+        from kernels.kernelbench import problem_source
+        return {"source": problem_source(a.task)}
+    if a.task.startswith("fib:"):
+        from kernels import flashinfer_bench
+        return {"samples": str(flashinfer_bench.root())}
     if not a.task.startswith("region:"):
         return {}
-    if os.environ.get("KERNEL_EVAL_SSH"):        # this process attaches the holder and reads the samples itself
-        raise SystemExit("a region task runs on the GPU host that holds its samples and holder: KERNEL_EVAL_SSH "
-                         "(the evaluator on a remote worker) does not take regions yet")
-    return {k: str(Path(v).resolve()) for k, v in (("samples", getattr(a, "samples", None)),
-                                                   ("shared_weights", getattr(a, "shared_weights", None))) if v}
+    there = bool(os.environ.get("KERNEL_EVAL_SSH"))
+    return {k: v if there else str(Path(v).resolve()) for k, v in (("samples", getattr(a, "samples", None)),
+                                                                 ("shared_weights", getattr(a, "shared_weights", None))) if v}
+
+
+def load_task(a):
+    """The task. A region judged on a remote worker loads only there: here it is described by its shapes file
+    (kernels/hold.py wrote it, with the held-out axes) and starts from --initial."""
+    if a.task.startswith("region:") and os.environ.get("KERNEL_EVAL_SSH"):
+        if not (a.shapes and a.initial):
+            raise SystemExit("a region judged on a remote worker needs --shapes and --initial from where it loads "
+                             "(python -m kernels.hold)")
+        from kernels.regions import light
+        return light(a.task, tuple(shapes_mod.read(a.shapes).get("heldout_axes") or ()))
+    return load(a.task, **region_args(a))
 
 
 def _shapes(task, a) -> dict:
@@ -261,18 +286,25 @@ def main(argv: list[str] | None = None) -> int:
         names = list(gates) or list(TASKS)       # with gates, only the gated tasks: two tasks can name one kernel
         print(json.dumps(rank([Path(p) for p in a.profile], [load(n) for n in names], gates), indent=1))
         return 0
-    task = load(a.task, **region_args(a))
+    task = load_task(a)
     sets = _shapes(task, a)
-    tol = tolerances(_target_tolerances())
+    tol = tolerances(_target_tolerances(task))
     if a.cmd == "split":
         print(shapes_mod.write(a.write, sets))
         return 0
-    if a.cmd == "gate":
-        out = judge_jailed({"task": task.name, "seen": [list(s) for s in sets["seen"]],
-                            "heldout": [list(s) for s in sets["heldout"]], "weights": sets.get("calls"),
-                            "device": a.device, "tolerances": tol, "ints": _ints(sets, ("seen", "heldout")),
-                            "options": options_from_target(task), **region_args(a)},
-                           Path(a.program).read_text(), 2, timeout_s=3600)
+    if a.cmd == "gate":                          # the program with its autotune frozen is what is judged and shipped
+        from kernels.evolve import freeze
+        cfg = {"task": task.name, "seen": [list(s) for s in sets["seen"]],
+               "heldout": [list(s) for s in sets["heldout"]], "weights": sets.get("calls"),
+               "device": a.device, "tolerances": tol, "ints": _ints(sets, ("seen", "heldout")),
+               "options": options_from_target(task), "full": True, **region_args(a)}
+        src = Path(a.program).read_text()
+        frozen, _ = freeze.freeze(src, lambda s: judge_jailed(cfg, s, freeze.FREEZE_STAGE, timeout_s=3600))
+        if frozen != src:
+            dest = Path(a.program).with_name(Path(a.program).stem + ".frozen.py")
+            dest.write_text(frozen)
+            print(f"frozen program (judged here; ship this one): {dest}", file=sys.stderr)
+        out = judge_jailed(cfg, frozen, 2, timeout_s=3600)
         print(json.dumps(out, indent=1))
         from kernels.evolve.ship import gate_passed
         return 0 if gate_passed(out) else 1
@@ -358,8 +390,9 @@ def retime(trace: Path, k: int, repeats: int = 3, exclude=None) -> tuple[str | N
         else:
             top.append(r)
     for r in top:
+        code = r["child_code"]
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
-            f.write(r["child_code"])
+            f.write(code)
         runs = [evaluator.judge_stage(f.name, 2)["metrics"] for _ in range(repeats)]
         Path(f.name).unlink()
         scores = [m.get("combined_score", 0.0) for m in runs]
@@ -369,7 +402,7 @@ def retime(trace: Path, k: int, repeats: int = 3, exclude=None) -> tuple[str | N
             continue
         med = statistics.median(scores)
         out.append({"id": r["child_id"], "selected_score": r["child_metrics"]["combined_score"], "scores": scores,
-                    "median": med, "code": r["child_code"],
+                    "median": med, "code": code,
                     "metrics": min(runs, key=lambda m: abs(m.get("combined_score", 0.0) - med))})
     timed = [x for x in out if "median" in x]
     if not timed:
@@ -400,7 +433,9 @@ def record(task, sets: dict, models: list[dict], iterations: int, device: str, t
         **({"cost": cost} if cost else {})}, root)
 
 
-def _target_tolerances() -> dict | None:
+def _target_tolerances(task=None) -> dict | None:
+    if task is not None and task.tolerances:     # a public benchmark's own, never the engine target's
+        return task.tolerances
     try:
         from lab import target
         return (target.load().raw.get("kernels") or {}).get("tolerances")

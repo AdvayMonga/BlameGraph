@@ -14,7 +14,8 @@ from pathlib import Path
 import torch
 
 from kernels import check_kernel, time_pair
-from kernels.check import TOLERANCES, _compare, _flat    # bound here, before any candidate loads
+from kernels.check import TOLERANCES, _compare, baseline_envelope    # bound here, before any candidate loads
+from kernels.evolve.freeze import FREEZE_STAGE
 from kernels.tasks import Task, from_config
 
 
@@ -183,13 +184,17 @@ def _patched(before: dict, task: Task) -> list[str]:
                   [k for k in now if k not in before and k.startswith(prefixes)])
 
 
-def load_program(path: Path):
+def load_module(path: Path):
     spec = importlib.util.spec_from_file_location(f"candidate_{abs(hash(str(path)))}", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     if not callable(getattr(mod, "kernel", None)):
         raise AttributeError("the program defines no callable `kernel`")
-    return mod.kernel
+    return mod
+
+
+def load_program(path: Path):
+    return load_module(path).kernel
 
 
 def _peaks(device: str):
@@ -263,10 +268,12 @@ def _shown(ratio: dict) -> bool:
 
 
 def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | None, device: str,
-          tolerances: dict | None, stage: int, iters: int = 30) -> dict:
-    """stage 1: correctness on the two most frequent seen shapes, one seed. stage 2: the full check on every seen shape
-    (held-out shapes only when given, which selection never does), then timing against the baseline. A candidate that
-    leaves any function the evaluator watches patched scores 0, whatever it measured."""
+          tolerances: dict | None, stage: int, iters: int = 30, full: bool = False) -> dict:
+    """stage 1: correctness on the two most frequent seen shapes, one seed. stage 2: correctness on every seen shape and
+    timing against the baseline; with `full` or held-out shapes (the gate, never selection) the full check on them and
+    the seen shapes: three seeds, repeats, edge cases and layouts, other value scales, the baseline's error, peak memory. A candidate that
+    leaves any function the evaluator watches patched scores 0, whatever it measured. FREEZE_STAGE: the program run
+    once on every seen shape, the config each of its autotuners chose for each key recorded; it scores nothing."""
     refused = screen(Path(program).read_text())
     if refused:
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
@@ -278,7 +285,8 @@ def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | 
         """Record anything patched since the snapshot; True once anything has been."""
         patched.extend(n for n in _patched(before, task) if n not in patched)
         return bool(patched)
-    out = _judge(task, program, seen, heldout, weights, device, tolerances, stage, iters, checkpoint)
+    out = (_freeze(task, program, seen, device, checkpoint) if stage == FREEZE_STAGE
+           else _judge(task, program, seen, heldout, weights, device, tolerances, stage, iters, checkpoint, full))
     if checkpoint():
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
                 "artifacts": {"error": "patched what the evaluator uses: " + ", ".join(patched[:20])}}
@@ -286,7 +294,7 @@ def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | 
 
 
 def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | None, device: str,
-           tolerances: dict | None, stage: int, iters: int, checkpoint) -> dict:
+           tolerances: dict | None, stage: int, iters: int, checkpoint, full: bool = False) -> dict:
     """The gates and timing; returns {} as soon as `checkpoint` finds a patch (judge reports it)."""
     bfn = task.baseline() if task.error_budget else None                 # bound before the candidate loads
     budget = {"baseline": task.bind(bfn), "budget": task.error_budget} if bfn else {}
@@ -305,21 +313,24 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
         return out
     ref = task.reference
     shapes = seen[:2] if stage == 1 else seen
+    full = stage > 1 and (full or bool(heldout))     # the gate: every check; selection: correctness and timing only
     try:
         keep = lambda case, out: _keep("check", case["shape"], case["dtype"], case["seed"], out)    # noqa: E731
-        r = check_kernel(ref, cand, task.make_inputs, shapes, heldout if stage > 1 else [], dtypes=task.dtypes,
-                         device=device, seeds=(0,) if stage == 1 else (0, 1, 2), tolerances=tolerances,
-                         edge_shapes=task.edge_shapes(shapes[0]) if task.edge_shapes else None,
-                         repeats=1 if stage == 1 else 3, layouts=task.layouts, record=keep, **budget)
+        r = check_kernel(ref, cand, task.make_inputs, shapes, heldout if full else [], dtypes=task.dtypes,
+                         device=device, seeds=(0, 1, 2) if full else (0,), tolerances=tolerances,
+                         edge_shapes=(task.edge_shapes(shapes[0]) if task.edge_shapes else None) if full else [],
+                         repeats=3 if full else 1, layouts=task.layouts if full else (), record=keep,
+                         nonfinite=task.nonfinite, **budget)
     except Exception:                            # noqa: BLE001
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
                 "artifacts": {"error": "checker raised:\n" + traceback.format_exc()[-3000:]}}
     gates = {k: {"passed": g["passed"], "reason": g["reason"], "cases": (g.get("evidence") or {}).get("cases")}
              for k, g in r["gates"].items()}
-    if r["passed"] and stage > 1:                 # other value distributions, on the two most frequent seen shapes
+    if r["passed"] and full:                      # other value distributions, on the two most frequent seen shapes
         for k in (SCALES if task.scales is None else task.scales):
             v = check_kernel(ref, cand, _scaled(task.make_inputs, k), seen[:2], [], dtypes=task.dtypes, device=device,
-                             seeds=(7,), tolerances=tolerances, edge_shapes=[], repeats=1, layouts=(), **budget,
+                             seeds=(7,), tolerances=tolerances, edge_shapes=[], repeats=1, layouts=(),
+                             nonfinite=task.nonfinite, **budget,
                              record=lambda case, out, k=k: _keep("check", case["shape"], case["dtype"], case["seed"],
                                                                  out, k))
             g = v["gates"]["correctness_seen"]
@@ -332,13 +343,13 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
     base_fn = task.baseline()
     base = task.bind(base_fn) if base_fn else ref
     error = {"candidate": _error(r)}                # a fact, not a gate: lower precision inside a kernel is allowed
-    if base_fn:
+    if base_fn and full:
         error["baseline"] = _error(check_kernel(ref, base, task.make_inputs, seen, [], dtypes=task.dtypes,
                                                 device=device, seeds=(0, 1, 2), tolerances=tolerances,
-                                                edge_shapes=[], repeats=1, layouts=()))
+                                                edge_shapes=[], repeats=1, layouts=(), nonfinite=task.nonfinite))
     hw, dtype = _peaks(device), task.dtypes[0]
     inputs0 = task.make_inputs(seen[0], dtype, device, torch.Generator().manual_seed(0))
-    pc, pb = _peak_bytes(timed, inputs0, device), _peak_bytes(base, inputs0, device)
+    pc, pb = (_peak_bytes(timed, inputs0, device), _peak_bytes(base, inputs0, device)) if full else (None, None)
     if checkpoint():
         return {}
     if pc is not None and pc > MEMORY_FACTOR * pb + MEMORY_SLACK:
@@ -376,6 +387,33 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
     return {"metrics": metrics, "artifacts": artifacts}
 
 
+def _freeze(task: Task, program: Path, seen: list, device: str, checkpoint) -> dict:
+    """{artifacts: {frozen: {name: {keys, table}}}}: each autotuner the program binds at module level, run on every
+    seen shape (each dtype, seed 0), with the config it chose for each key it saw."""
+    from kernels.evolve import freeze
+    try:
+        mod = load_module(program)
+    except Exception as e:                       # noqa: BLE001
+        return {"metrics": {"stage": FREEZE_STAGE}, "artifacts": {"error": f"load failed: {type(e).__name__}: {e}"}}
+    if checkpoint():
+        return {}
+    recorded = {n: freeze.record(t) for n, t in freeze.tuners(mod, Path(program).read_text()).items()}
+    fn = task.bind(mod.kernel)
+    try:
+        for s in seen:
+            for dt in task.dtypes:
+                fn(*task.make_inputs(s, dt, device, torch.Generator().manual_seed(0)))
+                if checkpoint():
+                    return {}
+        if torch.device(device).type == "cuda":
+            torch.cuda.synchronize()
+        frozen = json.dumps(freeze.tables(recorded))
+    except Exception as e:                       # noqa: BLE001  a key or config that is not a literal included
+        return {"metrics": {"stage": FREEZE_STAGE},
+                "artifacts": {"error": f"{type(e).__name__}: {e}\n" + traceback.format_exc()[-2000:]}}
+    return {"metrics": {"stage": FREEZE_STAGE}, "artifacts": {"frozen": frozen}}
+
+
 def _timed(task, cand, base, shapes, weights, dtype, device, iters, hw, tolerances=None) -> tuple[list, float, float]:
     """Per-shape paired timings against the baseline, and the call-weighted geometric-mean speedup with gains inside
     the noise counted as 1.0 (and without that rule). Raises if the timed calls' output differs from the reference:
@@ -390,7 +428,7 @@ def _timed(task, cand, base, shapes, weights, dtype, device, iters, hw, toleranc
             _keep("time", s, str(dtype).removeprefix("torch."), i, out)     # time_pair's buffer i: seed i
         for inputs, out in zip(p["inputs"], p["outputs_a"]):
             ref = task.reference(*[t.clone() for t in inputs])
-            b = _flat(base(*[t.clone() for t in inputs])) if task.error_budget else None
+            b = baseline_envelope(base, inputs, ref) if task.error_budget else None
             d = _compare(ref, out, atol, rtol, base=b, k=task.error_budget or 0.0)
             if not d["ok"]:
                 raise ValueError(f"the timed calls' output differs from the reference at shape {list(s)}: "
@@ -427,7 +465,8 @@ def main() -> int:
     task = from_config(cfg)      # captured int args (real sequence lengths) where given
     tol = {getattr(torch, k): tuple(v) for k, v in (cfg.get("tolerances") or {}).items()}
     out = judge(task, program, [tuple(s) for s in cfg["seen"]], [tuple(s) for s in cfg.get("heldout", [])],
-                cfg.get("weights"), cfg.get("device", "cpu"), tol or None, stage, cfg.get("iters", 30))
+                cfg.get("weights"), cfg.get("device", "cpu"), tol or None, stage, cfg.get("iters", 30),
+                bool(cfg.get("full")))
     if cfg.get("record"):
         _save({"records": RECORDS}, cfg["record"])
     sys.stdout.write("\n" + json.dumps({**out, "result_key": key} if key else out) + "\n")

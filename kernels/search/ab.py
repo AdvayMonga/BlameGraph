@@ -1,10 +1,10 @@
-"""python -m kernels.search.ab --task T --shapes SHAPES.json --out DIR [--initial PROGRAM.py] [--evals N] [--usd X]
+"""python -m kernels.search.ab --task T --shapes SHAPES.json --out DIR [--initial PROGRAM.py] [--evals N]
                              [--model M] [--seeds K] [--device cuda] [--arms A,B,...]
 
 OpenEvolve against kernels.search on one task, everything else equal: the same shapes, starting program, evaluator,
 model (OpenEvolve given the same single model, so the search and prompting are what differ), number of programs judged
-and post-search pipeline: the top 3 re-timed 3x, highest median promoted, no grid tuning or gaming detector for any
-arm (`SAME_PROMOTION`; on 2026-10-18 only the kernels.search arms got them, and the win came from the tuning). Each arm and seed runs in its own dir; each winner then goes through `gate` (all seen shapes
+and post-search pipeline: the top 3 re-timed 3x, highest median promoted, no gaming detector for any arm
+(`SAME_PROMOTION`). A program of either arm tunes only if it does so itself at run time (e.g. triton.autotune). Each arm and seed runs in its own dir; each winner then goes through `gate` (all seen shapes
 plus the held-out ones, jailed). The summary, per arm: re-timed seen score, held-out speedup, whether every gate
 passed, model $ and calls, programs judged; written to <out>/ab.json. An arm dir holding a result.json is reused, so
 an interrupted A/B resumes. With $KERNEL_EVAL_SSH the gate runs on that host, like the evaluator. Model calls and GPU
@@ -46,17 +46,16 @@ def _openevolve(a, out: Path, seed: int) -> dict:
     return _last_json(buf.getvalue())
 
 
-SAME_PROMOTION = ("--retime", "3", "--tune-points", "0", "--detector-model", "none")   # what OpenEvolve's run does
+SAME_PROMOTION = ("--retime", "3", "--detector-model", "none")   # what OpenEvolve's run does
 
 
 def _search(a, out: Path, seed: int, extra: tuple = ()) -> dict:
     from kernels.search.__main__ import main
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        main(["--task", a.task, "--shapes", a.shapes, "--out", str(out), "--evals", str(a.evals), "--usd", str(a.usd),
-              "--model", a.model, "--judge-model", a.model, "--wide-model", a.model, "--cheap-model", a.model,
-              "--second-judge-model", a.model, "--device", a.device, "--seed", str(seed),
-              *(["--gpu-s", str(a.gpu_s)] if getattr(a, "gpu_s", None) else []),
+        main(["--task", a.task, "--shapes", a.shapes, "--out", str(out), "--evals", str(a.evals),
+              "--model", a.model, "--judge-model", a.model, "--second-judge-model", a.model, "--device", a.device,
+              "--seed", str(seed),
               *(["--initial", a.initial] if a.initial else []), *SAME_PROMOTION, *extra])
     return _last_json(buf.getvalue())
 
@@ -65,14 +64,13 @@ def _variant(*extra: str):
     return lambda a, out, seed: _search(a, out, seed, extra)
 
 
-# Each arm differs from `kernels.search` (the genetic search over funnel rounds, judge tools on) in one thing, so a
-# difference in the summary is that thing's: the judge's web search and ledger SQL, one MCTS-chosen parent per round
-# (the 2026-10-25 default), KernelPro's literal UCT constant under it, fewer and larger generations, a share of
-# explicit crossover, or the whole generator.
+# Each arm differs from `kernels.search` (the genetic search, judge tools on) in one thing, so a difference in the
+# summary is that thing's: the judge's web search and ledger SQL, one MCTS-chosen parent per round (the 2026-10-25
+# default), KernelPro's literal UCT constant under it, refine ideas only (no persist, fresh or crossover types: the
+# search before 2026-10-29), or the whole generator.
 ARMS = {"openevolve": _openevolve, "kernels.search": _search, "search-no-tools": _variant("--no-judge-tools"),
         "search-mcts": _variant("--mcts"), "search-c1.41": _variant("--mcts", "--uct-c", "1.4142"),
-        "search-gen20": _variant("--gen-size", "20", "--keep", "12"),
-        "search-crossover": _variant("--crossover", "0.1")}
+        "search-untyped": _variant("--no-types")}
 
 
 def _gate(a, program: Path) -> dict:
@@ -111,9 +109,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--initial")
     ap.add_argument("--evals", type=int, default=30)
-    ap.add_argument("--usd", type=float, default=10.0, help="kernels.search's cap; OpenEvolve has none (measured)")
-    ap.add_argument("--gpu-s", type=float, help="kernels.search arms stop at this many judging seconds (the funnel's "
-                    "rounds judge many more programs per evaluation counted, so compare at equal GPU time)")
     ap.add_argument("--model", default="claude-opus-5-5")
     ap.add_argument("--seeds", type=int, default=1)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")

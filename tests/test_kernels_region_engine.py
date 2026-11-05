@@ -54,13 +54,24 @@ DECODE = (
     Station("kv", ("h", "kv"), ("kv",), _kv),
 )
 
+def _p_scale(c):                               # a prefill station: every token, or only the real ones of a padded wave
+    out = c["n"] * 2
+    if c["tokens"] is not None:
+        out = c["n"].clone().index_copy_(1, c["tokens"], (c["n"] * 2).index_select(1, c["tokens"]))
+    return {"h": out}
+
+PREFILL = (
+    Station("p_norm", ("h", "cfg"), ("n",), _norm),
+    Station("p_scale", ("n", "tokens"), ("h",), _p_scale),
+)
+
 def functional(stations=DECODE):
     def pure(fn):
         return lambda c: fn({**c, "h": c["h"].clone()})
     return tuple(replace(s, fn=pure(s.fn)) if s.name == "add" else s for s in stations)
 
-def reference():
-    return functional(DECODE)
+def reference(stations=DECODE):
+    return functional(stations)
 """
 
 
@@ -104,6 +115,7 @@ def test_a_region_of_the_engines_stations_is_judged_end_to_end(tmp_path, monkeyp
     caps = captures(tmp_path, [(4, 64, 0, True), (16, 64, 0, True)])
     t = regions.from_engine("norm", "add", str(caps), str(h.path), dtypes=(torch.float32,))
     assert t.name == "region:norm:add" and set(t.seen_default) == {(4, 64), (16, 64)}
+    assert t.graphs                                    # decode is replayed as a graph: timed as one
     xs = t.make_inputs((4, 64), torch.float32, "cpu", torch.Generator().manual_seed(0))
     assert len(xs) == 2 and xs[1].shape == (64, 64)                  # h, then the weight; its None scale bound
     start = tmp_path / "start.py"
@@ -133,25 +145,49 @@ def test_a_config_read_with_no_holder_is_refused_clearly(tmp_path, monkeypatch):
         regions.from_engine("norm", "add", str(caps))
 
 
-def test_a_region_writing_in_place_is_refused(tmp_path, monkeypatch):
-    regions = engine(tmp_path, monkeypatch)
+def test_a_region_writing_in_place_runs_on_a_copy_and_a_program_must_write_in_place(tmp_path, monkeypatch):
+    """A region with the K/V writer: the engine's stations as they run, each call on a copy of the pool (baseline and
+    program alike, inputs left unchanged); the start program passes; a program returning a new pool is refused."""
     import pytest
+    from kernels.evolve import core
+    regions = engine(tmp_path, monkeypatch)
+    h = held(tmp_path, regions)
+    d = tmp_path / "kvcaps"
+    (d / "samples").mkdir(parents=True)
+    with open(d / "calls.jsonl", "w") as f:
+        for i, t in enumerate((4, 16)):
+            f.write(json.dumps({"fn": "region:kv:kv", "layer": 0, "sample": f"{i}.pt",
+                                "reads": {"h": {"shape": [t, 64], "dtype": "float32"},
+                                          "kv": {"shape": [2], "dtype": "float32"}}}) + "\n")
+            torch.save({"reads": {"h": torch.randn(t, 64), "kv": torch.zeros(2)}, "writes": {}}, d / "samples" / f"{i}.pt")
+    t = regions.from_engine("kv", "kv", str(d), str(h.path), dtypes=(torch.float32,))
+    start = tmp_path / "start.py"
+    start.write_text(t.start_program())
+    assert "_PURE = _st.DECODE" in start.read_text()                  # as the engine runs it: writes in place
+    r = core.judge(t, start, [(4, 64), (16, 64)], [], None, "cpu", None, 2, iters=3)
+    assert r["metrics"]["correct"] == 1.0, r["artifacts"]
+    g = json.loads(r["artifacts"]["gates"])
+    assert g["inputs_unchanged"]["passed"]
+    xs = t.make_inputs((4, 64), torch.float32, "cpu", torch.Generator().manual_seed(0))
     with pytest.raises(ValueError, match="in place"):
-        regions.from_engine("add", "kv")
+        t.bind(lambda hh, kv: (torch.full_like(kv, hh.sum().item()),))(*xs)        # a new pool: refused
+    with pytest.raises(ValueError, match="context"):
+        monkeypatch.setattr(regions, "span", lambda st, a, b: (regions.Station("p", ("paged_ctx",), ("x",), None),))
+        regions._region("kv", "kv")
 
 
 def test_captured_shapes_split_with_a_heldout_region_from_the_holders_layer_only(tmp_path, monkeypatch):
     from kernels import shapes
     regions = engine(tmp_path, monkeypatch)
-    calls = [(4, 64, 0, True)] + [(4, 64, 0, False)] * 4 + [(16, 64, 0, True)] * 3 + [(64, 64, 0, True)]
+    calls = [(4, 64, 0, True)] + [(4, 64, 0, False)] * 4 + [(16, 64, 0, True)] * 3 + [(32, 64, 0, True), (64, 64, 0, True)]
     calls += [(32, 64, 1, True), (8, 64, 0, False)]          # another layer's; a shape whose sample was over the cap
     caps = captures(tmp_path, calls)
     t = regions.from_engine("norm", "add", str(caps), str(held(tmp_path, regions).path), dtypes=(torch.float32,))
-    assert t.heldout_axes == (0,) and set(t.seen_default) == {(4, 64), (16, 64), (64, 64)}
+    assert t.heldout_axes == (0,) and set(t.seen_default) == {(4, 64), (16, 64), (32, 64), (64, 64)}
     counts = shapes.from_captures(t, [caps])                 # read by the task's capture fn, not its entry
-    assert counts == {(4, 64): 5, (16, 64): 3, (64, 64): 1} and shapes.ints_from_captures(t, [caps]) == {}
+    assert counts == {(4, 64): 5, (16, 64): 3, (32, 64): 1, (64, 64): 1} and shapes.ints_from_captures(t, [caps]) == {}
     sets = shapes.split(t, counts)
-    assert sets["heldout"] == [(64, 64)] and sets["seen"] == [(4, 64), (16, 64)]
+    assert sets["heldout"] == [(32, 64)] and sets["seen"] == [(4, 64), (16, 64), (64, 64)]       # the largest seen
 
 
 def test_seed_zero_is_the_capture_and_later_seeds_perturb_it_differently(tmp_path, monkeypatch):
@@ -172,6 +208,8 @@ def test_the_pools_block_count_is_not_part_of_a_calls_shape(tmp_path, monkeypatc
     large = {**small, "kv": {"shape": [4000, 2, 16, 8]}}
     assert regions._signature(small) == regions._signature(large) == (4, 7, 4, 64)
     assert regions._heldout_axes(small, ("h", "kv", "attn_block_tables")) == (2, 1)
+    wave = {"q": {"shape": [1, 32, 2048, 128]}, "fi_kv_indices": {"shape": [142]}, "fi_qo_indptr": {"shape": [2]}}
+    assert regions._heldout_axes(wave, ("q", "fi_qo_indptr", "fi_kv_indices"), prefill=True) == (0,)   # the context
     monkeypatch.delattr(regions._engine(), "IN_PLACE")                      # no IN_PLACE: the engine's pool names
     assert regions._signature({"h": {"shape": [4, 64]}, "k_cache": {"shape": [9, 2, 16, 8]}}) == (4, 64)
 
@@ -220,7 +258,7 @@ def test_a_region_ships_as_an_override_module_never_through_the_entry_path(tmp_p
     assert program == regions.start_program("norm", "add", shared_weights=str(h.path))
     with pytest.raises(ValueError, match="holder"):
         initial_program(regions.from_engine("norm", "add"))
-    for f in (pipeline.module_file, lambda t, d: pipeline.start_program(t, d), lambda t, d: pipeline.patch(t, d, "")):
+    for f in (pipeline.module_file, lambda t, d: pipeline.start_program(t, d)):    # the patch: its override module
         with pytest.raises(ValueError, match="region"):
             f(t, tmp_path)
     monkeypatch.setattr(ship_mod, "unstart", lambda *a: pytest.fail("the entry path was used for a region"))
@@ -272,7 +310,7 @@ def test_the_search_cli_takes_a_region_with_its_samples_and_holder(tmp_path, mon
     from kernels.search import __main__ as cli
     regions = engine(tmp_path, monkeypatch)
     h = held(tmp_path, regions)
-    caps = captures(tmp_path, [(4, 64, 0, True)] * 3 + [(16, 64, 0, True)] * 2 + [(64, 64, 0, True)])
+    caps = captures(tmp_path, [(4, 64, 0, True)] * 3 + [(16, 64, 0, True)] * 2 + [(32, 64, 0, True), (64, 64, 0, True)])
     for k in ("KERNEL_EVAL_CONFIG", "KERNELS_EVAL_LOG"):
         monkeypatch.setenv(k, "")
     monkeypatch.setattr(cli, "Claude", lambda *a, **k: None)
@@ -283,24 +321,94 @@ def test_the_search_cli_takes_a_region_with_its_samples_and_holder(tmp_path, mon
                   "--out", str(out), "--judge-model", "none", "--device", "cpu"])
     cfg = json.loads((out / "eval_config.json").read_text())
     assert cfg["task"] == "region:norm:add" and cfg["samples"] == str(caps.resolve())
-    assert cfg["shared_weights"] == str(h.path.resolve()) and cfg["seen"] == [[4, 64], [16, 64]]   # split from samples
+    assert cfg["shared_weights"] == str(h.path.resolve()) and cfg["seen"] == [[4, 64], [16, 64], [64, 64]]   # split
     assert "_CONST['w.mm_scale'] = None" in (out / "initial_program.py").read_text()
     gates = []
     monkeypatch.setattr(run, "judge_jailed", lambda cfg, *a, **k: gates.append(cfg) or {"metrics": {}})
     run.main(["gate", "--task", "region:norm:add", "--samples", str(caps), "--shared-weights", str(h.path),
               "--program", str(out / "initial_program.py"), "--device", "cpu"])
-    assert gates[0]["heldout"] == [[64, 64]] and gates[0]["samples"] == cfg["samples"]
+    assert gates[0]["heldout"] == [[32, 64]] and gates[0]["samples"] == cfg["samples"]
     assert gates[0]["shared_weights"] == cfg["shared_weights"]
     with pytest.raises(argparse.ArgumentTypeError):
         run.task_name("region:norm")
 
 
-def test_a_region_task_with_a_remote_evaluator_is_refused(monkeypatch):
-    from types import SimpleNamespace
-    from kernels.evolve.run import region_args
-    monkeypatch.setenv("KERNEL_EVAL_SSH", '["ssh", "host"]')
-    try:
-        region_args(SimpleNamespace(task="region:norm:add", samples="s", shared_weights="w"))
-        raise AssertionError("a remote region search was not refused")
-    except SystemExit as e:
-        assert "GPU host" in str(e)
+def test_a_region_judged_on_a_remote_worker_is_described_here_from_its_shapes_file(tmp_path, monkeypatch):
+    import pytest
+    from kernels.search import __main__ as cli
+    from kernels import regions
+    monkeypatch.setattr(regions, "ENGINE", "no_engine_here.stations")       # nothing of the engine loads here
+    monkeypatch.setenv("KERNEL_EVAL_SSH", '["ssh", "gpu"]')
+    for k in ("KERNEL_EVAL_CONFIG", "KERNELS_EVAL_LOG"):
+        monkeypatch.setenv(k, "")
+    shapes = tmp_path / "shapes.json"
+    shapes.write_text(json.dumps({"seen": [[4, 64], [16, 64]], "heldout": [[64, 64]], "heldout_axes": [0],
+                                  "calls": {"[4, 64]": 3, "[16, 64]": 2}}))
+    start = tmp_path / "start.py"
+    start.write_text("# EVOLVE-BLOCK-START\ndef kernel(*xs):\n    return xs\n# EVOLVE-BLOCK-END\n")
+    monkeypatch.setattr(cli, "Claude", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "search", lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
+    argv = ["--task", "region:norm:add", "--samples", "/gpu/s", "--shared-weights", "/gpu/w.pkl", "--out",
+            str(tmp_path / "out"), "--judge-model", "none", "--device", "cuda", "--no-ncu"]
+    with pytest.raises(SystemExit, match="--shapes and --initial"):
+        cli.main(argv)
+    with pytest.raises(KeyboardInterrupt):
+        cli.main(argv + ["--shapes", str(shapes), "--initial", str(start)])
+    cfg = json.loads((tmp_path / "out" / "eval_config.json").read_text())
+    assert cfg["samples"] == "/gpu/s" and cfg["shared_weights"] == "/gpu/w.pkl"       # paths on the worker, as given
+    assert cfg["task"] == "region:norm:add" and cfg["seen"] == [[4, 64], [16, 64]]
+
+
+def test_a_prefill_region_binds_the_prefill_stations_and_a_none_read_becomes_a_constant(tmp_path, monkeypatch):
+    """A "p_" region is the engine's PREFILL; a read the engine passes as None (packed waves' `tokens`) is a constant
+    None, the calls where it is a tensor (padded waves) left out; a shipped override runs the engine's own stations
+    for a padded wave."""
+    from kernels.evolve import core
+    regions = engine(tmp_path, monkeypatch)
+    h = held(tmp_path, regions)
+    d = tmp_path / "pcaps"
+    (d / "samples").mkdir(parents=True)
+    with open(d / "calls.jsonl", "w") as f:
+        for i, (t, padded) in enumerate([(8, False), (24, False), (16, True)]):
+            tokens = {"shape": [t - 2], "dtype": "int64"} if padded else {"value": None}
+            f.write(json.dumps({"fn": "region:p_norm:p_scale", "layer": 0, "sample": f"{i}.pt",
+                                "reads": {"h": {"shape": [1, t, 64], "dtype": "float32"}, "cfg": {"value": {"eps": 1e-6}},
+                                          "tokens": tokens}}) + "\n")
+            torch.save({"reads": {"h": torch.randn(1, t, 64), "cfg": {"eps": 1e-6},
+                                  **({"tokens": torch.arange(t - 2)} if padded else {})}, "writes": {}},
+                       d / "samples" / f"{i}.pt")
+    assert regions.station_set("p_norm") == "PREFILL" and regions.light("region:p_norm:p_scale").entry.endswith(":PREFILL")
+    assert dict(regions.light("region:p_norm:p_scale").capture_env) == {"CAPTURE_REGION_LAYERS": "0,16,32,47"}
+    t = regions.from_engine("p_norm", "p_scale", str(d), str(h.path), dtypes=(torch.float32,))
+    assert set(t.seen_default) == {(1, 8, 64), (1, 24, 64)} and t.heldout_axes == (1,)    # the tokens axis
+    assert not t.graphs                                # prefill runs eagerly: its host time is real
+    start = tmp_path / "start.py"
+    start.write_text(t.start_program())
+    assert "_CONST['tokens'] = None" in start.read_text() and "_st.PREFILL" in start.read_text()
+    r = core.judge(t, start, [(1, 8, 64), (1, 24, 64)], [], None, "cpu", None, 2, iters=3)
+    assert r["metrics"]["correct"] == 1.0, r["artifacts"]
+    ns: dict = {}
+    exec(compile(regions.override_module(start.read_text(), "p_norm", "p_scale"), "o.py", "exec"), ns)
+    c = {"h": torch.randn(1, 6, 64), "cfg": regions._engine().LayerConfig(1e-6), "tokens": torch.tensor([0, 2])}
+    got = ns["OVERRIDES"][("p_norm", "p_scale")](c)["h"]                # a padded wave: the engine's own stations
+    st = regions._engine()
+    want = st.PREFILL[1].fn({**c, **st.PREFILL[0].fn(c)})["h"]
+    assert torch.equal(got, want)
+
+
+def test_a_region_held_for_several_layers_keys_shapes_by_layer_and_holds_one_layer_out(tmp_path, monkeypatch):
+    """Each layer's calls are its own shapes, with that layer's weights; the held-out layer's calls are held out."""
+    from kernels import shapes
+    from kernels.shared_weights import Holder
+    regions = engine(tmp_path, monkeypatch)
+    w = {i: torch.randn(64, 64) / 8 for i in (0, 32)}
+    h = Holder({"L0.w.mm": w[0], "L32.w.mm": w[32], "w.mm_scale": None}, tmp_path / "w.pkl",
+               {"cfg": regions._engine().LayerConfig(1e-6), "layers": [0, 32]})
+    monkeypatch.setattr(regions, "HELDOUT_LAYER", 32)
+    caps = captures(tmp_path, [(4, 64, 0, True), (16, 64, 0, True), (4, 64, 32, True), (8, 64, 7, True)])
+    t = regions.from_engine("norm", "add", str(caps), str(h.path), dtypes=(torch.float32,))
+    assert set(t.seen_default) == {(0, 4, 64), (0, 16, 64), (32, 4, 64)}           # layer 7 is not held
+    xs = t.make_inputs((32, 4, 64), torch.float32, "cpu", torch.Generator().manual_seed(0))
+    assert torch.equal(xs[1], w[32]) and t.heldout_values == ((0, (32,)),) and t.heldout_axes == (1,)
+    sets = shapes.split(t, shapes.from_captures(t, [caps]))
+    assert (32, 4, 64) in sets["heldout"] and (0, 4, 64) in sets["seen"]

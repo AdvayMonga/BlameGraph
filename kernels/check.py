@@ -40,9 +40,10 @@ def _poison(inputs):
     """Write NaN, +Inf and -Inf into the first floating-point input that is not a shared weight (kernels/shared_weights)."""
     from kernels.shared_weights import is_shared_weight
     v = next((t for t in inputs if t.is_floating_point() and not is_shared_weight(t)), None)
-    if v is not None:
-        v = v.view(-1)
-        v[0], v[v.numel() // 2], v[-1] = float("nan"), float("inf"), float("-inf")
+    if v is not None and v.numel():                  # by index, so a non-contiguous input (a transposed q) works too
+        n = v.numel()
+        for i, x in ((0, float("nan")), (n // 2, float("inf")), (n - 1, float("-inf"))):
+            v[tuple(int(j) for j in torch.unravel_index(torch.tensor(i), v.shape))] = x
 
 
 def _edge_shapes(shape):
@@ -51,15 +52,40 @@ def _edge_shapes(shape):
     return ones + [tuple(d + 1 if d > 1 and d & (d - 1) == 0 else d for d in shape)]
 
 
+BASELINE_CALLS = 3           # the baseline's error is taken over this many calls: its run-to-run spread is its error too
+
+
+def baseline_envelope(baseline, inputs, ref) -> list:
+    """The baseline's outputs with each element as far from the reference as any of `BASELINE_CALLS` calls on clones
+    of `inputs` put it (a NaN or Inf kept): a non-deterministic baseline's own spread counts as its error."""
+    runs = [_flat(baseline(*[t.clone() for t in inputs])) for _ in range(BASELINE_CALLS)]
+    out = []
+    for i, r in enumerate(_flat(ref)):
+        if not all(len(b) > i and isinstance(b[i], torch.Tensor) and b[i].shape == r.shape for b in runs):
+            out.append(runs[0][i] if len(runs[0]) > i else None)
+            continue
+        dt = torch.float64 if r.dtype == torch.float64 else torch.float32
+        r = r.to(dt)
+        bs = torch.stack([b[i].to(dt) for b in runs])
+        d = (bs - r).abs().amax(0)                                    # amax keeps a NaN
+        d = torch.where((bs == r).all(0), torch.zeros_like(d), d)    # Inf - Inf is NaN, not an error
+        pick = bs[0]                                                  # where the reference is non-finite: a run that
+        for b in bs[1:]:                                              # mismatches it there, else the first
+            pick = torch.where(_nonfinite_miss(r, b), b, pick)
+        out.append(torch.where(r.isfinite(), r + d, pick))
+    return out
+
+
 def _compare(ref, out, atol, rtol, base=None, k: float = 0.0) -> dict:
     """Max abs/rel error over finite positions; non-finite positions (and Inf signs) must match exactly. With `base`
     (the baseline's outputs on the same inputs), each element may also differ by `k` times the baseline's own error
-    there: a region's error budget, element by element, so one large value's rounding loosens nothing else."""
+    there: a region's error budget, element by element, so one large value's rounding loosens nothing else. A
+    non-finite mismatch is within that budget where the baseline's own output mismatches the reference there too."""
     refs, outs = _flat(ref), _flat(out)
     bases = _flat(base) if base is not None else [None] * len(refs)
     if len(refs) != len(outs):
         return {"ok": False, "error": f"{len(outs)} outputs, expected {len(refs)}"}
-    ok, max_abs, max_rel, nonfinite = True, 0.0, 0.0, 0
+    ok, max_abs, max_rel, nonfinite, budgeted = True, 0.0, 0.0, 0, 0
     for r, o, b in zip(refs, outs, bases):
         if not isinstance(o, torch.Tensor) or o.shape != r.shape or o.dtype != r.dtype:
             got = (tuple(o.shape), str(o.dtype)) if isinstance(o, torch.Tensor) else type(o).__name__
@@ -67,17 +93,30 @@ def _compare(ref, out, atol, rtol, base=None, k: float = 0.0) -> dict:
         dt = torch.float64 if r.dtype == torch.float64 else torch.float32
         r, o = r.to(dt), o.to(dt)
         both = r.isfinite() & o.isfinite()
-        nonfinite += int((~both & ~((r.isnan() & o.isnan()) | (r == o))).sum())
-        d, mag = (r - o).abs()[both], r.abs()[both]
+        miss = _nonfinite_miss(r, o)
         slack = 0.0
         if isinstance(b, torch.Tensor) and k and b.shape == r.shape:
-            bd = (b.to(dt) - r).abs()
+            b = b.to(dt)
+            bd = (b - r).abs()
             slack = k * torch.where(bd.isfinite(), bd, torch.zeros_like(bd))[both]
+            within = miss & _nonfinite_miss(r, b)
+            budgeted += int(within.sum())
+            miss = miss & ~within
+        nonfinite += int(miss.sum())
+        d, mag = (r - o).abs()[both], r.abs()[both]
         if d.numel():
             max_abs = max(max_abs, d.max().item())
             max_rel = max(max_rel, (d / mag.clamp_min(atol)).max().item())
         ok = ok and bool((d <= atol + rtol * mag + slack).all())
-    return {"ok": ok and nonfinite == 0, "max_abs": max_abs, "max_rel": max_rel, "nonfinite_mismatch": nonfinite}
+    res = {"ok": ok and nonfinite == 0, "max_abs": max_abs, "max_rel": max_rel, "nonfinite_mismatch": nonfinite}
+    if budgeted:
+        res["nonfinite_within_budget"] = budgeted
+    return res
+
+
+def _nonfinite_miss(r, o):
+    """Positions where r or o is non-finite and they differ (NaN matches NaN, an Inf only the same-signed Inf)."""
+    return ~(r.isfinite() & o.isfinite()) & ~((r.isnan() & o.isnan()) | (r == o))
 
 
 def _describe(c) -> str:
@@ -100,14 +139,17 @@ def _summary(cases) -> tuple[bool, str, dict]:
 
 def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes, dtypes=(torch.float32,),
                  device="cpu", seeds=(0, 1, 2), tolerances=None, edge_shapes=None, require_deterministic=False,
-                 repeats=3, layouts=("strided", "transposed"), record=None, baseline=None, budget=None) -> dict:
+                 repeats=3, layouts=("strided", "transposed"), record=None, baseline=None, budget=None,
+                 nonfinite=True) -> dict:
     """Return {"passed", "reasons", "gates": {name: {passed, reason, evidence}}} for candidate vs reference.
     make_inputs(shape, dtype, device, generator) -> tuple of tensors; generator is a seeded CPU torch.Generator.
     `layouts`: the non-contiguous input variants to test, for a kernel whose callers pass such inputs.
+    `nonfinite`: whether NaN/Inf inputs are a case (off for a public benchmark whose contract has none).
     `record(case, outputs)` is called with each plain case's outputs (inputs straight from make_inputs and the seed),
     so they can be checked again outside this process (kernels/evolve/verify.py).
     `budget` (with `baseline`): each element may also differ from the reference by `budget` times the baseline's own
-    error there, on the same inputs (a region's error budget, never stricter than `tolerances`)."""
+    error there, on the same inputs over `BASELINE_CALLS` calls (a region's error budget, never stricter than
+    `tolerances`)."""
     tol = {**TOLERANCES, **(tolerances or {})}
     mutated, aliased, nondet = [], [], []
 
@@ -118,7 +160,7 @@ def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes,
         if variant:
             case["variant"] = variant
         ref = reference(*[t.clone() for t in inputs])
-        base = baseline(*[t.clone() for t in inputs]) if budget and baseline is not None else None
+        base = baseline_envelope(baseline, inputs, ref) if budget and baseline is not None else None
         if base is not None:
             case["budget"] = budget
         before = [t.clone() for t in inputs]
@@ -158,9 +200,10 @@ def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes,
             if name not in layouts:
                 continue
             edge.append(run(s0, dt, sd0, tuple(f(t) for t in make_inputs(s0, dt, device, _gen(sd0))), name))
-        inputs = make_inputs(s0, dt, device, _gen(sd0))
-        _poison(inputs)
-        edge.append(run(s0, dt, sd0, inputs, "nonfinite"))
+        if nonfinite:
+            inputs = make_inputs(s0, dt, device, _gen(sd0))
+            _poison(inputs)
+            edge.append(run(s0, dt, sd0, inputs, "nonfinite"))
         inputs = make_inputs(s0, dt, device, _gen(sd0))
         run(s0, dt, sd0, inputs)
         for t, n in zip(inputs, make_inputs(s0, dt, device, _gen(sd0 + 1000))):

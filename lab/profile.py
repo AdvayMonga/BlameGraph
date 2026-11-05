@@ -118,6 +118,27 @@ async def _fire(sched: ContinuousBatchScheduler, prompts: list[list[int]], max_t
     return await asyncio.gather(*(sched.submit(r) for r in reqs), return_exceptions=True)
 
 
+async def _steady(sched: ContinuousBatchScheduler, prompts: list[list[int]], max_tokens: int, concurrency: int,
+                  session: str) -> list:
+    """Closed loop: `concurrency` requests in flight, each replaced by the next prompt when it ends, until every prompt
+    has run once: a loaded regime's steady state (rows at every point of their answers), not one wave started
+    together."""
+    loop = asyncio.get_running_loop()
+    fixed = {"ignore_eos": True} if "ignore_eos" in {f.name for f in dataclasses.fields(ScheduledRequest)} else {}
+    todo, results = iter(enumerate(prompts)), [None] * len(prompts)
+
+    async def lane():
+        for i, p in todo:                        # one iterator shared by every lane
+            r = ScheduledRequest(token_ids=p, max_tokens=max_tokens, session_id=f"{session}-{i}",
+                                 future=loop.create_future(), **fixed)
+            try:
+                results[i] = await sched.submit(r)
+            except Exception as e:               # noqa: BLE001  counted as an error, as _fire's gather does
+                results[i] = e
+    await asyncio.gather(*(lane() for _ in range(min(concurrency, len(prompts)))))
+    return results
+
+
 def stats_delta(start: dict, end: dict) -> dict:
     """What the window itself did: counter differences, wave sizes included."""
     d = {k: end[k] - start[k] for k in COUNTERS if k in start and k in end}
@@ -137,10 +158,12 @@ def outcomes(results: list, max_tokens: int) -> dict:
 
 async def run(backend: InferenceBackend, settings: Settings, prompts: list[list[int]],
               max_tokens: int, out: Path, warmup: int | None = None, source: dict | None = None,
-              profiler: str = "torch", pyspy: tuple[str, float, int, list[str]] | None = None) -> Path:
+              profiler: str = "torch", pyspy: tuple[str, float, int, list[str]] | None = None,
+              concurrency: int | None = None) -> Path:
     """Profile `prompts` through the served scheduler config on `backend`; return the bundle directory.
     `warmup` requests (default: as many as the window) are fired together first, outside the window.
-    `profiler`: torch (torch.profiler trace), cuda-range (window marked for nsys/ncu), pyspy (`pyspy` = exe, s, Hz)."""
+    `profiler`: torch (torch.profiler trace), cuda-range (window marked for nsys/ncu), pyspy (`pyspy` = exe, s, Hz).
+    `concurrency`: the window's requests run closed loop at that many in flight (`_steady`); default all at once."""
     out = bundle.new_dir(out)
     device = backend.device_str
     warmup = len(prompts) if warmup is None else warmup
@@ -164,10 +187,12 @@ async def run(backend: InferenceBackend, settings: Settings, prompts: list[list[
             results, rounds = await _sampled(sched, prompts, max_tokens, out, pyspy)
         elif profiler == "torch":
             with prof:
-                results = await _fire(sched, prompts, max_tokens, "profile")
+                results = await (_steady(sched, prompts, max_tokens, concurrency, "profile") if concurrency
+                                 else _fire(sched, prompts, max_tokens, "profile"))
         else:
             with _cuda_range(device):
-                results = await _fire(sched, prompts, max_tokens, "profile")
+                results = await (_steady(sched, prompts, max_tokens, concurrency, "profile") if concurrency
+                                 else _fire(sched, prompts, max_tokens, "profile"))
         t1 = time.time()
         timeline.event("profile_window", state="end")
         mem1, stats1, gpu1 = bundle.device_memory(device), sched.stats(), gpu.query()
@@ -195,7 +220,8 @@ async def run(backend: InferenceBackend, settings: Settings, prompts: list[list[
         warmup={"requests": warmup, "concurrent": True, "prompts": "random ids at the window's prompt lengths",
                 "max_tokens": max_tokens, "wall_s": w1 - w0},
         profiler_on=profiler == "torch", profiler={"kind": profiler, **(prof_config if profiler == "torch" else {})},
-        rounds=rounds, gpu={"window_start": gpu0, "window_end": gpu1}, timeline=timeline.stats(), workload=source))
+        rounds=rounds, gpu={"window_start": gpu0, "window_end": gpu1}, timeline=timeline.stats(), workload=source,
+        concurrency=concurrency))
     return out
 
 
@@ -213,6 +239,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--enable-thinking", action="store_true", help="chat template thinking on, for corpus prompts")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--requests", type=int, default=8)
+    ap.add_argument("--concurrency", type=int, help="the window's requests closed loop at this many in flight; "
+                                                    "default: all fired together")
     ap.add_argument("--prompt-len", type=int, default=64)
     ap.add_argument("--max-tokens", type=int, default=32)
     ap.add_argument("--warmup", type=int, help="warmup requests, fired together; default: as many as the window")
@@ -225,7 +253,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--pyspy-arg", action="append", default=[], help="pyspy: extra `py-spy record` flag (repeatable)")
     ap.add_argument("--capture", action="append", default=[], metavar="MODULE:FUNCTION",
                     help="record every call's argument shapes and the first call per shape whole (repeatable); "
-                         "it synchronizes, so the window's times are not representative")
+                         "region:FIRST:LAST records that stretch of the engine's decode stations (its CAPTURE_REGION), "
+                         f"{capture.STEP} the decode-step megakernel; it synchronizes, so the window's times are not "
+                         "representative")
     ap.add_argument("--capture-bytes", type=int, default=64 * 2**20, help="largest call kept whole as a sample")
     args = ap.parse_args(argv)
 
@@ -233,6 +263,11 @@ def main(argv: list[str] | None = None) -> int:
     settings = load_settings()
     overrides = {k: v for k, v in (("backend_name", args.backend), ("model_name", args.model)) if v}
     settings = dataclasses.replace(settings, **overrides)
+    staged = Path(tempfile.mkdtemp(prefix="capture-", dir=Path(args.out).parent if Path(args.out).parent.exists() else None))
+    entries = [c for c in args.capture if not c.startswith("region:")]
+    for c in args.capture:                       # the engine's own region capture, read at its first decode step
+        if c.startswith("region:") and c != capture.STEP:
+            os.environ.update(CAPTURE_REGION=c.removeprefix("region:"), CAPTURE_REGION_DIR=str(staged))
     backend = build_backend(settings)
     if args.synthetic:
         prompts = synthetic_prompts(args.requests, args.prompt_len, seed=args.seed)
@@ -252,10 +287,14 @@ def main(argv: list[str] | None = None) -> int:
                                   Path(args.corpus_dir) if args.corpus_dir else corpus.CORPUS_DIR)
             prompts = [tok.encode_messages(m, thinking=args.enable_thinking) for m in w["messages"]]
             source = {**w["source"], "thinking": args.enable_thinking}
-    staged = Path(tempfile.mkdtemp(prefix="capture-", dir=Path(args.out).parent if Path(args.out).parent.exists() else None))
-    with (capture.capture(args.capture, staged, args.capture_bytes) if args.capture else contextlib.nullcontext()):
+    with contextlib.ExitStack() as stack:
+        if entries:
+            stack.enter_context(capture.capture(entries, staged, args.capture_bytes))
+        if capture.STEP in args.capture:
+            stack.enter_context(capture.step(backend.pools, staged))
         out = asyncio.run(run(backend, settings, prompts, args.max_tokens, Path(args.out), warmup=args.warmup,
-                              source=source, profiler=args.profiler, pyspy=(args.pyspy_bin, args.seconds, args.rate, args.pyspy_arg)))
+                              source=source, profiler=args.profiler, pyspy=(args.pyspy_bin, args.seconds, args.rate, args.pyspy_arg),
+                              concurrency=args.concurrency))
     if args.capture:
         shutil.move(str(staged), str(Path(out) / "captures"))
     else:

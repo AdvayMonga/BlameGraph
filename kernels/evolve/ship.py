@@ -42,6 +42,17 @@ def unstart(task, src: str) -> str:
     return src
 
 
+def no_live_autotune(src: str, base: str | None) -> str:
+    """`src`, refused when it would autotune while serving where `base` (the engine module it replaces) does not:
+    a winner ships with its autotune frozen (kernels/evolve/freeze.py, which `gate` and `kernel_search` apply)."""
+    from kernels.evolve.freeze import introduced
+    live = introduced(src, base)
+    if live:
+        raise ValueError(f"the program still autotunes at run time (`{live[0][:100]}`): ship the program "
+                         "`gate` froze beside it (<program>.frozen.py), whose tuning is a table")
+    return src
+
+
 def gate_passed(gate: dict) -> bool:
     """Every gate passed (correctness, physics, memory, timing/capture) and the held-out check judged > 0 cases."""
     gates = json.loads(gate.get("artifacts", {}).get("gates") or "{}")
@@ -60,19 +71,26 @@ def _module_path(repo: Path, base: str, module: str) -> str:
 
 def _overrides_at(repo: Path, base: str, pkg: str) -> list[tuple[str, tuple[str, str]]]:
     """(module path, (first, last)) of every OVERRIDES key in the overrides package's modules at `base`."""
-    import ast
     out = []
     for path in _git(repo, "ls-tree", "--name-only", f"{base}:{pkg}").split() if _exists(repo, base, pkg) else []:
         if path.endswith(".py"):
-            for node in ast.walk(ast.parse(_git(repo, "show", f"{base}:{pkg}/{path}"))):
-                targets = node.targets if isinstance(node, ast.Assign) else [node.target] \
-                    if isinstance(node, ast.AnnAssign) else []
-                if any(isinstance(t, ast.Name) and t.id == "OVERRIDES" for t in targets):
-                    try:
-                        out += [(f"{pkg}/{path}", tuple(ast.literal_eval(k))) for k in node.value.keys]
-                    except (AttributeError, TypeError, ValueError):
-                        raise ValueError(f"{pkg}/{path} at {base}: OVERRIDES is not a dict of literal (first, last) "
-                                         "keys, so an overlap cannot be ruled out") from None
+            out += override_keys(f"{pkg}/{path}", _git(repo, "show", f"{base}:{pkg}/{path}"))
+    return out
+
+
+def override_keys(path: str, src: str) -> list[tuple[str, tuple[str, str]]]:
+    """(path, (first, last)) of every OVERRIDES key in one module's source."""
+    import ast
+    out = []
+    for node in ast.walk(ast.parse(src)):
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target] \
+            if isinstance(node, ast.AnnAssign) else []
+        if any(isinstance(t, ast.Name) and t.id == "OVERRIDES" for t in targets):
+            try:
+                out += [(path, tuple(ast.literal_eval(k))) for k in node.value.keys]
+            except (AttributeError, TypeError, ValueError):
+                raise ValueError(f"{path}: OVERRIDES is not a dict of literal (first, last) keys, so an overlap "
+                                 "cannot be ruled out") from None
     return out
 
 
@@ -81,22 +99,32 @@ def _exists(repo: Path, base: str, path: str) -> bool:
 
 
 def _region_files(task, program: str, repo: Path, base: str) -> dict[str, str]:
-    """A region's winner as a module of the engine's overrides package (`regions.override_module`), beside the
-    stations module; the package's `__init__.py` added when the engine lacks it."""
+    """A region's winner as a module of the engine's overrides package at `base`."""
     from kernels import regions
-    _, first, last = task.name.split(":")
     root = _module_path(repo, base, regions.ENGINE).removesuffix(regions.ENGINE.replace(".", "/") + ".py")
     pkg = root + regions.OVERRIDES_PACKAGE.replace(".", "/")
-    names = [s.name for s in regions.engine_stations()]
-    for path, (a, b) in _overrides_at(repo, base, pkg):
+    return region_files(task, program, pkg, _overrides_at(repo, base, pkg), [s.name for s in regions.engine_stations()],
+                        _exists(repo, base, f"{pkg}/__init__.py"))
+
+
+def region_files(task, program: str, pkg: str, overrides: list, names: list[str], has_init: bool) -> dict[str, str]:
+    """A region's winner as a module of the overrides package `pkg` (`regions.override_module`), refused when it
+    overlaps one of `overrides` ((path, (first, last)), stations ordered as `names`); the package's `__init__.py`
+    added when it lacks one."""
+    from kernels import regions
+    from lab.capture import STEP
+    if task.name == STEP:
+        raise ValueError(f"{STEP} does not ship: the engine's STEP hook writes the K/V pools in place and this task's K/V "
+                         "is pure (copied per call)")
+    _, first, last = task.name.split(":")
+    for path, (a, b) in overrides:
         if a not in names or b not in names:
-            raise ValueError(f"the override {a}..{b} in {path} at {base} names a station this engine lacks")
+            raise ValueError(f"the override {a}..{b} in {path} names a station this engine lacks")
         if names.index(a) <= names.index(last) and names.index(first) <= names.index(b):
-            raise ValueError(f"region {first}..{last} overlaps the override {a}..{b} already in {path} at {base}")
-    files = {f"{pkg}/{first}_{last}.py": regions.override_module(program, first, last)}
-    init = f"{pkg}/__init__.py"
-    if not _exists(repo, base, init):
-        files[init] = '"""Region overrides from the layer-1 loop (models/stations.py: `overrides`)."""\n'
+            raise ValueError(f"region {first}..{last} overlaps the override {a}..{b} already in {path}")
+    files = {f"{pkg}/{first}_{last}.py": no_live_autotune(regions.override_module(program, first, last), None)}
+    if not has_init:
+        files[f"{pkg}/__init__.py"] = '"""Region overrides from the layer-1 loop (models/stations.py: `overrides`)."""\n'
     return files
 
 
@@ -111,7 +139,7 @@ def ship(task, program: str, gate: dict, repo: Path, base: str = "HEAD", branch:
     else:
         module, _, attr = task.entry.partition(":")
         path = _module_path(repo, base, module)
-        files = {path: unstart(task, module_source(program, attr))}
+        files = {path: no_live_autotune(unstart(task, module_source(program, attr)), _git(repo, "show", f"{base}:{path}"))}
     with tempfile.TemporaryDirectory() as d:
         env = {"GIT_INDEX_FILE": str(Path(d) / "index")}
         _git(repo, "read-tree", base, env=env)

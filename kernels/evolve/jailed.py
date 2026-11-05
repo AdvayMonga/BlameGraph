@@ -1,4 +1,4 @@
-"""python -m kernels.evolve.jailed CONFIG.json PROGRAM|- STAGE (1, 2, or 3: ncu counters)  (or `- - STAGE`: {config, source} as JSON on stdin)  ->  kernels.evolve.core's JSON, judged in the jail.
+"""python -m kernels.evolve.jailed CONFIG.json PROGRAM|- STAGE (1, 2, 3: ncu counters, 4: quick, 5: precheck, 6: sanitizer, 7: freeze)  (or `- - STAGE`: {config, source} as JSON on stdin)  ->  kernels.evolve.core's JSON, judged in the jail.
 
 The candidate runs as agent code (lab/safety/grader.jailed: a container with no network on Linux, srt elsewhere;
 LAB_NO_JAIL=1 waives it). The jail sees a fresh tree holding only the candidate and its config, a read-only copy of
@@ -18,7 +18,8 @@ import tempfile
 from pathlib import Path
 
 from kernels import shared_weights
-from kernels.evolve import ncu
+from kernels.evolve import ncu, sanitize
+from kernels.evolve.evaluator import tail
 from kernels.evolve.verify import verify
 from kernels.tasks import load
 from lab import engine
@@ -31,6 +32,7 @@ TIMEOUT_S = float(os.environ.get("KERNEL_EVAL_TIMEOUT_S", "600"))
 NCU_STAGE = 3                    # not a judging stage: ncu counters for a program that passed stage 2 (kernels/evolve/ncu.py)
 QUICK_STAGE = 4                  # stage 2 on the most-called seen shape only: the funnel's quick speed test
 PRECHECK_STAGE = 5               # no GPU attached: the screen, the CUDA C++ build, the compiler's report (precheck.py)
+SANITIZE_STAGE = 6               # the gate's: compute-sanitizer around one call per shape (kernels/evolve/sanitize.py)
 EVAL_DIRS = Path(os.environ.get("KERNEL_EVAL_DIRS") or Path(tempfile.gettempdir()) / "kernel-eval")
 CUDA = Path("/usr/local/cuda")
 MEMORY = os.environ.get("KERNEL_EVAL_MEMORY", "32g")   # host RAM a judgment may use: a program cannot starve the host
@@ -156,7 +158,21 @@ def _refuse_writable(holder: Path) -> None:
 def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_S) -> dict:
     """core's result for `source` under `cfg`, from a jailed process; a crash or timeout scores 0 with its output.
     Stage 3 (ncu) profiles the smallest and the largest seen shape (by their first axis), each in its own jail:
-    a batch of 1 and a batch of 512 rarely share a bottleneck."""
+    a batch of 1 and a batch of 512 rarely share a bottleneck. The held-out gate (stage 2 with held-out shapes) also
+    runs stage 6 on a program that passed it: each sanitizer tool in its own jail, any error failing the gate."""
+    if stage == 2 and cfg.get("heldout") and not cfg.get("_unsanitized"):
+        return _sanitized(cfg, source, judge_jailed({**cfg, "_unsanitized": True}, source, 2, timeout_s), timeout_s)
+    if stage == SANITIZE_STAGE and not cfg.get("_sanitizer_tool"):
+        runs = []
+        for tool in sanitize.TOOLS:
+            a = judge_jailed({**cfg, "seen": sanitize.shapes(cfg["seen"], cfg.get("heldout") or []),
+                              "_sanitizer_tool": tool}, source, stage, timeout_s)["artifacts"]
+            if "sanitizer_missing" in a:
+                return {"metrics": {"stage": stage}, "artifacts": a}
+            runs.append(json.loads(a["sanitizer"]) if "sanitizer" in a else
+                        {"tool": tool, "passed": False, "errors": 0, "kinds": [], "kernels": [],
+                         "note": (a.get("shared_weights_changed") or a.get("error", ""))[-500:]})
+        return {"metrics": {"stage": stage}, "artifacts": {"sanitizer": json.dumps(runs)}}
     if stage == NCU_STAGE and not cfg.get("_ncu_one"):
         seen = sorted(cfg["seen"], key=lambda s: s[0])
         out = []
@@ -167,11 +183,12 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
             why = a.get("ncu_error") or a.get("shared_weights_changed") or a.get("error", "")    # a void's evidence too
             out.append({"shape": shape, **(json.loads(a["ncu"]) if "ncu" in a else {"error": why[-500:]})})
         return {"metrics": {"stage": stage}, "artifacts": {"ncu": json.dumps({"shapes": out})}}
-    if stage == QUICK_STAGE:                     # selection orders seen shapes by calls: the first is the most called
+    if stage == QUICK_STAGE:        # selection orders seen shapes by calls: the first is the most called
         one = json.dumps(list(cfg["seen"][0]))
         r = judge_jailed({**cfg, "seen": cfg["seen"][:1], "weights": {one: (cfg.get("weights") or {}).get(one, 1)},
-                          "ints": {k: v for k, v in (cfg.get("ints") or {}).items() if k == one}}, source, 2, timeout_s)
-        return {**r, "metrics": {**r["metrics"], "stage": QUICK_STAGE}}
+                          "ints": {k: v for k, v in (cfg.get("ints") or {}).items() if k == one}}, source, 2,
+                         timeout_s)
+        return {**r, "metrics": {**r["metrics"], "stage": stage}}
     fail = {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage}}
     if cfg.get("shared_weights"):
         _refuse_writable(Path(cfg["shared_weights"]))
@@ -186,7 +203,9 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
         if stage == 2:                           # outputs to verify outside the jail
             cfg = {**cfg, "record": str(tree / "outputs.pt")}
         (tree / "eval_config.json").write_text(json.dumps(cfg))
-        src = _engine_src(load(cfg["task"]))
+        bench = {k: cfg[k] for k in ("source", "samples") if cfg.get(k)} if cfg["task"].startswith(("kb:", "fib:")) \
+            else {}                              # a public benchmark's problem; a region stays light here
+        src = _engine_src(load(cfg["task"], **bench))
         path = os.pathsep.join(str(p) for p in (harness, src) if p)
         read = [harness] + ([src] if src else [])
         gpu = None
@@ -194,6 +213,14 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
             argv = [engine.python(), "-m", "kernels.evolve.precheck", str(tree / "eval_config.json"),
                     str(tree / "candidate.py")]
             gpu = False
+        elif stage == SANITIZE_STAGE:            # compute-sanitizer around the probe, its install dir mounted read-only
+            exe = sanitizer()
+            if not exe:
+                return {"metrics": {"stage": stage},
+                        "artifacts": {"sanitizer_missing": "not run: compute-sanitizer not found"}}
+            read += [Path(exe).parent]           # <toolkit>/compute-sanitizer: the launcher and its libraries
+            argv = [*sanitize.argv(exe, cfg["_sanitizer_tool"]), engine.python(), "-m", "kernels.evolve.sanitize",
+                    str(tree / "eval_config.json"), str(tree / "candidate.py")]
         elif stage == NCU_STAGE:                 # ncu around the probe; its install root mounted read-only
             exe = shutil.which("ncu")
             if not exe:
@@ -212,6 +239,8 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
             env["TORCH_CUDA_ARCH_LIST"] = cfg["arch"]
         if stage == PRECHECK_STAGE:
             env["CUDA_VISIBLE_DEVICES"] = ""
+        if stage == SANITIZE_STAGE:              # no caching allocator: an access past a tensor's end leaves its block
+            env["PYTORCH_NO_CUDA_MEMORY_CACHING"] = "1"
         read += [home] if home else []
         read += [Path(cfg["samples"])] if cfg.get("samples") else []                  # a region's captures
         read += [shared_weights._side(Path(cfg["shared_weights"]), k) if k else Path(cfg["shared_weights"])
@@ -234,7 +263,7 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
                                                                     "void, and they were restored"}}
         if stage == PRECHECK_STAGE:
             return _precheck_result(p, stage, key)
-        r, why = _result(p.stdout, key) if stage != NCU_STAGE else (None, "")
+        r, why = _result(p.stdout, key) if stage not in (NCU_STAGE, SANITIZE_STAGE) else (None, "")
         if stage == 2 and p.returncode == 0 and r is not None:
             if r["metrics"].get("correct") == 1.0:
                 ok, why = verify(cfg, tree / "outputs.pt", timed=r["metrics"].get("combined_score", 0) > 0)
@@ -246,6 +275,9 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
             return r
     finally:
         shutil.rmtree(d / "harness", ignore_errors=True)
+    if stage == SANITIZE_STAGE:
+        return {"metrics": {"stage": stage}, "artifacts": {"sanitizer": json.dumps(
+            sanitize.parse(cfg["_sanitizer_tool"], p.stdout, p.returncode))}}
     if stage == NCU_STAGE:
         if p.returncode != 0:
             return {"metrics": {"stage": stage}, "artifacts": {"ncu_error": (p.stderr or p.stdout)[-2000:]}}
@@ -253,8 +285,36 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
     if p.returncode != 0 or r is None:
         return {**fail, "artifacts": {"error": f"evaluation process exited {p.returncode}"
                                                f"{'; ' + why if p.returncode == 0 else ''}:\n"
-                                               f"{(p.stderr or p.stdout)[-3000:]}"}}
+                                               f"{tail(p.stderr or p.stdout)}"}}
     return r
+
+
+def sanitizer() -> str | None:
+    """compute-sanitizer from the toolkit the builds use, else on PATH (resolved: its install root is mounted)."""
+    home = cuda_home()
+    exe = home / "bin" / "compute-sanitizer" if home else None
+    exe = str(exe) if exe and exe.exists() else shutil.which("compute-sanitizer")
+    return str(Path(exe).resolve()) if exe else None
+
+
+def _sanitized(cfg: dict, source: str, r: dict, timeout_s: float) -> dict:
+    """The gate's result with the sanitizer's verdict added as gate `sanitizer` (an error zeroes the program); not
+    run when the program already failed; a host without the sanitizer, or weights attached over CUDA IPC from the
+    holder's process (which the sanitizer does not instrument), say so as a fact, never a failure."""
+    if r["metrics"].get("correct") != 1.0:
+        return r
+    if cfg.get("shared_weights"):
+        return {**r, "artifacts": {**r["artifacts"], "sanitizer": "not run: the weights are attached over CUDA IPC "
+                                                                    "from the holder's process, which the sanitizer does not instrument"}}
+    a = judge_jailed(cfg, source, SANITIZE_STAGE, timeout_s)["artifacts"]
+    if "sanitizer_missing" in a:
+        return {**r, "artifacts": {**r["artifacts"], "sanitizer": a["sanitizer_missing"]}}
+    g = sanitize.verdict(json.loads(a["sanitizer"]))
+    gates = {**json.loads(r["artifacts"].get("gates") or "{}"), "sanitizer": g}
+    out = {**r, "artifacts": {**r["artifacts"], "gates": json.dumps(gates, indent=1), "sanitizer": a["sanitizer"]}}
+    if not g["passed"]:
+        out["metrics"] = {**r["metrics"], "combined_score": 0.0, "correct": 0.0}
+    return out
 
 
 def _precheck_result(p, stage: int, key: str) -> dict:

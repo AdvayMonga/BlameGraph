@@ -177,3 +177,11 @@ if __name__ == "__main__":
             fn("mps"); print("ok", fn.__name__, "[mps]")
     else:
         print("skip mps tests (not available)")
+
+
+def test_poison_marks_a_non_contiguous_input():
+    from kernels.check import _poison
+    q = torch.zeros(2, 3, 4).transpose(1, 2)          # a transposed q, as the prefill stations pass it
+    _poison([q])
+    flat = q.contiguous().view(-1)
+    assert torch.isnan(flat[0]) and torch.isposinf(flat[12]) and torch.isneginf(flat[-1])

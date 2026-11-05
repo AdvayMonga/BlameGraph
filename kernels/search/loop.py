@@ -4,7 +4,7 @@ lineage's scores, what its earlier children scored or why they failed), apply it
 the result with the cascade (stage 1, then stage 2). Lessons it builds on: serial refinement over parallel sampling
 (Kevin), a tree with caps and pruning (STARK), keeping slower and failed nodes as context (Kernel Forge), no
 conversation history, only the latest program and its facts (CudaForge), duplicates refused before any GPU time.
-With a judge (a strong model), each expansion is one funnel round (kernels/search/funnel.py), whose judge calls use
+With a judge (a strong model), each expansion is one round (kernels/search/funnel.py), whose calls use
 `JUDGE` and `MODES` below; the genetic search (kernels/search/generations.py) runs the same rounds from several parents.
 
 Every node goes to `<out>/trace.jsonl` in the fields `kernels.evolve.run.record` and `retime` read."""
@@ -14,13 +14,11 @@ import difflib
 import json
 import re
 import tempfile
-import time
 import uuid
 from pathlib import Path
 from typing import Callable
 
 from kernels.search import diff
-from kernels.search.llm import CACHE_SPLIT
 from kernels.search.tree import UCT_C, Node, Tree, fingerprint
 
 FORMAT = """Answer with SEARCH/REPLACE blocks against the program shown. Each SEARCH section must match the program
@@ -36,18 +34,21 @@ TIMING_KEYS = ("shape", "candidate_ms", "baseline_ms", "speedup", "speedup_p25",
                "pct_of_roofline", "bound", "pct_of_peak_bandwidth", "pct_of_peak_flops")
 
 
-JUDGE = """You are the judge in a search over GPU kernel programs. You are shown one program and its measurements.
-{mode_spec}"""
-MODES = {
-    "optimization": 'The program is correct. Name {n} distinct changes a coder could make, as one JSON array of {n} '
-                    'objects and nothing else, each {{"bottleneck": "<max 30 words>", "optimisation_method": "<max 35 '
-                    'words>", "modification_plan": "<max 35 words>", "mechanism": [{{"counter": "<an ncu metric name '
-                    'from the measurements>", "change_pct": <predicted % change, summed over the program\'s kernels>}}]}}. '
-                    '"mechanism" may be empty. Every one is written and measured.',
-    "crossover": 'The program is correct. Below it is another program from the same search, as a diff. Name {n} '
-                 'change(s) to this program that carry over what the other program does differently, as one JSON '
-                 'array of {n} objects and nothing else, each {{"bottleneck": "<max 30 words>", "optimisation_method": '
-                 '"<max 35 words>", "modification_plan": "<max 35 words>", "mechanism": []}}.',
+JUDGE = ("You are making changes to GPU kernel programs in a search. You are shown one program, its measurements and "
+         "the starting program.")
+SHAPE = ('{{"bottleneck": "<max 30 words>", "optimisation_method": "<max 35 words>", "modification_plan": "<max 35 '
+         'words>", "mechanism": [{{"counter": "<an ncu metric name from the measurements>", "change_pct": <predicted % '
+         'change, summed over the program\'s kernels>}}]}}')
+ONE = ('Answer with one JSON object ' + SHAPE + ' ("mechanism" may be empty), then the change as SEARCH/REPLACE blocks '
+       'against the program shown. It is applied and measured.')
+MODES = {           # the request that ends a call's prompt, by idea type (kernels/search/generations.py)
+    "optimization": "The program is correct. Make one change to it. " + ONE,
+    "persistence": "The program is correct. Its last change, shown above, took its parent from {before:.4f} to "
+                   "{after:.4f}. Make one change that takes that same change further. " + ONE,
+    "fresh": "The program is correct. Make one change that gives the kernel an overall structure that differs from this "
+             "program's and from every idea in the table of ideas tried on this task. " + ONE,
+    "crossover": "The program is correct. Another program from the same search is shown after it. Make one change to "
+                 "this program that carries over what the other program does differently. " + ONE,
 }
 
 
@@ -55,7 +56,7 @@ def trace_row(node: Node, cost: float) -> dict:
     """A node as `<out>/trace.jsonl` keeps it (the fields `kernels.evolve.run.record` and `retime` read)."""
     return {"iteration": node.iteration, "parent_id": node.parent, "child_id": node.id, "child_metrics": node.metrics,
             "child_code": node.code, "mode": node.mode, "artifacts": node.artifacts, "judge": node.judge,
-            "proposal": node.proposal, "cost_usd": cost}
+            "proposal": node.proposal, "kind": node.kind, "cost_usd": cost}
 
 
 def hypotheses(text: str, n: int) -> list[dict]:
@@ -122,39 +123,49 @@ def inspirations(tree: Tree, node: Node, k: int = 2) -> list[Node]:
     return sorted(others, key=lambda n: -n.score)[:k]
 
 
-def prompt(tree: Tree, node: Node, plan: str = "", coder: bool = True) -> str:
+def prompt(tree: Tree, node: Node) -> str:
+    """The program, its measurements, its lineage and children, the starting program (when it is not the starting
+    program) and the best programs off its lineage, all as full code."""
     path = " -> ".join(f"{n.id} ({n.score:.4f})" for n in tree.lineage(node))
     tried = [tree.nodes[c] for c in node.children]
     kids = "\n".join(f"- {c.id}: score {c.score:.4f}" + (f", {c.artifacts.get('error', '')[:300]}"
                                                           if c.score <= 0 else "") for c in tried) or "none"
     sol = f"; {node.pct_of_roofline:.1f}% of its roofline bound, call-weighted" if node.pct_of_roofline else ""
-    others = [] if coder else inspirations(tree, node)       # the judge sees other branches; the coder its plan only
-    other = "".join(f"## Program {o.id} (score {o.score:.4f}), its diff against the starting program\n"
-                    f"```diff\n{diff_from_root(tree, o)}```\n" for o in others)
+    root = tree.root()
+    start = "" if node is root else (f"# The starting program {root.id} (score {root.score:.4f})\n"
+                                     f"```python\n{root.code}\n```\n\n")
+    other = "".join(f"## Program {o.id} (score {o.score:.4f})\n```python\n{o.code}\n```\n"
+                    for o in inspirations(tree, node))
     return (f"# Program {node.id} (score {node.score:.4f}{sol}; best in the tree {tree.best().score:.4f})\n"
             f"```python\n{node.code}\n```\n\n# Its measurements\n{facts(node)}\n\n"
-            f"# Lineage (node, score)\n{path}\n\n# Programs already derived from it\n{kids}\n\n"
-            + (f"# Other programs in the tree\n{other}\n" if other else "")
-            + (f"{CACHE_SPLIT}# The change to make (from the judge)\n{plan}\n\n" if plan else "")
-            + (FORMAT if coder else ""))
+            f"# Lineage (node, score)\n{path}\n\n# Programs already derived from it\n{kids}\n\n" + start
+            + (f"# Other programs in the tree\n{other}\n" if other else ""))
 
 
 REFUSED = "ERR_NVGPUCTRPERM"        # ncu: this host does not let the jail read GPU performance counters
 
 
 def cascade(judge_stage: Callable[[str, int], dict], counters: bool = False) -> Callable[[str], dict]:
-    """Stage 1, then stage 2 for a program that passes it, then (counters=True) its ncu counters: {metrics,
-    artifacts}. Once the host refuses counters, they are not asked for again (two jailed runs per program, for an
+    """Stage 1, then stage 2 for a program that passes it, then (counters=True) its ncu counters: {metrics, artifacts,
+    code: the program measured}. Once the host refuses counters, they are not asked for again (two jailed runs per program, for an
     error: every profile of 2026-10-18/19)."""
     on = [counters]
 
-    def judge(code: str) -> dict:
+    def staged(code: str, n: int) -> dict:
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
             f.write(code)
         try:
-            r = judge_stage(f.name, 1)
-            if r["metrics"].get("correct") != 1.0:
-                return r
+            return judge_stage(f.name, n)
+        finally:
+            Path(f.name).unlink()
+
+    def judge(code: str) -> dict:
+        r = staged(code, 1)
+        if r["metrics"].get("correct") != 1.0:
+            return {**r, "code": code}
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+            f.write(code)
+        try:
             r = judge_stage(f.name, 2)
             if on[0] and r["metrics"].get("correct") == 1.0 and r["metrics"].get("combined_score", 0) > 0:
                 a = judge_stage(f.name, 3)["artifacts"]
@@ -162,34 +173,24 @@ def cascade(judge_stage: Callable[[str, int], dict], counters: bool = False) -> 
                     on[0] = False
                     a = {"ncu_missing": f"ncu counters unavailable on this host ({REFUSED}); not collected this run"}
                 r["artifacts"] = {**r["artifacts"], **a}
-            return r
+            return {**r, "code": code}
         finally:
             Path(f.name).unlink()
     return judge
 
 
 def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, float]],
-           judge: Callable[[str], dict], out: Path, evals: int, usd: float, seed: int = 0,
+           judge: Callable[[str], dict], out: Path, evals: int, seed: int = 0,
            patience: int | None = None, children: int = 4,
-           uct_c: float = UCT_C, funnel=None, gpu_s: float | None = None,
-           gpu_used: Callable[[], float] | None = None, wall_s: float | None = None) -> tuple[Tree, dict]:
-    """Search until `evals` programs are judged, `usd` is spent on model calls, nothing is left to try, or `patience`
+           uct_c: float = UCT_C, funnel=None) -> tuple[Tree, dict]:
+    """Search until `evals` programs are judged, nothing is left to try, or `patience`
     programs have been judged since the best last improved (MANTIS, Hari et al.: 16 attempts without progress).
 
     Each expansion of an MCTS-chosen parent is one funnel round (kernels/search/funnel.py), every idea and what became
     of it in `<out>/hypotheses.jsonl`; without a funnel (no judge), the coder alone proposes `children` children.
     Returns the tree and the run's cost {usd, model_calls, evals, ...}."""
     out.mkdir(parents=True, exist_ok=True)
-    tree, spent, calls, judged, it = Tree(seed, c=uct_c), 0.0, 0, 0, 0
-
-    deadline = time.monotonic() + wall_s if wall_s else None
-
-    def gpu_out() -> bool:
-        return bool((gpu_s is not None and gpu_used and gpu_used() >= gpu_s)
-                    or (deadline is not None and time.monotonic() >= deadline))
-    if funnel is not None:                       # its rounds stop mid-way at the same caps
-        funnel.usd_cap = usd if funnel.usd_cap is None else funnel.usd_cap
-        funnel.gpu_s_cap, funnel.gpu_used, funnel.deadline = gpu_s, gpu_used, deadline
+    tree, spent, calls, judged, it, rows = Tree(seed, c=uct_c), 0.0, 0, 0, 0, []
     with open(out / "trace.jsonl", "w") as trace, open(out / "hypotheses.jsonl", "w") as hyplog:
         def keep(node: Node, cost: float) -> None:
             tree.add(node)
@@ -197,9 +198,9 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
             trace.flush()
 
         def attempt(parent: Node) -> None:
-            """One coder call, applied and judged (nothing when the budget ran out first)."""
+            """One coder call, applied and judged (nothing once `evals` are judged)."""
             nonlocal spent, calls, judged
-            if judged >= evals or spent >= usd or gpu_out():
+            if judged >= evals:
                 return
             text, c = propose(system + "\n\n" + FORMAT, prompt(tree, parent))
             spent, calls = spent + c, calls + 1
@@ -212,13 +213,13 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
                 return
             r = judge(code)
             judged += 1
-            keep(Node(uuid.uuid4().hex[:8], parent.id, code, r["metrics"], r["artifacts"], it, text), c)
+            keep(Node(uuid.uuid4().hex[:8], parent.id, r.get("code", code), r["metrics"], r["artifacts"], it, text), c)
 
         r = judge(initial)
         judged += 1
-        keep(Node(uuid.uuid4().hex[:8], None, initial, r["metrics"], r["artifacts"], 0), 0.0)
+        keep(Node(uuid.uuid4().hex[:8], None, r.get("code", initial), r["metrics"], r["artifacts"], 0), 0.0)
         best_at, best_score = judged, tree.best().score
-        while judged < evals and spent < usd and not gpu_out():
+        while judged < evals:
             if tree.best().score > best_score:
                 best_at, best_score = judged, tree.best().score
             if patience and judged - best_at >= patience:
@@ -231,12 +232,15 @@ def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, f
                 for _ in range(children):
                     attempt(parent)
                 continue
+            from kernels.search import memory
             from kernels.search.funnel import expand
-            before = funnel.spent
+            before, library = funnel.spent, funnel.library
+            funnel.memory = (memory.general(library, funnel.task), memory.task(library, funnel.task, rows))
             kids = expand(funnel, tree, parent, system, it, keep,
-                          lambda row: (hyplog.write(json.dumps(row, default=str) + "\n"), hyplog.flush()))
+                          lambda row: (rows.append(row), hyplog.write(json.dumps(row, default=str) + "\n"),
+                                       hyplog.flush()))
             spent, calls, judged = spent + funnel.spent - before, funnel.calls, judged + len(kids)
             if not kids:                         # a round that examined nothing counts as one failure
                 parent.failures += 1
-    stalled = bool(patience and judged < evals and spent < usd and judged - best_at >= patience)
+    stalled = bool(patience and judged < evals and judged - best_at >= patience)
     return tree, {"usd": round(spent, 4), "model_calls": calls, "evals": judged, "stopped_no_progress": stalled}

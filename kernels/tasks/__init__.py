@@ -27,6 +27,7 @@ class Task:
                                             # move; with inputs, for those exact inputs (e.g. real sequence lengths)
     call: Callable = None                   # call(fn, *inputs) -> fn's output (adds scalars); default fn(*inputs)
     heldout_axes: tuple[int, ...] = ()      # shape axes whose largest values are held out as a region
+    heldout_values: tuple = ()              # (axis, values) pairs: a shape with one of those values there is held out
     edge_shapes: Callable = None            # edge_shapes(shape) -> shapes; default: the checker's
     dtypes: tuple = (torch.bfloat16,)
     layouts: tuple = ("strided", "transposed")  # non-contiguous variants its callers pass (lab/capture records it)
@@ -34,8 +35,6 @@ class Task:
                                             # as a graph replay (no host launch overhead)
     scales: tuple | None = None            # value scalings checked beyond the task's own (None: the evaluator's; ties in
                                             # bf16 make ×0.01 meaningless for an exact top-k)
-    size_expr: str | None = None            # the call's size along heldout_axes[0], as Python over the entry's `args`,
-                                            # from tensor shapes only (no device sync): per-region dispatch reads it
     kernel_names: tuple[str, ...] = ()      # regexes of the device kernels its entry launches (kernels/share.py)
     make_real: Callable = None              # make_real(shape, dtype, device, generator, ints) -> inputs, `ints` being a
                                             # captured call's 1-D int args by value (e.g. its real sequence lengths)
@@ -53,6 +52,8 @@ class Task:
                                             # calls are "region:FIRST:LAST")
     seen_default: tuple = field(default_factory=tuple)      # shapes to use with no capture (tests, toys)
     heldout_default: tuple = field(default_factory=tuple)
+    tolerances: dict | None = None          # {dtype: [atol, rtol]} in place of the target's (a public benchmark's own)
+    nonfinite: bool = True                  # NaN/Inf inputs must give the reference's NaN/Inf positions
 
     def bind(self, fn: Callable) -> Callable:
         """fn as the checker and the timer call it: tensors in, the task's scalars added."""
@@ -96,12 +97,26 @@ def randn(size, g, device, dtype, scale: float = 1.0) -> torch.Tensor:
 
 
 def load(name: str, **region) -> Task:
-    """A named task, or a region of the engine's decode stations (`region:FIRST:LAST`; `region` may give its
-    captured `samples` dir and its `shared_weights` holder file)."""
+    """A named task, a region of the engine's decode stations (`region:FIRST:LAST`, or the whole decode step
+    `region:embed:argmax`; `region` gives its captured `samples` dir and its `shared_weights` holder file, without
+    which it is `regions.light`), a KernelBench problem (`kb:LEVEL:ID`; `region` may give its `source`), or a
+    FlashInfer-Bench definition (`fib:NAME`; `region` may give its dataset dir as `samples`)."""
+    if name.startswith("fib:"):
+        from kernels.flashinfer_bench import task
+        return task(name, region.get("samples"))
+    if name.startswith("kb:"):
+        from kernels.kernelbench import task
+        return task(name, region.get("source"))
     if name.startswith("region:"):
-        from kernels.regions import from_engine
+        from kernels import regions
+        from lab.capture import STEP
+        if not region:                           # no samples or holder here: what the controller knows of it
+            return regions.light(name)
+        if name == STEP:
+            from kernels import step
+            return step.task(**region)
         _, first, last = name.split(":")
-        return from_engine(first, last, **region)
+        return regions.from_engine(first, last, **region)
     return importlib.import_module(f"kernels.tasks.{name}").TASK
 
 
@@ -111,8 +126,8 @@ TASKS = ("toy_rmsnorm", "paged_decode", "paged_decode_fp8", "moe_gemm", "moe_gem
 
 def from_config(cfg: dict) -> Task:
     """The task an evaluation config names, with its deployment options and captured ints: what every judge uses."""
-    region = {k: cfg[k] for k in ("samples", "shared_weights") if cfg.get(k)} \
-        if cfg["task"].startswith("region:") else {}
+    region = {k: cfg[k] for k in ("samples", "shared_weights", "source") if cfg.get(k)} \
+        if cfg["task"].startswith(("region:", "kb:", "fib:")) else {}
     return load(cfg["task"], **region).with_options(cfg.get("options")).with_ints(cfg.get("ints"))
 
 

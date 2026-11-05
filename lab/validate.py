@@ -6,7 +6,8 @@
 2. Serves each launch in the target's [validation] good and bad tables, judges it (`correctness candidate`), and
    checks the gate separates them: every good must PASS, every bad must FAIL (inconclusive counts as neither).
 3. Serves the target's *engine* (the base commit, from its repo) and runs the chosen regimes `noise_runs` times on
-   the seen split, short tier, to measure each regime's run-to-run band on the thing submit will judge; writes
+   the seen split at bench's tier, its load searches resolved to RESOLUTION_PCT (a searched regime's band is never
+   below it), to measure each regime's run-to-run band on the thing submit will judge; writes
    a `noise` ledger record per regime (tagged with the target, `server: engine` and the engine commit, None when its
    tree had uncommitted changes), which `submit` reads for runs on that base commit only.
 Exit status 0 only if the gate separated and every band was measured. Nothing here is jailed: these are the
@@ -30,19 +31,22 @@ from lab import calibrate, engine, gpu, ledger, serve, target
 from lab.evaltools import BENCH_TIER
 
 
-def band_pct(values: list[float]) -> float | None:
-    """Run-to-run band as a percent of the mean: 2 x sample sd / mean (one value: None)."""
+RESOLUTION_PCT = 5.0    # the noise runs' load searches resolve to this; a searched regime's band is never below it
+
+
+def band_pct(values: list[float], floor: float = 0.0) -> float | None:
+    """Run-to-run band as a percent of the mean: 2 x sample sd / mean, at least `floor` (one value: None)."""
     vals = [v for v in values if v is not None]
     if len(vals) < 2 or not statistics.mean(vals):
         return None
-    return 2 * statistics.stdev(vals) / abs(statistics.mean(vals)) * 100
+    return max(2 * statistics.stdev(vals) / abs(statistics.mean(vals)) * 100, floor)
 
 
 def write_noise(regime: str, values: list[float], t: target.Target, extra: dict | None = None,
-                root: Path = ledger.ROOT) -> dict:
+                root: Path = ledger.ROOT, floor: float = 0.0) -> dict:
     """One regime's band as a `noise` ledger record; returns its fields."""
     from regimes.workload import corpus_version
-    d = {"regime": regime, "band_pct": band_pct(values), "values": values, "runs": len(values), "model": t.model,
+    d = {"regime": regime, "band_pct": band_pct(values, floor), "values": values, "runs": len(values), "model": t.model,
          "target": t.name, "server": "engine", "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,
          "measured_at": time.strftime("%Y-%m-%dT%H:%M:%S"), **(extra or {})}
     ledger.append({"kind": "noise", "config": {"split": "seen", "tier": d.get("tier")}, "result": d}, root)
@@ -89,22 +93,26 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
     if noise_runs > 0 and names:
         with serve.Served(t.engine_repo, t.engine, log=log_dir / "serve-noise.log", jailed=False) as srv:
             values: dict[str, list] = {n: [] for n in names}
+            searched: set[str] = set()
             for k in range(noise_runs):
-                ctx = suite.Ctx.from_target(t, srv.url, split="seen", tier=BENCH_TIER, seed=k)
+                ctx = suite.Ctx.from_target(t, srv.url, split="seen", tier=BENCH_TIER, seed=k, tol=RESOLUTION_PCT / 100)
                 for n in names:
                     r = suite.REGIMES[n](ctx)
                     values[n].append(r["value"] if r["valid"] else None)
+                    if r.get("probes") or r.get("levels"):
+                        searched.add(n)
             srv.exclusive()                     # a band from a shared GPU would skew every submit
         for n in names:
             report["noise"][n] = write_noise(n, values[n], t, {"tier": BENCH_TIER, "split": "seen",
-                                                                "engine_commit": engine.commit(t.engine_repo, clean=True)}, root)
+                                                                "engine_commit": engine.commit(t.engine_repo, clean=True)}, root,
+                                             RESOLUTION_PCT if n in searched else 0.0)
     report["bands_measured"] = all(d["band_pct"] is not None for d in report["noise"].values()) if names and noise_runs else None
     # 4. the reference engine under the same regimes, once, without its determinism switches: what every bench is shown next to
     if reference_regimes and names:
         with serve.Served(target.ENV_ROOT, calibrate.perf_reference(t), log=log_dir / "serve-reference-regimes.log",
                           jailed=False) as srv:
             rows: list = []
-            ctx = suite.Ctx.from_target(t, srv.url, split="seen", tier=BENCH_TIER, seed=0, rows=rows)
+            ctx = suite.Ctx.from_target(t, srv.url, split="seen", tier=BENCH_TIER, seed=0, rows=rows, tol=RESOLUTION_PCT / 100)
             fp = calibrate.fingerprint(t, gpu.query(), BENCH_TIER, "seen", 0)
             for n in names:
                 k = len(rows)

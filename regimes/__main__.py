@@ -27,7 +27,7 @@ def _cpus(spec: str | None) -> list[int] | None:
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="regimes", description="measure a live server under the eight regimes")
+    ap = argparse.ArgumentParser(prog="regimes", description="measure a live server under the ten regimes")
     target.add_argument(ap)
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")

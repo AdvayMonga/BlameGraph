@@ -77,3 +77,9 @@ def test_validate_separates_and_measures_bands(spec, tmp_path, monkeypatch):
     assert noise["server"] == "engine" and noise["target"] == spec.name
     assert "engine_commit" in noise and noise["engine_commit"] is None     # this engine dir is no git repo
     assert (tmp_path / "ref" / "outputs.jsonl").exists() and (tmp_path / "out" / "report.json").exists()
+
+
+def test_a_searched_band_is_never_below_the_search_resolution():
+    assert validate.band_pct([80.0, 80.0, 80.0], validate.RESOLUTION_PCT) == validate.RESOLUTION_PCT
+    assert validate.band_pct([8.0, 10.0], validate.RESOLUTION_PCT) > validate.RESOLUTION_PCT
+    assert validate.band_pct([0.004, 0.004]) == 0.0 and validate.band_pct([80.0]) is None

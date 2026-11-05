@@ -344,9 +344,26 @@ def test_value_distributions_catch_a_kernel_tuned_to_one_scale():
                          "    if torch.isfinite(x).all() and x.abs().max() > 8:\n        return x.clone()\n"
                          "    xf = x.float()\n"
                          "    return (xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + 1e-6) * w.float()).to(x.dtype)\n")
-        r = judge(t, clamp, list(t.seen_default), [], None, "cpu", None, 2, iters=3)
-        g = json.loads(r["artifacts"]["gates"])
-        assert r["metrics"]["combined_score"] == 0.0 and g["values_x3"]["passed"] is False
+        seen = list(t.seen_default)
+        for held, full in ((seen[:1], False), ([], True)):     # the gate: held-out shapes, or none but `full`
+            r = judge(t, clamp, seen, held, None, "cpu", None, 2, iters=3, full=full)
+            g = json.loads(r["artifacts"]["gates"])
+            assert r["metrics"]["combined_score"] == 0.0 and g["values_x3"]["passed"] is False
+        g = json.loads(judge(t, clamp, seen, [], None, "cpu", None, 2, iters=3)["artifacts"]["gates"])
+        assert "values_x3" not in g and "edge_cases" in g          # selection: correctness and timing, no value scales
+
+
+def test_a_task_without_nonfinite_inputs_gets_none_in_any_check_of_the_gate():
+    import dataclasses
+    from kernels.evolve import core
+    t = dataclasses.replace(load("toy_rmsnorm"), nonfinite=False)
+    seen, orig = [], core.check_kernel
+    core.check_kernel = lambda *a, **kw: (seen.append(kw.get("nonfinite", True)), orig(*a, **kw))[1]
+    try:
+        r = judge(t, SEED, list(t.seen_default), [], None, "cpu", None, 2, iters=3, full=True)
+    finally:
+        core.check_kernel = orig
+    assert r["metrics"]["correct"] == 1.0 and len(seen) > 1 and not any(seen)
 
 
 def load_program_text(src: str):
@@ -414,7 +431,8 @@ def test_split_holds_out_a_region_even_when_calls_pile_up_at_the_largest_value()
     counts = Counter({(m, 64, 96, 8, m, 1): (1000 if m == 512 else 3) for m in range(8, 513, 8)})
     s = shapes.split(t, counts)
     assert s["cut_by"] == "distinct" and s["heldout"] and (512, 64, 96, 8, 512, 1) in s["seen"]   # the top stays seen
-    assert max(x[0] for x in s["seen"] if x[0] != 512) < min(x[0] for x in s["heldout"])          # a whole region
+    h = [x[0] for x in s["heldout"]]
+    assert not any(min(h) < x[0] < max(h) for x in s["seen"]) and max(h) < 512                   # a band below the top
     two = Counter({(n, 32, 4, 128, 16, L): (900 if (n, L) == (33, 8032) else 10)                  # 2026-10-19 regate
                    for n in range(1, 257, 8) for L in (650, 8032)})
     two.update({(n, 32, 4, 128, 16, 8032): 300 for n in range(200, 257, 8)})
@@ -642,7 +660,7 @@ def test_paged_decode_reference_matches_dense_attention():
     assert real[1] < nbytes and real[0] == 4 * 8 * int(lens.sum()) * 16
 
 
-def test_capture_records_calls_and_the_split_holds_out_the_largest():
+def test_capture_records_calls_and_the_split_holds_out_a_band():
     t = load("paged_decode")
     import types
     mod = types.ModuleType("fake_engine_kernels")
@@ -668,10 +686,19 @@ def test_capture_records_calls_and_the_split_holds_out_the_largest():
         counts = shapes.from_captures(task, [Path(d)])
         assert counts[(1, 32, 4, 128, 16, 17)] == 2
         s = shapes.split(task, counts)
-        assert s["source"] == "captures" and (256, 32, 4, 128, 16, 17 * 256) in s["heldout"]
-        assert max(x[0] for x in s["seen"]) < min(x[0] for x in s["heldout"])
+        assert s["source"] == "captures" and (256, 32, 4, 128, 16, 17 * 256) in s["seen"]       # the largest stays seen
+        h = [x[0] for x in s["heldout"]]
+        assert h and not any(min(h) < x[0] < max(h) for x in s["seen"])                           # a band
         ints = shapes.ints_from_captures(task, [Path(d)])
         assert ints[json.dumps([1, 32, 4, 128, 16, 17])] == [[17]] and len(ints) == 9       # first call per shape
+        from unittest import mock
+        with mock.patch.object(capture, "SMALL_INT", 8), tempfile.TemporaryDirectory() as d2:
+            with capture.capture(["fake_engine_kernels:paged_decode_attention"], Path(d2)):
+                for n in (4, 16):                            # 16 lengths: too long to log by value
+                    user.paged_decode_attention(torch.zeros(n, 32, 128), pool, pool, torch.zeros(n, 2, dtype=torch.int32),
+                                                torch.full((n,), 17, dtype=torch.int32), scale=0.1)
+            part = shapes.ints_from_captures(task, [Path(d2)])
+            assert list(part) == [json.dumps([4, 32, 4, 128, 16, 17])]                     # none rather than a part
         kept = shapes.select(task, {**s, "ints": ints}, k=3)["ints"]
         assert set(kept) <= {json.dumps(list(x)) for x in [*shapes.select(task, s, k=3)["seen"], *s["heldout"]]}
         sel = shapes.select(task, s, k=3)

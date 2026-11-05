@@ -2,12 +2,17 @@
 calls under real traffic, split them seen / held-out, search, gate the winner on the held-out shapes, and hand the
 engine module back as a patch the agent applies itself. It runs on the controller: the search's model calls stay
 here, and its evaluator runs where the GPU is (`remote_env` for a worker host, kernels/evolve/evaluator.py's ssh mode).
-A blocking call for now; a parallel job on its own GPU host comes later."""
+A region (`region:FIRST:LAST`, or the whole step) loads only where the GPU is: its captures are packed and sent there,
+a hold process there shares its weights and describes it (`hold`, kernels/hold.py), and the controller searches and
+gates it from that description. A blocking call for now; a parallel job on its own GPU host comes later."""
 from __future__ import annotations
 
+import contextlib
 import difflib
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +25,19 @@ CAPTURE_SPECS = (("mixed_1", 256), ("mixed_3", 64), ("long_context", 60))
 REGIME_CAPTURE = {"single_stream": ("steady_interactive", 1), "saturated": ("mixed_1", 256), "bursty": ("mixed_3", 64),
                   "long_prompt_short_output": ("long_context", 60), "short_prompt_long_output": ("steady_interactive", 64),
                   "shared_prefix_multi_turn": ("mixed_3", 64), "overload": ("mixed_1", 256)}
+
+
+CAPTURE_TOKENS = 256          # each capture request's answer length
+
+
+def steady(cls: str, n: int) -> tuple[int, int]:
+    """(requests, in flight) for a capture of corpus class `cls` at load `n`: closed loop at `n` in flight over 3x as
+    many requests, so most of the window is the regime's steady state; a class with fewer seen requests runs them all
+    at a third as many in flight."""
+    from lab import corpus
+    have = len(corpus.load_trace(cls, "seen")[1])
+    total = min(3 * n, have)
+    return total, max(1, min(n, total // 3))
 
 
 def specs(regimes: tuple[str, ...] = ()) -> tuple[tuple[str, int], ...]:
@@ -42,13 +60,15 @@ def capture_env(task) -> dict:
 def tree_key(task, tree: Path, spec: tuple) -> str:
     """What a capture depends on: every engine file but the task's own module, and the traffic. Equal keys reuse."""
     import hashlib
-    h, skip = hashlib.sha256(json.dumps(spec).encode()), module_file(task, tree)
+    h = hashlib.sha256(json.dumps(spec).encode())
+    skip = None if task.name.startswith("region:") else module_file(task, tree)     # a region's code is the engine's
     for f in sorted(p for p in Path(tree).rglob("*") if p.is_file() and p != skip
                     and not {"_harness", "runs", "__pycache__", ".git"} & set(p.relative_to(tree).parts)):
         h.update(f.relative_to(tree).as_posix().encode() + b"\0" + f.read_bytes())
     return h.hexdigest()
 ROOT = Path(__file__).resolve().parents[1]
 GATE_TIMEOUT_S = 3600        # as `kernels.evolve gate`: the held-out shapes on top of the seen ones
+HOLD = "kernels.hold"        # the module a region's hold process runs
 
 
 def module_file(task, tree: Path) -> Path:
@@ -75,8 +95,10 @@ def captures(task, tree: Path, profile: Callable[[Path, dict], Path | None], reg
     env = capture_env(task)
     for cls, n in specs(regimes):
         key = tree_key(task, tree, (task.name, cls, n, sorted(env.items())))
+        total, lanes = steady(cls, n)
         bundle = Path(known[key]) if key in known and Path(known[key]).is_dir() else \
-            profile(tree, {"capture": [task.entry], "corpus_class": cls, "requests": n,
+            profile(tree, {"capture": [task.capture_fn or task.entry], "corpus_class": cls, "requests": total,
+                           "concurrency": lanes, "max_tokens": CAPTURE_TOKENS,
                            **({"capture_task": task.name} if task.capture_env else {})})
         if bundle is not None and (Path(bundle) / "captures").is_dir():
             out.append(Path(bundle) / "captures")
@@ -85,6 +107,67 @@ def captures(task, tree: Path, profile: Callable[[Path, dict], Path | None], reg
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_text(json.dumps(known, indent=1))
     return out
+
+
+def pack(caps: list[Path], dest: Path) -> Path:
+    """One samples dir of a region's captures, what its task loads (`samples`): every call in calls.jsonl, its samples
+    under samples/ renamed per capture, and each capture's calls again in traffic<i>/profile-<source>/captures/, so the
+    shapes are counted per traffic (each weighing the same) and keep their source."""
+    from kernels import shapes
+    from lab import capture
+    (dest / "samples").mkdir(parents=True, exist_ok=True)
+    every = []
+    for i, cap in enumerate(caps):
+        calls = capture.load(cap)
+        for c in calls:
+            if c.get("sample"):
+                name = f"{i}-{c['sample']}"
+                try:
+                    os.link(Path(cap) / "samples" / c["sample"], dest / "samples" / name)
+                except OSError:                  # another file system
+                    shutil.copyfile(Path(cap) / "samples" / c["sample"], dest / "samples" / name)
+                c["sample"] = name
+        own = dest / f"traffic{i}" / f"profile-{shapes.source(cap)}" / "captures"
+        own.mkdir(parents=True)
+        (own / "calls.jsonl").write_text("".join(json.dumps(c) + "\n" for c in calls))
+        every += calls
+    (dest / "calls.jsonl").write_text("".join(json.dumps(c) + "\n" for c in every))
+    return dest
+
+
+@contextlib.contextmanager
+def hold(task, caps: list[Path], out: Path, env: dict, worker=None):
+    """A region held where the evaluator runs, for the block: its captures packed (and pushed to `worker`, a
+    lab.worker.Remote), `python -m kernels.hold` started there, and its description yielded: {holder, samples (paths
+    there), shapes, start, stations}. The hold process exits when its stdin closes, here or over ssh."""
+    local = pack(caps, Path(out) / "samples")
+    there = f"{worker.root()}/lab/runs/remote/kernel_search/{Path(out).name}" if worker else str(Path(out).resolve())
+    samples = f"{there}/samples"
+    if worker:
+        worker.push(local, samples)
+    args = ["-m", HOLD, "--task", task.name, "--samples", samples, "--out", f"{there}/holder/weights.pkl"]
+    if "KERNEL_EVAL_SSH" in env:
+        argv = json.loads(env["KERNEL_EVAL_SSH"]) + [f"{env['KERNEL_EVAL_REMOTE']} python {shlex.join(args)}"]
+    else:
+        from lab import engine
+        argv = [engine.python(), *args]
+    log = open(Path(out) / "hold.log", "w")
+    p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True, cwd=ROOT,
+                         env={**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(ROOT),
+                                                                                        os.environ.get("PYTHONPATH")]))})
+    try:
+        line = next((x for x in p.stdout if x.startswith("{")), None)
+        if line is None:
+            p.wait()
+            raise RuntimeError(f"kernels.hold exited {p.returncode}: {(Path(out) / 'hold.log').read_text()[-2000:]}")
+        yield json.loads(line)
+    finally:
+        p.stdin.close()
+        try:
+            p.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            p.kill()
+        log.close()
 
 
 def remote_env(prefix: list[str], env_dir: str, python: str, env: dict, sudo: bool = False) -> dict:
@@ -132,16 +215,21 @@ def facts(task, kernel_tasks: dict | None, regimes: tuple[str, ...] = ()) -> str
     return "\n".join(out)
 
 
-def search(task, caps: list[Path], start: Path, out: Path, usd: float, evals: int, ledger_root: Path, env: dict,
-           device: str = "cuda", facts_text: str | None = None) -> dict:
-    """`python -m kernels.search` on the captures: its last JSON line (best, cost, out, ledger record id)."""
+def search(task, caps: list[Path], start: Path, out: Path, evals: int, ledger_root: Path, env: dict,
+           device: str = "cuda", facts_text: str | None = None, held: dict | None = None) -> dict:
+    """`python -m kernels.search` on the captures (a region: on its shapes, samples and holder, `hold`'s): its last
+    JSON line (best, cost, out, ledger record id)."""
     out.mkdir(parents=True, exist_ok=True)
     if facts_text:
         (out / "facts.txt").write_text(facts_text)
-    argv = [sys.executable, "-m", "kernels.search", "--task", task.name, "--out", str(out), "--usd", str(usd),
+    if held:
+        (out / "shapes.json").write_text(json.dumps(held["shapes"]))
+        given = ["--shapes", str(out / "shapes.json"), "--samples", held["samples"], "--shared-weights", held["holder"]]
+    else:
+        given = [w for c in caps for w in ("--captures", str(c))]
+    argv = [sys.executable, "-m", "kernels.search", "--task", task.name, "--out", str(out),
             "--evals", str(evals), "--initial", str(start), "--ledger", str(ledger_root), "--equal-captures",
-            "--device", device, *(["--facts", str(out / "facts.txt")] if facts_text else []),
-            *[w for c in caps for w in ("--captures", str(c))]]
+            "--device", device, *(["--facts", str(out / "facts.txt")] if facts_text else []), *given]
     p = subprocess.run(argv, capture_output=True, text=True, cwd=ROOT, env={**os.environ, **env})
     lines = [x for x in p.stdout.splitlines() if x.startswith("{")]
     if p.returncode != 0 or not lines:
@@ -149,16 +237,41 @@ def search(task, caps: list[Path], start: Path, out: Path, usd: float, evals: in
     return json.loads(lines[-1])
 
 
-def gate(task, caps: list[Path], program: Path, out: Path, env: dict) -> dict:
-    """The held-out gate on the winner, judged where the evaluator runs (here, or the worker over ssh)."""
+def freeze(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict | None = None) -> Path:
+    """The winner with its autotune frozen into a table by key (kernels/evolve/freeze.py), from the freeze stage run on
+    the gate's seen shapes where the evaluator runs: what the gate judges and the patch holds (`program` itself when
+    nothing in it autotunes)."""
+    from kernels.evolve import freeze as frozen_by
+    src = Path(program).read_text()
+    new, _ = frozen_by.freeze(src, lambda s: _judged(task, caps, program, out, env, held, frozen_by.FREEZE_STAGE))
+    if new == src:
+        return Path(program)
+    dest = Path(out) / "frozen_program.py"
+    dest.write_text(new)
+    return dest
+
+
+def gate(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict | None = None) -> dict:
+    """The held-out gate on the winner, judged where the evaluator runs (here, or the worker over ssh); a region on
+    the shapes, samples and holder `hold` described."""
+    return _judged(task, caps, program, out, env, held, 2)
+
+
+def _judged(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict | None, stage: int) -> dict:
+    """`stage` of `program` under the gate's config (every seen and held-out shape)."""
     from kernels import shapes as shapes_mod
     from kernels.evolve import evaluator
     from kernels.evolve.run import _ints, _target_tolerances, options_from_target, tolerances
-    sets = shapes_mod.split(task, shapes_mod.from_captures(task, caps, equal=True))
-    sets["ints"] = shapes_mod.ints_from_captures(task, caps)
+    if held:
+        sets = {**held["shapes"], "seen": [tuple(s) for s in held["shapes"]["seen"]],
+                "heldout": [tuple(s) for s in held["shapes"]["heldout"]]}
+    else:
+        sets = shapes_mod.split(task, shapes_mod.from_captures(task, caps, equal=True))
+        sets["ints"] = shapes_mod.ints_from_captures(task, caps)
     cfg = {"task": task.name, "seen": [list(s) for s in sets["seen"]], "heldout": [list(s) for s in sets["heldout"]],
            "weights": sets.get("calls"), "device": "cuda", "tolerances": tolerances(_target_tolerances()),
-           "ints": _ints(sets, ("seen", "heldout")), "options": options_from_target(task)}
+           "ints": _ints(sets, ("seen", "heldout")), "options": options_from_target(task), "full": True,
+           **({"samples": held["samples"], "shared_weights": held["holder"]} if held else {})}
     path = Path(out) / "gate_config.json"
     path.write_text(json.dumps(cfg))
     env = {**env, "KERNEL_EVAL_TIMEOUT_S": str(GATE_TIMEOUT_S)}            # every seen and held-out shape: longer
@@ -167,17 +280,28 @@ def gate(task, caps: list[Path], program: Path, out: Path, env: dict) -> dict:
     saved = {k: os.environ.get(k) for k in ("KERNEL_EVAL_CONFIG", *env)}
     os.environ.update({"KERNEL_EVAL_CONFIG": str(path), **env})
     try:
-        return evaluator.judge_stage(str(program), 2)
+        return evaluator.judge_stage(str(program), stage)
     finally:
         for k, v in saved.items():
             os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
 
 
-def patch(task, tree: Path, program: str) -> str:
-    """The winner as a unified diff of the engine module in `tree`, the task's start edits undone."""
-    from kernels.evolve.ship import module_source, unstart
+def patch(task, tree: Path, program: str, held: dict | None = None) -> str:
+    """The winner as a unified diff of the engine module in `tree`, the task's start edits undone; a region's as the
+    override module `kernels.evolve ship` would commit (the overlap checked against the overrides in `tree`, with the
+    station names `hold` read from the engine)."""
+    from kernels.evolve.ship import module_source, no_live_autotune, override_keys, region_files, unstart
+    if task.name.startswith("region:"):
+        from kernels import regions
+        pkg = Path(tree) / "src" / regions.OVERRIDES_PACKAGE.replace(".", "/")
+        rel = pkg.relative_to(tree).as_posix()
+        have = [(f"{rel}/{f.name}", f.read_text()) for f in sorted(pkg.glob("*.py"))] if pkg.is_dir() else []
+        files = region_files(task, program, rel, [k for f, src in have for k in override_keys(f, src)],
+                             held["stations"], (pkg / "__init__.py").exists())
+        return "".join("".join(difflib.unified_diff([], src.splitlines(True), "/dev/null", f"b/{f}"))
+                       for f, src in files.items())
     path = module_file(task, tree)
     old = path.read_text()
-    new = unstart(task, module_source(program, task.entry.partition(":")[2]))
+    new = no_live_autotune(unstart(task, module_source(program, task.entry.partition(":")[2])), old)
     rel = path.relative_to(tree).as_posix()
     return "".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True), f"a/{rel}", f"b/{rel}"))

@@ -19,6 +19,12 @@ TIMEOUT_S = float(os.environ.get("KERNEL_EVAL_TIMEOUT_S", "600"))
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def tail(out: str, n: int = 3000) -> str:
+    """The last `n` characters of a failed process's output without C++ stack frames, which otherwise fill them and
+    push out the error they follow."""
+    return "\n".join(x for x in out.splitlines() if not x.startswith("frame #"))[-n:]
+
+
 def seconds(log: Path) -> float:
     """Wall seconds spent judging (the GPU host busy or reserved), summed from the log `judge_stage` appends to."""
     return round(sum(float(x) for x in Path(log).read_text().split()), 1) if Path(log).exists() else 0.0
@@ -56,7 +62,7 @@ def _judge_stage(program_path: str, stage: int) -> dict:
     lines = [x for x in p.stdout.splitlines() if x.startswith("{")]
     if p.returncode != 0 or not lines:
         return {"metrics": zero,
-                "artifacts": {"error": f"evaluation process exited {p.returncode}:\n{(p.stderr or p.stdout)[-3000:]}"}}
+                "artifacts": {"error": f"evaluation process exited {p.returncode}:\n{tail(p.stderr or p.stdout)}"}}
     d = json.loads(lines[-1])
     return {"metrics": d["metrics"], "artifacts": d.get("artifacts") or {}}
 

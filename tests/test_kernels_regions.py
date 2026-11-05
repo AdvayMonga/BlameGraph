@@ -58,11 +58,12 @@ def test_the_reference_keeps_the_baselines_experts_and_weighs_them_in_fp32():
     def route(c):                                    # top-1 by a stable sort: a tie goes to the lower expert
         top = torch.argsort(c["logits"], dim=-1, descending=True, stable=True)[:, 0]
         return {"sorted_ids": torch.arange(top.numel()), "expert_ids": top, "tok": torch.arange(top.numel()),
-                "pair_w": torch.softmax(c["logits"].float(), -1).gather(1, top[:, None])[:, 0]}
+                "pair_w": torch.softmax(c["logits"].float(), -1).gather(1, top[:, None])[:, 0],
+                "acc": torch.zeros(top.numel(), c["logits"].shape[-1])}     # the accumulator `down` adds into, as the engine's
     stations = (Station("router", ("x", "w"), ("logits",), lambda c: {"logits": c["x"] @ c["w"]}),
-                Station("route", ("logits",), ("sorted_ids", "expert_ids", "tok", "pair_w"), route),
-                Station("down", ("e", "expert_ids", "pair_w"), ("y",),
-                        lambda c: {"y": (c["e"][c["expert_ids"]].float() * c["pair_w"][:, None]).to(c["e"].dtype)}))
+                Station("route", ("logits",), ("sorted_ids", "expert_ids", "tok", "pair_w", "acc"), route),
+                Station("down", ("e", "expert_ids", "pair_w", "acc"), ("y",),
+                        lambda c: {"y": (c["acc"] + c["e"][c["expert_ids"]].float() * c["pair_w"][:, None]).to(c["e"].dtype)}))
     bf = torch.bfloat16
     x, w = torch.tensor([[1.0, 2 ** -9]], dtype=bf), torch.tensor([[1.0, 1.0], [0.0, 1.0]], dtype=bf)
     e = torch.tensor([[10.0, 20.0], [30.0, 40.0]], dtype=bf)
@@ -113,6 +114,26 @@ def test_the_error_budget_is_per_element_twice_the_baselines_own_error_there():
                             **{**common, "budget": None})["passed"]       # without the budget the dtype's rule holds
 
 
+def test_the_budget_covers_the_baselines_own_run_to_run_spread():
+    """A baseline whose outputs differ across identical calls (the megakernel's do) has that spread as its error."""
+    import itertools
+    t = task("toy_region", STATIONS, "norm", "add", ctx, lambda call: None, live=("x",),
+             seen_default=((4, 64),))
+    base, ref = t.baseline(), t.reference
+    calls = itertools.count()
+
+    def jittery(*a):                                        # exact on every other call, the baseline's error on the rest
+        return (ref(*a)[0],) if next(calls) % 2 == 0 else base(*a)
+
+    def toward(k):
+        return lambda *a: ((ref(*a)[0].float() + k * (base(*a)[0].float() - ref(*a)[0].float())).to(torch.bfloat16),)
+    common = dict(dtypes=(torch.bfloat16,), tolerances={torch.bfloat16: (1e-6, 0.0)}, edge_shapes=[], layouts=(),
+                  seeds=(0, 1), repeats=1, budget=t.error_budget)
+    assert check_kernel(ref, toward(1.5), t.make_inputs, [(4, 64)], [], baseline=jittery, **common)["passed"]
+    assert not check_kernel(ref, toward(1.5), t.make_inputs, [(4, 64)], [],
+                            baseline=lambda *a: (ref(*a)[0],), **common)["passed"]    # an exact baseline: no slack
+
+
 def test_one_large_value_loosens_nothing_else():
     """Outlier channels (x1000) make the baseline's largest error large; a candidate that zeroes the rest must fail."""
     def outliers(shape, dtype, device, g):
@@ -132,6 +153,30 @@ def test_one_large_value_loosens_nothing_else():
                      tolerances={torch.bfloat16: (1e-6, 0.0)}, edge_shapes=[], layouts=(), seeds=(0, 1, 2), repeats=1,
                      baseline=base, budget=t.error_budget)
     assert not r["passed"]
+
+
+def test_a_non_finite_mismatch_is_within_budget_only_where_the_baseline_has_it_too():
+    """The engine's kernel turns NaN/Inf rows finite (a PTX min/max returns the non-NaN operand); its fp32 reference
+    keeps them. The stations as the program pass the NaN/Inf case; a program adding a non-finite mismatch fails."""
+    def clamp(c):
+        return {"y": torch.nan_to_num(c["n"] @ c["w"], nan=0.0, posinf=448.0, neginf=-448.0)}
+    engine = (*STATIONS[:1], Station("mm", ("n", "w"), ("y",), clamp), *STATIONS[2:])
+    t = task("toy_region", engine, "norm", "add", ctx, lambda call: None, live=("x",), reference_stations=STATIONS)
+    base, ref = t.baseline(), t.reference
+    common = dict(dtypes=(torch.bfloat16,), edge_shapes=[], layouts=(), seeds=(0,), repeats=1, baseline=base,
+                  budget=t.error_budget)
+    r = check_kernel(ref, base, t.make_inputs, [(4, 64)], [], **common)
+    assert r["passed"], r["reasons"]
+    assert r["gates"]["edge_cases"]["evidence"]["cases"] == 1           # the NaN/Inf case alone
+    assert not check_kernel(ref, base, t.make_inputs, [(4, 64)], [], **{**common, "budget": None})["passed"]
+
+    def one_more(*a):                                   # the baseline, plus a NaN where every output was finite
+        o = base(*a)[0].clone()
+        o[1, 3] = float("nan")
+        return (o,)
+    r = check_kernel(ref, one_more, t.make_inputs, [(4, 64)], [], **common)
+    assert not r["passed"]
+    assert r["gates"]["correctness_seen"]["evidence"]["failures"][0]["nonfinite_mismatch"] == 1
 
 
 def test_a_region_is_judged_end_to_end_by_the_evaluator(tmp_path):

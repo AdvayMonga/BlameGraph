@@ -52,7 +52,7 @@ def edge_shapes(shape):
 
 TASK = Task("rmsnorm_rope", "inference_server.models.fused:rmsnorm_rope", reference, make_inputs, shape_of, cost,
             call=lambda fn, x, w, c, s: fn(x, w, c, s, EPS), start_edits=START_EDITS, graphs=True, kernel_names=(r"^_rmsnorm_rope_kernel",),
-            size_expr="args[0].shape[0]", heldout_axes=(0, 1), edge_shapes=edge_shapes, dtypes=(torch.bfloat16,), layouts=(),
+            heldout_axes=(0, 1), edge_shapes=edge_shapes, dtypes=(torch.bfloat16,), layouts=(),
             error_budget=2.0,
             seen_default=((4, 1, 32, HEAD_DIM), (8, 1, 4, HEAD_DIM), (1, 16, 32, HEAD_DIM)),
             heldout_default=((64, 1, 32, HEAD_DIM), (1, 256, 4, HEAD_DIM)))
