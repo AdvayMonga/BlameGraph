@@ -28,4 +28,4 @@ unless marked [abs]. Compiled 2026-10-18.
 Unmeasured choices, in order of what the A/B should settle first: generations vs MCTS rounds (6, `search-mcts`),
 idea types (18, `search-untyped`), the memory (8), the judge mix (an Opus share of 1 in 4, unmeasured as a mix), judge tools
 (8), the UCT constant (6, under `--mcts`), grid search vs model-chosen parameters (11). Arms: `lab kernels
-ab --arms openevolve,generate.kernels.search,search-no-tools,search-mcts,search-c1.41,search-untyped`.
+ab --arms openevolve,kernels.search,search-no-tools,search-mcts,search-c1.41,search-untyped`.

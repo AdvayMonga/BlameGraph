@@ -426,7 +426,7 @@ workloads, calibration, knowledge); `tests/` stays flat; `local/` (gitignored) h
   and ncu runs on the smallest and the largest seen shape; before promotion a model (`--detector-model`, Opus 5.5) reads each would-be winner for gaming and a flagged one is
   passed over, recorded with its evidence (`generate/kernels/search/detect.py`, MANTIS; never changes a score);
   every call priced (OpenEvolve's too, via a usage log);
-  `lab kernels ab --arms ...` runs OpenEvolve and generate.kernels.search (and variants differing in one flag:
+  `lab kernels ab --arms ...` runs OpenEvolve and kernels.search (and variants differing in one flag:
   `search-no-tools`, `search-mcts`, `search-c1.41`, `search-gen20`, `search-untyped`) on one task with the same shapes, start, evaluator,
   the same post-search promotion for every arm (`ab.SAME_PROMOTION`: top 3 re-timed, no tuning, no detector), single model
   and judged-program budget, gates each winner on held-out shapes, and writes `ab.json`; `generate/kernels/search/METHOD.md` maps

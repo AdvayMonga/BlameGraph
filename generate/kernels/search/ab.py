@@ -64,11 +64,11 @@ def _variant(*extra: str):
     return lambda a, out, seed: _search(a, out, seed, extra)
 
 
-# Each arm differs from `generate.kernels.search` (the genetic search, judge tools on) in one thing, so a difference in the
+# Each arm differs from `kernels.search` (the genetic search, judge tools on) in one thing, so a difference in the
 # summary is that thing's: the judge's web search and ledger SQL, one MCTS-chosen parent per round (the 2026-10-25
 # default), KernelPro's literal UCT constant under it, refine ideas only (no persist, fresh or crossover types: the
 # search before 2026-10-29), or the whole generator.
-ARMS = {"openevolve": _openevolve, "generate.kernels.search": _search, "search-no-tools": _variant("--no-judge-tools"),
+ARMS = {"openevolve": _openevolve, "kernels.search": _search, "search-no-tools": _variant("--no-judge-tools"),
         "search-mcts": _variant("--mcts"), "search-c1.41": _variant("--mcts", "--uct-c", "1.4142"),
         "search-untyped": _variant("--no-types")}
 
@@ -112,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--model", default="claude-opus-5-5")
     ap.add_argument("--seeds", type=int, default=1)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    ap.add_argument("--arms", default="openevolve,generate.kernels.search", help=f"comma-separated, of: {', '.join(ARMS)}")
+    ap.add_argument("--arms", default="openevolve,kernels.search", help=f"comma-separated, of: {', '.join(ARMS)}")
     a = ap.parse_args(argv)
     arms = [x for x in a.arms.split(",") if x]
     unknown = [x for x in arms if x not in ARMS]

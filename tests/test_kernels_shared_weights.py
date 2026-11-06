@@ -80,7 +80,7 @@ def test_poison_never_writes_a_shared_weight(tmp_path):
 def test_the_check_mounts_only_this_module(tmp_path):
     root = harness(tmp_path / "h")
     assert sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()) == \
-        ["evals/kernels/__init__.py", "generate/kernels/tasks/shared_weights.py"]
+        ["kernels/__init__.py", "kernels/shared_weights.py"]
     assert run(holder(tmp_path).path, False, root)[0] == "66.0"
 
 
