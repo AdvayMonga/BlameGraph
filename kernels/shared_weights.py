@@ -129,8 +129,15 @@ def attach(path: Path, copy_ok: bool = False) -> dict[str, torch.Tensor]:
 
 
 def _rebuild(raw: bytes) -> dict:
-    """The handles file's entries, the tensors mapped over IPC (torch's reducers)."""
-    return pickle.loads(raw)
+    """The handles file's entries, the tensors mapped over IPC (torch's reducers). A CPU storage's rebuild spends the
+    one reference its pickling added (torch shares a storage as a one-shot handoff) and gets it back here: the holder's
+    file is rebuilt in process after process, and without this the shared memory was unlinked once a process rebuilt
+    it, freed it and rebuilt it again (2026-11-05)."""
+    d = pickle.loads(raw)
+    for t in d.values():
+        if isinstance(t, torch.Tensor) and not t.is_cuda:
+            t.untyped_storage()._shared_incref()
+    return d
 
 
 def attached_by_copy(path: Path) -> bool:

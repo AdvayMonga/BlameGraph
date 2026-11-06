@@ -184,7 +184,7 @@ def test_pipeline_freezes_where_the_evaluator_runs_and_writes_the_frozen_program
     t = load("toy_rmsnorm")
     calls = []
 
-    def judged(task, caps, program, out, env, held, stage):
+    def judged(task, caps, program, out, env, held, stage, device):
         calls.append(stage)
         return {"metrics": {"stage": stage}, "artifacts": {"frozen": json.dumps(TABLES)}}
     saved, pipeline._judged = pipeline._judged, judged

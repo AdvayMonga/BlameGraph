@@ -1,7 +1,8 @@
 """Regions through the kernel layer's pipeline (kernels/pipeline.py, kernels/hold.py) with the controller unable to
 load them: captures packed into one samples dir, the hold process's protocol (local and over a stand-in for ssh), its
 description of a region on the fake stations, the winner as an override-module patch of the agent's tree, and the
-`kernel_search` tool on a region end to end with the capture, hold, search and gate faked (no GPU, no model)."""
+`kernel_search` tool on a region end to end: once with the capture, hold, search and gate faked, and once for real on
+the CPU with a fake engine held by `kernels.hold` and a fake model answering `python -m kernels.search` (no GPU)."""
 from __future__ import annotations
 
 import json
@@ -134,7 +135,7 @@ def test_kernel_search_runs_a_region_and_hands_back_its_override_module(tb, monk
         return {"best": {"combined_score": 1.2, "correct": 1.0}, "cost": {"usd": 1.0}, "ledger": "ev"}
     monkeypatch.setattr(pipeline, "search", search)
     gates = {"correctness_seen": {"passed": True}, "correctness_heldout": {"passed": True, "cases": 2}}
-    monkeypatch.setattr(pipeline, "gate", lambda t, caps, best, out, env, held: seen.setdefault("gate", held) and {
+    monkeypatch.setattr(pipeline, "gate", lambda t, caps, best, out, env, held, device: seen.setdefault("gate", held) and {
         "metrics": {"correct": 1.0, "heldout_speedup": 1.1}, "artifacts": {"gates": json.dumps(gates)}})
     h = next(s for s in tb.specs() if s.name == "hypothesis").fn
     k = h({"hypothesis": "fuse norm..add", "rationale": "r", "layer": "kernels"}).split()[1]
@@ -144,3 +145,86 @@ def test_kernel_search_runs_a_region_and_hands_back_its_override_module(tb, monk
     assert seen["hold"] == "region:norm:add" and seen["search"] == (start, "/gpu/w.pkl") and seen["gate"]["samples"]
     patch = (tb.s.workspace.path / out["patch"]).read_text()
     assert "+++ b/src/inference_server/models/regions/norm_add.py" in patch and "OVERRIDES = {('norm', 'add')" in patch
+
+
+FAKE_ENGINE = {                      # the engine as kernels.hold loads it: settings, a backend with a model, stations
+    "inference_server/__init__.py": "",
+    "inference_server/config.py": "def load_settings():\n    return None\n",
+    "inference_server/server.py": "import torch\n\nclass _M:\n    w = torch.randn(64, 64, generator=torch.Generator()"
+                                  ".manual_seed(0)) / 8\n\nclass _B:\n    model = _M()\n\ndef build_backend(settings):"
+                                  "\n    return _B()\n",
+    "inference_server/models/__init__.py": "",
+    "inference_server/models/regions/__init__.py": "",
+}
+FAKE_WEIGHTS = """
+
+def layer_weights(model, i):
+    return {"w.mm": model.w, "w.mm_scale": None}
+
+def layer_config(model):
+    return LayerConfig(1e-6)
+"""
+# python -m kernels.search runs in its own process: its model is faked where every process starts (sitecustomize).
+FAKE_MODEL = """
+import json, sys
+sys.path.insert(0, {root!r})
+try:
+    from kernels.search import llm
+except Exception:
+    llm = None
+
+class Claude:
+    def __init__(self, *a, **k):
+        pass
+
+    def __call__(self, system, user):
+        if "making changes" not in system:                               # the gaming detector
+            return json.dumps({{"gaming": False, "evidence": ""}}), 0.01
+        head = json.dumps({{"bottleneck": "b", "optimisation_method": "m", "modification_plan": "p", "mechanism": []}})
+        if "_K = 1" in user:                                             # the one change exists: nothing new to write
+            return head, 0.01
+        return head + "\\n<<<<<<< SEARCH\\n_CONST = {{}}\\n=======\\n_CONST = {{}}\\n_K = 1\\n>>>>>>> REPLACE", 0.01
+
+if llm is not None:
+    llm.Claude = Claude
+"""
+
+
+def test_kernel_search_runs_a_region_through_hold_search_and_gate_on_the_cpu(tb, monkeypatch, tmp_path):
+    """The real pipeline with only the capture and the model faked: `kernels.hold` loads a fake engine and shares its
+    weights, `python -m kernels.search` evolves the region's start program (every call answering one change) with the
+    jailed evaluator on the CPU, the held-out gate judges the winner there too, and the override module comes back."""
+    from tests.test_kernels_region_engine import FAKE as STATIONS
+    from lab import ledger
+    fake = tmp_path / "fake"
+    for rel, text in {**FAKE_ENGINE, "inference_server/models/stations.py": STATIONS + FAKE_WEIGHTS,
+                      "sitecustomize.py": FAKE_MODEL.format(root=str(pipeline.ROOT))}.items():
+        (fake / rel).parent.mkdir(parents=True, exist_ok=True)
+        (fake / rel).write_text(text)
+    for k in [m for m in sys.modules if m.split(".")[0] == "inference_server"]:
+        monkeypatch.delitem(sys.modules, k)                              # the real engine, if a test imported it
+    monkeypatch.syspath_prepend(str(fake))
+    monkeypatch.setenv("PYTHONPATH", str(fake))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    monkeypatch.setenv("LAB_GPU_USD_PER_HOUR", "3")
+    for k in ("KERNEL_EVAL_CONFIG", "KERNELS_EVAL_LOG", "KERNEL_EVAL_SSH"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(pipeline, "captures", lambda t, tree, profile, *a: two_traffics(tmp_path))
+    h = next(s for s in tb.specs() if s.name == "hypothesis").fn
+    k = h({"hypothesis": "fuse norm..add", "rationale": "r", "layer": "kernels"}).split()[1]
+    fn = next(s for s in tb.specs() if s.name == "kernel_search").fn
+    text = fn({"hypothesis_id": k, "expect": EXPECT, "task": "region:norm:add", "budget": 20})
+    out = json.loads(text.split("\n\nExperiment record")[0])
+    assert out["gate"]["passed"] is True, out
+    gates = out["gate"]["gates"]
+    assert gates["correctness_seen"]["passed"] and gates["correctness_heldout"]["passed"], gates
+    assert gates["correctness_heldout"]["cases"] > 0                     # the held-out shape (64 rows) was judged
+    assert out["metrics"]["speedup"] > 0 and out["metrics"]["heldout_speedup"] > 0
+    patch = (tb.s.workspace.path / out["patch"]).read_text()
+    assert "+++ b/src/inference_server/models/regions/norm_add.py" in patch and "OVERRIDES = {('norm', 'add')" in patch
+    assert "+_K = 1" in patch or "_CONST['w.mm_scale'] = None" in patch     # the child or the start itself won
+    rec = next(r for r in ledger.records(tb.s.ledger_root, kind="kernels") if r.get("tool") == "kernels.search")
+    assert rec["config"]["task"] == "region:norm:add" and len(rec["result"]["candidates"]) >= 2   # start + the change
+    run = next(d for d in (tb.s.run_dir / "kernel_search").iterdir() if d.is_dir() and "region" in d.name)
+    assert (run / "holder" / "weights.pkl").exists() and (run / "samples" / "calls.jsonl").exists()
+    assert out["model_usd"] > 0

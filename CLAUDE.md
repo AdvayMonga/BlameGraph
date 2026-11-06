@@ -364,8 +364,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   module (`ship.region_files`, git-free, overlap checked against the overrides in the agent's tree). The jail mounts the samples and the holder
   file with its `.pristine` and `.constants` sidecars read-only and shares the host's IPC
   namespace (root lab only, never at the precheck); afterwards every /dev/shm entry of the jail's uid is removed.
-  `kernels/shared_weights.py`: a holder shares tensors by reference (CUDA IPC, or shared memory on the CPU) and writes
-  a pristine copy beside the file (files unpickled outside the jail must be the lab's, not group/other-writable, not
+  `kernels/shared_weights.py`: a holder shares tensors by reference (CUDA IPC, or shared memory on the CPU; a CPU
+  rebuild gives back the reference torch's one-shot handoff spends, else the memory vanished after a process rebuilt
+  it twice) and writes a pristine copy beside the file (files unpickled outside the jail must be the lab's, not group/other-writable, not
   under /dev/shm or a jail-writable dir); judgments on one holder hold its lock, `restore` runs before and (in a
   `finally`) after each one, and a judgment that wrote a weight is void and the weight copied back. `time_pair`
   fingerprints every input between calls (outside the window): a call that changes an input fails the timing. On the
@@ -382,7 +383,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   stations call (`STATION_MODULES`) are watched; the K/V pool's shape is not part of a shape. First run on the H200
   2026-10-27 (engine branch engine/region-capture): router..down of layer 0 captured under mixed_1 and mixed_3, held,
   split and gated jailed with the weights attached over IPC: the start program passed every gate, 1.0x seen, 1.001x
-  held-out. Not yet run through kernel_search or over ssh on a GPU.
+  held-out. The `kernel_search` tool runs a region end to end on the CPU with a fake engine and a fake model
+  (`tests/test_kernels_regions_remote.py`: real hold, search, freeze, gate, patch); not yet through it on a GPU.
 - `kernels/step.py` — the whole decode step as one region, `region:embed:argmax` (`lab.capture.STEP`): the engine's
   megakernel (`megakernel.decode_step`) as a kernel task. Captured by `lab.capture.step` (`lab.profile --capture
   region:embed:argmax`: wraps decode_step; the first call per (rows, block-table width) kept whole up to 256 MiB:

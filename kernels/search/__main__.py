@@ -12,6 +12,7 @@ compare like for like."""
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import sys
 import tempfile
@@ -80,7 +81,7 @@ def _funnel(a, task, review):
     return Funnel(Models(review, mix), staged(evaluator.judge_stage), task.name,
                   a.per_call, a.parallel, a.ncu, a.precheck,
                   workers=a.workers, library=library,
-                  embedder=FastEmbed(ledger.ROOT / "index" / "models"))
+                  embedder=FastEmbed(ledger.ROOT / "index" / "models") if importlib.util.find_spec("fastembed") else None)
 
 
 def main(argv: list[str] | None = None) -> int:
