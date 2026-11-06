@@ -4,7 +4,7 @@ layer's K/V written into the paged cache) as a kernel task (local/notes/handoff-
 
 Inputs, captured at a step's start (measure.profile.capture.step): tokens [B], pos [B] (each row's length so far), the block
 table [B, cols] and every layer's K/V of the blocks the rows touch, stacked [layers, blocks, kv heads, 16, head dim].
-Outputs: logits [B, V], next tokens [B] (judged only as a greatest logit of their row, `derived`), and the K/V after
+Outputs: logits [B, V], next tokens [B] (judged only as a greatest logit of their row, `judged`), and the K/V after
 the step. A pure function: the K/V comes back as new
 tensors, so the baseline and every program copy it per call (the engine writes in place). The weights are not inputs:
 the call passes the holder's (kernels/shared_weights, CUDA IPC; a step's do not fit the copy fallback) as a dict `w`
@@ -28,7 +28,7 @@ from generate.kernels.tasks import Task, randn
 from measure.profile.capture import STEP, STEP_ENTRY
 
 INPUTS = ("tokens", "pos", "bt", "k_cache", "v_cache")
-OUTPUTS = ("logits", "k_cache", "v_cache")      # judged; `next` is checked against the logits and dropped (`derived`)
+OUTPUTS = ("logits", "k_cache", "v_cache")      # compared; `next` is checked against the logits and dropped (`judged`)
 ROW = ("w.input_norm", "w.qkv", "w.q_norm", "w.k_norm", "w.o_proj", "w.post_norm", "w.router", "w.gate_up",
        "w.gate_up_scale", "w.down", "w.down_scale")      # the megakernel's per-layer pointer table, then K and V
 EXPERTS = ("w.gate_up", "w.down")        # the reference widens these per expert used, never whole
@@ -97,7 +97,7 @@ def reference(w: dict):
         x = h[:, 0]
         n = w["final_norm"].float() * (x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + cfg.eps))
         logits = n @ w["lm_head"].float().T
-        return (logits.to(torch.bfloat16), logits.argmax(-1), torch.stack(ks).to(k_cache.dtype),
+        return (logits.to(torch.bfloat16), torch.stack(ks).to(k_cache.dtype),
                 torch.stack(vs).to(v_cache.dtype))
     return run
 
@@ -117,15 +117,20 @@ def _cost(w: dict):
     return cost
 
 
-def derived(out):
-    """A step's (logits, next, k, v) as the checker judges it: `next` must be a greatest logit of its row (a tie counts)
-    and is then dropped. An integer fits no error budget, and a bf16 step's argmax flips where the fp32 reference's does
-    not when two logits are close, as the engine's own megakernel does run to run; the logits are judged under the
-    budget."""
+def judged(out):
+    """A program's (logits, next, k, v) as compared: `next` must be a greatest logit of its row (a tie counts), then dropped."""
     logits, nxt, k, v = out
+    if nxt.shape != logits.shape[:1] or bool(((nxt < 0) | (nxt >= logits.shape[-1])).any()):
+        raise ValueError("`next` is not one token id per row")
     top, best = logits.gather(-1, nxt.long()[:, None])[:, 0], logits.amax(-1)
     if not bool(((top == best) | (top.isnan() & best.isnan())).all()):
         raise ValueError("`next` is not a greatest logit of its row")
+    return logits, k, v
+
+
+def _baseline(*xs):
+    """The baseline's compared outputs: its own `next` is not checked (its fault never fails a candidate)."""
+    logits, _, k, v = baseline(*xs)
     return logits, k, v
 
 
@@ -155,11 +160,10 @@ def task(samples: str | None = None, shared_weights: str | None = None) -> Task:
     def shape_of(call):
         return _shape(call) if call.get("fn") == STEP and _shape(call) in by_shape else None
     ok = bool(w)
-    ref = reference(w) if ok else _missing
-    return Task(name=STEP, entry=STEP_ENTRY, reference=lambda *xs: derived(ref(*xs)), make_inputs=make_inputs,
-                shape_of=shape_of, cost=_cost(w) if ok else _missing, call=lambda fn, *xs: derived(fn(*xs, dict(w))),
+    return Task(name=STEP, entry=STEP_ENTRY, reference=reference(w) if ok else _missing, make_inputs=make_inputs,
+                shape_of=shape_of, cost=_cost(w) if ok else _missing, call=lambda fn, *xs: fn(*xs, dict(w)), judged=judged,
                 heldout_axes=(0, 1), edge_shapes=lambda shape: [], layouts=(), nonfinite=False, error_budget=ERROR_BUDGET,
-                baseline_fn=baseline, watch=_watch(), capture_fn=STEP, seen_default=tuple(by_shape),
+                baseline_fn=_baseline, watch=_watch(), capture_fn=STEP, seen_default=tuple(by_shape),
                 start_program=(lambda: start_program()) if ok else None)
 
 

@@ -61,7 +61,12 @@ def verify(cfg: dict, path: Path, timed: bool = False) -> tuple[bool, str]:
         ref, (atol, rtol) = task.reference(*[t.clone() for t in inputs]), tol[dt]
         base = (baseline_envelope(task.bind(task.baseline()), inputs, ref)          # the engine's own code, never
                 if task.error_budget else None)                                     # the candidate's
-        d = _compare(ref, [o.to(device) for o in r["outputs"]], atol, rtol, base=base, k=task.error_budget or 0.0)
+        out = [o.to(device) for o in r["outputs"]]
+        try:
+            out = task.judged(out) if task.judged else out
+        except Exception as e:                   # noqa: BLE001
+            return False, f"{r['kind']} output at shape {r['shape']} seed {r['seed']}: {type(e).__name__}: {e}"
+        d = _compare(ref, out, atol, rtol, base=base, k=task.error_budget or 0.0)
         if not d["ok"]:
             why = d.get("error") or f"max_abs {d['max_abs']:.3g}, max_rel {d['max_rel']:.3g}"
             return False, f"{r['kind']} output at shape {r['shape']} seed {r['seed']} differs from the reference: {why}"

@@ -497,7 +497,7 @@ workloads, calibration, knowledge); `tests/` stays flat; `local/` (gitignored) h
   region:embed:argmax`: wraps decode_step; the first call per (rows, block-table width) kept whole up to 256 MiB:
   tokens, pos, bt renumbered to the blocks its rows touch, every layer's K/V of those blocks stacked [layers, blocks,
   ...], and logits, next tokens and those blocks after). Inputs (tokens, pos, bt, k_cache, v_cache), outputs (logits,
-  K/V; `next` is checked as a greatest logit of its row and dropped, `step.derived`: an integer fits no budget and a
+  K/V; `next` is checked as a greatest logit of its row and dropped, `Task.judged`, outside the timed call: an integer fits no budget and a
   bf16 step's argmax flips where the fp32 reference's does not): pure, so baseline and programs copy the K/V per call. The weights are not inputs: `Task.call` passes the
   holder's dict (`step.weights`: every layer's `<i>.w.*`, embed, final norm, lm_head, inv_freq; cfg, n_layers) after
   the inputs, so the checker never clones them; attached over IPC only (no copy fallback). Baseline: the engine's

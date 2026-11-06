@@ -10,7 +10,8 @@ import types
 from types import SimpleNamespace
 
 if __name__ == "__main__":          # CI's referee job runs each test file as a script: these need pytest's fixtures
-    raise SystemExit(0)
+    import pytest
+    raise SystemExit(pytest.main(["-q", __file__]))
 
 import pytest  # noqa: E402
 
@@ -129,7 +130,9 @@ def test_the_step_task_reads_its_captures_and_passes_the_weights_uncloned(tmp_pa
     out = t.bind(lambda *xs: seen.append(xs[-1]) or (logits, nxt, xs[3], xs[4]))(*x0)
     w = seen[0]
     assert len(w) > len(x0) and w["0.w.qkv"].data_ptr() == h.tensors["0.w.qkv"].data_ptr()   # the holder's memory
-    assert len(out) == 3 and out[0] is logits                                 # `next` checked against the logits, dropped
+    assert len(out) == 4 and step.judged(out)[0] is logits                    # called as is; `next` dropped when compared
+    with pytest.raises(ValueError, match="one token id"):
+        step.judged((logits, torch.tensor([0, V]), x0[3], x0[4]))                 # out of range: refused, never indexed
     flops, nbytes = t.cost((2, 3), torch.bfloat16, x0)
     assert flops == 0 and nbytes > 2 * x0[3].numel() * 2
 
@@ -153,8 +156,8 @@ def test_the_reference_runs_the_engines_stations_over_every_layer_in_fp32(tmp_pa
     from generate.kernels.tasks.shared_weights import attach
     w = {**attach(h.path), "cfg": LayerConfig(NQ, NKV, D, D ** -0.5, 1e-6, E, K, True)}     # the engine's own config
     xs = t.make_inputs((2, 3), torch.bfloat16, "cpu", torch.Generator().manual_seed(0))
-    logits, nxt, k, v = step.reference(w)(*xs)
-    assert logits.shape == (2, V) and logits.dtype == torch.bfloat16 and nxt.tolist() == logits.float().argmax(-1).tolist()
+    logits, k, v = step.reference(w)(*xs)                    # `next` is the program's, judged against its own logits
+    assert logits.shape == (2, V) and logits.dtype == torch.bfloat16
     changed = (k != xs[3]).any(dim=(2, 4))                   # [layer, block, slot]
     bt = xs[2]
     want = torch.zeros_like(changed)
@@ -210,7 +213,10 @@ def test_the_step_is_judged_end_to_end_on_the_cpu(tmp_path, monkeypatch):
     from evals.kernels import core
     caps, _ = capture_steps(tmp_path, monkeypatch)
     h = held_step(tmp_path, LayerConfig(NQ, NKV, D, D ** -0.5, 1e-6, E, K, True))
-    monkeypatch.setattr(step, "baseline", lambda *xs: step.reference(xs[-1])(*xs[:-1]))   # the megakernel needs CUDA
+    def baseline(*xs):                                       # the megakernel needs CUDA: the reference, with a `next`
+        logits, k, v = step.reference(xs[-1])(*xs[:-1])
+        return logits, torch.zeros(len(logits), dtype=torch.long), k, v      # a wrong `next`: never held against anyone
+    monkeypatch.setattr(step, "baseline", baseline)
     t = step.task(str(caps), str(h.path))
     program = tmp_path / "candidate.py"
     program.write_text(PROGRAM)

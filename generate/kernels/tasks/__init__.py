@@ -54,6 +54,7 @@ class Task:
     heldout_default: tuple = field(default_factory=tuple)
     tolerances: dict | None = None          # {dtype: [atol, rtol]} in place of the target's (a public benchmark's own)
     nonfinite: bool = True                  # NaN/Inf inputs must give the reference's NaN/Inf positions
+    judged: Callable | None = None          # a program's outputs as they are compared (raises on a broken rule)
 
     def bind(self, fn: Callable) -> Callable:
         """fn as the checker and the timer call it: tensors in, the task's scalars added."""
