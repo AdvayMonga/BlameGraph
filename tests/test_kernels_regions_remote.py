@@ -223,7 +223,7 @@ def test_kernel_search_runs_a_region_through_hold_search_and_gate_on_the_cpu(tb,
     patch = (tb.s.workspace.path / out["patch"]).read_text()
     assert "+++ b/src/inference_server/models/regions/norm_add.py" in patch and "OVERRIDES = {('norm', 'add')" in patch
     assert "+_K = 1" in patch or "_CONST['w.mm_scale'] = None" in patch     # the child or the start itself won
-    rec = next(r for r in ledger.records(tb.s.ledger_root, kind="kernels") if r.get("tool") == "generate.kernels.search")
+    rec = next(r for r in ledger.records(tb.s.ledger_root, kind="kernels") if "candidates" in r["result"])   # the search's
     assert rec["config"]["task"] == "region:norm:add" and len(rec["result"]["candidates"]) >= 2   # start + the change
     run = next(d for d in (tb.s.run_dir / "kernel_search").iterdir() if d.is_dir() and "region" in d.name)
     assert (run / "holder" / "weights.pkl").exists() and (run / "samples" / "calls.jsonl").exists()
