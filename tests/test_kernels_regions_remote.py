@@ -6,12 +6,14 @@ the CPU with a fake engine held by `generate.kernels.tasks.hold` and a fake mode
 from __future__ import annotations
 
 import json
+import os
 import sys
 from contextlib import contextmanager
 from pathlib import Path
 
 if __name__ == "__main__":          # CI's referee job runs each test file as a script: these need pytest's fixtures
-    raise SystemExit(0)
+    import pytest
+    raise SystemExit(pytest.main(["-q", __file__]))
 
 import pytest  # noqa: E402
 
@@ -204,7 +206,7 @@ def test_kernel_search_runs_a_region_through_hold_search_and_gate_on_the_cpu(tb,
     for k in [m for m in sys.modules if m.split(".")[0] == "inference_server"]:
         monkeypatch.delitem(sys.modules, k)                              # the real engine, if a test imported it
     monkeypatch.syspath_prepend(str(fake))
-    monkeypatch.setenv("PYTHONPATH", str(fake))
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(filter(None, [str(fake), os.environ.get("PYTHONPATH")])))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     monkeypatch.setenv("LAB_GPU_USD_PER_HOUR", "3")
     for k in ("KERNEL_EVAL_CONFIG", "KERNELS_EVAL_LOG", "KERNEL_EVAL_SSH"):
@@ -222,9 +224,9 @@ def test_kernel_search_runs_a_region_through_hold_search_and_gate_on_the_cpu(tb,
     assert out["metrics"]["speedup"] > 0 and out["metrics"]["heldout_speedup"] > 0
     patch = (tb.s.workspace.path / out["patch"]).read_text()
     assert "+++ b/src/inference_server/models/regions/norm_add.py" in patch and "OVERRIDES = {('norm', 'add')" in patch
-    assert "+_K = 1" in patch or "_CONST['w.mm_scale'] = None" in patch     # the child or the start itself won
     rec = next(r for r in ledger.records(tb.s.ledger_root, kind="kernels") if "candidates" in r["result"])   # the search's
-    assert rec["config"]["task"] == "region:norm:add" and len(rec["result"]["candidates"]) >= 2   # start + the change
+    assert rec["config"]["task"] == "region:norm:add"
+    assert any(c["parent"] and c["metrics"].get("correct") == 1.0 for c in rec["result"]["candidates"])  # the change, judged
     run = next(d for d in (tb.s.run_dir / "kernel_search").iterdir() if d.is_dir() and "region" in d.name)
     assert (run / "holder" / "weights.pkl").exists() and (run / "samples" / "calls.jsonl").exists()
     assert out["model_usd"] > 0

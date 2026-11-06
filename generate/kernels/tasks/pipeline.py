@@ -237,8 +237,7 @@ def search(task, caps: list[Path], start: Path, out: Path, evals: int, ledger_ro
     return json.loads(lines[-1])
 
 
-def freeze(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict | None = None,
-           device: str = "cuda") -> Path:
+def freeze(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict | None, device: str) -> Path:
     """The winner with its autotune frozen into a table by key (evals/kernels/freeze.py), from the freeze stage run on
     the gate's seen shapes where the evaluator runs, on `device`: what the gate judges and the patch holds (`program`
     itself when nothing in it autotunes)."""
@@ -252,8 +251,7 @@ def freeze(task, caps: list[Path], program: Path, out: Path, env: dict, held: di
     return dest
 
 
-def gate(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict | None = None,
-         device: str = "cuda") -> dict:
+def gate(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict | None, device: str) -> dict:
     """The held-out gate on the winner, judged where the evaluator runs (here, or the worker over ssh) on `device`; a
     region on the shapes, samples and holder `hold` described."""
     return _judged(task, caps, program, out, env, held, 2, device)

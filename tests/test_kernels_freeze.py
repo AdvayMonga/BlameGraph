@@ -192,11 +192,11 @@ def test_pipeline_freezes_where_the_evaluator_runs_and_writes_the_frozen_program
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "best_program.py"
             p.write_text(TWO)
-            got = pipeline.freeze(t, [], p, Path(d), {})
+            got = pipeline.freeze(t, [], p, Path(d), {}, None, "cpu")
             assert got == Path(d) / "frozen_program.py" and not freeze.sites(got.read_text())
             assert calls == [freeze.FREEZE_STAGE]
             p.write_text("def kernel(x, w):\n    return x\n")
-            assert pipeline.freeze(t, [], p, Path(d), {}) == p and calls == [freeze.FREEZE_STAGE]
+            assert pipeline.freeze(t, [], p, Path(d), {}, None, "cpu") == p and calls == [freeze.FREEZE_STAGE]
     finally:
         pipeline._judged = saved
 

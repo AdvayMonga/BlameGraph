@@ -200,15 +200,14 @@ def _engine():
 
 
 def _importable(names: tuple[str, ...]) -> tuple[str, ...]:
-    """The modules of `names` that import here (core._watched imports every watched module): an engine checkout whose
-    deps are missing (triton on a laptop) has modules that exist and cannot be watched or called."""
+    """The modules of `names` that import here (core._watched imports every watched module; triton is Linux-only)."""
     import importlib
     out = []
     for n in names:
         try:
             importlib.import_module(n)
             out.append(n)
-        except Exception:                        # noqa: BLE001  ImportError, or a dep raising at import
+        except ImportError:
             pass
     return tuple(out)
 

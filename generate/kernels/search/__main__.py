@@ -12,7 +12,6 @@ compare like for like."""
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import sys
 import tempfile
@@ -73,14 +72,16 @@ def _funnel(a, task, review):
     if review is None:
         raise SystemExit("--funnel needs a judge (--judge-model)")
     from data.knowledge import ledger
-    from data.knowledge.search import FastEmbed
     library = archive.load(Path(a.archive)) if a.archive else []      # every task's ideas: the memory
     second = Claude(a.second_judge_model, a.effort, tools=a.judge_tools) if a.second_judge_model != "none" else None
     mix = (review,) * (a.second_judge_share - 1) + (second,) if second and a.second_judge_share > 1 else ()
+    embedder = archive._embedder(ledger.ROOT)
+    if embedder is None:
+        print("no embedder (fastembed): near-duplicate programs are not refused", file=sys.stderr)
     return Funnel(Models(review, mix), staged(evaluator.judge_stage), task.name,
                   a.per_call, a.parallel, a.ncu, a.precheck,
                   workers=a.workers, library=library,
-                  embedder=FastEmbed(ledger.ROOT / "index" / "models") if importlib.util.find_spec("fastembed") else None)
+                  embedder=embedder)
 
 
 def main(argv: list[str] | None = None) -> int:
