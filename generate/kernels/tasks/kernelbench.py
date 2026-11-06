@@ -361,7 +361,7 @@ def main(argv: list[str] | None = None) -> int:
     rn = sub.add_parser("run", help="problems through generate.kernels.search.ab's arms, then score (GPU, model calls)")
     rn.add_argument("--level", type=int)
     rn.add_argument("--problems", help="comma-separated kb:LEVEL:ID (default: every problem of --level)")
-    rn.add_argument("--arms", default="openevolve,generate.kernels.search")
+    rn.add_argument("--arms", default="openevolve,kernels.search")
     rn.add_argument("--out", required=True)
     of = sub.add_parser("_official")
     of.add_argument("config")

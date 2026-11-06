@@ -167,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
         if fun is not None and fun.models.judges else [])
     rec = record(task, sets, models, a.evals, a.device,
                  out / "trace.jsonl", out / "best_program.py", metrics or best.metrics, retimed=retimed,
-                 tool="generate.kernels.search", cost=cost, root=Path(a.ledger) if a.ledger else None,
+                 tool="kernels.search", cost=cost, root=Path(a.ledger) if a.ledger else None,
                  extra={"hypotheses": _blob(out / "hypotheses.jsonl", a.ledger)})
     print(json.dumps({"best": metrics or best.metrics, "cost": cost, "nodes": len(tree.nodes), "out": str(out),
                       "ledger": rec["id"]}))

@@ -412,7 +412,7 @@ def retime(trace: Path, k: int, repeats: int = 3, exclude=None) -> tuple[str | N
 
 
 def record(task, sets: dict, models: list[dict], iterations: int, device: str, trace: Path, best: Path,
-           best_metrics: dict, root: Path | None = None, retimed: list | None = None, tool: str = "generate.kernels.evolve.run",
+           best_metrics: dict, root: Path | None = None, retimed: list | None = None, tool: str = "kernels.evolve.run",
            cost: dict | None = None, extra: dict | None = None) -> dict:
     """One `kernels` ledger record per run: every evaluated candidate's seen-shape metrics and lineage, the trace and
     the best program as blobs. Held-out shapes stay out (`gate` judges them; its output stays in the run dir)."""

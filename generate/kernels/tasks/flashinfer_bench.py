@@ -428,7 +428,7 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--out", required=True)
     rn = sub.add_parser("run", help="definitions through generate.kernels.search.ab's arms, then score (GPU, model calls)")
     rn.add_argument("--definitions", required=True, help="comma-separated fib:NAME")
-    rn.add_argument("--arms", default="openevolve,generate.kernels.search")
+    rn.add_argument("--arms", default="openevolve,kernels.search")
     rn.add_argument("--out", required=True)
     of = sub.add_parser("_official")
     of.add_argument("config")
