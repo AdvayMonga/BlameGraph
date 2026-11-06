@@ -76,11 +76,20 @@ def baseline_envelope(baseline, inputs, ref) -> list:
     return out
 
 
+def _by_size(r, err):
+    """`err` with each position given the largest error among positions whose reference has the same binary exponent."""
+    if not r.numel():
+        return err
+    e = torch.frexp(r)[1]
+    e = e - e.min()
+    peaks = torch.zeros(int(e.max()) + 1, dtype=err.dtype, device=err.device).scatter_reduce(0, e.long(), err, "amax")
+    return peaks[e]
+
+
 def _compare(ref, out, atol, rtol, base=None, k: float = 0.0) -> dict:
-    """Max abs/rel error over finite positions; non-finite positions (and Inf signs) must match exactly. With `base`
-    (the baseline's outputs on the same inputs), each element may also differ by `k` times the baseline's own error
-    there: a region's error budget, element by element, so one large value's rounding loosens nothing else. A
-    non-finite mismatch is within that budget where the baseline's own output mismatches the reference there too."""
+    """Max abs/rel error over finite positions; non-finite positions (and Inf signs) must match exactly. With `base`,
+    each element may also differ by `k` times the baseline's largest error on reference values of its size, and a
+    non-finite mismatch where the baseline has it too."""
     refs, outs = _flat(ref), _flat(out)
     bases = _flat(base) if base is not None else [None] * len(refs)
     if len(refs) != len(outs):
@@ -98,7 +107,7 @@ def _compare(ref, out, atol, rtol, base=None, k: float = 0.0) -> dict:
         if isinstance(b, torch.Tensor) and k and b.shape == r.shape:
             b = b.to(dt)
             bd = (b - r).abs()
-            slack = k * torch.where(bd.isfinite(), bd, torch.zeros_like(bd))[both]
+            slack = k * _by_size(r[both], torch.where(bd.isfinite(), bd, torch.zeros_like(bd))[both])
             within = miss & _nonfinite_miss(r, b)
             budgeted += int(within.sum())
             miss = miss & ~within
@@ -140,7 +149,7 @@ def _summary(cases) -> tuple[bool, str, dict]:
 def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes, dtypes=(torch.float32,),
                  device="cpu", seeds=(0, 1, 2), tolerances=None, edge_shapes=None, require_deterministic=False,
                  repeats=3, layouts=("strided", "transposed"), record=None, baseline=None, budget=None,
-                 nonfinite=True) -> dict:
+                 nonfinite=True, judged=None) -> dict:
     """Return {"passed", "reasons", "gates": {name: {passed, reason, evidence}}} for candidate vs reference.
     make_inputs(shape, dtype, device, generator) -> tuple of tensors; generator is a seeded CPU torch.Generator.
     `layouts`: the non-contiguous input variants to test, for a kernel whose callers pass such inputs.
@@ -148,7 +157,7 @@ def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes,
     `record(case, outputs)` is called with each plain case's outputs (inputs straight from make_inputs and the seed),
     so they can be checked again outside this process (evals/kernels/verify.py).
     `budget` (with `baseline`): each element may also differ from the reference by `budget` times the baseline's own
-    error there, on the same inputs over `BASELINE_CALLS` calls (a region's error budget, never stricter than
+    largest error among reference values of its size, on the same inputs over `BASELINE_CALLS` calls (a region's error budget, never stricter than
     `tolerances`)."""
     tol = {**TOLERANCES, **(tolerances or {})}
     mutated, aliased, nondet = [], [], []
@@ -180,7 +189,11 @@ def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes,
             nondet.append(case)
         if record is not None and variant is None:
             record(case, first)
-        return {**case, **_compare(ref, first, atol, rtol, base=base, k=budget or 0.0)}
+        try:
+            got = judged(first) if judged else first
+        except Exception as e:
+            return {**case, "ok": False, "error": f"raised {type(e).__name__}: {e}"}
+        return {**case, **_compare(ref, got, atol, rtol, base=base, k=budget or 0.0)}
 
     def cases(shapes, seeds_, reps=1):
         return [run(s, dt, sd, make_inputs(s, dt, device, _gen(sd)), reps=reps)

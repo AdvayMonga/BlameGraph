@@ -166,7 +166,7 @@ def _watched(task: Task) -> dict:
         mods += [importlib.import_module(n) for n in names]      # imported before the snapshot, never skipped
     out = {}
     for m in mods:
-        own = m.__name__.startswith("kernels")
+        own = m.__name__.startswith(("evals.kernels", "generate.kernels"))
         for k, v in vars(m).items():
             if (callable(v) or isinstance(v, type(math))) and not k.startswith("__") and (own or not k.startswith("_")):
                 out[f"{m.__name__}.{k}"] = id(v)
@@ -321,7 +321,7 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
                          device=device, seeds=(0, 1, 2) if full else (0,), tolerances=tolerances,
                          edge_shapes=(task.edge_shapes(shapes[0]) if task.edge_shapes else None) if full else [],
                          repeats=3 if full else 1, layouts=task.layouts if full else (), record=keep,
-                         nonfinite=task.nonfinite, **budget)
+                         nonfinite=task.nonfinite, judged=task.judged, **budget)
     except Exception:                            # noqa: BLE001
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
                 "artifacts": {"error": "checker raised:\n" + traceback.format_exc()[-3000:]}}
@@ -331,7 +331,7 @@ def _judge(task: Task, program: Path, seen: list, heldout: list, weights: dict |
         for k in (SCALES if task.scales is None else task.scales):
             v = check_kernel(ref, cand, _scaled(task.make_inputs, k), seen[:2], [], dtypes=task.dtypes, device=device,
                              seeds=(7,), tolerances=tolerances, edge_shapes=[], repeats=1, layouts=(),
-                             nonfinite=task.nonfinite, **budget,
+                             nonfinite=task.nonfinite, judged=task.judged, **budget,
                              record=lambda case, out, k=k: _keep("check", case["shape"], case["dtype"], case["seed"],
                                                                  out, k))
             g = v["gates"]["correctness_seen"]
@@ -430,7 +430,7 @@ def _timed(task, cand, base, shapes, weights, dtype, device, iters, hw, toleranc
         for inputs, out in zip(p["inputs"], p["outputs_a"]):
             ref = task.reference(*[t.clone() for t in inputs])
             b = baseline_envelope(base, inputs, ref) if task.error_budget else None
-            d = _compare(ref, out, atol, rtol, base=b, k=task.error_budget or 0.0)
+            d = _compare(ref, task.judged(out) if task.judged else out, atol, rtol, base=b, k=task.error_budget or 0.0)
             if not d["ok"]:
                 raise ValueError(f"the timed calls' output differs from the reference at shape {list(s)}: "
                                  f"{d.get('error') or ('max_abs %.3g, max_rel %.3g' % (d['max_abs'], d['max_rel']))}")
