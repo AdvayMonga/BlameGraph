@@ -14,3 +14,4 @@ venv/
 # held-out traces and the corpus seed live in the store (python -m data.knowledge pull --corpus), never in git
 data/corpus/*/heldout.jsonl
 data/corpus/.seed
+*.egg-info/

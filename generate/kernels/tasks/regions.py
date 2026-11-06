@@ -200,13 +200,14 @@ def _engine():
 
 
 def _importable(names: tuple[str, ...]) -> tuple[str, ...]:
-    """The modules of `names` that exist (core._watched imports every watched module)."""
-    import importlib.util
+    """The modules of `names` that import here (core._watched imports every watched module; triton is Linux-only)."""
+    import importlib
     out = []
     for n in names:
         try:
-            out += [n] if importlib.util.find_spec(n) else []
-        except (ImportError, ValueError):
+            importlib.import_module(n)
+            out.append(n)
+        except ImportError:
             pass
     return tuple(out)
 

@@ -237,13 +237,13 @@ def search(task, caps: list[Path], start: Path, out: Path, evals: int, ledger_ro
     return json.loads(lines[-1])
 
 
-def freeze(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict | None = None) -> Path:
+def freeze(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict | None, device: str) -> Path:
     """The winner with its autotune frozen into a table by key (evals/kernels/freeze.py), from the freeze stage run on
-    the gate's seen shapes where the evaluator runs: what the gate judges and the patch holds (`program` itself when
-    nothing in it autotunes)."""
+    the gate's seen shapes where the evaluator runs, on `device`: what the gate judges and the patch holds (`program`
+    itself when nothing in it autotunes)."""
     from evals.kernels import freeze as frozen_by
     src = Path(program).read_text()
-    new, _ = frozen_by.freeze(src, lambda s: _judged(task, caps, program, out, env, held, frozen_by.FREEZE_STAGE))
+    new, _ = frozen_by.freeze(src, lambda s: _judged(task, caps, program, out, env, held, frozen_by.FREEZE_STAGE, device))
     if new == src:
         return Path(program)
     dest = Path(out) / "frozen_program.py"
@@ -251,14 +251,15 @@ def freeze(task, caps: list[Path], program: Path, out: Path, env: dict, held: di
     return dest
 
 
-def gate(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict | None = None) -> dict:
-    """The held-out gate on the winner, judged where the evaluator runs (here, or the worker over ssh); a region on
-    the shapes, samples and holder `hold` described."""
-    return _judged(task, caps, program, out, env, held, 2)
+def gate(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict | None, device: str) -> dict:
+    """The held-out gate on the winner, judged where the evaluator runs (here, or the worker over ssh) on `device`; a
+    region on the shapes, samples and holder `hold` described."""
+    return _judged(task, caps, program, out, env, held, 2, device)
 
 
-def _judged(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict | None, stage: int) -> dict:
-    """`stage` of `program` under the gate's config (every seen and held-out shape)."""
+def _judged(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict | None, stage: int,
+            device: str) -> dict:
+    """`stage` of `program` under the gate's config (every seen and held-out shape) on `device`."""
     from generate.kernels.tasks import shapes as shapes_mod
     from evals.kernels import evaluator
     from generate.kernels.evolve.run import _ints, _target_tolerances, options_from_target, tolerances
@@ -269,7 +270,7 @@ def _judged(task, caps: list[Path], program: Path, out: Path, env: dict, held: d
         sets = shapes_mod.split(task, shapes_mod.from_captures(task, caps, equal=True))
         sets["ints"] = shapes_mod.ints_from_captures(task, caps)
     cfg = {"task": task.name, "seen": [list(s) for s in sets["seen"]], "heldout": [list(s) for s in sets["heldout"]],
-           "weights": sets.get("calls"), "device": "cuda", "tolerances": tolerances(_target_tolerances()),
+           "weights": sets.get("calls"), "device": device, "tolerances": tolerances(_target_tolerances()),
            "ints": _ints(sets, ("seen", "heldout")), "options": options_from_target(task), "full": True,
            **({"samples": held["samples"], "shared_weights": held["holder"]} if held else {})}
     path = Path(out) / "gate_config.json"
