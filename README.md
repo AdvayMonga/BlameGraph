@@ -13,4 +13,6 @@ The environment for autoresearch loops that optimize LLM inference. The engine l
 - **Correctness gate:** optimized outputs still match the original model
 - **Canaries:** planted cheats that must get caught
 - **Validity checks:** held-out budget, cache audit, short-vs-full test agreement
-- **Kernel checker:** rewritten kernels compute the same thing
+- **Kernel search:** an LLM-driven search that writes faster GPU kernels for the engine, judged by the kernel checker
+- **Kernel checker:** rewritten kernels compute the same thing, on shapes the search never saw
+- **Engine comparison:** the engine against vLLM, SGLang and TensorRT-LLM on one GPU at matched precision
