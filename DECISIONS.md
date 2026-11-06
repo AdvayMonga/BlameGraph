@@ -3,6 +3,12 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-05 — No stacked-kernels bench: every shipped kernel is judged on its own
+Each kernel that passes its held-out gate is shipped and judged alone by `bench` + `equiv` (the 2026-10-28 merge
+gates). Why (the user): a bench and equiv per kernel is affordable, and a stack would have had nothing to stack: one
+task has a real winner. `ship --base` still takes any base, so kernels can be built on one another when wanted.
+Reverses 2026-10-17 (the end-to-end judge runs once several shipped kernels stack).
+
 ## 2026-11-05 — A region's error budget covers the baseline's run-to-run spread
 The baseline's error against the fp32 reference, which a region's budget is 2x of, is taken over 3 calls on the same
 inputs, each element as far from the reference as any call put it (`check.baseline_envelope`; the checker, the timed
