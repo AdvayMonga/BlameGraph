@@ -9,7 +9,7 @@ import argparse
 import json
 import sys
 
-from lab import target
+from targets import target
 
 
 def main(argv: list[str] | None = None) -> int:

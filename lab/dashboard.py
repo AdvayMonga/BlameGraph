@@ -12,7 +12,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from lab import engine, experiments, ledger
+from targets import engine
+from lab import experiments, ledger
 
 PAGE = Path(__file__).parent / "dashboard.html"
 RUNS_DIR = engine.ENV_ROOT / "lab" / "runs"

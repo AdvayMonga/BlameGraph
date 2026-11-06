@@ -7,7 +7,8 @@ import sys
 
 import pytest
 
-from lab import rehearsal, target
+from lab import rehearsal
+from targets import target
 
 
 class Words:

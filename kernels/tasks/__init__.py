@@ -135,7 +135,7 @@ def options_from_target(task: Task) -> dict:
     """The task's declared options, read from the target spec's engine env (context_window <- CONTEXT_WINDOW)."""
     if not task.options:
         return {}
-    from lab import target
+    from targets import target
     env = target.load().engine.env
     return {"context_window": int(env["CONTEXT_WINDOW"])} if "context_window" in task.options and \
         "CONTEXT_WINDOW" in env else {}

@@ -23,7 +23,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from lab import artifacts, calibrate, ledger, live, profiles, serve, target, worker
+from lab import artifacts, calibrate, ledger, live, profiles, serve, worker
+from targets import target
 from validity.holdout import HoldoutGuard, Refused
 
 HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT = 100, 2.0, 0.5

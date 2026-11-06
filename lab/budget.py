@@ -45,7 +45,7 @@ def gpu_rate() -> tuple[float, bool]:
     """(USD per GPU-hour, known): LAB_GPU_USD_PER_HOUR, else the target's [cost] gpu_usd_per_hour, else (0, False)."""
     raw = os.environ.get("LAB_GPU_USD_PER_HOUR")
     if raw is None:
-        from lab import target
+        from targets import target
         raw = (target.load().raw.get("cost") or {}).get("gpu_usd_per_hour")
     if raw is None:
         return 0.0, False

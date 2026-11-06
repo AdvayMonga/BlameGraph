@@ -216,7 +216,7 @@ def test_the_fused_tasks_start_launches_what_the_engine_module_launches():
     import types
     from kernels.evolve.core import screen
     from kernels.evolve.run import _start
-    from lab import engine
+    from targets import engine
     try:
         src = (engine.repo() / "src" / "inference_server" / "models" / "fused.py").read_text()
     except Exception:                            # noqa: BLE001  no engine checkout here (CI)
@@ -852,7 +852,7 @@ def test_the_jail_sees_a_fresh_tree_and_a_copied_harness_never_this_repo():
     with tempfile.TemporaryDirectory() as d:
         h = jailed.stage_harness(Path(d) / "h")
         names = {p.relative_to(h).as_posix() for p in h.rglob("*") if p.is_file()}
-        assert "kernels/evolve/core.py" in names and "lab/target.py" in names and "validity/peaks.py" in names
+        assert "kernels/evolve/core.py" in names and "targets/target.py" in names and "validity/peaks.py" in names
         assert not any(n.startswith(("lab/ledger", "lab/runs", "corpus", "data")) or n.endswith(".env") for n in names)
     seen, saved = {}, (jail.backend, container.available, container._docker, grader.subprocess.run)
 

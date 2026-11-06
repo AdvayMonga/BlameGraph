@@ -15,7 +15,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lab import engine, providers
+from targets import engine
+from lab import providers
 from lab.providers import ProviderError, Record, env_field, pricing
 
 KNOWN_HOSTS_DIR = Path.home() / ".cache" / "inference-server-lab"

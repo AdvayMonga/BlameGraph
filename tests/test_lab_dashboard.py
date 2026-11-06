@@ -6,7 +6,8 @@ import json
 
 import pytest
 
-from lab import dashboard, evaltools, ledger, live, session, target
+from lab import dashboard, evaltools, ledger, live, session
+from targets import target
 from lab.agent import AgentReply
 from regimes import suite
 from regimes.client import Row

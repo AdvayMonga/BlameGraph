@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from lab import profiles, target
+from lab import profiles
+from targets import target
 
 SPEC = '''
 [model]

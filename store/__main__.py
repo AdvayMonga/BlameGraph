@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from lab import ledger
-from lab.engine import ENV_ROOT
+from targets.engine import ENV_ROOT
 from store import index, sync
 from store.remote import open_remote
 

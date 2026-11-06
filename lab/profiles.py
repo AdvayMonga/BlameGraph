@@ -8,7 +8,7 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-from lab import target
+from targets import target
 
 
 def overrides(tree: Path, t: target.Target) -> dict[str, dict]:

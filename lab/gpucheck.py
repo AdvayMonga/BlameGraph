@@ -19,7 +19,8 @@ import time
 import traceback
 from pathlib import Path
 
-from lab import engine, gpu, serve, worker
+from targets import engine
+from lab import gpu, serve, worker
 from lab.safety import container, grader
 
 HOLD = "import torch, time; x = torch.empty(2**30, dtype=torch.uint8, device='cuda'); print('holding', flush=True); time.sleep(600)"

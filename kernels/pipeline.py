@@ -50,7 +50,7 @@ def capture_env(task) -> dict:
     """The launch env a capture of `task` runs under (the target's [kernels] capture_env, then the task's own): part
     of what a capture depends on."""
     try:
-        from lab import target
+        from targets import target
         env = dict((target.load().raw.get("kernels") or {}).get("capture_env") or {})
     except Exception:                            # noqa: BLE001  no target: the task's own only
         env = {}
@@ -149,7 +149,7 @@ def hold(task, caps: list[Path], out: Path, env: dict, worker=None):
     if "KERNEL_EVAL_SSH" in env:
         argv = json.loads(env["KERNEL_EVAL_SSH"]) + [f"{env['KERNEL_EVAL_REMOTE']} python {shlex.join(args)}"]
     else:
-        from lab import engine
+        from targets import engine
         argv = [engine.python(), *args]
     log = open(Path(out) / "hold.log", "w")
     p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True, cwd=ROOT,

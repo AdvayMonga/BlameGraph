@@ -36,7 +36,8 @@ import tarfile
 import tempfile
 from pathlib import Path
 
-from lab import engine, live, serve, target
+from targets import engine, target
+from lab import live, serve
 from lab.safety import container
 
 RESULT = "_result.json"

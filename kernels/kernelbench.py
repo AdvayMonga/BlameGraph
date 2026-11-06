@@ -273,7 +273,7 @@ def _official(cfg_path: str) -> int:
 def score(name: str, program: Path, work: Path) -> dict:
     """The benchmark's own verdict on `program`'s ModelNew, run jailed on this host's GPU, with the speedups."""
     from kernels.evolve import jailed
-    from lab import engine
+    from targets import engine
     from lab.safety import grader
     work = Path(work).resolve()
     tree = work / "tree"

@@ -12,7 +12,8 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lab import agent, engine, experiments, ledger, live, target, worker
+from lab import agent, experiments, ledger, live, worker
+from targets import engine, target
 from lab.budget import Budget, BudgetExceeded
 from lab.evaltools import BENCH_TIER
 from lab.safety import grader
