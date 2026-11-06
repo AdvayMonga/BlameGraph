@@ -1,4 +1,4 @@
-"""The whole decode step as one region (kernels/step.py, measure.profile.capture.step): a step captured from a fake megakernel,
+"""The whole decode step as one region (generate/kernels/tasks/step.py, measure.profile.capture.step): a step captured from a fake megakernel,
 the task built from it and a CPU holder (shapes, inputs, the weights passed uncloned), and, where the engine imports
 (run with LAB_ENGINE_REPO set), the fp32 reference through the engine's stations on a tiny model and the starting
 program built from the engine's decode_step.cu. The megakernel itself needs an H200: not run here."""
@@ -16,7 +16,7 @@ import pytest  # noqa: E402
 
 torch = pytest.importorskip("torch")
 
-from kernels import step  # noqa: E402
+from generate.kernels.tasks import step  # noqa: E402
 from measure.profile import capture  # noqa: E402
 
 L, NB, NKV, BS, D, H, NQ, E, K, I, V = 2, 12, 2, 16, 16, 64, 4, 4, 2, 32, 50
@@ -94,7 +94,7 @@ def test_the_step_is_never_given_nonfinite_inputs():
 
 
 def held_step(tmp, cfg=None):
-    from kernels.shared_weights import Holder
+    from generate.kernels.tasks.shared_weights import Holder
     g = torch.Generator().manual_seed(1)
     w = {}
     for i in range(L):
@@ -114,8 +114,8 @@ def held_step(tmp, cfg=None):
 
 
 def test_the_step_task_reads_its_captures_and_passes_the_weights_uncloned(tmp_path, monkeypatch):
-    from kernels import shapes
-    from kernels.check import _gen
+    from generate.kernels.tasks import shapes
+    from evals.kernels.check import _gen
     caps, _ = capture_steps(tmp_path, monkeypatch)
     h = held_step(tmp_path)
     t = step.task(str(caps), str(h.path))
@@ -131,7 +131,7 @@ def test_the_step_task_reads_its_captures_and_passes_the_weights_uncloned(tmp_pa
 
 
 def test_the_whole_step_does_not_ship():
-    from kernels.evolve import ship
+    from evals.kernels import ship
     with pytest.raises(ValueError, match="does not ship"):
         ship.region_files(SimpleNamespace(name=capture.STEP), "", "pkg", [], [], True)
 
@@ -146,7 +146,7 @@ def test_the_reference_runs_the_engines_stations_over_every_layer_in_fp32(tmp_pa
     caps, _ = capture_steps(tmp_path, monkeypatch)
     h = held_step(tmp_path)
     t = step.task(str(caps), str(h.path))
-    from kernels.shared_weights import attach
+    from generate.kernels.tasks.shared_weights import attach
     w = {**attach(h.path), "cfg": LayerConfig(NQ, NKV, D, D ** -0.5, 1e-6, E, K, True)}     # the engine's own config
     xs = t.make_inputs((2, 3), torch.bfloat16, "cpu", torch.Generator().manual_seed(0))
     logits, nxt, k, v = step.reference(w)(*xs)
@@ -161,7 +161,7 @@ def test_the_reference_runs_the_engines_stations_over_every_layer_in_fp32(tmp_pa
 
 @engine
 def test_the_starting_program_is_the_engines_megakernel_built_inline_and_passes_the_screen():
-    from kernels.evolve import core
+    from evals.kernels import core
     src = step.start_program()
     cu = importlib.import_module(step.MODULE).source()      # decode_step.cu with common.cuh inlined, as the start is
     assert core.screen(src) == [] and "globaltimer" not in src and "load_inline(" in src
@@ -203,7 +203,7 @@ def kernel(tokens, pos, bt, k_cache, v_cache, w):
 @engine
 def test_the_step_is_judged_end_to_end_on_the_cpu(tmp_path, monkeypatch):
     from inference_server.models.stations import LayerConfig
-    from kernels.evolve import core
+    from evals.kernels import core
     caps, _ = capture_steps(tmp_path, monkeypatch)
     h = held_step(tmp_path, LayerConfig(NQ, NKV, D, D ** -0.5, 1e-6, E, K, True))
     monkeypatch.setattr(step, "baseline", lambda *xs: step.reference(xs[-1])(*xs[:-1]))   # the megakernel needs CUDA

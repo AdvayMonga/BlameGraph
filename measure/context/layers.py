@@ -9,7 +9,7 @@ window, kernels.json, the engine's timeline in events.jsonl, stats.json):
 
 Distance: layer 2 = the mean decode step against the step floor (measure.context.ceiling) at the window's mean batch and
 context; layer 1 = the kernels' call-weighted % of their roofline bounds when gate results are given
-(kernels.share.weighted_pct), else missing and why; layers 3 and 4 have no single ceiling, so the facts beside them
+(generate.kernels.tasks.share.weighted_pct), else missing and why; layers 3 and 4 have no single ceiling, so the facts beside them
 are what a change there moves. Every number names its basis; a missing one says why.
 
   python -m measure.context.layers BUNDLE [--target T]
@@ -117,7 +117,7 @@ def from_bundle(bundle: str | Path, t=None, gpu: dict | None = None, gates: dict
 
 def _kernel_distance(gates: dict | None, tasks: list | None) -> dict:
     if not gates:
-        return {"pct_of_ceiling": None, "ceiling_missing": "no kernel gate results given (kernels.share.rank joins them)"}
+        return {"pct_of_ceiling": None, "ceiling_missing": "no kernel gate results given (generate.kernels.tasks.share.rank joins them)"}
     per = {name: _weighted_pct(g) for name, g in gates.items()}
     known = {k: v for k, v in per.items() if v is not None}
     return {"pct_of_ceiling": sum(known.values()) / len(known) if known else None, "pct_of_roofline_by_task": per,
@@ -125,7 +125,7 @@ def _kernel_distance(gates: dict | None, tasks: list | None) -> dict:
 
 
 def _weighted_pct(gate: dict) -> float | None:
-    """Call-weighted % of the roofline bound over the shapes a kernel `gate` result timed (as kernels.share.weighted_pct;
+    """Call-weighted % of the roofline bound over the shapes a kernel `gate` result timed (as generate.kernels.tasks.share.weighted_pct;
     repeated here because the kernels package imports torch, which the lab does not require)."""
     rows = [r for k in ("timings", "heldout_timings") for r in json.loads((gate.get("artifacts") or {}).get(k) or "[]")
             if r.get("pct_of_roofline") is not None]

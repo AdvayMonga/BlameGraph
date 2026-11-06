@@ -1,4 +1,4 @@
-"""The fp8-KV paged decode task (kernels/tasks/paged_decode_fp8.py): fp8 pools at a unit scale, its reference against
+"""The fp8-KV paged decode task (generate/kernels/tasks/paged_decode_fp8.py): fp8 pools at a unit scale, its reference against
 the bf16 task's on the same values, each task reading only its own captured calls, and the capture env it asks for."""
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import torch  # noqa: E402
 
-from kernels.tasks import load  # noqa: E402
+from generate.kernels.tasks import load  # noqa: E402
 
 
 def test_fp8_pools_and_the_reference_on_their_values():

@@ -5,8 +5,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from kernels import library as L  # noqa: E402
-from kernels.tasks import TASKS  # noqa: E402
+from generate.kernels import library as L  # noqa: E402
+from generate.kernels.tasks import TASKS  # noqa: E402
 
 INDEX = """[libraries]
 a = { repo = "o/a", version = "v1" }

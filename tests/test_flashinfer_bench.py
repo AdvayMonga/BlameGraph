@@ -19,10 +19,10 @@ os.environ.setdefault("LAB_TARGET", str(ROOT / "targets" / "inference-server.tom
 import torch  # noqa: E402
 from safetensors.torch import save  # noqa: E402
 
-from kernels import flashinfer_bench as fib  # noqa: E402
-from kernels.evolve.core import judge, screen  # noqa: E402
-from kernels.evolve.run import _target_tolerances, initial_program, system_message  # noqa: E402
-from kernels.tasks import from_config, load  # noqa: E402
+from generate.kernels.tasks import flashinfer_bench as fib  # noqa: E402
+from evals.kernels.core import judge, screen  # noqa: E402
+from generate.kernels.evolve.run import _target_tolerances, initial_program, system_message  # noqa: E402
+from generate.kernels.tasks import from_config, load  # noqa: E402
 
 NAME = "gather_scale_h8"
 DEFINITION = {
@@ -143,7 +143,7 @@ def test_the_judge_passes_a_correct_rewrite_and_zeroes_a_wrong_one():
 
 
 def test_a_jailed_judgment_mounts_the_dataset_and_verifies_outside():
-    from kernels.evolve.jailed import judge_jailed
+    from evals.kernels.jailed import judge_jailed
     with tempfile.TemporaryDirectory() as d:
         ds = dataset(Path(d) / "ds")
         t = load(f"fib:{NAME}", samples=str(ds))

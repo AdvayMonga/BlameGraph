@@ -36,7 +36,7 @@ if [ -n "$tv" ] && [ ! -x "/usr/local/cuda-$tv/bin/nvcc" ]; then
     || echo "cuda-toolkit-$tv: not in apt (finding, not failure)"
 fi
 [ -n "$tv" ] && { "/usr/local/cuda-$tv/bin/nvcc" --version 2>/dev/null | tail -1 || true; }
-# The held-out gate runs compute-sanitizer from that toolkit (kernels/evolve/sanitize.py); without it the gate says so.
+# The held-out gate runs compute-sanitizer from that toolkit (evals/kernels/sanitize.py); without it the gate says so.
 for d in ${tv:+/usr/local/cuda-$tv} /usr/local/cuda; do
   [ -x "$d/bin/compute-sanitizer" ] && { "$d/bin/compute-sanitizer" --version 2>/dev/null | tail -1; break; }
 done || echo "compute-sanitizer: not in the toolkit (finding, not failure)"

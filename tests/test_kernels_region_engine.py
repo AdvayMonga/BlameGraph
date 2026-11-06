@@ -76,7 +76,7 @@ def reference(stations=DECODE):
 
 
 def engine(tmp, monkeypatch):
-    from kernels import regions
+    from generate.kernels.tasks import regions
     (tmp / "fake_stations_mod.py").write_text(FAKE)
     monkeypatch.syspath_prepend(str(tmp))
     monkeypatch.setattr(regions, "ENGINE", "fake_stations_mod")
@@ -103,13 +103,13 @@ def captures(tmp, calls):
 
 
 def held(tmp, regions, layer=0):
-    from kernels.shared_weights import Holder
+    from generate.kernels.tasks.shared_weights import Holder
     return Holder({"w.mm": torch.randn(64, 64) / 8, "w.mm_scale": None}, tmp / "w.pkl",
                   {"cfg": regions._engine().LayerConfig(1e-6), "layer": layer})
 
 
 def test_a_region_of_the_engines_stations_is_judged_end_to_end(tmp_path, monkeypatch):
-    from kernels.evolve import core
+    from evals.kernels import core
     regions = engine(tmp_path, monkeypatch)
     h = held(tmp_path, regions)
     caps = captures(tmp_path, [(4, 64, 0, True), (16, 64, 0, True)])
@@ -130,7 +130,7 @@ def test_a_region_of_the_engines_stations_is_judged_end_to_end(tmp_path, monkeyp
 
 
 def test_region_names_go_through_the_task_loader(tmp_path, monkeypatch):
-    from kernels.tasks import from_config
+    from generate.kernels.tasks import from_config
     regions = engine(tmp_path, monkeypatch)
     caps = captures(tmp_path, [(4, 64, 0, True)])
     t = from_config({"task": "region:norm:act", "samples": str(caps), "shared_weights": str(held(tmp_path, regions).path)})
@@ -149,7 +149,7 @@ def test_a_region_writing_in_place_runs_on_a_copy_and_a_program_must_write_in_pl
     """A region with the K/V writer: the engine's stations as they run, each call on a copy of the pool (baseline and
     program alike, inputs left unchanged); the start program passes; a program returning a new pool is refused."""
     import pytest
-    from kernels.evolve import core
+    from evals.kernels import core
     regions = engine(tmp_path, monkeypatch)
     h = held(tmp_path, regions)
     d = tmp_path / "kvcaps"
@@ -177,7 +177,7 @@ def test_a_region_writing_in_place_runs_on_a_copy_and_a_program_must_write_in_pl
 
 
 def test_captured_shapes_split_with_a_heldout_region_from_the_holders_layer_only(tmp_path, monkeypatch):
-    from kernels import shapes
+    from generate.kernels.tasks import shapes
     regions = engine(tmp_path, monkeypatch)
     calls = [(4, 64, 0, True)] + [(4, 64, 0, False)] * 4 + [(16, 64, 0, True)] * 3 + [(32, 64, 0, True), (64, 64, 0, True)]
     calls += [(32, 64, 1, True), (8, 64, 0, False)]          # another layer's; a shape whose sample was over the cap
@@ -191,7 +191,7 @@ def test_captured_shapes_split_with_a_heldout_region_from_the_holders_layer_only
 
 
 def test_seed_zero_is_the_capture_and_later_seeds_perturb_it_differently(tmp_path, monkeypatch):
-    from kernels.check import _gen
+    from evals.kernels.check import _gen
     regions = engine(tmp_path, monkeypatch)
     caps = captures(tmp_path, [(4, 64, 0, True)])
     t = regions.from_engine("norm", "add", str(caps), str(held(tmp_path, regions).path), dtypes=(torch.float32,))
@@ -225,7 +225,7 @@ def test_the_stations_callees_are_watched_when_they_import(tmp_path, monkeypatch
 def _engine_repo(tmp, monkeypatch):
     """A git repo of a fake engine package holding the fake stations at models/stations.py, with no regions package."""
     import subprocess
-    from kernels import regions
+    from generate.kernels.tasks import regions
     repo = tmp / "engine"
     pkg = repo / "src" / "fake_engine" / "models"
     pkg.mkdir(parents=True)
@@ -248,9 +248,9 @@ def _engine_repo(tmp, monkeypatch):
 
 def test_a_region_ships_as_an_override_module_never_through_the_entry_path(tmp_path, monkeypatch):
     import pytest
-    from kernels import pipeline
-    from kernels.evolve import ship as ship_mod
-    from kernels.evolve.run import initial_program
+    from generate.kernels.tasks import pipeline
+    from evals.kernels import ship as ship_mod
+    from generate.kernels.evolve.run import initial_program
     regions, repo, git = _engine_repo(tmp_path, monkeypatch)
     h = held(tmp_path, regions)
     t = regions.from_engine("norm", "add", shared_weights=str(h.path))
@@ -287,8 +287,8 @@ def test_a_region_ships_as_an_override_module_never_through_the_entry_path(tmp_p
 
 def test_a_region_overlapping_an_override_already_shipped_is_refused(tmp_path, monkeypatch):
     import pytest
-    from kernels.evolve import ship as ship_mod
-    from kernels.evolve.run import initial_program
+    from evals.kernels import ship as ship_mod
+    from generate.kernels.evolve.run import initial_program
     regions, repo, git = _engine_repo(tmp_path, monkeypatch)
     h = held(tmp_path, regions)
     ok = {"metrics": {"correct": 1.0}, "artifacts": {"gates": json.dumps(
@@ -306,8 +306,8 @@ def test_a_region_overlapping_an_override_already_shipped_is_refused(tmp_path, m
 def test_the_search_cli_takes_a_region_with_its_samples_and_holder(tmp_path, monkeypatch):
     import argparse
     import pytest
-    from kernels.evolve import run
-    from kernels.search import __main__ as cli
+    from generate.kernels.evolve import run
+    from generate.kernels.search import __main__ as cli
     regions = engine(tmp_path, monkeypatch)
     h = held(tmp_path, regions)
     caps = captures(tmp_path, [(4, 64, 0, True)] * 3 + [(16, 64, 0, True)] * 2 + [(32, 64, 0, True), (64, 64, 0, True)])
@@ -335,8 +335,8 @@ def test_the_search_cli_takes_a_region_with_its_samples_and_holder(tmp_path, mon
 
 def test_a_region_judged_on_a_remote_worker_is_described_here_from_its_shapes_file(tmp_path, monkeypatch):
     import pytest
-    from kernels.search import __main__ as cli
-    from kernels import regions
+    from generate.kernels.search import __main__ as cli
+    from generate.kernels.tasks import regions
     monkeypatch.setattr(regions, "ENGINE", "no_engine_here.stations")       # nothing of the engine loads here
     monkeypatch.setenv("KERNEL_EVAL_SSH", '["ssh", "gpu"]')
     for k in ("KERNEL_EVAL_CONFIG", "KERNELS_EVAL_LOG"):
@@ -363,7 +363,7 @@ def test_a_prefill_region_binds_the_prefill_stations_and_a_none_read_becomes_a_c
     """A "p_" region is the engine's PREFILL; a read the engine passes as None (packed waves' `tokens`) is a constant
     None, the calls where it is a tensor (padded waves) left out; a shipped override runs the engine's own stations
     for a padded wave."""
-    from kernels.evolve import core
+    from evals.kernels import core
     regions = engine(tmp_path, monkeypatch)
     h = held(tmp_path, regions)
     d = tmp_path / "pcaps"
@@ -398,8 +398,8 @@ def test_a_prefill_region_binds_the_prefill_stations_and_a_none_read_becomes_a_c
 
 def test_a_region_held_for_several_layers_keys_shapes_by_layer_and_holds_one_layer_out(tmp_path, monkeypatch):
     """Each layer's calls are its own shapes, with that layer's weights; the held-out layer's calls are held out."""
-    from kernels import shapes
-    from kernels.shared_weights import Holder
+    from generate.kernels.tasks import shapes
+    from generate.kernels.tasks.shared_weights import Holder
     regions = engine(tmp_path, monkeypatch)
     w = {i: torch.randn(64, 64) / 8 for i in (0, 32)}
     h = Holder({"L0.w.mm": w[0], "L32.w.mm": w[32], "w.mm_scale": None}, tmp_path / "w.pkl",

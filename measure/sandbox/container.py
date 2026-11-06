@@ -121,7 +121,7 @@ def argv(name: str, workdir: Path, command: list[str], env: dict[str, str], writ
            "--label", "lab.jail=1"]
     if gpus() if gpu is None else gpu:
         out += ["--gpus", "all"]
-    if ipc_host:                                 # CUDA IPC from a holder on the host (kernels/shared_weights.py)
+    if ipc_host:                                 # CUDA IPC from a holder on the host (generate/kernels/tasks/shared_weights.py)
         out += ["--ipc", "host"]
     if (cpus := cpuset()):
         out += ["--cpuset-cpus", cpus]

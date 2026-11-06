@@ -85,10 +85,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   from held-out requests; harness facts carry peaks and floors for the GPU the ledger last measured on),
   `import_runs.py` (a hand-made run dir → `bench`/`equiv` records under a `manual-` run, numbers only),
   `tools.py` (metered tools: test, profile, ledger, query, search, budget, restore, note, `kernel_search` (decided
-  2026-10-22; a blocking call: `kernels/pipeline.py` captures the task's calls under each scored regime's traffic
+  2026-10-22; a blocking call: `generate/kernels/tasks/pipeline.py` captures the task's calls under each scored regime's traffic
   (`REGIME_CAPTURE`; each regime weighted equally, `shapes.from_captures(equal=True)`; reused while the engine outside
   the task's module, the traffic and the spec are unchanged, `tree_key`), runs
-  `kernels.search` on the controller with its evaluator on the worker over ssh, gates the winner on held-out shapes,
+  `generate.kernels.search` on the controller with its evaluator on the worker over ssh, gates the winner on held-out shapes,
   and saves a patch of the engine module in the workspace for the agent to apply; kernels-layer hypotheses only;
   `budget` (USD) split between model calls and GPU time); every record's `cost` has wall seconds, and
   GPU tools charge them at `LAB_GPU_USD_PER_HOUR` / the target's `[cost] gpu_usd_per_hour` to the run's budget) +
@@ -224,8 +224,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   bandwidth and bf16 GEMM measured once per GPU+driver into `data/calibration/peaks/<gpu>.json`, run by `vm-setup.sh`; spec
   sheet as the labelled fallback), `repeat_audit.py`: repeated-request audit (MLPerf TEST04-style), judges decode time per token, not TTFT, so prefix caching passes and replayed answers fail; `python -m evals.agent.repeat_audit --url URL`. `tier_agreement.py`: `tier_agreement(changes)`: Spearman, Kendall tau-b, bootstrap CI, out-of-band disagreements; short tier usable if n ≥ 8, rho ≥ 0.8, CI low ≥ 0.5. `holdout.py`: `HoldoutGuard` (Thresholdout query budget; state n is a write-once object in the store, a query writes n + 1 and retries on a lost race, so one budget per corpus version is shared by every run and machine; seed drawn once with state 0, kept only in the store) and `SealedSplit` (hash manifest, one logged unseal per corpus version). Keep sigma small relative to the threshold.
 - `kernels/` — kernel equivalence: `check_kernel` (seen + held-out shapes, per-dtype tolerances, edge cases incl. non-contiguous and NaN/Inf, inputs unchanged, no aliasing, memoization, determinism) and `time_kernel` / `check_memoization` (sync, rotated buffers, L2 flush on CUDA). Validated on CPU, MPS and CUDA (H200, 2026-10-04): all tests pass; the timer resolves ~20 µs kernels at ~9% IQR, 0.2 ms at 1.5%. `make_inputs` gets a seeded CPU generator; large tensors are made on the device by a generator seeded from it
-(`kernels.tasks.randn`: generating them on the CPU took seconds per check case at real shapes).
-  `kernels/tasks/` (a kernel task: the engine entry point it replaces = the baseline, a reference, an input builder,
+(`generate.kernels.tasks.randn`: generating them on the CPU took seconds per check case at real shapes).
+  `generate/kernels/tasks/` (a kernel task: the engine entry point it replaces = the baseline, a reference, an input builder,
   how to read a shape from a captured call, the held-out axes, the layouts its callers pass, bytes and FLOPs per call
   for the roofline; `toy_rmsnorm` for CPU, `paged_decode` = the example engine's `paged_decode_attention` (block tables as wide as its graphed decode passes them, from the target's CONTEXT_WINDOW: `Task.options`, `tasks.from_config`), `paged_decode_fp8` = the same on fp8 KV pools (KV_CACHE_DTYPE=fp8, unit scale;
   its captures run with that env, `Task.capture_env`), `moe_gemm` = its MoE grouped
@@ -235,20 +235,20 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `silu_mul`, `topk_softmax` = its fused kernels in `models/fused.py`, references from its own eager paths, the start
   that module with its kernels module imported directly (`Task.start_edits`: the screen refuses its importlib/getattr); prefill
   attention has no task: `sdpa_prefill` takes the backend's paged context, not tensors),
-  `kernels/shapes.py` (shapes and call counts from captures; held-out = a whole band of each held-out axis, above its 60th and up to its 80th percentile by calls, never
+  `generate/kernels/tasks/shapes.py` (shapes and call counts from captures; held-out = a whole band of each held-out axis, above its 60th and up to its 80th percentile by calls, never
   the axis's largest value and never random samples (decided 2026-11-02); `ints_from_captures` keeps each shape's captured int args, e.g. real sequence
   lengths, which `Task.with_ints` uses for checking and timing in place of synthetic ones), `kernels/evolve/` (the layer-1 generator, a replication of OpenEvolve 0.4.0 =
-  open AlphaEvolve: `python -m kernels.evolve run|gate|split`; the starting program is the engine's kernel module;
+  open AlphaEvolve: `python -m generate.kernels.evolve run|gate|split`; the starting program is the engine's kernel module;
   each run appends one `kernels` ledger record (every candidate's seen-shape metrics and lineage, OpenEvolve's
   evolution trace and the best program as blobs; `data/knowledge/LEDGER.md`);
-  prompts carry facts only (`kernels/evolve/prompts/` overrides OpenEvolve's advice; `run.setting` states the seen
+  prompts carry facts only (`generate/kernels/evolve/prompts/` overrides OpenEvolve's advice; `run.setting` states the seen
   shapes with calls, score weight and capture traffic (`shapes.sources_from_captures`), the GPU, peaks, toolchain,
   launch settings and tolerances, for both generators; `run.system_message` states how a
   program is judged, from the evaluator's own constants);
-  a precheck with no GPU attached (`jailed.PRECHECK_STAGE`, `kernels/evolve/precheck.py`: the screen, the
+  a precheck with no GPU attached (`jailed.PRECHECK_STAGE`, `evals/kernels/precheck.py`: the screen, the
   CUDA C++ build for the GPU's architecture from the config's `arch`, each built kernel's registers, stack, shared and
   local memory from cuobjdump as `compile_report`; only a failed build drops a program, spills are facts, an import
-  that needs a device is inconclusive; Triton kernels build on first call, so not here), then a two-stage cascade, each stage a fresh jailed process (`kernels.evolve.jailed`: the jail gets the candidate, its
+  that needs a device is inconclusive; Triton kernels build on first call, so not here), then a two-stage cascade, each stage a fresh jailed process (`evals.kernels.jailed`: the jail gets the candidate, its
   config and a copied harness, never this repo; `core.judge`: stage 1 = two shapes, one seed; stage 2 = correctness
   on every seen shape (one seed, plus memoization, non-finite inputs, inputs unchanged, aliasing) + paired timing against
   the baseline, and only in the gate (config `full`, or held-out shapes given) the full check: three seeds x 3 repeats, edge shapes and
@@ -257,7 +257,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   graph replay behind a GPU spin so its launch is not timed, and a kernel that cannot be captured scores 0; the
   timed calls' outputs are checked against the reference too, so a kernel that does less only when timed scores 0; every
   plain check case's and timed call's outputs are verified again outside the jail by a process that never loads the
-  candidate, `kernels/evolve/verify.py`, gate `verified_outside`, which requires every record the config implies:
+  candidate, `evals/kernels/verify.py`, gate `verified_outside`, which requires every record the config implies:
   each seen shape x dtype at seed 0 (the gate, `full`: each seen and held-out shape x dtype x seed 0-2 and each value scale),
   each timed buffer; the result is the one stdout line
   carrying a per-judgment key that core reads and removes before the candidate loads; between judgments only torch's
@@ -270,10 +270,10 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `torch.library`, `TORCH_LIBRARY`, dispatch modes, which could change what the baseline's own ops do) or writes into anything it imported, under any alias
   (`core.screen`), and scores 0 if any function the checker or timer uses is patched, checked after loading and
   after every call the checker makes (`core._watched`; the timer binds its own at import); the exploit canaries in
-  `tests/test_kernels_evolve.py` must all score 0; selection never sees held-out shapes, `gate` judges them (correctness, and their speedup as a fact), then runs a program that passed under `compute-sanitizer` (`kernels/evolve/sanitize.py`, jailed stage 6, decided 2026-11-04: memcheck, racecheck, initcheck, synccheck, each in its own jail, one call on the smallest and largest seen and the largest held-out shape, caching allocator off, host API errors not reported (Triton's loader makes them on the engine's own kernels); any device-side error fails gate `sanitizer` with the report as evidence; a host without it, or a region whose weights are attached over IPC from the holder, records "not run" as a fact); `validate_gpu.sh` = the GPU validation (shapes captured under real corpus traffic at several concurrencies, `CAPTURE_SPECS`; never synthetic prompts, whose batches have uniform lengths); tolerances from the target's
-  `[kernels]`). `kernels/search/` (extra `kernel-search`; our own layer-1 generator, replacing OpenEvolve, which stays as the A/B baseline: `python -m
-  kernels.search`; by default the genetic search (`kernels/search/generations.py`, decided 2026-10-26): generation 0 is
-  one round from the start program (40 changes; competitors' ported kernels, `kernels.competitors.starts`, judged beside
+  `tests/test_kernels_evolve.py` must all score 0; selection never sees held-out shapes, `gate` judges them (correctness, and their speedup as a fact), then runs a program that passed under `compute-sanitizer` (`evals/kernels/sanitize.py`, jailed stage 6, decided 2026-11-04: memcheck, racecheck, initcheck, synccheck, each in its own jail, one call on the smallest and largest seen and the largest held-out shape, caching allocator off, host API errors not reported (Triton's loader makes them on the engine's own kernels); any device-side error fails gate `sanitizer` with the report as evidence; a host without it, or a region whose weights are attached over IPC from the holder, records "not run" as a fact); `validate_gpu.sh` = the GPU validation (shapes captured under real corpus traffic at several concurrencies, `CAPTURE_SPECS`; never synthetic prompts, whose batches have uniform lengths); tolerances from the target's
+  `[kernels]`). `generate/kernels/search/` (extra `kernel-search`; our own layer-1 generator, replacing OpenEvolve, which stays as the A/B baseline: `python -m
+  generate.kernels.search`; by default the genetic search (`generate/kernels/search/generations.py`, decided 2026-10-26): generation 0 is
+  one round from the start program (40 changes; competitors' ported kernels, `generate.kernels.library.competitors.starts`, judged beside
   it and joined to the population), then exactly `--generations` (10) generations (decided 2026-10-30:
   nothing stops it sooner), each a round whose `--gen-size` (24) changes are split over
   four idea types (decided 2026-10-29;
@@ -287,7 +287,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   generation by each type's Laplace-smoothed rate of new bests (floor 2), after a new best found by the last generation
   takes half of the ideas as refine ideas (`NEW_BEST`, decided 2026-11-03); every correct program takes the full exam,
   children under their own parent with their type (`Node.kind`); every call gets
-  the memory (`kernels/search/memory.py`, cached blocks: ideas that beat their parent on other tasks with their best gain
+  the memory (`generate/kernels/search/memory.py`, cached blocks: ideas that beat their parent on other tasks with their best gain
   and bound type, then every idea tried on this task, earlier runs from `--archive` and this run so far, with measured
   gains; archived ideas naming a program of their own run left out); with `--mcts` instead a tree of refinement chains, one parent per round chosen by MCTS (UCT with
   C = 0.6 on percentile rewards and max backup,
@@ -295,17 +295,17 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   that never reached the GPU; in every mode the model is shown the
   parent program, its measurements, its lineage, the starting program and up to 2 better programs from other branches,
   all as full code (CodeEvolve's inspirations; decided 2026-10-30), one call per change answering with its hypothesis as
-  JSON and the change as SEARCH/REPLACE blocks (`kernels/search/funnel.py`; each and its fate in `hypotheses.jsonl`),
+  JSON and the change as SEARCH/REPLACE blocks (`generate/kernels/search/funnel.py`; each and its fate in `hypotheses.jsonl`),
   duplicates refused before any GPU time, from the facts (and, its choice when, Anthropic's web search
   and read-only SQL over the agent's view of the ledger index, `--judge-tools`; the harness pastes no research),
   including CudaForge's 24 ncu counters
-  (`kernels/evolve/ncu.py`, stage 3 of the jailed evaluator; collected in the jail since 2026-10-27, on a Nebius H200
+  (`evals/kernels/ncu.py`, stage 3 of the jailed evaluator; collected in the jail since 2026-10-27, on a Nebius H200
   whose driver had them open: the earlier refusals, ERR_NVGPUCTRPERM, were on hosts with them closed, which
   `vm-setup.sh` never opened because it grepped the module option's name, not the driver's `RmProfilingAdminOnly`; a
   run stops asking after the first refusal); the harness tunes nothing (decided 2026-11-03, its grid search removed): a
   program tunes itself at run time if it does (e.g. `triton.autotune`), and the system message states that the checks
-  and warm-up calls run before each shape's timed window; before the held-out gate (`kernels.evolve gate`, and
-  `kernel_search` via `pipeline.freeze`) the winner's autotune is frozen (decided 2026-11-04, `kernels/evolve/freeze.py`:
+  and warm-up calls run before each shape's timed window; before the held-out gate (`generate.kernels.evolve gate`, and
+  `kernel_search` via `pipeline.freeze`) the winner's autotune is frozen (decided 2026-11-04, `evals/kernels/freeze.py`:
   jailed stage 7 runs it on every seen shape and records each autotuner's choice per key; each module-level
   `triton.autotune` becomes `_FrozenTune` over that table, the call's key or the nearest tuned one: equal non-numeric
   values, then the smallest sizes at or above, then the closest), and the frozen program is what the gate judges and
@@ -314,20 +314,20 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   2026-10-27);
   each timed shape carries its bound type (memory or compute) and the achieved % of peak bandwidth and of peak FLOPs,
   and ncu runs on the smallest and the largest seen shape; before promotion a model (`--detector-model`, Opus 5.5) reads each would-be winner for gaming and a flagged one is
-  passed over, recorded with its evidence (`kernels/search/detect.py`, MANTIS; never changes a score);
+  passed over, recorded with its evidence (`generate/kernels/search/detect.py`, MANTIS; never changes a score);
   every call priced (OpenEvolve's too, via a usage log);
-  `python -m kernels.search.ab --arms ...` runs OpenEvolve and kernels.search (and variants differing in one flag:
+  `python -m generate.kernels.search.ab --arms ...` runs OpenEvolve and generate.kernels.search (and variants differing in one flag:
   `search-no-tools`, `search-mcts`, `search-c1.41`, `search-gen20`, `search-untyped`) on one task with the same shapes, start, evaluator,
   the same post-search promotion for every arm (`ab.SAME_PROMOTION`: top 3 re-timed, no tuning, no detector), single model
-  and judged-program budget, gates each winner on held-out shapes, and writes `ab.json`; `kernels/METHOD.md` maps
-  every component to its published source and number, or says why ours; same evaluator, run dir, re-timed promotion and `kernels` record as `kernels.evolve run`). `kernels/evolve/ship.py` (`python -m kernels.evolve ship`: a program with a passing held-out gate becomes a
+  and judged-program budget, gates each winner on held-out shapes, and writes `ab.json`; `generate/kernels/search/METHOD.md` maps
+  every component to its published source and number, or says why ours; same evaluator, run dir, re-timed promotion and `kernels` record as `generate.kernels.evolve run`). `evals/kernels/ship.py` (`python -m generate.kernels.evolve ship`: a program with a passing held-out gate becomes a
   commit on a new engine branch, built with git plumbing so the engine's tree is untouched; `--budget` starts the
-  `lab.experiment` researcher run on it, measured end to end by `bench`/`equiv`/`submit`). `kernels/share.py` (`python -m kernels.evolve share --profile BUNDLE [--profile ...] [--gate TASK=GATE.json]`: tasks
+  `lab.experiment` researcher run on it, measured end to end by `bench`/`equiv`/`submit`). `generate/kernels/tasks/share.py` (`python -m generate.kernels.evolve share --profile BUNDLE [--profile ...] [--gate TASK=GATE.json]`: tasks
   ranked by share x (1 - % of roofline) across profiles, each task's share of a profiled engine
   window from the device kernels it launches, `Task.kernel_names`, the speedup bound if they took no time, and the
   kernels no task covers, by share: the facts for choosing the next task). `measure/profile/capture.py` + `measure.profile.profile --capture MODULE:FUNCTION` (the `profile` tool's `capture`): every
   call's argument shapes and small int tensors, the first call per shape kept whole as real inputs.
-- `kernels/regions.py` — regions (decided 2026-10-22/23): any run of consecutive decode stations of the engine as a
+- `generate/kernels/tasks/regions.py` — regions (decided 2026-10-22/23): any run of consecutive decode stations of the engine as a
   kernel task with a generated harness (since 2026-11-02 prefill stations too: a region whose first station starts
   "p_" binds the engine's `PREFILL`, `station_set`; its held-out axis is the tokens of the packed wave; a read the
   engine passes as None in the captured calls, e.g. a packed wave's `tokens`, is a constant None and the calls where it
@@ -345,14 +345,14 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   (`cfg`, None weights) the constants that `start_program` writes in too; the flat shape signature holds out the first
   activation's rows (and the attention block tables' width); shapes are read from calls named `Task.capture_fn`
   (`region:F:L`); `load("region:FIRST:LAST")` and `from_config` (keys `samples`, `shared_weights`) take it, and so do
-  `kernels.search` and `kernels.evolve run|gate|split|ship` (`--task region:F:L --samples DIR --shared-weights FILE`;
+  `generate.kernels.search` and `generate.kernels.evolve run|gate|split|ship` (`--task region:F:L --samples DIR --shared-weights FILE`;
   the samples are the captures unless `--captures` is given; both keys go into `eval_config.json` and the gate's
   config). `load` with neither key gives `regions.light`: name, entry, capture env (`CAPTURE_REGION_LAYERS` =
   `regions.LAYER` 0, `MEGAKERNEL=0`) and held-out axes, no engine import: what the controller knows. kernel_search takes
-  `region:F:L` end to end (`kernels/pipeline.py`): captured with `measure.profile.profile --capture region:F:L` (sets the engine's
+  `region:F:L` end to end (`generate/kernels/tasks/pipeline.py`): captured with `measure.profile.profile --capture region:F:L` (sets the engine's
   CAPTURE_REGION/_DIR before the backend is built) under the scored regimes' traffic, `pipeline.pack` merges the
   captures into one samples dir (each traffic's calls kept apart under traffic<i>/profile-<source>/captures, so each
-  weighs the same), pushed to a remote worker, and `pipeline.hold` runs `python -m kernels.hold` where the evaluator
+  weighs the same), pushed to a remote worker, and `pipeline.hold` runs `python -m generate.kernels.tasks.hold` where the evaluator
   runs (over the evaluator's ssh env, or locally with the engine's python): it loads the engine (target env, 16 K/V
   blocks, no graphs, no megakernel), shares the region's weights (`Holder(jail_uid=)`), describes the region (shapes
   split with `heldout_axes`, ints, sources, the start program, the engine's station names) on one JSON line, and holds
@@ -362,7 +362,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   module (`ship.region_files`, git-free, overlap checked against the overrides in the agent's tree). The jail mounts the samples and the holder
   file with its `.pristine` and `.constants` sidecars read-only and shares the host's IPC
   namespace (root lab only, never at the precheck); afterwards every /dev/shm entry of the jail's uid is removed.
-  `kernels/shared_weights.py`: a holder shares tensors by reference (CUDA IPC, or shared memory on the CPU) and writes
+  `generate/kernels/tasks/shared_weights.py`: a holder shares tensors by reference (CUDA IPC, or shared memory on the CPU) and writes
   a pristine copy beside the file (files unpickled outside the jail must be the lab's, not group/other-writable, not
   under /dev/shm or a jail-writable dir); judgments on one holder hold its lock, `restore` runs before and (in a
   `finally`) after each one, and a judgment that wrote a weight is void and the weight copied back. `time_pair`
@@ -381,7 +381,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   2026-10-27 (engine branch engine/region-capture): router..down of layer 0 captured under mixed_1 and mixed_3, held,
   split and gated jailed with the weights attached over IPC: the start program passed every gate, 1.0x seen, 1.001x
   held-out. Not yet run through kernel_search or over ssh on a GPU.
-- `kernels/step.py` — the whole decode step as one region, `region:embed:argmax` (`measure.profile.capture.STEP`): the engine's
+- `generate/kernels/tasks/step.py` — the whole decode step as one region, `region:embed:argmax` (`measure.profile.capture.STEP`): the engine's
   megakernel (`megakernel.decode_step`) as a kernel task. Captured by `measure.profile.capture.step` (`measure.profile.profile --capture
   region:embed:argmax`: wraps decode_step; the first call per (rows, block-table width) kept whole up to 256 MiB:
   tokens, pos, bt renumbered to the blocks its rows touch, every layer's K/V of those blocks stacked [layers, blocks,
@@ -401,27 +401,27 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   the H200 (lab-gpu-18, 2026-11-04, steady_interactive 1 and 8) the start program failed correctness on 3 of 6 cases
   (max_abs 0.5) while the determinism check found the megakernel's own outputs differ across identical calls; the
   error budget now covers that spread (`check.baseline_envelope`), not re-run yet.
-- `kernels/ptx.py` — the PTX comparison's cards (decided 2026-10-22, after Standard Kernel): each implementation's
+- `generate/kernels/library/ptx.py` — the PTX comparison's cards (decided 2026-10-22, after Standard Kernel): each implementation's
   kernels counted from its PTX (or `cuobjdump -sass` output, for libraries that ship no PTX): instruction classes,
   widest vector access, declared registers, static shared memory, and the Hopper features in use (wgmma, TMA,
   setmaxnreg, mbarrier, cp.async, mma, ldmatrix), with a measured time beside it when given; fastest first.
-  `python -m kernels.ptx card --name N PTX ... [--timing N=MS] --out F`; the cards live in
-  `knowledge/ptx/<task>.txt`, built by `python -m kernels.library cards` (only moe_gemm_fp8's exist yet).
-- `kernels/library/` — other implementations of every kernel task in one place (decided 2026-10-31): `index.toml`
+  `python -m generate.kernels.library.ptx card --name N PTX ... [--timing N=MS] --out F`; the cards live in
+  `generate/kernels/library/ptx/<task>.txt`, built by `python -m generate.kernels.library cards` (only moe_gemm_fp8's exist yet).
+- `generate/kernels/library/` — other implementations of every kernel task in one place (decided 2026-10-31): `index.toml`
   names 2-3 per task from vLLM v0.32.0, SGLang v0.5.22, FlashInfer v0.7.2.post1 and TensorRT-LLM v1.2.1 (upstream
-  paths with line ranges; whole files kept verbatim in `src/`, `python -m kernels.library fetch` re-downloads them),
+  paths with line ranges; whole files kept verbatim in `src/`, `python -m generate.kernels.library fetch` re-downloads them),
   and `block(task)` is the part of every search prompt (the system message, cached) that shows each one's source, URL
   and PTX/SASS card where built, and the starting program's card; no timings. Each entry also names the engine stations
   it implements (`stations`), so a region's prompt gets every entry for its stations (`for_stations`; the hold side
-  writes the region's station names into its shapes file), FlashInfer's batch prefill included for `p_attention`. `python -m kernels.library cards --task T
-  --out knowledge/ptx/T.txt [--dump DIR]` on the GPU host: each entry's card from a `kernels.competitors` dump or from
+  writes the region's station names into its shapes file), FlashInfer's batch prefill included for `p_attention`. `python -m generate.kernels.library cards --task T
+  --out generate/kernels/library/ptx/T.txt [--dump DIR]` on the GPU host: each entry's card from a `generate.kernels.library.competitors` dump or from
   its package's .so (`sass` in the index; SGLang's JIT kernels and Triton kernels without a dump have none). Regions
   have no entries.
-- `kernels/competitors.py` — competitors timed on our shapes (`python -m kernels.competitors`, libraries installed) and
+- `generate/kernels/library/competitors.py` — competitors timed on our shapes (`python -m generate.kernels.library.competitors`, libraries installed) and
   `starts(task, program)`: each task's vLLM v0.32.0 port as a starting program from source vendored in
-  `kernels/vllm_sources.py` (no library needed; rmsnorm, add_rmsnorm, silu_mul, topk_softmax as CUDA C++ built at import,
+  `generate/kernels/library/vllm_sources.py` (no library needed; rmsnorm, add_rmsnorm, silu_mul, topk_softmax as CUDA C++ built at import,
   moe_gemm(_fp8), moe_gemm_scatter_fp8 and paged_decode(_fp8) as Triton), routed to the engine's kernel where unsupported.
-- `kernels/search/funnel.py` — one round (decided 2026-10-22; one call per change and every correct program measured
+- `generate/kernels/search/funnel.py` — one round (decided 2026-10-22; one call per change and every correct program measured
   since 2026-10-30, replacing the funnel's tiers: named ideas, merge, past-failure check, wide coder, repairs, quick
   timing, strong rewrite), from one parent (`expand`, an MCTS expansion: `--per-call` changes) or several
   (`generation`: one `Slot` per parent and idea type with its count; a refine slot's calls read the slices in turn;
@@ -434,17 +434,17 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   jails, and every correct program takes the full exam and joins the tree. A parent gets its ncu
   counters (stage 3) when it is first chosen. Model calls run in waves of `--workers` (8), each call shown the changes earlier waves of the round proposed and
   asked for a different one (`funnel.proposed`, decided 2026-11-01), the round's first call alone so the rest read
-  the prompt cache it writes (`kernels/search/llm.py`'s `CACHE_SPLIT`: the stable part of a prompt is
+  the prompt cache it writes (`generate/kernels/search/llm.py`'s `CACHE_SPLIT`: the stable part of a prompt is
   sent as cached blocks); GPU timings run one at a time. Each hypothesis may predict ncu counter changes (`mechanism`),
   measured against the parent's. Every idea's fate goes to `hypotheses.jsonl` (each idea with its `parent_id`; the
   row's `parents` and `improved`), which the archive reads. `--facts FILE` adds facts to every prompt; the
   `kernel_search` tool passes the scored regimes and the task's share of the latest profiled window (`pipeline.facts`).
-- `kernels/archive.py` — the idea archive (decided 2026-10-22): every distinct kernel idea from the `kernels` records'
+- `generate/kernels/archive.py` — the idea archive (decided 2026-10-22): every distinct kernel idea from the `kernels` records'
   hypothesis logs and traces, with each outcome (run, parent and its score, child and its score, improved, stage
   reached, error); an idea within cosine 0.92 of an earlier one on the same task is folded into it (identical texts only
   without fastembed); `matches` (similarity, else BM25), `retry` (never beat its parent, tried only on parents other
   than the task's current best), `facts` (what the past-failure check sees); each outcome keeps the bound type of
-  the child's seen shapes; `kernels/search/memory.py` turns it into the judge's memory tables. `python -m kernels.archive export --out F` on the
+  the child's seen shapes; `generate/kernels/search/memory.py` turns it into the judge's memory tables. `python -m generate.kernels.archive export --out F` on the
   controller (the GPU host reads the file), `query --archive F TEXT`. Measurements only.
 - `measure/context/layers.py` — each layer's share of a profiled window and its distance from a ceiling, as facts (2026-10-18):
   kernels = CUDA kernel time / window; model execution = prefill + decode phase wall time beyond kernel time;
@@ -453,7 +453,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   batch and context; kernels' % of roofline from gate results when given; layers 3 and 4 say they have no single
   ceiling. Every `profile` record (and every bench's and baseline's `profiled`) carries it under
   `calibrated.layers`, and each kernel task's share of the window under `calibrated.kernel_tasks`
-  (`lab.tools.task_shares`, `kernels/share.py`; why it is missing where the tasks don't import); the brief's harness
+  (`lab.tools.task_shares`, `generate/kernels/tasks/share.py`; why it is missing where the tasks don't import); the brief's harness
   facts show the latest of each (`layers`, `kernel_tasks`). `python -m measure.context.layers BUNDLE`. The timeline covers the whole run, so only events inside the window
   count; nested phases (prefill_mixed inside prefill_chunk) are counted once.
 - `measure/sim/` — the scheduler simulator (layer 3, 2026-10-18): `measure/sim/scheduler.py` drives the engine's real
@@ -547,17 +547,17 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
 - `measure/loadgen/clientcheck.py` — `python -m measure.loadgen.clientcheck`: the client's own TPOT error at each closed-loop concurrency
   and open-loop rate and burst size (`BURST`: N arrivals within 50 ms), against a fixed-schedule server that logs its
   true send times.
-- `kernels/kernelbench.py` — KernelBench as kernel tasks, researcher-only (2026-10-28): `python -m kernels.kernelbench
+- `generate/kernels/tasks/kernelbench.py` — KernelBench as kernel tasks, researcher-only (2026-10-28): `python -m generate.kernels.tasks.kernelbench
   fetch|list|score|run`; the repo at a pinned commit into `local/kernelbench/<commit>/` (problems + the benchmark's own
-  eval package, sha256 manifest); `kb:LEVEL:ID` tasks (`kernels.tasks.load`; the eval config carries the problem's
+  eval package, sha256 manifest); `kb:LEVEL:ID` tasks (`generate.kernels.tasks.load`; the eval config carries the problem's
   source into the jail): inputs from its get_inputs on the device, weights under a fixed seed, fp32, reference and
   baseline its eager forward, its tolerance (Task.tolerances), the benchmark's contract (no layouts, scalings, NaN/Inf
   (Task.nonfinite) or edge shapes, no roofline), a held-out size; start program = problem + `ModelNew(Model)` + `kernel`.
   `score`: the benchmark's `eval_kernel_against_ref` jailed (its package imported without the LLM clients), both
-  tolerances, static checker, torch.compile time; `run`: problems through `kernels.search.ab` arms then `score`,
+  tolerances, static checker, torch.compile time; `run`: problems through `generate.kernels.search.ab` arms then `score`,
   fast_p per arm in `kernelbench.json`. Level 3 problems 48-49 need einops.
-- `kernels/flashinfer_bench.py` — FlashInfer-Bench as kernel tasks, researcher-only (2026-11-02): `python -m
-  kernels.flashinfer_bench fetch [--definitions]|list|solution|score|run`; the HF dataset `flashinfer-ai/flashinfer-trace`
+- `generate/kernels/tasks/flashinfer_bench.py` — FlashInfer-Bench as kernel tasks, researcher-only (2026-11-02): `python -m
+  generate.kernels.tasks.flashinfer_bench fetch [--definitions]|list|solution|score|run`; the HF dataset `flashinfer-ai/flashinfer-trace`
   at a pinned revision into `local/flashinfer_bench/<rev>/` laid out as its TraceSet (sha256 manifest; safetensors only
   for the definitions named). `fib:NAME` tasks: a shape is a workload (its variable axes + an ordinal), recorded tensors
   from its safetensors, the rest drawn as the benchmark draws them, each workload's scalars as 0-d CPU tensors handed

@@ -1,4 +1,4 @@
-"""Regions through the kernel layer's pipeline (kernels/pipeline.py, kernels/hold.py) with the controller unable to
+"""Regions through the kernel layer's pipeline (generate/kernels/tasks/pipeline.py, generate/kernels/tasks/hold.py) with the controller unable to
 load them: captures packed into one samples dir, the hold process's protocol (local and over a stand-in for ssh), its
 description of a region on the fake stations, the winner as an override-module patch of the agent's tree, and the
 `kernel_search` tool on a region end to end with the capture, hold, search and gate faked (no GPU, no model)."""
@@ -17,7 +17,7 @@ import pytest  # noqa: E402
 torch = pytest.importorskip("torch")
 pytest_plugins = ["tests.test_lab_proftools"]   # its `tb` fixture: a Toolbox with fake instruments
 
-from kernels import pipeline  # noqa: E402
+from generate.kernels.tasks import pipeline  # noqa: E402
 from tests.test_kernels_region_engine import captures, engine, held  # noqa: E402
 
 EXPECT = {"metric": "speedup", "value": 1.1, "unit": "absolute", "why": "fused"}
@@ -39,7 +39,7 @@ def two_traffics(tmp):
 
 
 def test_captures_pack_into_one_samples_dir_each_traffic_counted_apart(tmp_path, monkeypatch):
-    from kernels import shapes
+    from generate.kernels.tasks import shapes
     regions = engine(tmp_path, monkeypatch)
     caps = two_traffics(tmp_path)
     pack = pipeline.pack(caps, tmp_path / "pack")
@@ -53,7 +53,7 @@ def test_captures_pack_into_one_samples_dir_each_traffic_counted_apart(tmp_path,
 
 
 def test_the_hold_side_describes_a_region_from_its_samples_and_holder(tmp_path, monkeypatch):
-    from kernels import hold
+    from generate.kernels.tasks import hold
     regions = engine(tmp_path, monkeypatch)
     pack = pipeline.pack(two_traffics(tmp_path), tmp_path / "pack")
     d = hold.describe("region:norm:add", pack, held(tmp_path, regions).path)
@@ -84,7 +84,7 @@ def test_the_hold_process_runs_where_the_evaluator_does_and_ends_with_the_block(
     env = {"KERNEL_EVAL_SSH": json.dumps(["sh", "-c"]),
            "KERNEL_EVAL_REMOTE": f'cd ~ && PATH="{Path(sys.executable).parent}:$PATH" PYTHONPATH="{tmp_path}"'} \
         if remote else {}
-    from kernels.tasks import load
+    from generate.kernels.tasks import load
     task = load("region:norm:add")
     with pipeline.hold(task, caps, out, env, Worker() if remote else None) as d:
         assert d["task"] == "region:norm:add" and Path(d["samples"]).is_dir()
