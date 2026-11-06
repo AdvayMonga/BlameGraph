@@ -189,6 +189,13 @@ generated from the engine's own code). A prefill wave runs through the stations 
 or captured, so the default path is unchanged. Known limits: one layer captured, writers in place (K/V) outside
 regions, the whole step's weights large to share.
 
+## 2026-11-03 — The reorganization starts; the old design docs leave the tree
+The agreed reorganization (one PR per top-level group, no behavior change, a structure as simple as it can be) starts
+with the docs nobody reads any more: `RUNS.md` (frozen since 2026-10-18; runs are ledger records),
+`ENVIRONMENT.md`, `lab/README.md`, `lab/RUNTIME.md` and `lab/TRACE.md` are kept at tag `archive/docs` and deleted.
+Why (the user): RUNS.md was still on main though nothing is recorded there; the layout in `CLAUDE.md` and the code
+are the current description.
+
 ## 2026-11-01 — The regimes on real conversation timing; `realistic` is the objective, `saturated` the developer's signal; `offline`; a salt on every request
 Four open-loop regimes run on the fitted timing model (`regimes/arrivals.py`, same day): the new `realistic` (the
 corpus mix, sittings added until the limits break; headline good requests/s) replaces Poisson as the regime a task

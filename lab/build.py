@@ -1,4 +1,4 @@
-"""The dependency build step (lab/RUNTIME.md). A measurement room is rebuilt from the agent's change alone and runs
+"""The dependency build step. A measurement room is rebuilt from the agent's change alone and runs
 offline, so a change to the engine's dependency files (the target's `deps`) is installed from scratch for it: a
 fresh venv built by the target's `build` command in a container with no GPU, no secrets and no network but a
 CONNECT proxy to the package-index hosts, cached by the dependency files' hash. A tree whose change leaves the dependency

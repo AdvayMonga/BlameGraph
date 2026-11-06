@@ -442,7 +442,7 @@ class EvalTools:
         extra = (*task.regimes, *task.constraints) if task else ()
         return tuple(dict.fromkeys((*self.bench_default_regimes, *extra)))
     seed = 0
-    equiv_concurrency = 32       # dev tier ~26 min on inference-server #107 at 32 (RUNS.md 2026-10-15); sheds are retried
+    equiv_concurrency = 32       # dev tier ~26 min on inference-server #107 at 32 (RUNS.md 2026-10-15, tag archive/docs); sheds are retried
     serve_jailed = True
 
     def _bands(self, names: list[str]) -> dict:

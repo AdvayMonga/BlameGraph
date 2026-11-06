@@ -1,4 +1,4 @@
-"""Deliberate regressions the eval harness must flag, applied from outside the engine (usage: lab/README.md)."""
+"""Deliberate regressions the eval harness must flag, applied from outside the engine."""
 
 from __future__ import annotations
 

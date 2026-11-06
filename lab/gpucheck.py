@@ -1,4 +1,4 @@
-"""What lab/RUNTIME.md's jails need from a real GPU host, checked on one: run on the GPU VM, as root the way the remote
+"""What the jails need from a real GPU host, checked on one: run on the GPU VM, as root the way the remote
 worker runs (`sudo`), with the engine's venv first on PATH. Each check prints PASS or FAIL with its evidence; the exit
 status is the number of failures. `--only NAME,...` runs a subset; `--skip-build` leaves out the dependency build.
 

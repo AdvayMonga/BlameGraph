@@ -28,7 +28,7 @@ profile_env = "ENGINE_PROFILE"                    # names a launch's profile
 build = '''uv sync --locked --extra dev --extra flashinfer --no-install-project && uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" --reinstall "torch==$(awk '/^name = "torch"$/{getline; sub(/version = "/,""); sub(/"/,""); print; exit}' uv.lock)" --index-url https://download.pytorch.org/whl/cu130'''
 
 [engine.telemetry]                           # optional: engine-native files serve collects after teardown
-env = { TELEMETRY_DIR = "{dir}", TIMELINE_DIR = "{dir}/timeline" }   # request rows (lab/TRACE.md); events.jsonl apart
+env = { TELEMETRY_DIR = "{dir}", TIMELINE_DIR = "{dir}/timeline" }   # request rows (lab/trace_contract.py); events.jsonl apart
 
 [reference]                                  # the unmodified model the correctness gate compares against
 api = "vllm"

@@ -1,4 +1,4 @@
-"""The GPU arm: one persistent VM on a cloud of your choice, same lifecycle everywhere (usage: lab/README.md).
+"""The GPU arm: one persistent VM on a cloud of your choice, same lifecycle everywhere.
 It carries two trees: the engine (LAB_VM_DIR, where its venv and GPU checks live) and this environment (LAB_VM_ENV_DIR)."""
 
 from __future__ import annotations

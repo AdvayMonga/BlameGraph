@@ -1,4 +1,4 @@
-"""profile: run the served engine in process under torch.profiler on a workload and write a raw bundle (usage: lab/README.md)."""
+"""profile: run the served engine in process under torch.profiler on a workload and write a raw bundle."""
 
 from __future__ import annotations
 
