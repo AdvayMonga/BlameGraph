@@ -8,7 +8,7 @@ import os
 
 import pytest
 
-from lab import ledger, search
+from data.knowledge import ledger, search
 
 # Words that mean the same thing share a dimension: what an embedding model gives and BM25 cannot.
 CONCEPTS = [{"latency", "tpot", "slow", "slower"}, {"attention", "decode"}, {"memory", "bandwidth", "bytes"},

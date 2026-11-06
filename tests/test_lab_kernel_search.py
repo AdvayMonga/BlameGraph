@@ -14,7 +14,7 @@ pytest_plugins = ["tests.test_lab_proftools"]   # its `tb` fixture: a Toolbox wi
 
 from kernels import pipeline  # noqa: E402
 from kernels.tasks import load  # noqa: E402
-from lab import ledger  # noqa: E402
+from data.knowledge import ledger  # noqa: E402
 
 EXPECT = {"metric": "speedup", "value": 1.1, "unit": "absolute", "why": "fewer launches"}
 MODULE = "import torch\n\n\ndef fn(x):\n    return x * 2\n"

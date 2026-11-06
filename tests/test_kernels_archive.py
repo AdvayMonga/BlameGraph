@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from kernels import archive
-from lab import ledger
+from data.knowledge import ledger
 
 
 class FakeEmbed:

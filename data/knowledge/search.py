@@ -15,7 +15,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Callable, Protocol
 
-from lab import experiments, ledger
+from lab import experiments
+from data.knowledge import ledger
 
 MODEL = "BAAI/bge-base-en-v1.5"
 RRF_K = 60                      # the usual constant (Cormack et al. 2009): rank r contributes 1 / (60 + r)

@@ -1,8 +1,8 @@
 """Build the frozen workload corpus from real public traces, deterministically, then commit it.
 
     uv sync --extra dev --extra corpus
-    .venv/bin/python corpus/fetch_traces.py           # once: raw inputs into the cache
-    .venv/bin/python corpus/build_corpus.py [--seed N]    # default: the secret seed in corpus/.seed
+    .venv/bin/python data/corpus/fetch_traces.py           # once: raw inputs into the cache
+    .venv/bin/python data/corpus/build_corpus.py [--seed N]    # default: the secret seed in data/corpus/.seed
 
 Timing and sessions come from BurstGPT (`BurstGPT_3.csv`; mixed classes also draw on the earlier,
 session-less `BurstGPT_1.csv` and `_2.csv`): every arrival, its session (API-log
@@ -14,7 +14,7 @@ closest to the trace's Request tokens, turns strictly increasing within a sessio
 is a real `[user, assistant, ..., user]` message list. No conversation is used twice.
 
 Same seed + same cached inputs + same tokenizer = same bytes (the test asserts it). The seed is
-secret: it is kept in corpus/.seed and the store's heldout/ prefix, never in git, because the
+secret: it is kept in data/corpus/.seed and the store's heldout/ prefix, never in git, because the
 held-out split is reproducible from it. Anything
 else is a NEW corpus version. Do not hand-edit a trace.
 """
@@ -37,18 +37,11 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fetch_traces import DEFAULT_CACHE, QWEN3_REV, WILDCHAT_JSONL, WILDCHAT_REV  # noqa: E402
-from lab.corpus import (  # noqa: E402
-    SPLITS,
-    Manifest,
-    TraceRequest,
-    WorkloadClass,
-    build_manifest,
-    write_trace,
-)
+from data.corpus import SPLITS, Manifest, TraceRequest, WorkloadClass, build_manifest, write_trace
 
 DEFAULT_TOKENIZER = "tokenizers/Qwen3-30B-A3B"     # relative to the cache, or any HF id/path
 TOKENIZER_LABEL = f"Qwen/Qwen3-30B-A3B@{QWEN3_REV[:12]}"
@@ -73,7 +66,7 @@ NOTES_TMPL = (
     "Text: WildChat-1M @{wc} shards 0-1 (allenai, ODC-BY), English, not toxic/flagged/redacted, "
     "no conversation containing a credential-like string (SECRET_RE). "
     "Azure LLM inference trace 2024 (CC-BY-4.0) is fetched as a cross-source check only, not "
-    "a split (no sessions; see corpus/README.md). Tokenizer {tok}, chat template "
+    "a split (no sessions; see data/corpus/README.md). Tokenizer {tok}, chat template "
     "enable_thinking=False, prompt cap {cap}, max_tokens {mt}. Seed: secret. Splits: seen = even "
     "weeks of the trace, heldout = odd weeks. `dilation` per trace: arrival_s = real offset x "
     "dilation; replay with --rate-scale <dilation> for real timing. Each request's "

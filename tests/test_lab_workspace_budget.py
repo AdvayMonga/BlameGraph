@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from lab import ledger
+from data.knowledge import ledger
 from lab.budget import Budget, BudgetExceeded
 from lab.workspace import Workspace
 from tests.lab_fixtures import make_repo

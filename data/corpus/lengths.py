@@ -4,10 +4,10 @@ user-turn prefix of its messages (the shared-prefix regime's turns). Measured on
 into every trace of both splits; regimes then send each request at that length with ignore_eos
 (`regimes.workload.to_request`), so a base and a candidate generate the same tokens' worth of work. Every trace
 changes, so the manifest is rebuilt: a new corpus version, whose `prompts_version` keeps the held-out budget's key.
-Held-out traces must be present (`python -m store pull --corpus`) and pushed again afterwards. Each answer is
-appended to a log as it arrives (default `data/corpus-lengths-<version>.jsonl`), so a rerun resumes.
+Held-out traces must be present (`python -m data.knowledge pull --corpus`) and pushed again afterwards. Each answer is
+appended to a log as it arrives (default `local/corpus-lengths-<version>.jsonl`), so a rerun resumes.
 
-    python -m corpus.lengths --url URL [--target T] [--concurrency 64]
+    python -m data.corpus.lengths --url URL [--target T] [--concurrency 64]
 """
 from __future__ import annotations
 
@@ -18,20 +18,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from lab.corpus import (
-    CORPUS_DIR,
-    REPO_ROOT,
-    SPLITS,
-    CorpusError,
-    Manifest,
-    TraceRequest,
-    build_manifest,
-    load_manifest,
-    read_trace,
-    write_trace,
-)
+from data.corpus import CORPUS_DIR, REPO_ROOT, SPLITS, CorpusError, Manifest, TraceRequest, build_manifest, load_manifest, read_trace, write_trace
 
-NOTE = " expected_output_tokens: the reference's answer length per record (corpus/lengths.py)."
+NOTE = " expected_output_tokens: the reference's answer length per record (data/corpus/lengths.py)."
 # per trace, per record: (answer length, per-turn lengths for a multi-turn record else None)
 Lengths = dict[str, list[tuple[int | None, list[int] | None]]]
 
@@ -50,7 +39,7 @@ def _turns(r: TraceRequest) -> list[list[dict]]:
 def _traces(corpus_dir: Path, m: Manifest) -> dict[str, list[TraceRequest]]:
     for rel in _files(m):
         if not (corpus_dir / rel).exists():
-            raise CorpusError(f"trace {rel} is missing; held-out traces are not in git: `python -m store pull --corpus`")
+            raise CorpusError(f"trace {rel} is missing; held-out traces are not in git: `python -m data.knowledge pull --corpus`")
     return {rel: read_trace(corpus_dir / rel) for rel in _files(m)}
 
 
@@ -90,7 +79,7 @@ def measure(url: str, model: str, chat_kwargs: dict, corpus_dir: Path = CORPUS_D
     from regimes.client import Request, send
     m = load_manifest(corpus_dir)
     traces = _traces(corpus_dir, m)
-    log = log or REPO_ROOT / "data" / f"corpus-lengths-{m.corpus_version[:12]}.jsonl"
+    log = log or REPO_ROOT / "local" / f"corpus-lengths-{m.corpus_version[:12]}.jsonl"
     done: dict[tuple[str, int, int | None], int] = {}
     if log.exists():
         for line in log.read_text().splitlines():

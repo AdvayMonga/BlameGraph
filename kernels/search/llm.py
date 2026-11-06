@@ -3,7 +3,7 @@ call priced from its usage at lab.apiproxy's rates (web searches at $10 per 1,00
 (always on) at an explicit effort, with server-side refusal fallbacks; Haiku 4.5 takes neither.
 
 With `tools=True` the model may use two tools, its own choice when: Anthropic's web search (server-side), and
-`query`, read-only SQL over the agent's view of the ledger index (store/index.py: every run's records, kernel-loop
+`query`, read-only SQL over the agent's view of the ledger index (data/knowledge/index.py: every run's records, kernel-loop
 runs and their candidates included; never held-out rows or a person's runs). The harness pastes no research or
 advice into a prompt; what the model reads it chose to read.
 
@@ -38,9 +38,9 @@ TOOLS = [
 
 
 def run_query(sql: str, root: Path | None = None) -> str:
-    from lab import ledger
+    from data.knowledge import ledger
     try:
-        from store import index                  # duckdb: missing on a host without the store extra
+        from data.knowledge import index                  # duckdb: missing on a host without the store extra
         out = index.query(index.agent_db(root or ledger.ROOT), sql)
     except Exception as e:                       # noqa: BLE001  a bad query is the model's to read
         return f"query failed: {type(e).__name__}: {e}"[:2000]

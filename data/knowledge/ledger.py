@@ -1,4 +1,4 @@
-"""ledger: append-only record of every tool call (format: lab/LEDGER.md)."""
+"""ledger: append-only record of every tool call (format: data/knowledge/LEDGER.md)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 SCHEMA = 1
-ROOT = Path(__file__).resolve().parents[1] / "lab" / "ledger"
+ROOT = Path(__file__).resolve().parents[2] / "local" / "ledger"
 KINDS = {"test", "equiv", "bench", "profile", "submit", "session", "note", "baseline", "noise", "hypothesis",
          "reflection", "kernels"}
 LEGACY_KINDS = {"finding"}             # in older ledgers: read and merged, never written
@@ -213,7 +213,7 @@ def merge(src: Path, root: Path = ROOT) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m lab.ledger")
+    ap = argparse.ArgumentParser(prog="python -m data.knowledge.ledger")
     ap.add_argument("--root", type=Path, default=ROOT)
     sub = ap.add_subparsers(dest="cmd", required=True)
     ls = sub.add_parser("list", help="print records as JSONL")

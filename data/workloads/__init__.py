@@ -1,5 +1,5 @@
 """Frontier benchmark workloads: the request data public inference benchmarks are scored on, one module per benchmark,
-fetched from their public sources into data/workloads/ (gitignored) as trace-shaped JSONL the regimes consume.
+fetched from their public sources into local/workloads/ (gitignored) as trace-shaped JSONL the regimes consume.
 
 Record: {"id", "prompt" | "messages", "max_tokens", "build_prompt_tokens", "subset"}. Prompts are the benchmark's raw
 text with its model-specific chat template stripped, so any chat server can serve them; `build_prompt_tokens` is the
@@ -16,7 +16,7 @@ import urllib.request
 from pathlib import Path
 from types import ModuleType
 
-DATA = Path(__file__).resolve().parents[1] / "data" / "workloads"
+DATA = Path(__file__).resolve().parents[2] / "local" / "workloads"
 MLPERF_STORAGE = "https://inference.mlcommons-storage.org"
 MLPERF_COMMIT = "3fbc329939999c13d0a7b5e67fb2092287e06047"       # mlcommons/inference master, 2026-09-02
 BENCHES = ("mlperf_llama3_1_8b", "mlperf_llama2_70b", "mlperf_mixtral_8x7b", "mlperf_deepseek_r1",
@@ -24,7 +24,7 @@ BENCHES = ("mlperf_llama3_1_8b", "mlperf_llama2_70b", "mlperf_mixtral_8x7b", "ml
 
 
 def download(url: str, md5: str | None = None) -> Path:
-    """Fetch `url` into data/workloads/raw/ once; verify md5 when the source publishes one. Returns the local path."""
+    """Fetch `url` into local/workloads/raw/ once; verify md5 when the source publishes one. Returns the local path."""
     dest = DATA / "raw" / url.rsplit("/", 1)[1]
     if not dest.exists():
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -55,7 +55,7 @@ def record(id: str, max_tokens: int, tokens: int | None, subset: str, prompt: st
 
 
 def fetch(bench: ModuleType, tokenizer: str | None = None) -> Path:
-    """Build a benchmark's records, write data/workloads/<name>.jsonl and its manifest entry."""
+    """Build a benchmark's records, write local/workloads/<name>.jsonl and its manifest entry."""
     recs = bench.records()
     if tokenizer:
         _recount(recs, tokenizer)

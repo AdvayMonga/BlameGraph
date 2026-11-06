@@ -1,5 +1,5 @@
-# all data stays local
-data/
+# all local data, the ledger and run outputs (local/ledger, local/runs) stay local
+local/
 .env
 .env.*
 __pycache__/
@@ -11,9 +11,6 @@ venv/
 .vscode/
 .idea/
 .vibe-wise/
-# lab state: the ledger and run outputs stay local
-lab/ledger/
-lab/runs/
-# held-out traces and the corpus seed live in the store (python -m store pull --corpus), never in git
-corpus/*/heldout.jsonl
-corpus/.seed
+# held-out traces and the corpus seed live in the store (python -m data.knowledge pull --corpus), never in git
+data/corpus/*/heldout.jsonl
+data/corpus/.seed

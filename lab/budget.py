@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from lab import ledger
+from data.knowledge import ledger
 
 
 class BudgetExceeded(RuntimeError):

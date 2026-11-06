@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from lab import ledger, serve
+from data.knowledge import ledger
+from lab import serve
 from targets import target
 from lab.budget import Budget
 from lab.session import Session
@@ -283,7 +284,7 @@ def test_submit_reports_no_heldout_delta_without_a_seen_delta(lab, monkeypatch, 
     # but only on the corpus version it was measured on: fixed answer lengths are a new version
     import dataclasses
 
-    from lab.corpus import CORPUS_DIR
+    from data.corpus import CORPUS_DIR
     from regimes.workload import corpus_version
     t = dataclasses.replace(target.load(), corpus_dir=CORPUS_DIR)
     ledger.append({"kind": "noise", "result": {**band, "target": t.name, "corpus_version": "old", "band_pct": 3.0}}, root)
@@ -640,7 +641,7 @@ def test_an_after_profile_shares_no_gpu_and_spends_no_budget_that_is_gone(lab, m
 
 def test_task_shares_come_with_every_profile_and_the_latest_reaches_the_harness_facts(tmp_path):
     pytest.importorskip("torch")                 # the kernel tasks import it
-    from lab import ledger as L
+    from data.knowledge import ledger as L
     from lab.evaltools import _layer_facts
     from lab.tools import task_shares
     b = tmp_path / "bundle"

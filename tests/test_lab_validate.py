@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from lab import ledger, validate
+from data.knowledge import ledger
+from lab import validate
 from targets import target
 from regimes import suite
 

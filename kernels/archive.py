@@ -21,8 +21,8 @@ import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from lab import ledger
-from lab.search import Cache, Embedder, _cosine, bm25
+from data.knowledge import ledger
+from data.knowledge.search import Cache, Embedder, _cosine, bm25
 
 DISTINCT = 0.92              # cosine above which two ideas on one task are one idea (bge-base: paraphrases ~0.9+)
 FIELDS = ("bottleneck", "optimisation_method", "modification_plan")
@@ -204,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _embedder(root: Path) -> Embedder | None:
     try:
-        from lab.search import FastEmbed
+        from data.knowledge.search import FastEmbed
         return FastEmbed(root / "index" / "models")
     except Exception:                            # noqa: BLE001  without fastembed: identical texts only, BM25 lookup
         return None

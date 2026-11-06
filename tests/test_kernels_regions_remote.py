@@ -91,7 +91,7 @@ def test_the_hold_process_runs_where_the_evaluator_does_and_ends_with_the_block(
         assert (Path(d["samples"]) / "calls.jsonl").exists() and d["holder"].endswith("/holder/weights.pkl")
         assert not (Path(d["samples"]).parent / "released").exists()
     assert (Path(d["samples"]).parent / "released").exists()                    # stdin closed: it let go
-    assert pushed == ([str(tmp_path / "worker" / "lab/runs/remote/kernel_search/out/samples")] if remote else [])
+    assert pushed == ([str(tmp_path / "worker" / "local/runs/remote/kernel_search/out/samples")] if remote else [])
 
 
 def test_a_region_winner_is_a_patch_adding_its_override_module(tmp_path, monkeypatch):

@@ -22,8 +22,8 @@ from tests.lab_fixtures import make_repo
     ("pyproject.toml", False, True),                 # a dependency file: its dependency tables only (the audit)
     ("uv.lock", False, True),
     ("sub/pyproject.toml", False, False),
-    ("lab/ledger.py", False, False),
-    ("corpus/a/heldout.jsonl", True, False),
+    ("data/knowledge/ledger.py", False, False),
+    ("data/corpus/a/heldout.jsonl", True, False),
     ("CORPUS/A/HELDOUT.JSONL", True, False),
 ])
 def test_may_write(path, new, ok):
@@ -34,7 +34,7 @@ def test_export_strips_hidden_and_git(tmp_path):
     repo = make_repo(tmp_path)
     ws = tmp_path / "ws"
     grader.export(repo, "HEAD", ws)
-    assert (ws / "corpus/a/seen.jsonl").exists() and not (ws / "corpus/a/heldout.jsonl").exists()
+    assert (ws / "data/corpus/a/seen.jsonl").exists() and not (ws / "data/corpus/a/heldout.jsonl").exists()
     assert not (ws / ".git").exists()
 
 
@@ -48,7 +48,7 @@ def test_audit_classifies_changes_and_violations(tmp_path):
     (ws / "tests/test_engine.py").write_text("def test_speed():\n    pass\n")   # evidence edited
     (ws / "lab").mkdir()
     (ws / "lab/evil.py").write_text("")
-    (ws / "corpus/a/heldout.jsonl").write_text("{}")
+    (ws / "data/corpus/a/heldout.jsonl").write_text("{}")
     os.symlink("/etc/passwd", ws / "src/inference_server/link")
     (ws / "README.md").unlink()
     a = grader.audit(repo, "HEAD", ws)
@@ -58,7 +58,7 @@ def test_audit_classifies_changes_and_violations(tmp_path):
     assert a.scratch == ["lab/evil.py"]              # outside the surface: left out, not an integrity failure
     assert a.deleted == ["README.md"]
     joined = "\n".join(a.violations)
-    for needle in ("symlink: src/inference_server/link", "recreated hidden file: corpus/a/heldout.jsonl",
+    for needle in ("symlink: src/inference_server/link", "recreated hidden file: data/corpus/a/heldout.jsonl",
                    "may not change: tests/test_engine.py", "may not change: README.md"):
         assert needle in joined
     assert "lab/evil.py" not in joined and not a.ok
@@ -129,7 +129,7 @@ def test_pristine_tree_diff_lint_and_tests(tmp_path, monkeypatch):
     grader.pristine_tree(repo, "HEAD", ws, a, tree)
     log = subprocess.run(["git", "-C", str(tree), "log", "--format=%s"], capture_output=True, text=True).stdout.split()
     assert log == ["change", "base"]
-    assert not (tree / "corpus/a/heldout.jsonl").exists()
+    assert not (tree / "data/corpus/a/heldout.jsonl").exists()
     assert "-    return 1\n+    return 3" in grader.diff(repo, "HEAD", tree, a)
     assert grader.run_lint(tree).passed
     run = grader.run_tests(tree, timeout_s=120)

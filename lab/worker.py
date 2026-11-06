@@ -296,7 +296,7 @@ class Remote:
         return self._root
 
     def workspace_path(self, run_id: str) -> str:
-        return f"{self.root()}/lab/runs/remote/{run_id}/workspace"
+        return f"{self.root()}/local/runs/remote/{run_id}/workspace"
 
     def push(self, local: Path, remote: str) -> None:
         self._run(f"mkdir {shlex.quote(remote)}")
@@ -379,7 +379,7 @@ def load(**hooks):
 # -- the worker host's side ---------------------------------------------------------------------------------------
 
 def cache_dir() -> Path:
-    return Path(os.environ.get("LAB_WORKER_CACHE") or engine.ENV_ROOT / "lab" / "runs" / "worker-cache")
+    return Path(os.environ.get("LAB_WORKER_CACHE") or engine.ENV_ROOT / "local" / "runs" / "worker-cache")
 
 
 def _put(sha: str, data: bytes) -> None:
@@ -438,7 +438,7 @@ def _workbench(req: dict) -> dict:
     if os.environ.get("SUDO_UID"):                  # sshd binds the tunnel's socket here as the login user
         os.chown(sock_dir, int(os.environ["SUDO_UID"]), int(os.environ["SUDO_GID"]))
     (sock_dir / "proxy.sock").unlink(missing_ok=True)
-    scratch = engine.ENV_ROOT / "lab" / "runs" / "remote" / "scratch" / req["session"]
+    scratch = engine.ENV_ROOT / "local" / "runs" / "remote" / "scratch" / req["session"]
     argv = agent.workbench_command(req["name"], Path(req["workspace"]), scratch, agent_cli(req["sdk_version"]),
                                    sock_dir=sock_dir)
     return {"argv": argv, "sock": str(sock_dir / "proxy.sock")}

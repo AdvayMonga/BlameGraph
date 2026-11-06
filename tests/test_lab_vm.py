@@ -136,7 +136,7 @@ def test_run_pushes_runs_in_repo_dir_and_fetches(fake, monkeypatch):
 
 
 def test_run_in_the_environment_dir(fake, monkeypatch):
-    from lab import ledger
+    from data.knowledge import ledger
     monkeypatch.setattr(ledger, "ROOT", fake / "ledger")
     monkeypatch.delenv("LAB_STORE", raising=False)
     vm = labvm.VM(name="t4e", user="u", remote_dir="~/repo", env_dir="~/env")
@@ -146,20 +146,20 @@ def test_run_in_the_environment_dir(fake, monkeypatch):
     cmd = [c for c in log if c[0] == "ssh" and c[-1].startswith("cd ")][-1][-1]
     assert cmd.startswith("cd ~/env && ") and 'PATH="$HOME/repo/.venv/bin:$PATH" timeout --signal=TERM --kill-after=60 180m python -m regimes' in cmd
     rsyncs = [c for c in log if c[0] == "rsync"]
-    assert "--include=corpus/*/heldout.jsonl" in rsyncs[1]                     # held-out traces travel, not via git
-    assert [r[-2] for r in rsyncs[-3:]] == ["u@10.0.0.7:~/env/out/", "u@10.0.0.7:~/env/lab/ledger/",
-                                            "u@10.0.0.7:~/env/lab/runs/"]      # a lab run is always brought home
+    assert "--include=data/corpus/*/heldout.jsonl" in rsyncs[1]                     # held-out traces travel, not via git
+    assert [r[-2] for r in rsyncs[-3:]] == ["u@10.0.0.7:~/env/out/", "u@10.0.0.7:~/env/local/ledger/",
+                                            "u@10.0.0.7:~/env/local/runs/"]      # a lab run is always brought home
     assert "--exclude=workspace/" in rsyncs[-1]
 
 
 def test_collect_merges_the_vms_ledger(fake, monkeypatch):
-    from lab import ledger
+    from data.knowledge import ledger
     monkeypatch.setattr(ledger, "ROOT", fake / "ledger")
     monkeypatch.delenv("LAB_STORE", raising=False)
     remote = fake / "vm-ledger"
     rec = ledger.append({"kind": "note", "run": "on-vm"}, remote)
     def fetch(vm, record, path, local, base=None, *extra):
-        if path == "lab/ledger":
+        if path == "local/ledger":
             shutil.copytree(remote, local, dirs_exist_ok=True)
     monkeypatch.setattr(labvm, "fetch", fetch)
     labvm.collect(labvm.VM(name="t4c", user="u"), None)

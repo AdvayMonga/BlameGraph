@@ -203,9 +203,9 @@ def push(vm: VM, record: Record) -> None:
     except the held-out traces, which submit needs and git no longer holds."""
     # .venv is named explicitly: a gitignore-only exclusion did not protect it from --delete on the VM.
     for local, remote, keep in ((engine.repo(), vm.remote_dir, []),
-                                (engine.ENV_ROOT, vm.env_dir, ["--include=corpus/*/heldout.jsonl"])):
-        # lab/runs is named explicitly too: it holds the worker's cache and the agent's live workspaces there.
-        _rsync(vm, "--delete", "--exclude=.git", "--exclude=.venv", "--exclude=__pycache__", "--exclude=/lab/runs",
+                                (engine.ENV_ROOT, vm.env_dir, ["--include=data/corpus/*/heldout.jsonl"])):
+        # local/runs is named explicitly too: it holds the worker's cache and the agent's live workspaces there.
+        _rsync(vm, "--delete", "--exclude=.git", "--exclude=.venv", "--exclude=__pycache__", "--exclude=/local/runs",
                *keep, "--filter=:- .gitignore",
                f"{local}/", f"{ssh_target(vm, record)}:{remote}/")
 
@@ -219,18 +219,18 @@ def fetch(vm: VM, record: Record, remote: str, local: Path, base: str | None = N
 def collect(vm: VM, record: Record) -> None:
     """Bring a lab run home before the VM goes: its ledger merged into this one, its run dirs (minus the trees that
     can be rebuilt), then everything pushed to the store when LAB_STORE is set."""
-    from lab import ledger
+    from data.knowledge import ledger
     staging = Path(tempfile.mkdtemp(prefix="vm-ledger-"))
     try:
-        fetch(vm, record, "lab/ledger", staging, vm.env_dir, "--exclude=index/")
+        fetch(vm, record, "local/ledger", staging, vm.env_dir, "--exclude=index/")
         print(f"[lab.vm] merged {ledger.merge(staging, ledger.ROOT)} ledger records", file=sys.stderr)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
-    fetch(vm, record, "lab/runs", engine.ENV_ROOT / "lab" / "runs", vm.env_dir,
+    fetch(vm, record, "local/runs", engine.ENV_ROOT / "local" / "runs", vm.env_dir,
           "--exclude=workspace/", "--exclude=pristine/", "--exclude=base-tree-*/", "--exclude=scratch/")
     if os.environ.get("LAB_STORE"):
-        from store import sync
-        from store.remote import open_remote
+        from data.knowledge import sync
+        from data.knowledge.remote import open_remote
         print(f"[lab.vm] stored {sync.push(ledger.ROOT, open_remote(), runs=engine.ENV_ROOT / 'lab' / 'runs')}",
               file=sys.stderr)
 
@@ -294,7 +294,7 @@ def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | Non
               f"`{spot}python -m lab.vm {again}` restarts it and brings the results home", file=sys.stderr)
     if fetch_dir and not lost:
         try:
-            fetch(vm, record, fetch_dir, local or engine.ENV_ROOT / "lab" / "runs", base=cwd)
+            fetch(vm, record, fetch_dir, local or engine.ENV_ROOT / "local" / "runs", base=cwd)
         except ProviderError as e:
             print(f"[lab.vm] fetch failed: {e}", file=sys.stderr)
     if where == "env" and not lost:
@@ -360,7 +360,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "setup":
         code = run(vm, f"bash {vm.env_dir}/lab/vm-setup.sh {vm.remote_dir}", keep=True)
         try:                                   # the measured peaks come home: every ceiling is computed from them
-            fetch(vm, p.get(vm.name), "knowledge/peaks", engine.ENV_ROOT / "knowledge" / "peaks", base=vm.env_dir)
+            fetch(vm, p.get(vm.name), "data/calibration/peaks", engine.ENV_ROOT / "data" / "calibration" / "peaks", base=vm.env_dir)
         except ProviderError as e:
             print(f"[lab.vm] peaks not fetched: {e}", file=sys.stderr)
         return code

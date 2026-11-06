@@ -56,7 +56,7 @@ def _step(s: dict, seen_value: float, heldout_value: float, threshold: float, si
 
 
 class HoldoutGuard:
-    """Thresholdout for one scalar metric per query, its state in a write-once store (store/remote.py: `keys`,
+    """Thresholdout for one scalar metric per query, its state in a write-once store (data/knowledge/remote.py: `keys`,
     `get`, and a `put` that refuses an existing key). State n is `<prefix>/state-<n>.json`; a query writes n + 1 and,
     when another writer took n + 1 first, re-reads and tries again, so every run and machine sharing the store shares
     one budget and loses no query. The seed is drawn once, with state 0, and lives only in the store."""

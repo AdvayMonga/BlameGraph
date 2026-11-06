@@ -34,7 +34,7 @@ def main():
     r.add_argument("regimes", help=f"comma-separated, or 'all': {', '.join(suite.REGIMES)}")
     r.add_argument("--url", required=True)
     r.add_argument("--corpus", help="corpus dir (default: the target's; synthetic prompts if it does not exist)")
-    r.add_argument("--workload", help="a data/workloads/*.jsonl file (python -m workloads) instead of the corpus")
+    r.add_argument("--workload", help="a local/workloads/*.jsonl file (python -m data.workloads) instead of the corpus")
     r.add_argument("--synthetic", action="store_true",
                    help="traffic generated fresh from the corpus's seen split (regimes/synth.py), by --seed; nothing kept")
     r.add_argument("--split", choices=("seen", "heldout"), default="seen")

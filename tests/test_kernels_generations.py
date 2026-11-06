@@ -216,7 +216,7 @@ def test_every_call_gets_the_memory(tmp_path):
 
 
 def test_the_archive_reads_each_ideas_own_parent_from_a_generation(tmp_path):
-    from lab import ledger
+    from data.knowledge import ledger
     f = funnel()
     tree, _ = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, gen_size=6, n_parents=2,
                        generations=1)

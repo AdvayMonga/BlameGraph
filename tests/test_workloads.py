@@ -9,8 +9,8 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import workloads as W  # noqa: E402
-from workloads import mlperf_deepseek_r1, mlperf_gpt_oss_120b, mlperf_llama2_70b, mlperf_llama3_1_8b, mlperf_mixtral_8x7b, sharegpt  # noqa: E402
+import data.workloads as W  # noqa: E402
+from data.workloads import mlperf_deepseek_r1, mlperf_gpt_oss_120b, mlperf_llama2_70b, mlperf_llama3_1_8b, mlperf_mixtral_8x7b, sharegpt  # noqa: E402
 
 import pandas as pd  # noqa: E402
 

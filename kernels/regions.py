@@ -2,7 +2,7 @@
 step, as a kernel task whose harness is generated rather than hand-written.
 
 The engine declares its stations, in order (name, what each reads and writes, and a function computing its writes;
-data/notes/handoff-engine-stations.md). A region's inputs are what its stations read before any of them writes it;
+local/notes/handoff-engine-stations.md). A region's inputs are what its stations read before any of them writes it;
 its outputs are what it writes that a later station reads or that outlives the step (`live`: the residual stream, the
 KV cache). The baseline runs the stations in order in the engine's dtypes; the reference runs them on fp32 copies of
 the floating inputs, the truth a region's error budget is measured against (2x the baseline's own error). The fusion
@@ -159,7 +159,7 @@ def task(name: str, stations: tuple[Station, ...], first: str, last: str,
                 cost=cost, dtypes=dtypes, layouts=(), error_budget=ERROR_BUDGET, baseline_fn=base, watch=watched, **kw)
 
 
-# -- the engine's stations (inference-server models/stations.py; data/notes/handoff-engine-stations.md) ---------------
+# -- the engine's stations (inference-server models/stations.py; local/notes/handoff-engine-stations.md) ---------------
 ENGINE = "inference_server.models.stations"
 OVERRIDES_PACKAGE = "inference_server.models.regions"    # where the engine's `overrides()` reads OVERRIDES from
 # The engine modules the stations call into at call time (watched for patches; the engine may export this later).

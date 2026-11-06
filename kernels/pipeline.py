@@ -34,7 +34,7 @@ def steady(cls: str, n: int) -> tuple[int, int]:
     """(requests, in flight) for a capture of corpus class `cls` at load `n`: closed loop at `n` in flight over 3x as
     many requests, so most of the window is the regime's steady state; a class with fewer seen requests runs them all
     at a third as many in flight."""
-    from lab import corpus
+    from data import corpus
     have = len(corpus.load_trace(cls, "seen")[1])
     total = min(3 * n, have)
     return total, max(1, min(n, total // 3))
@@ -141,7 +141,7 @@ def hold(task, caps: list[Path], out: Path, env: dict, worker=None):
     lab.worker.Remote), `python -m kernels.hold` started there, and its description yielded: {holder, samples (paths
     there), shapes, start, stations}. The hold process exits when its stdin closes, here or over ssh."""
     local = pack(caps, Path(out) / "samples")
-    there = f"{worker.root()}/lab/runs/remote/kernel_search/{Path(out).name}" if worker else str(Path(out).resolve())
+    there = f"{worker.root()}/local/runs/remote/kernel_search/{Path(out).name}" if worker else str(Path(out).resolve())
     samples = f"{there}/samples"
     if worker:
         worker.push(local, samples)

@@ -133,9 +133,9 @@ def stage_harness(dest: Path) -> Path:
         (dest / pkg).mkdir(parents=True, exist_ok=True)
         for f in files:
             shutil.copyfile(ROOT / pkg / f, dest / pkg / f)
-    peaks = ROOT / "knowledge" / "peaks"
+    peaks = ROOT / "data" / "calibration" / "peaks"
     if peaks.is_dir():
-        shutil.copytree(peaks, dest / "knowledge" / "peaks")
+        shutil.copytree(peaks, dest / "data" / "calibration" / "peaks")
     return dest
 
 

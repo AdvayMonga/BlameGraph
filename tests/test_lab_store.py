@@ -8,10 +8,10 @@ import types
 
 import pytest
 
-from lab import ledger
+from data.knowledge import ledger
 from lab.tools import Toolbox
-from store import index, sync
-from store.remote import DirRemote, S3Remote
+from data.knowledge import index, sync
+from data.knowledge.remote import DirRemote, S3Remote
 
 
 def _lab(root, runs):

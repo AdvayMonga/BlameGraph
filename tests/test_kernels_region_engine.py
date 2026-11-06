@@ -1,5 +1,5 @@
 """Regions bound to the engine's stations (kernels/regions.from_engine), with a fake stations module shaped as
-data/notes/handoff-engine-stations.md asks: inputs from a CAPTURE_REGION dir, weights attached from a shared holder,
+local/notes/handoff-engine-stations.md asks: inputs from a CAPTURE_REGION dir, weights attached from a shared holder,
 the generated start program judged end to end by the evaluator on the CPU, and `region:` names through the loader."""
 from __future__ import annotations
 

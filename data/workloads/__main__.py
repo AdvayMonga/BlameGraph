@@ -1,5 +1,5 @@
-"""python -m workloads fetch BENCH[,BENCH...]|all [--tokenizer NAME]   (into data/workloads/)
-python -m workloads list"""
+"""python -m data.workloads fetch BENCH[,BENCH...]|all [--tokenizer NAME]   (into local/workloads/)
+python -m data.workloads list"""
 from __future__ import annotations
 
 import argparse

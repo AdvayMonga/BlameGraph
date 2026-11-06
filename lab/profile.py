@@ -231,11 +231,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--model", help="override MODEL_NAME")
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--corpus-class", help="prompts drawn from this corpus class (verified loader)")
-    src.add_argument("--workload", help="JSON from lab.corpus.sample, for a tree without the corpus (the profile tool)")
+    src.add_argument("--workload", help="JSON from data.corpus.sample, for a tree without the corpus (the profile tool)")
     src.add_argument("--prompts", help="JSON list of prompt strings")
     src.add_argument("--synthetic", action="store_true", help="random token ids of --prompt-len")
     ap.add_argument("--split", default="seen", choices=("seen", "heldout"))
-    ap.add_argument("--corpus-dir", help="default: this repo's corpus/")
+    ap.add_argument("--corpus-dir", help="default: this repo's data/corpus/")
     ap.add_argument("--enable-thinking", action="store_true", help="chat template thinking on, for corpus prompts")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--requests", type=int, default=8)
@@ -282,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.workload:
                 w = json.loads(Path(args.workload).read_text())
             else:
-                from lab import corpus
+                from data import corpus
                 w = corpus.sample(args.corpus_class, args.split, args.seed, args.requests,
                                   Path(args.corpus_dir) if args.corpus_dir else corpus.CORPUS_DIR)
             prompts = [tok.encode_messages(m, thinking=args.enable_thinking) for m in w["messages"]]

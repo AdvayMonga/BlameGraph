@@ -5,7 +5,7 @@ evolutionary searches); metrics: correct, speedup over eager PyTorch, fast_p = s
 p times faster. Researcher-only: nothing in `lab/` reads it, and it is no agent tool.
 
 `python -m kernels.kernelbench fetch` downloads the repo at COMMIT (the problems and the benchmark's own evaluation
-code) into data/kernelbench/<commit>/, with a manifest of every file's sha256; nothing is re-hosted. Each problem is a
+code) into local/kernelbench/<commit>/, with a manifest of every file's sha256; nothing is re-hosted. Each problem is a
 kernel task `kb:LEVEL:ID` (`kernels.tasks.load`): inputs from its own get_inputs (made on the device), weights from
 `Model(*get_init_inputs())` under WEIGHT_SEED, fp32, reference and baseline its eager forward under no_grad,
 KernelBench's tolerance at COMMIT. The starting program is the problem plus `class ModelNew(Model)`, the class
@@ -42,7 +42,7 @@ from kernels.tasks import Task
 REPO = "ScalingIntelligence/KernelBench"
 COMMIT = "423217d9fda91e0c2d67e4a43bf62f96f6d104f1"       # main, 2026-03-05 (0.2.0.dev0)
 SOURCE = f"https://codeload.github.com/{REPO}/tar.gz/{COMMIT}"
-DATA = Path(__file__).resolve().parents[1] / "data" / "kernelbench"
+DATA = Path(__file__).resolve().parents[1] / "local" / "kernelbench"
 WEIGHT_SEED = 0
 TOLERANCE = 1e-4                  # fp32 atol = rtol at COMMIT (eval.get_tolerance_for_precision)
 V01_TOLERANCE = 1e-2              # fp32 atol = rtol in v0 and v0.1

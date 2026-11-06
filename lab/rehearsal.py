@@ -146,7 +146,7 @@ min_length_ratio = 0.90
 submit_tier = "dev"
 
 [corpus]
-dir = "{engine.ENV_ROOT / "corpus"}"
+dir = "{engine.ENV_ROOT / "data" / "corpus"}"
 
 [validation]                                 # the gate must pass the unmodified server and fail a wrong one
 good = {{ same = "{python} {ref} --port {{port}}" }}

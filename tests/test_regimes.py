@@ -118,7 +118,7 @@ def test_workload_builders():
     assert 2400 <= len(W.scaled(many, 2.5)) <= 2600 and 450 <= len(W.scaled(many, 0.5)) <= 550
     lo, hi = W.peak_window(trace + [{"id": "b", "prompt": "p", "arrival_s": 500.0 + k / 10, "max_tokens": 8} for k in range(30)])
     assert lo < 500 < hi
-    from lab.corpus import CorpusError, TraceRequest, WorkloadClass, build_manifest, write_trace
+    from data.corpus import CorpusError, TraceRequest, WorkloadClass, build_manifest, write_trace
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
         cls = {"spike": WorkloadClass("spike", "", 2000.0, None, 1.0, "spike/seen.jsonl", "spike/heldout.jsonl")}
@@ -158,7 +158,7 @@ def test_every_regime_runs_on_a_fake_engine():
 
 
 def test_every_regime_runs_from_a_workload_file():
-    """A `python -m workloads` file stands in for the corpus: one pool for every regime; bursty has no arrival times."""
+    """A `python -m data.workloads` file stands in for the corpus: one pool for every regime; bursty has no arrival times."""
     recs = [{"id": f"w-{k}", "prompt": f"question {k}", "max_tokens": 16, "build_prompt_tokens": 3, "subset": "s"}
             for k in range(30)]
     recs += [{"id": f"c-{k}", "max_tokens": 16, "subset": "multi", "messages": [

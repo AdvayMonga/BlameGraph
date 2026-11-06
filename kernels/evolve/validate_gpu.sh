@@ -7,11 +7,11 @@
 # 3. judge the engine's own kernel against the reference on both (correctness on the GPU, the baseline timing)
 # 4. a short OpenEvolve run on the seen shapes (model calls: ANTHROPIC_API_KEY must be set; 0 iterations skips it)
 # 5. the held-out gate on the best program
-# Everything lands in lab/runs/kernels-validate/ for `--fetch`.
+# Everything lands in local/runs/kernels-validate/ for `--fetch`.
 set -euo pipefail
 ITER="${1:-10}"
 TASK="${2:-paged_decode}"
-OUT=lab/runs/kernels-validate$([ "$TASK" = paged_decode ] || echo "-$TASK")
+OUT=local/runs/kernels-validate$([ "$TASK" = paged_decode ] || echo "-$TASK")
 ENTRY=$(python -c "from kernels.tasks import load; print(load('$TASK').entry)")
 export LAB_TARGET="${LAB_TARGET:-targets/inference-server.toml}"
 mkdir -p "$OUT"
