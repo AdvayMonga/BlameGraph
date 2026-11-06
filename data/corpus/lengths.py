@@ -2,7 +2,7 @@
 max_tokens, the target's chat kwargs), and for a multi-turn record `expected_turn_output_tokens`, the same for each
 user-turn prefix of its messages (the shared-prefix regime's turns). Measured once on a served reference and written
 into every trace of both splits; regimes then send each request at that length with ignore_eos
-(`regimes.workload.to_request`), so a base and a candidate generate the same tokens' worth of work. Every trace
+(`measure.loadgen.workload.to_request`), so a base and a candidate generate the same tokens' worth of work. Every trace
 changes, so the manifest is rebuilt: a new corpus version, whose `prompts_version` keeps the held-out budget's key.
 Held-out traces must be present (`python -m data.knowledge pull --corpus`) and pushed again afterwards. Each answer is
 appended to a log as it arrives (default `local/corpus-lengths-<version>.jsonl`), so a rerun resumes.
@@ -76,7 +76,7 @@ def measure(url: str, model: str, chat_kwargs: dict, corpus_dir: Path = CORPUS_D
             attempts: int = 3, log: Path | None = None) -> Lengths:
     """The served reference's completion tokens for every record and turn prefix, resuming from `log`. Raises after
     every request was tried when any failed `attempts` times (with backoff); the answers so far stay in the log."""
-    from regimes.client import Request, send
+    from measure.loadgen.client import Request, send
     m = load_manifest(corpus_dir)
     traces = _traces(corpus_dir, m)
     log = log or REPO_ROOT / "local" / f"corpus-lengths-{m.corpus_version[:12]}.jsonl"

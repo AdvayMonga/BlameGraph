@@ -73,7 +73,7 @@ def test_the_hold_process_runs_where_the_evaluator_does_and_ends_with_the_block(
     out.mkdir()
     pushed = []
 
-    class Worker:                                # lab.worker.Remote's push and root, over the local disk
+    class Worker:                                # measure.runner.worker.Remote's push and root, over the local disk
         def root(self):
             return str(tmp_path / "worker")
 

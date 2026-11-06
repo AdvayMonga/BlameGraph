@@ -11,7 +11,7 @@ import pytest
 from data.knowledge import ledger
 from lab import validate
 from targets import target
-from regimes import suite
+from measure.loadgen import suite
 
 FAKE = Path(__file__).resolve().parent / "fake_engine.py"
 
@@ -63,7 +63,7 @@ def test_validate_separates_and_measures_bands(spec, tmp_path, monkeypatch):
     items = [{"id": f"mc-{k}", "task": "mmlu_pro", "gold": "C", "max_tokens": 6,
               "messages": [{"role": "user", "content": f"question {k} pick one"}]} for k in range(60)]
     monkeypatch.setattr(tasks, "load", lambda names, tier="dev", **kw: items)
-    from lab import calibrate
+    from measure.context import calibrate
     monkeypatch.setattr(calibrate, "REFERENCE_DIR", tmp_path / "reference")
     rep = validate.validate(spec, noise_runs=2, regimes=["single_stream"], out=tmp_path / "out", encoder=Enc(),
                             root=tmp_path / "ledger")

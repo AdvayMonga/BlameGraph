@@ -1,5 +1,5 @@
 """Instrumented runs of the agent's pristine tree, one tool per instrument, all through one path (`instrument` on the
-worker, `run_instrument` here): lab.profile's workload inside the jail, the instrument's own flags passed through as
+worker, `run_instrument` here): measure.profile.profile's workload inside the jail, the instrument's own flags passed through as
 an argument list, the GPU watched like a served engine, one record shape (verdict ok | failed | refused |
 contaminated), the raw output kept as a ledger blob and a short raw summary returned.
 
@@ -17,7 +17,8 @@ import shutil
 import time
 from pathlib import Path
 
-from lab import calibrate, layers, profiles, serve
+from measure.context import calibrate, layers
+from measure.runner import profiles, serve
 from targets import target
 from lab.agent import ToolSpec
 from lab.evaltools import _failed, _killed
@@ -47,7 +48,7 @@ def _flags(args: dict, name: str, default: list[str] | None = None) -> list[str]
 
 
 def workload(args: dict) -> list[str]:
-    """lab.profile's workload flags from validated integers."""
+    """measure.profile.profile's workload flags from validated integers."""
     return [w for k, (d, lo) in WORKLOAD.items() for w in (f"--{k.replace('_', '-')}", str(_int(args, k, d, lo)))]
 
 
@@ -75,9 +76,9 @@ def _head(path: Path | None) -> str:
 
 
 def instrument(kind: str, args: dict) -> dict:
-    """One instrument from validated args: its binary (None: torch, in lab.profile itself), `wrap(exe, out)` around
-    lab.profile, lab.profile `flags`, `post(exe, out)` -> (argv, file for its stdout) run after, the `summary` glob,
-    `extra(exe)` flags, and `bundle_only`: the blob is lab.profile's bundle rather than the whole output dir."""
+    """One instrument from validated args: its binary (None: torch, in measure.profile.profile itself), `wrap(exe, out)` around
+    measure.profile.profile, measure.profile.profile `flags`, `post(exe, out)` -> (argv, file for its stdout) run after, the `summary` glob,
+    `extra(exe)` flags, and `bundle_only`: the blob is measure.profile.profile's bundle rather than the whole output dir."""
     wl = workload(args)
     if kind == "profile":
         capture = [w for f in _flags(args, "capture") for w in ("--capture", f)]

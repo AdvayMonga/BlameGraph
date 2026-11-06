@@ -1,4 +1,4 @@
-"""lab.providers.nebius against a fake `nebius` CLI on PATH: lifecycle, ip parsing, cloud-init key."""
+"""measure.cloud.providers.nebius against a fake `nebius` CLI on PATH: lifecycle, ip parsing, cloud-init key."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ import stat
 
 import pytest
 
-from lab import vm as labvm
-from lab.providers import ProviderError, nebius
+from measure.cloud import vm as labvm
+from measure.cloud.providers import ProviderError, nebius
 
 FAKE = r'''#!/usr/bin/env python3
 import json, os, sys

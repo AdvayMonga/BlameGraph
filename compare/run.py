@@ -131,8 +131,8 @@ class Server:
 
 def launch_check(url: str, model: str, chat_kwargs: dict) -> dict:
     """The model answers "17 + 25" with 42, and a fixed-length answer runs to exactly its length with ignore_eos."""
-    from regimes.client import Request, send, wall_clock
-    from regimes.suite import PROBE
+    from measure.loadgen.client import Request, send, wall_clock
+    from measure.loadgen.suite import PROBE
     clock = wall_clock()
     probe = send(url, model, Request("check-42", PROBE, 16), clock(), clock, chat_kwargs=chat_kwargs)
     fixed = send(url, model, Request("check-len", [{"role": "user", "content": "Say hi."}], 300, ignore_eos=True),
@@ -154,7 +154,7 @@ def run(out: Path, engines: list[str], precisions: list[str], stages: list[str],
     t = target.load()
     out.mkdir(parents=True, exist_ok=True)
     if "clientcheck" in stages and not (out / "clientcheck.json").exists():
-        _python("regimes.clientcheck", "--client-cpus", c["client_cpus"], "--server-cpus", c["engine_cpus"],
+        _python("measure.loadgen.clientcheck", "--client-cpus", c["client_cpus"], "--server-cpus", c["engine_cpus"],
                 "--out", str(out / "clientcheck.json"))
     configs = [(e, p) for e in engines for p in precisions]
     for rep in range(first_repeat, first_repeat + repeats):
@@ -178,7 +178,7 @@ def run(out: Path, engines: list[str], precisions: list[str], stages: list[str],
                                 print(f"{engine}-{precision}: launch check failed: {res}", file=sys.stderr)
                                 continue
                         if "regimes" in todo:
-                            _python("regimes", "run", regimes, "--url", url, "--tier", "short", "--tol", str(tol),
+                            _python("measure.loadgen", "run", regimes, "--url", url, "--tier", "short", "--tol", str(tol),
                                     "--client-procs", "8", "--client-cpus", c["client_cpus"],
                                     *(["--tokenizer", c["tokenizer"]] if c.get("tokenizer") else []),
                                     "--out", str(d / f"regimes-{rep}.json"))
@@ -194,7 +194,7 @@ def run(out: Path, engines: list[str], precisions: list[str], stages: list[str],
                 subprocess.run("sync && echo 3 | sudo tee /proc/sys/vm/drop_caches", shell=True, capture_output=True)
                 if gpu_free():
                     cmd = command(spec, engine, precision, d, '"$(dirname "$VLLM_CACHE_ROOT")"')
-                    _python("regimes", "cold-start", "--url", f"http://127.0.0.1:{PORT}", "--cmd", cmd,
+                    _python("measure.loadgen", "cold-start", "--url", f"http://127.0.0.1:{PORT}", "--cmd", cmd,
                             "--log-dir", str(d), "--out", str(d / "cold.json"))
                     _sh("docker", "rm", "-f", f"bgcmp-{engine}")
 

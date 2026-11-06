@@ -20,8 +20,8 @@ from urllib.parse import urlsplit
 
 from lab import live
 from lab.agent import OUTPUT_SCHEMA, AgentReply, AgentSpec
-from lab.safety import grader
-from lab.safety.hooks import allowed
+from measure.sandbox import grader
+from lab.hooks import allowed
 
 BASE_URL = "https://api.openai.com/v1"
 MAX_TOOL_TEXT = 30_000                  # chars of one tool result the model sees (the tail is kept)

@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable
 
 # The capture traffic (kernels/evolve/validate_gpu.sh's CAPTURE_SPECS): corpus classes at real concurrencies, for a
-# run without a task; with one, each scored regime's traffic from REGIME_CAPTURE (its corpus class, regimes/suite.py,
+# run without a task; with one, each scored regime's traffic from REGIME_CAPTURE (its corpus class, measure/loadgen/suite.py,
 # at a concurrency like the regime's load: the profile job sends that many requests at once).
 CAPTURE_SPECS = (("mixed_1", 256), ("mixed_3", 64), ("long_context", 60))
 REGIME_CAPTURE = {"single_stream": ("steady_interactive", 1), "saturated": ("mixed_1", 256), "bursty": ("mixed_3", 64),
@@ -114,7 +114,7 @@ def pack(caps: list[Path], dest: Path) -> Path:
     under samples/ renamed per capture, and each capture's calls again in traffic<i>/profile-<source>/captures/, so the
     shapes are counted per traffic (each weighing the same) and keep their source."""
     from kernels import shapes
-    from lab import capture
+    from measure.profile import capture
     (dest / "samples").mkdir(parents=True, exist_ok=True)
     every = []
     for i, cap in enumerate(caps):
@@ -138,7 +138,7 @@ def pack(caps: list[Path], dest: Path) -> Path:
 @contextlib.contextmanager
 def hold(task, caps: list[Path], out: Path, env: dict, worker=None):
     """A region held where the evaluator runs, for the block: its captures packed (and pushed to `worker`, a
-    lab.worker.Remote), `python -m kernels.hold` started there, and its description yielded: {holder, samples (paths
+    measure.runner.worker.Remote), `python -m kernels.hold` started there, and its description yielded: {holder, samples (paths
     there), shapes, start, stations}. The hold process exits when its stdin closes, here or over ssh."""
     local = pack(caps, Path(out) / "samples")
     there = f"{worker.root()}/local/runs/remote/kernel_search/{Path(out).name}" if worker else str(Path(out).resolve())
@@ -172,7 +172,7 @@ def hold(task, caps: list[Path], out: Path, env: dict, worker=None):
 
 def remote_env(prefix: list[str], env_dir: str, python: str, env: dict, sudo: bool = False) -> dict:
     """The evaluator's ssh mode for a worker host: each judgment runs there, config and source on stdin. Quoted as
-    `lab.worker.Remote._run` quotes (paths raw, so `~` and `$HOME` expand there; values in double quotes)."""
+    `measure.runner.worker.Remote._run` quotes (paths raw, so `~` and `$HOME` expand there; values in double quotes)."""
     for v in env.values():
         if any(c in v for c in '"`\\'):
             raise ValueError(f"unsafe value in the worker's env: {v!r}")

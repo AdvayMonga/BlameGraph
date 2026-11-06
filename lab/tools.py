@@ -17,7 +17,7 @@ from lab.agent import ToolSpec
 from lab.budget import Budget, BudgetExceeded, gpu_rate
 from lab.evaltools import BENCH_TIER, EvalTools
 from lab.proftools import ProfTools
-from lab.safety import grader
+from measure.sandbox import grader
 
 # Tools that occupy the GPU: their wall time is charged at the venue's rate. The rest cost $0.
 QUERY_MAX_BYTES = 64_000           # a query's reply: whole rows up to this, so one call cannot flood the context
@@ -44,7 +44,7 @@ class Toolbox(EvalTools, ProfTools):
     """Bound to one session: knows the workspace, the budget, the ledger root and the run."""
 
     def __init__(self, session: Any):
-        from lab import worker
+        from measure.runner import worker
         self.s = session
         self.violation: str | None = None
         self.worker = getattr(session, "worker", None) or worker.load(
@@ -208,7 +208,7 @@ class Toolbox(EvalTools, ProfTools):
             if r["verdict"] in ("refused", "contaminated"):
                 raise RuntimeError(f"a capture was {r['verdict']}: {r['reason']}")
             return self.s.ledger_root / r["bundle"] if r["verdict"] == "ok" else None
-        from lab import worker
+        from measure.runner import worker
         w = self.worker
         remote = isinstance(w, worker.Remote)
         env = pipeline.remote_env(w.prefix, w.env_dir, w.python, w.env, w.sudo) if remote else {}
@@ -373,7 +373,7 @@ class Toolbox(EvalTools, ProfTools):
 
     def specs(self) -> list[ToolSpec]:
         """What each tool does, returns and costs; never when or how to use it."""
-        from regimes import suite
+        from measure.loadgen import suite
         from lab.evaltools import HOLDOUT_BUDGET
         obj = {"type": "object", "properties": {}}
         rate, known = gpu_rate()
@@ -520,23 +520,24 @@ def _names(names) -> str:
     return ", ".join(f"`{n}`" for n in names)
 
 
-HARNESS = ("__init__.py", "profile.py", "bundle.py", "gpu.py", "capture.py")     # all lab.profile imports from the environment
+HARNESS = ("__init__.py", "profile.py", "bundle.py", "gpu.py", "capture.py")     # all measure.profile.profile imports from the environment
 HARNESS_DIR = "_harness"
 DEFAULT_CORPUS_CLASS = "steady_interactive"   # targets name no corpus class of their own
 
 
 def stage_harness(tree: Path) -> Path:
     """Copy just the profiling harness into the pristine tree: the jail must not open the environment repo (it holds
-    the ledger and .env), and the agent's own tree has no `lab` package any more."""
-    dest = tree / HARNESS_DIR / "lab"
+    the ledger and .env), and the agent's own tree has no `measure` package."""
+    dest = tree / HARNESS_DIR / "measure" / "profile"
     dest.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(engine.ENV_ROOT / "measure" / "__init__.py", dest.parent / "__init__.py")
     for name in HARNESS:
-        shutil.copyfile(engine.ENV_ROOT / "lab" / name, dest / name)
-    return dest.parent
+        shutil.copyfile(engine.ENV_ROOT / "measure" / "profile" / name, dest / name)
+    return dest.parents[1]
 
 
 def workload_flags(args: dict, harness: Path, n: int) -> list[str]:
-    """lab.profile's workload source: synthetic ids if asked, else `n` seen-split corpus requests sampled out here
+    """measure.profile.profile's workload source: synthetic ids if asked, else `n` seen-split corpus requests sampled out here
     (the jail holds no corpus, and the verified loader needs the held-out split too) and staged in the harness."""
     if args.get("synthetic"):
         return ["--synthetic", "--prompt-len", str(args.get("prompt_len", 64))]
@@ -567,7 +568,7 @@ def task_shares(bundle: Path) -> dict:
 
 def default_profile_runner(tree: Path, argv: list[str], read: list[Path] = (), env: dict | None = None,
                            timeout_s: int = 3600, on_start=None):
-    """lab.profile in the pristine tree as agent code: jailed, with the target's engine env (and `env`: a launch
+    """measure.profile.profile in the pristine tree as agent code: jailed, with the target's engine env (and `env`: a launch
     profile's), weights and `read` read-only, harness first on the path; `on_start` as `grader.jailed`'s."""
     path = os.pathsep.join([str(tree / HARNESS_DIR), str(tree / "src"), str(tree)])
     return grader.jailed(tree, argv, timeout_s=timeout_s,

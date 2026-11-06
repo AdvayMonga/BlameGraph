@@ -21,7 +21,7 @@ import torch  # noqa: E402
 from kernels import shapes  # noqa: E402
 from kernels.evolve.core import judge  # noqa: E402
 from kernels.tasks import load  # noqa: E402
-from lab import capture  # noqa: E402
+from measure.profile import capture  # noqa: E402
 
 SEED = ROOT / "kernels" / "evolve" / "seeds" / "toy_rmsnorm.py"
 FAST = '''<<<<<<< SEARCH
@@ -391,7 +391,7 @@ def test_noise_rule_and_physics_alarm():
     assert held["metrics"]["heldout_speedup"] > 0 and len(json.loads(held["artifacts"]["heldout_timings"])) == 2
     err = json.loads(same["artifacts"]["error_vs_reference"])["candidate"]
     assert err["max_abs"]["float32"] is not None and err["cases"] > 0
-    from validity.peaks import Peaks
+    from measure.context.peaks import Peaks
     fast = Peaks("toy", 1.0, 1.0, 1e9, "spec")      # a 1 FLOP/s, 1 B/s machine: any real time beats its bound
     orig = core._peaks
     core._peaks = lambda device: fast
@@ -848,11 +848,11 @@ def test_outputs_are_verified_again_outside_the_candidates_process():
 
 def test_the_jail_sees_a_fresh_tree_and_a_copied_harness_never_this_repo():
     from kernels.evolve import jailed
-    from lab.safety import container, grader, jail
+    from measure.sandbox import container, grader, jail
     with tempfile.TemporaryDirectory() as d:
         h = jailed.stage_harness(Path(d) / "h")
         names = {p.relative_to(h).as_posix() for p in h.rglob("*") if p.is_file()}
-        assert "kernels/evolve/core.py" in names and "targets/target.py" in names and "validity/peaks.py" in names
+        assert "kernels/evolve/core.py" in names and "targets/target.py" in names and "measure/context/peaks.py" in names
         assert not any(n.startswith(("local", "data/corpus", "data/knowledge", "data/workloads")) or n.endswith(".env") for n in names)
     seen, saved = {}, (jail.backend, container.available, container._docker, grader.subprocess.run)
 

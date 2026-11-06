@@ -112,7 +112,7 @@ def region_files(task, program: str, pkg: str, overrides: list, names: list[str]
     overlaps one of `overrides` ((path, (first, last)), stations ordered as `names`); the package's `__init__.py`
     added when it lacks one."""
     from kernels import regions
-    from lab.capture import STEP
+    from measure.profile.capture import STEP
     if task.name == STEP:
         raise ValueError(f"{STEP} does not ship: the engine's STEP hook writes the K/V pools in place and this task's K/V "
                          "is pure (copied per call)")

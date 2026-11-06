@@ -14,9 +14,9 @@ from urllib.parse import urlsplit
 
 from lab import apiproxy, live
 from targets import engine
-from lab.safety import container, jail
-from lab.safety.grader import HF_HUB
-from lab.safety.hooks import WRITE_TOOLS, write_guard
+from measure.sandbox import container, jail
+from measure.sandbox.grader import HF_HUB
+from lab.hooks import WRITE_TOOLS, write_guard
 
 BUILTIN_TOOLS = ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "WebSearch", "WebFetch"]
 PASS_ENV = ("CLAUDE_CODE_ENTRYPOINT", "CLAUDE_AGENT_SDK_VERSION")       # what the SDK sets for its CLI
@@ -53,7 +53,7 @@ class AgentSpec:
     timeout_s: float = 3600.0
     model: str = field(default_factory=lambda: os.environ.get("LAB_MODEL", "claude-fable-5-1"))
     workbench: str | None = None            # the container name of the agent's workbench (Linux)
-    remote: Any = None                      # a lab.worker.Remote: the workbench runs on that host
+    remote: Any = None                      # a measure.runner.worker.Remote: the workbench runs on that host
     remote_workspace: str | None = None     # the workspace's path there
 
 

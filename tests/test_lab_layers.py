@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from lab import layers
+from measure.context import layers
 
 REAL = Path(__file__).resolve().parents[1] / "local" / "engine-h200-20261017" / "session6" / "prof6-b1"
 

@@ -184,7 +184,7 @@ def light(name: str, heldout_axes: tuple[int, ...] = ()) -> Task:
     """A region as the controller knows it without the engine, its samples or its holder (all on the GPU host): its
     name, entry, capture traffic's env and, from a shapes file the GPU host wrote, its held-out axes. Enough to
     capture it, select its shapes and write its prompts; nothing here can run it."""
-    from lab.capture import STEP, STEP_ENTRY
+    from measure.profile.capture import STEP, STEP_ENTRY
     step = name == STEP
     which = station_set(name.split(":")[1]) if not step else ""
     env = () if step else (("CAPTURE_REGION_LAYERS", ",".join(map(str, LAYERS))),) + \
@@ -322,7 +322,7 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
     multi = bool(layers) and len(layers) > 1     # a call's shape starts with its layer; each layer its own weights
     calls = []
     if samples:
-        from lab import capture
+        from measure.profile import capture
         calls = [c for c in capture.load(Path(samples))
                  if c.get("fn") == fn and (layers is None or c.get("layer") in layers)]
     # A read the engine passes as None in some calls (a prefill wave's `tokens`, `fi_tokens` when nothing is padded)

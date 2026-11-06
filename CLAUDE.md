@@ -21,7 +21,7 @@ The task (`lab/task.py`, `--task task.toml`: goal, objective regimes, constraint
 and a submit returns its `score` under that task: the win condition is known, never inferred. The agent's objective
 (its system prompt) is generated per session (`session.system_prompt`: template `lab/prompts/objective.md`, a role line
 and facts only: the engine and its files by layer (target `[layers]`), how results are scored (each regime's load and
-report from `regimes.suite.FACTS`, the limits, tiers, verdicts, correctness policy), the environment, write surface,
+report from `measure.loadgen.suite.FACTS`, the limits, tiers, verdicts, correctness policy), the environment, write surface,
 tools (ToolSpec descriptions: what each does, returns and costs, never when to use it), budget, sessions). Everything
 task-specific is in the per-session brief (goal, optional `context` of specs and facts, objective, constraints, budget
 left, referee, baseline, hypotheses). Both are saved per session to `<run>/sessions/<id>/{objective,brief}.md`. The brief is the
@@ -32,13 +32,13 @@ kind; `RunConfig.baseline=False` skips it) and only the run's last `session` rec
 Make the loop rely less on the raw model and more on per-layer machinery. The engine is looked at as four layers;
 each needs data, a simulator, a hypothesis generator, measurement tools and an evaluator, and all of them answer to one
 end-to-end judge (`equiv` + `submit` + the held-out guard). The agent chooses which layer to work on; it is given each
-layer's share of time × its distance from the ceiling as a fact (`lab/layers.py`, in every profile record and the
+layer's share of time × its distance from the ceiling as a fact (`measure/context/layers.py`, in every profile record and the
 brief). Layer 1 first.
 
 ## Layout
 Top-level packages, run from the repo root (no install step; `pyproject.toml` lists optional extras and holds the
 pytest/ruff config). Each folder with commands has its own `python -m`.
-- `lab/profiles.py` — launch profiles (decided 2026-10-14): one engine, a config per regime in a TOML file of its own
+- `measure/runner/profiles.py` — launch profiles (decided 2026-10-14): one engine, a config per regime in a TOML file of its own
   tree (`[general]` + a table per regime, on the agent's write surface). bench, submit and the base measurement serve
   the general config once for every regime, then each regime whose table is non-empty in its own launch with
   `<profile_env>=<regime>`; that number is the headline, the general one beside it (`metrics.<regime>.general`).
@@ -50,7 +50,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
 - `targets/<name>.toml` + `targets/target.py` — **the target spec** (since 2026-10-06): model + chat kwargs, engine
   (repo, python, launch command with `{port}`, health path, env, logprobs `api` vllm|sglang|none, write surface,
   add-only globs, test and lint commands, optional `[engine.telemetry] env` with `{dir}`, optional `profiles` +
-  `profile_env`: launch profiles, `lab/profiles.py`), reference server + its outputs dir, MLPerf latency limits, correctness
+  `profile_env`: launch profiles, `measure/runner/profiles.py`), reference server + its outputs dir, MLPerf latency limits, correctness
   tasks and policy (`submit_tier`: the equiv tier submit requires, `dev` for the example engine until full fits), corpus dir. Selected by `LAB_TARGET` or `--target`; `target.load()` raises `NoTarget` otherwise.
   Nothing defaults to the user's engine or to Qwen3; `targets/inference-server.toml` is the committed example and
   what `tests/conftest.py` points at. Surfaces, grader commands, `targets/engine.py`, and the `correctness`,
@@ -92,7 +92,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   and saves a patch of the engine module in the workspace for the agent to apply; kernels-layer hypotheses only;
   `budget` (USD) split between model calls and GPU time); every record's `cost` has wall seconds, and
   GPU tools charge them at `LAB_GPU_USD_PER_HOUR` / the target's `[cost] gpu_usd_per_hour` to the run's budget) +
-  `proftools.py` (profile = torch.profiler, trace = nsys, kernel = ncu, hostprof = py-spy, all one path: lab.profile's
+  `proftools.py` (profile = torch.profiler, trace = nsys, kernel = ncu, hostprof = py-spy, all one path: measure.profile.profile's
   workload in the jail with validated args, the GPU watched like a served engine (`serve.Watch`: refused when busy,
   contaminated when shared), one record shape) + `evaltools.py` (bench → `regimes` on
   the seen split at tier `min` (`BENCH_TIER`), default regimes saturated + the task's, each search started where the run's base measurement ended and
@@ -141,24 +141,24 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   its commit (which `submit` reads for runs on that base commit only), its load searches resolved to
   `RESOLUTION_PCT` (5%), below which a searched regime's band is never reported. Exit 0 only if both hold. Needs a GPU for a real target; tested on fakes. `data/knowledge/LEDGER.md` is the
   record-format spec: the environment's public interface.
-- `lab/build.py` — the dependency build step: a tree whose change touched the target's `deps` (pyproject: dependency
+- `measure/sandbox/build.py` — the dependency build step: a tree whose change touched the target's `deps` (pyproject: dependency
   tables only, checked by the audit) gets a venv built by the target's `build` command in a no-GPU, `--network none`
   container whose only way out is a CONNECT proxy to the package-index hosts; cached by the files' hash; jobs run
   under `engine.using(build.python_for(tree))`.
-- `lab/gpucheck.py` — `python -m lab.gpucheck` on a GPU VM (as root, like the worker): what the jails need from a real
+- `measure/cloud/gpucheck.py` — `python -m measure.cloud.gpucheck` on a GPU VM (as root, like the worker): what the jails need from a real
   GPU host, PASS/FAIL each: jail GPU, workbench (GPU, root, apt/pip, metadata blocked), quiet, exclusivity, ncu,
   compute-sanitizer, hostprof, the dependency build.
-- `lab/worker.py` — the job interface, built for the measured jobs: `test`, `measure`, `equiv`, `profile` take input
+- `measure/runner/worker.py` — the job interface, built for the measured jobs: `test`, `measure`, `equiv`, `profile` take input
   trees + JSON args, write an out dir, return JSON; the tools call `self.worker`. `LAB_WORKER=local` (default, in
-  process) or `ssh` (the `lab.vm` VM): inputs by content hash, re-hashed on the worker before every job; GpuBusy,
+  process) or `ssh` (the `measure.cloud.vm` VM): inputs by content hash, re-hashed on the worker before every job; GpuBusy,
   Contaminated, NotReady, ValueError cross intact. Remote is tested through a local shell, and ran over real SSH in the 2026-10-10 dry run and the 2026-10-16
   kernel run. With
   `ssh` the agent works on the VM too: its workspace mirrored by rsync (pulled before every audit), its workbench
   built there (`workbench`), its CLI's stdio over `ssh -R`, the API proxy tunnelled to a unix socket in the workbench.
-- `lab/trace_contract.py` — the request-trace contract: per-request engine rows (trace_id = the
+- `measure/runner/trace_contract.py` — the request-trace contract: per-request engine rows (trace_id = the
   client's `X-Trace-Id`, `arrival_ts` epoch s, `*_s` monotonic durations, TPOT = (E2E − TTFT)/(n − 1)) in a dir of
   `*.sqlite` (`requests` + `meta`) or `*.jsonl` + `<stem>.meta.json`, with schema version and drop counts;
-  `python -m lab.trace_contract DIR`. Diagnostics only, never scored. inference-server's `TELEMETRY_DIR` conforms
+  `python -m measure.runner.trace_contract DIR`. Diagnostics only, never scored. inference-server's `TELEMETRY_DIR` conforms
   natively (schema 1, inference-server#102); the target names its env vars in `[engine.telemetry] env` (`{dir}`); serve collects
   the files after every bench/equiv/submit and the contract check's report is stored beside them.
 - `data/corpus/` — frozen workload traces (BurstGPT timing, WildChat text), seen/heldout, hashed, `manifest.json`;
@@ -325,7 +325,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `lab.experiment` researcher run on it, measured end to end by `bench`/`equiv`/`submit`). `kernels/share.py` (`python -m kernels.evolve share --profile BUNDLE [--profile ...] [--gate TASK=GATE.json]`: tasks
   ranked by share x (1 - % of roofline) across profiles, each task's share of a profiled engine
   window from the device kernels it launches, `Task.kernel_names`, the speedup bound if they took no time, and the
-  kernels no task covers, by share: the facts for choosing the next task). `lab/capture.py` + `lab.profile --capture MODULE:FUNCTION` (the `profile` tool's `capture`): every
+  kernels no task covers, by share: the facts for choosing the next task). `measure/profile/capture.py` + `measure.profile.profile --capture MODULE:FUNCTION` (the `profile` tool's `capture`): every
   call's argument shapes and small int tensors, the first call per shape kept whole as real inputs.
 - `kernels/regions.py` — regions (decided 2026-10-22/23): any run of consecutive decode stations of the engine as a
   kernel task with a generated harness (since 2026-11-02 prefill stations too: a region whose first station starts
@@ -349,7 +349,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   the samples are the captures unless `--captures` is given; both keys go into `eval_config.json` and the gate's
   config). `load` with neither key gives `regions.light`: name, entry, capture env (`CAPTURE_REGION_LAYERS` =
   `regions.LAYER` 0, `MEGAKERNEL=0`) and held-out axes, no engine import: what the controller knows. kernel_search takes
-  `region:F:L` end to end (`kernels/pipeline.py`): captured with `lab.profile --capture region:F:L` (sets the engine's
+  `region:F:L` end to end (`kernels/pipeline.py`): captured with `measure.profile.profile --capture region:F:L` (sets the engine's
   CAPTURE_REGION/_DIR before the backend is built) under the scored regimes' traffic, `pipeline.pack` merges the
   captures into one samples dir (each traffic's calls kept apart under traffic<i>/profile-<source>/captures, so each
   weighs the same), pushed to a remote worker, and `pipeline.hold` runs `python -m kernels.hold` where the evaluator
@@ -381,8 +381,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   2026-10-27 (engine branch engine/region-capture): router..down of layer 0 captured under mixed_1 and mixed_3, held,
   split and gated jailed with the weights attached over IPC: the start program passed every gate, 1.0x seen, 1.001x
   held-out. Not yet run through kernel_search or over ssh on a GPU.
-- `kernels/step.py` — the whole decode step as one region, `region:embed:argmax` (`lab.capture.STEP`): the engine's
-  megakernel (`megakernel.decode_step`) as a kernel task. Captured by `lab.capture.step` (`lab.profile --capture
+- `kernels/step.py` — the whole decode step as one region, `region:embed:argmax` (`measure.profile.capture.STEP`): the engine's
+  megakernel (`megakernel.decode_step`) as a kernel task. Captured by `measure.profile.capture.step` (`measure.profile.profile --capture
   region:embed:argmax`: wraps decode_step; the first call per (rows, block-table width) kept whole up to 256 MiB:
   tokens, pos, bt renumbered to the blocks its rows touch, every layer's K/V of those blocks stacked [layers, blocks,
   ...], and logits, next tokens and those blocks after). Inputs (tokens, pos, bt, k_cache, v_cache), outputs (logits,
@@ -446,41 +446,41 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   than the task's current best), `facts` (what the past-failure check sees); each outcome keeps the bound type of
   the child's seen shapes; `kernels/search/memory.py` turns it into the judge's memory tables. `python -m kernels.archive export --out F` on the
   controller (the GPU host reads the file), `query --archive F TEXT`. Measurements only.
-- `lab/layers.py` — each layer's share of a profiled window and its distance from a ceiling, as facts (2026-10-18):
+- `measure/context/layers.py` — each layer's share of a profiled window and its distance from a ceiling, as facts (2026-10-18):
   kernels = CUDA kernel time / window; model execution = prefill + decode phase wall time beyond kernel time;
   runtime = admit + evict phases, with the GPU idle share, batch fill and admissions blocked; serving = window time
-  outside scheduler steps. Distance: the mean decode step against `validity.ceiling`'s step floor at the window's
+  outside scheduler steps. Distance: the mean decode step against `measure.context.ceiling`'s step floor at the window's
   batch and context; kernels' % of roofline from gate results when given; layers 3 and 4 say they have no single
   ceiling. Every `profile` record (and every bench's and baseline's `profiled`) carries it under
   `calibrated.layers`, and each kernel task's share of the window under `calibrated.kernel_tasks`
   (`lab.tools.task_shares`, `kernels/share.py`; why it is missing where the tasks don't import); the brief's harness
-  facts show the latest of each (`layers`, `kernel_tasks`). `python -m lab.layers BUNDLE`. The timeline covers the whole run, so only events inside the window
+  facts show the latest of each (`layers`, `kernel_tasks`). `python -m measure.context.layers BUNDLE`. The timeline covers the whole run, so only events inside the window
   count; nested phases (prefill_mixed inside prefill_chunk) are counted once.
-- `sim/` — the scheduler simulator (layer 3, 2026-10-18): `sim/scheduler.py` drives the engine's real
+- `measure/sim/` — the scheduler simulator (layer 3, 2026-10-18): `measure/sim/scheduler.py` drives the engine's real
   `ContinuousBatchScheduler` one `step()` at a time (inference-server #120) on a fake clock (`Clock`, installed as the
   scheduler module's `time`) with `SimBackend`, which runs no model and charges a `CostModel` (prefill and decode
   step times, answer lengths; defaults are unfitted stand-ins, phase 2 fits them from a GPU run's step telemetry) and
   reserves KV blocks worst-case like the custom backend. Real: the scheduler, its policy, admission, KV arithmetic,
   request timestamps, TTFT/TPOT as the regimes define them; a 10-minute class simulates in under a second.
   `simulate(records, Settings, CostModel)` → regimes-shaped rows for `runner.summarize`; `Settings.from_env` takes the
-  engine's scheduler env vars, so a profile applies as is. `python -m sim run CLASS [--synthetic] [--env JSON]
+  engine's scheduler env vars, so a profile applies as is. `python -m measure.sim run CLASS [--synthetic] [--env JSON]
   [--cost FILE]`, with the engine's python. Not yet validated against a real bench (the bar: ranks changes like bench
   does, Spearman ≥ 0.8); not an agent tool yet (the user's design).
-- `regimes/synth.py` — synthetic traffic (2026-10-18): generated fresh per run from the corpus's seen split and then
+- `measure/loadgen/synth.py` — synthetic traffic (2026-10-18): generated fresh per run from the corpus's seen split and then
   gone, never written, the seed regenerates it (`Ctx.synthetic`, `regimes run --synthetic`). Whole real sessions in
   shuffled passes (structure, turns, think time, max_tokens, regime), the real gap sequence repeated with a seeded
   jitter (bursts stay where they were), text cut from real messages of the same role at sentence ends and
   recombined to length: 0 of ~2,000 generated prompts per class equal a real one; KS on prompt tokens ≤ 0.02 and
-  per-10 s arrival counts within a few % of the real class (`python -m regimes.synth compare`). Not yet compared
+  per-10 s arrival counts within a few % of the real class (`python -m measure.loadgen.synth compare`). Not yet compared
   against the real corpus on a GPU; until then bench/submit stay on the public corpus.
-- `regimes/arrivals.py` + `arrivals.json` — request timing fitted from real conversation traffic (2026-11-01):
+- `measure/loadgen/arrivals.py` + `arrivals.json` — request timing fitted from real conversation traffic (2026-11-01):
   BurstGPT_3's conversation log cut into sittings (a session's gap over 30 min ends one; the user returns as a resumed
   sitting with that many turns of history), fitted on the seen weeks: counts of (first turn, turns) and gap quantiles
   by transition index (buckets at 5, 10, 20, 40). `Model.schedule(rate, duration_s, seed)`: sittings start as
   Poisson(rate) from -horizon (the p99.99 span of the model's own sittings, 23,049 s; a pre-roll sitting whose shape
   cannot reach t=0 is skipped undrawn) so users are mid-conversation at t=0; load rises by raising the sitting
   rate, which is what the data does (turns and gaps per sitting are the same at every hour of day, `seen_by_hour`).
-  `python -m regimes.arrivals fit|compare`: the fit carries the source's hash; compare puts the model beside the
+  `python -m measure.loadgen.arrivals fit|compare`: the fit carries the source's hash; compare puts the model beside the
   held-out weeks (sitting-start CV and KS against exponential, request-count dispersion at 1/10/60 s per busy
   window, KS real vs model for turns, first turn and gaps), numbers only. `workload.realistic` turns a schedule into
   requests: each sitting draws a conversation of the pool with turns enough for its indices (else one of the longest,
@@ -493,7 +493,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   Every request is salted ("[k] " before the conversation's opening message; `Cycle`, `Once`, `realistic`), so no two
   share a prefix except a conversation's turns and the shared system prompt (MLPerf's rule). Tests set
   `suite.ARRIVALS` to `tests/fake_engine.fast_arrivals()`.
-- `regimes/` — load generation: drives a live OpenAI-compatible server the ten ways it gets used, client-side.
+- `measure/loadgen/` — load generation: drives a live OpenAI-compatible server the ten ways it gets used, client-side.
   `client.py` (one streamed chat request: TTFT from *scheduled* send to first real token, TPOT = (E2E − TTFT)/(n − 1),
   status ok / error (explicit 4xx or 503 rejection) / silent_drop / truncated / crash (other 5xx, no response,
   stream died); a one-token answer has no TPOT and never meets the limits; corpus headers X-Session-Id,
@@ -526,9 +526,9 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   Tiers: min (15 s probes, 30 s final; bursty cropped to its peak window like short), short (30 s probes, 60 s final),
   full (60 s probes, 600 s final). Probes must last well beyond the TTFT limit
   or a short overload goes unseen; limits are settable per `Ctx` (MLPerf by default). CLI:
-  `python -m regimes run REGIME[,..]|all --url URL [--corpus DIR | --workload FILE] [--synthetic] [--split] [--tier] [--tokenizer] [--out]`
+  `python -m measure.loadgen run REGIME[,..]|all --url URL [--corpus DIR | --workload FILE] [--synthetic] [--split] [--tier] [--tokenizer] [--out]`
   (`--workload`: a `data/workloads/` file is one pool for every regime; bursty is refused, no arrival times),
-  `python -m regimes cold-start --url URL --cmd "..."`. Closed-loop runs can't detect a client bottleneck by lag.
+  `python -m measure.loadgen cold-start --url URL --cmd "..."`. Closed-loop runs can't detect a client bottleneck by lag.
 - `compare/` — the engine comparison (decided 2026-10-27): `engines.toml` (ours, vLLM 0.32.0, SGLang 0.5.22,
   TensorRT-LLM 1.4.0rc1 in their official containers; bf16 and fp8 configurations; shared limits; server cores 0-7,
   client 8-15), `run.py` (`python -m compare.run --out DIR` on the GPU VM: the client check, then per configuration a
@@ -544,7 +544,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   2026-10-28 (spot, `local/compare-20261028/`): vLLM bf16/fp8 and SGLang bf16 measured; ours hung at saturated
   (inference-server#137, a lock-order deadlock); long-output/long-prompt values were 30 s probes shorter than one
   request, and bursty stopped on client lag: both fixed 2026-10-29.
-- `regimes/clientcheck.py` — `python -m regimes.clientcheck`: the client's own TPOT error at each closed-loop concurrency
+- `measure/loadgen/clientcheck.py` — `python -m measure.loadgen.clientcheck`: the client's own TPOT error at each closed-loop concurrency
   and open-loop rate and burst size (`BURST`: N arrivals within 50 ms), against a fixed-schedule server that logs its
   true send times.
 - `kernels/kernelbench.py` — KernelBench as kernel tasks, researcher-only (2026-10-28): `python -m kernels.kernelbench
@@ -578,7 +578,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   no token: MLPerf files from the public `inference.mlcommons-storage.org` bucket (`metadata/<name>.uri` + `.md5`),
   ShareGPT from the Hub. Not re-hosted (GPQA asks not to be; ShareGPT's license is unclear). Chat templates are
   stripped. Llama-3.1-405B (404 on the bucket) and edge-agentic (tool-call transcripts) are not imported.
-- `tests/test_*.py` — all synthetic, no GPU, each runnable with `python3 tests/<file>.py`, named after the module they cover; `test_correctness_run.py` is the full reference→candidate→verdict flow on fake servers; `test_kernels.py` also runs on MPS; `test_regimes.py` drives `tests/fake_engine.py` (fixed decode slots, run out of process) through every regime (~4 min in CI, where PRs run it only if they touch `regimes/`, `canaries/`, `data/corpus/`, `data/corpus/__init__.py`, `targets/target.py`, its fake engine or the workflows; main pushes and the weekly run always do).
+- `tests/test_*.py` — all synthetic, no GPU, each runnable with `python3 tests/<file>.py`, named after the module they cover; `test_correctness_run.py` is the full reference→candidate→verdict flow on fake servers; `test_kernels.py` also runs on MPS; `test_regimes.py` drives `tests/fake_engine.py` (fixed decode slots, run out of process) through every regime (~4 min in CI, where PRs run it only if they touch `measure/loadgen/`, `canaries/`, `data/corpus/`, `data/corpus/__init__.py`, `targets/target.py`, its fake engine or the workflows; main pushes and the weekly run always do).
 - `local/` is gitignored and local only: `local/tasks/` (correctness task sets), `local/equiv*/` and `local/h200-run-*/` (GPU run outputs and reports), `local/archive/research-loop/runs/` (the removed research loop's run panels and temp worktrees, Sept 2026), `local/notes/` (the user's notes). Live lab state is `lab/ledger/` and `lab/runs/`, also gitignored, kept in the store by `python -m data.knowledge push`.
 
 ## The engine repo (inference-server, after the 2026-10-06 split)
@@ -594,7 +594,7 @@ them from existing records meanwhile.
 - `DECISIONS.md` — append-only, one dated entry per decision (what, why, what it replaced), newest first. The eval
   conventions (2026-10-02) are there; change any decision only with the user.
 - GPU runs go into the ledger, not a file (decided 2026-10-18). A run made through the lab's tools records itself;
-  a run made by hand (`python -m regimes run --out DIR`, `python -m correctness candidate --out DIR/equiv.json`) is
+  a run made by hand (`python -m measure.loadgen run --out DIR`, `python -m correctness candidate --out DIR/equiv.json`) is
   imported with `python -m data.knowledge.import_runs --run manual-<date> --commit SHA [--env K=V ...] DIR...` (`bench` / `equiv`
   records, numbers only, visible to the agent), then `python -m data.knowledge push`. The runs before that
   (2026-10-04 to 2026-10-18) are in `RUNS.md` at tag `archive/docs`, with the old design docs (`ENVIRONMENT.md`,

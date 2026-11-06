@@ -20,7 +20,7 @@ HOLD_ENV = {"CUSTOM_BACKEND_BLOCKS": "16", "CUSTOM_BACKEND_CUDA_GRAPH": "0", "ME
 def held(name: str, model) -> tuple[dict, dict]:
     """(tensors, constants) the region `name` reads from the loaded engine `model`."""
     from kernels import regions, step
-    from lab.capture import STEP
+    from measure.profile.capture import STEP
     if name == STEP:
         return step.weights(model)
     st = regions._engine()
@@ -37,7 +37,7 @@ def describe(name: str, samples: Path, holder: Path) -> dict:
     from kernels import regions, shapes
     from kernels.evolve.run import initial_program
     from kernels.tasks import load
-    from lab.capture import STEP
+    from measure.profile.capture import STEP
     task = load(name, samples=str(samples), shared_weights=str(holder))
     caps = sorted(Path(samples).glob("traffic*/*/captures"))
     counts = shapes.from_captures(task, caps, equal=True)
@@ -61,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", required=True, help="the holder file to write (its dir is made)")
     a = ap.parse_args(argv)
     from targets import target
-    from lab.safety import container
+    from measure.sandbox import container
     for k, v in target.load().engine.env.items():
         os.environ.setdefault(k, v)
     os.environ.update(HOLD_ENV)

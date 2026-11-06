@@ -45,7 +45,7 @@ def _stations(task, sets: dict) -> list[str] | None:
     if sets.get("stations"):
         return list(sets["stations"])
     from kernels import regions
-    from lab.capture import STEP
+    from measure.profile.capture import STEP
     try:
         if task.name == STEP:
             return [s.name for s in regions.engine_stations()]

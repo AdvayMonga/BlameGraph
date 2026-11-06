@@ -24,7 +24,7 @@ from targets import engine
 from lab import experiments
 from data.knowledge import ledger
 from lab.budget import Budget
-from lab.safety.surfaces import may_write
+from measure.sandbox.surfaces import may_write
 from lab.workspace import Workspace
 
 RUNS = engine.ENV_ROOT / "local" / "runs"

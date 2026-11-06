@@ -53,7 +53,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           files=$(gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --name-only)
-          if echo "$files" | grep -qE '^(regimes/|canaries/|data/corpus/|targets/target\.py|tests/test_regimes\.py|tests/fake_engine\.py|\.github/workflows/)'; then
+          if echo "$files" | grep -qE '^(measure/loadgen/|canaries/|data/corpus/|targets/target\.py|tests/test_regimes\.py|tests/fake_engine\.py|\.github/workflows/)'; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
           else
             echo "skip=true" >> "$GITHUB_OUTPUT"

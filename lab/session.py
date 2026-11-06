@@ -12,12 +12,13 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lab import agent, experiments, live, worker
+from lab import agent, experiments, live
+from measure.runner import worker
 from data.knowledge import ledger
 from targets import engine, target
 from lab.budget import Budget, BudgetExceeded
 from lab.evaltools import BENCH_TIER
-from lab.safety import grader
+from measure.sandbox import grader
 from lab.task import Task
 from lab.tools import Toolbox, clean_pristine
 from lab.workspace import Workspace
@@ -41,7 +42,7 @@ class Session:
     profile_runner: object = None          # None: lab.tools.default_profile_runner
     task: Task | None = None
     workbench: str | None = None           # the agent's container: paused while the tools measure
-    worker: object = None                  # None: lab.worker.load() per toolbox
+    worker: object = None                  # None: measure.runner.worker.load() per toolbox
     remote_workspace: str | None = None    # the workspace's mirror on a Remote worker, where the agent works
 
 
@@ -95,8 +96,8 @@ def system_prompt(t: target.Target, spec: agent.AgentSpec) -> str:
     """The agent's objective from the target spec, the regimes' definitions and the tool specs: what is there, how it
     is scored and what it costs, nothing advised. Task-specific facts go in each session's brief."""
     from lab.evaltools import HOLDOUT_BUDGET
-    from lab.safety.surfaces import ALWAYS_DENY
-    from regimes import suite
+    from measure.sandbox.surfaces import ALWAYS_DENY
+    from measure.loadgen import suite
 
     def globs(g):
         return ", ".join(f"`{x}`" for x in g) or "nothing"

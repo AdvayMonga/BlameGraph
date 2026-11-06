@@ -22,7 +22,7 @@ checkpoint = "Qwen/Qwen3-30B-A3B-FP8"        # Qwen's own: block-wise 128x128 sc
 # attention bf16: a fact of the comparison, not a handicap the others carry
 
 [engines.ours]
-kind = "venv"                                # the engine repo's .venv on the VM (lab/vm-setup.sh)
+kind = "venv"                                # the engine repo's .venv on the VM (measure/cloud/vm-setup.sh)
 version = "inference-server main"            # the commit is recorded per run
 api = "vllm"                                 # its prompt_logprobs shim
 health = "/health"

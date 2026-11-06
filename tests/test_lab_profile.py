@@ -1,4 +1,4 @@
-"""lab.profile writes a complete bundle whose trace carries the engine's phase ranges."""
+"""measure.profile.profile writes a complete bundle whose trace carries the engine's phase ranges."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ import json
 
 import pytest
 
-pytest.importorskip("lab.profile", reason="needs the engine and its deps: run with the engine's python", exc_type=ImportError)
+pytest.importorskip("measure.profile.profile", reason="needs the engine and its deps: run with the engine's python", exc_type=ImportError)
 from inference_server.config import Settings  # noqa: E402
-from lab import bundle, gpu, profile  # noqa: E402
+from measure.profile import bundle, gpu, profile  # noqa: E402
 
 
 @pytest.mark.asyncio
@@ -125,10 +125,10 @@ def test_main_captures_the_calls_of_named_functions_into_the_bundle(tmp_path, st
     monkeypatch.setattr(profile, "build_backend", lambda s: stub_backend_cls())
     out = tmp_path / "o"
     assert profile.main(["--synthetic", "--requests", "2", "--prompt-len", "4", "--max-tokens", "2", "--out", str(out),
-                         "--capture", "lab.bundle:workload_hash"]) == 0
+                         "--capture", "measure.profile.bundle:workload_hash"]) == 0
     b = next(p for p in out.iterdir() if p.is_dir())
     calls = [json.loads(x) for x in (b / "captures" / "calls.jsonl").read_text().splitlines()]
-    assert calls and calls[0]["fn"] == "lab.bundle:workload_hash" and calls[0]["args"][1] == {"value": 2}
+    assert calls and calls[0]["fn"] == "measure.profile.bundle:workload_hash" and calls[0]["args"][1] == {"value": 2}
     assert bundle.workload_hash.__name__ == "workload_hash" and not hasattr(bundle.workload_hash, "__wrapped__")
     assert not [p for p in out.iterdir() if p.name.startswith("capture-")]       # staging dir moved, not left
 

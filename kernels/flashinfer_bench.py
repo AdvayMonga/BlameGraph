@@ -347,7 +347,7 @@ def score(name: str, program: Path, work: Path) -> dict:
     the FlashInfer baseline's."""
     from kernels.evolve import jailed
     from targets import engine
-    from lab.safety import grader
+    from measure.sandbox import grader
     work = Path(work).resolve()
     tree = work / "tree"
     tree.mkdir(parents=True, exist_ok=True)

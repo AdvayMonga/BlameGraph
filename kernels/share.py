@@ -1,4 +1,4 @@
-"""Each kernel task's share of the engine's profiled window, from a `profile` bundle (`lab/bundle.py`: kernels.json +
+"""Each kernel task's share of the engine's profiled window, from a `profile` bundle (`measure/profile/bundle.py`: kernels.json +
 meta.json): the device kernels the task's entry launches (`Task.kernel_names`), their share of the window, and the
 end-to-end speedup bound if they took no time (Amdahl). Facts for choosing the next task; the kernels no task covers
 are listed by share."""
@@ -8,7 +8,7 @@ import json
 import re
 from pathlib import Path
 
-from lab import calibrate
+from measure.context import calibrate
 
 
 def shares(bundle: Path, tasks: list, unmatched: int = 15) -> dict | None:
@@ -41,8 +41,8 @@ def rank(bundles: list[Path], tasks: list, gates: dict | None = None) -> dict:
     """Each task's share of the window in every profile (one per corpus class or regime), their mean, its kernel's %
     of the roofline bound (from a `gate` result of the engine's own kernel, when given), and the fraction of the
     window that would disappear at the roofline: share x (1 - % of roofline), the Amdahl ceiling gain
-    (validity.ceiling.ceiling_gain; GEAK ranks by GPU-time share x achievable speedup). Ranked by it, else by share."""
-    from validity.ceiling import ceiling_gain
+    (measure.context.ceiling.ceiling_gain; GEAK ranks by GPU-time share x achievable speedup). Ranked by it, else by share."""
+    from measure.context.ceiling import ceiling_gain
     per = [shares(b, tasks) for b in bundles]
     out = []
     for t in tasks:

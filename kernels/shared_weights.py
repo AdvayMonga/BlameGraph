@@ -223,13 +223,13 @@ def check(jailed: bool = True) -> dict:
         p.chmod(0o755)
     for f in (root / "kernels").iterdir():
         f.chmod(0o644)
-    from lab.safety import container
+    from measure.sandbox import container
     h = Holder({"a": torch.arange(1024, dtype=torch.float32, device="cuda")}, hd / "w.pkl",
                jail_uid=container.user()[0] if jailed else None)
     code = CHILD.format(root=str(root), path=str(h.path))
     (d / "child.py").write_text(code)
     if jailed:
-        from lab.safety import grader
+        from measure.sandbox import grader
         p = grader.jailed(d, [sys.executable, str(d / "child.py")], timeout_s=300, read=[root, hd], ipc_host=True)
     else:
         p = subprocess.run([sys.executable, str(d / "child.py")], capture_output=True, text=True, timeout=300)
