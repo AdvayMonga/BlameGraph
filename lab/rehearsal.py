@@ -11,7 +11,7 @@ can edit and measure), a target spec for it, a task, and the reference answers e
 
 Then, from this repo (the ledger and run dirs are this checkout's own):
   export LAB_TARGET=DIR/target.toml LAB_STORE=DIR/store LAB_ENGINE_REPO=DIR/engine
-  python -m lab.validate --regimes single_stream --noise-runs 3 --tier dev      # noise bands, the gate on good/bad
+  python -m evals.agent.validate --regimes single_stream --noise-runs 3 --tier dev      # noise bands, the gate on good/bad
   python -m lab.session --task DIR/task.toml --budget 2                         # the loop, with the real model
 
 The model's tokenizer counts tokens on both sides of every check, so the server streams words that are one token
@@ -103,7 +103,7 @@ def items(n: int) -> list[dict]:
 
 
 def make_reference(script: Path, out: Path, n: int, encoder) -> dict:
-    from correctness import run as crun
+    from evals.agent.correctness import run as crun
     proc, url = _serve(script)
     try:
         return crun.reference(url, MODEL, out, items(n), encoder, top_k=5, div_n=min(n, 60), concurrency=8)
@@ -162,7 +162,7 @@ regimes = ["single_stream"]
 
 
 def setup(d: Path, python: str = sys.executable, n_dev: int = 200, n_full: int = 400, encoder=None) -> dict:
-    from correctness import run as crun
+    from evals.agent.correctness import run as crun
     d = d.resolve()
     if (d / "engine").exists():
         raise SystemExit(f"{d / 'engine'} exists: set up a fresh directory")

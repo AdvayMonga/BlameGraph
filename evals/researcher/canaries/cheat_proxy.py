@@ -2,7 +2,7 @@
 The harness (measurement + correctness gate + validity) must flag every cheat; one that goes unflagged is a
 blind spot. Engine-agnostic, stdlib only.
 
-  python -m canaries --upstream http://127.0.0.1:8000 --port 8100 --cheat truncate
+  python -m evals.researcher.canaries --upstream http://127.0.0.1:8000 --port 8100 --cheat truncate
 
 Cheats (what should catch it):
   truncate      cap max_tokens at 40% of the request            -> length gate

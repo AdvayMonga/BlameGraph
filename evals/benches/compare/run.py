@@ -4,10 +4,10 @@ answers, a fixed-length answer runs to its length), the regimes, equiv once, and
 configurations in a rotated order, so drift over the session falls on every engine alike. Every stage writes one file
 and is skipped when that file exists, so a rerun resumes. Run from the BlameGraph checkout with the engine's python:
 
-    python -m compare.run --out ~/compare [--engines ours,vllm,sglang,trtllm] [--precisions bf16,fp8]
+    python -m evals.benches.compare.run --out ~/compare [--engines ours,vllm,sglang,trtllm] [--precisions bf16,fp8]
                           [--stages clientcheck,launch,regimes,equiv,cold] [--repeats 1] [--regimes all] [--tol 0.02]
     # more repeats of the contested regimes, numbered after the first pass's:
-    python -m compare.run --out ~/compare --stages launch,regimes --regimes bursty,overload --repeats 2 --first-repeat 1
+    python -m evals.benches.compare.run --out ~/compare --stages launch,regimes --regimes bursty,overload --repeats 2 --first-repeat 1
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent
+ROOT = HERE.parents[2]
 PORT = 8100
 STAGES = ("clientcheck", "launch", "regimes", "equiv", "cold")
 
@@ -184,7 +184,7 @@ def run(out: Path, engines: list[str], precisions: list[str], stages: list[str],
                                     "--out", str(d / f"regimes-{rep}.json"))
                             (d / f"facts-{rep}.json").write_text(json.dumps(facts()) + "\n")
                         if "equiv" in todo:
-                            _python("correctness", "candidate", "--url", url, "--api", spec["engines"][engine]["api"],
+                            _python("evals.agent.correctness", "candidate", "--url", url, "--api", spec["engines"][engine]["api"],
                                     "--concurrency", "32", "--out", str(d / "equiv.json"))
                 except RuntimeError as err:
                     (d / f"error-{rep}.txt").write_text(f"{err}\n")

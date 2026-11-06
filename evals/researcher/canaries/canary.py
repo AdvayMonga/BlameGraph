@@ -57,7 +57,7 @@ def apply(names: frozenset[str]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m lab.canary",
+    ap = argparse.ArgumentParser(prog="python -m evals.researcher.canaries.canary",
                                  description="serve the engine with deliberate regressions applied")
     ap.add_argument("names", help="comma-separated: " + ", ".join(NAMES))
     ap.add_argument("--host", default="0.0.0.0")

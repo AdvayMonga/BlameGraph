@@ -25,10 +25,10 @@ from pathlib import Path
 
 from measure.runner import artifacts, profiles, serve, worker
 from measure.context import calibrate
-from lab import live
+from evals.researcher import live
 from data.knowledge import ledger
 from targets import target
-from validity.holdout import HoldoutGuard, Refused
+from evals.agent.holdout import HoldoutGuard, Refused
 
 HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT = 100, 2.0, 0.5
 BENCH_TIER = "min"            # bench's default tier, which submit compares against (base is measured at the same tier)
@@ -65,7 +65,7 @@ def run_regimes(url: str, t: target.Target, names: list[str], split: str, tier: 
 
 
 def _progress(rows) -> None:
-    """One load call's raw numbers for the dashboard (`lab.live`), computed after the call: never during it."""
+    """One load call's raw numbers for the dashboard (`evals.researcher.live`), computed after the call: never during it."""
     from measure.loadgen.runner import _q
     ok = [r for r in rows if r.status == "ok"]
     ttft, tpot = [r.ttft_s for r in ok if r.ttft_s is not None], [r.tpot_s for r in ok if r.tpot_s is not None]
@@ -157,7 +157,7 @@ def heldout_context(seen_cal: dict, base: dict, delta: float | None, better: str
 
 def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
     """What the referee measures against: the parameters the agent cannot read off its ledger. Facts, not advice."""
-    from lab import validate                        # validate imports this module
+    from evals.agent import validate                        # validate imports this module
 
     from measure.loadgen import suite
     from measure.loadgen.workload import corpus_version
@@ -171,7 +171,7 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
                         "tasks": list(t.tasks)},
         "noise_bands_pct": {n: noise_band_pct(n, t, ledger_root or ledger.ROOT) for n in suite.REGIMES},
         "noise_bands_measured_on": "the base commit's engine with its general config, repeated unchanged runs "
-                                   "(lab.validate, the latest at any engine commit on this corpus version; a searched regime's band is at "
+                                   "(evals.agent.validate, the latest at any engine commit on this corpus version; a searched regime's band is at "
                                    f"least the search's resolution, {validate.RESOLUTION_PCT}%); submit applies them "
                                    "to every candidate and "
                                    "every launch profile; None where no band was measured for this target",
@@ -332,7 +332,7 @@ class EvalTools:
         ref = t.reference_dir_for("dev" if tier == "quick" else tier)
         if not target.reference_complete(ref):
             self._record("equiv", "equiv", args, {"verdict": "refused", "reason": f"no {tier}-tier reference outputs; "
-                         "run `python -m correctness reference` for this target first"}, snap, config=config)
+                         "run `python -m evals.agent.correctness reference` for this target first"}, snap, config=config)
             return "equiv refused: no reference outputs for this target"
         tree = self._pristine()
         why = profiles.refusal(tree, t, profile)

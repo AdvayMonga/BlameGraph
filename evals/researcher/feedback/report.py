@@ -8,9 +8,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from feedback import lab_verdict
-from feedback.claim_facts import claim_facts
-from diagnostics.lab_process import process
+from evals.researcher.feedback import lab_verdict
+from evals.researcher.feedback.claim_facts import claim_facts
+from evals.researcher.lab_process import process
 
 
 def feedback(path: str | Path, run_id: str | None = None) -> dict:

@@ -1,10 +1,10 @@
-"""python -m feedback PATH [--run RUN_ID] [--agent-text]"""
+"""python -m evals.researcher.feedback PATH [--run RUN_ID] [--agent-text]"""
 from __future__ import annotations
 
 import argparse
 import json
 
-from feedback.report import feedback, render_for_agent
+from evals.researcher.feedback.report import feedback, render_for_agent
 
 
 def main():

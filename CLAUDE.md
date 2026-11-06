@@ -75,8 +75,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   e.g. on a branch, recorded like the agent's: a `researcher-` run whose workspace is base + the change's files inside
   the write surface (the rest listed as `left_out` in the start record), measured through the lab's own Toolbox
   under the same hypothesis/expect/reflection rules) +
-  `calibrate.py` (every measured number with its context, decided 2026-10-11: `% of ceiling` from `validity/ceiling`
-  on measured peaks, `% of reference` from `data/calibration/reference/<target>/<regime>.json` written by `lab.validate`
+  `calibrate.py` (every measured number with its context, decided 2026-10-11: `% of ceiling` from `measure/context/ceiling`
+  on measured peaks, `% of reference` from `data/calibration/reference/<target>/<regime>.json` written by `evals.agent.validate`
   with `perf_reference` (the correctness reference minus its determinism switches, which are slow by design),
   and for kernels their share of the window; a ceiling or reference is shown only under a matching config
   fingerprint (model, dtypes, max_model_len, tier, split, corpus version, GPU), else the field says why it is
@@ -121,8 +121,8 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   shutdown, because a stalled session once billed 12 h for 3.5 h of work), `corpus.py` +
   `chat_template.py` (corpus loader, template fingerprint). Tests: `tests/test_lab_*.py` (pytest); the ones
   that drive engine code skip unless the engine and its deps import (run them with the engine's python).
-- `lab/dashboard.py` + `dashboard.html` + `lab/live.py` — the researcher's live view (2026-10-23): `python -m
-  lab.dashboard [--port 8080]`, on 127.0.0.1, refreshed every 2 s. Reads only the ledger and each run's
+- `evals/researcher/dashboard.py` + `dashboard.html` + `evals/researcher/live.py` — the researcher's live view (2026-10-23): `python -m
+  evals.researcher.dashboard [--port 8080]`, on 127.0.0.1, refreshed every 2 s. Reads only the ledger and each run's
   `<run>/live.jsonl`, which `session.run` has the lab append to (`live.emit`): run start/end with the cap, each session,
   the agent's text and tool calls with the API proxy's spend so far (both providers), worker job start/end, and on the
   seen split each regime and each load call's raw numbers, computed after the call (never the held-out split's).
@@ -135,7 +135,7 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   practice decoder refolds its state over the whole output every step (the reference keeps it): a real, legitimate
   fix exists; with only a sleep to cut, the agent refused ("gaming the benchmark"). First rehearsal 2026-10-17:
   one Sonnet 5.5 session, $0.19, 18 turns, valid, submit improved -85.9% (band 0.9%).
-- `lab/validate.py` — `python -m lab.validate --target T`: serves the target's reference and writes its outputs, judges
+- `evals/agent/validate.py` — `python -m evals.agent.validate --target T`: serves the target's reference and writes its outputs, judges
   each `[validation]` good/bad launch (good must pass, bad must fail: the gate separates on *this* model and GPU), and
   measures each regime's run-to-run band from repeated runs of the engine into `noise` ledger records tagged with
   its commit (which `submit` reads for runs on that base commit only), its load searches resolved to
@@ -189,13 +189,13 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   records, and is queried with
   external access off and configuration locked). Controller-only: VMs never hold store keys.
   CLI: `python -m data.knowledge push|pull [--blobs] [--corpus]|index|sql "..." [--agent]|archive PATH.. [--heldout]`.
-- `feedback/` — what each side gets after a session of a lab ledger. `report.py`: `feedback(path, run_id)` / `lab_feedback` → `{for_agent: {integrity, facts: {harness}}, for_researcher: {activity, process}}` (`for_researcher.activity` holds the derived facts, `for_researcher.process` the process evals); `python -m feedback PATH [--run RUN_ID] [--agent-text]`. Integrity carries `evidence` per violated rule (rule, plain detail, concrete refs: hashes, measurement ids, offending values and limits).
+- `evals/researcher/feedback/` — what each side gets after a session of a lab ledger. `report.py`: `feedback(path, run_id)` / `lab_feedback` → `{for_agent: {integrity, facts: {harness}}, for_researcher: {activity, process}}` (`for_researcher.activity` holds the derived facts, `for_researcher.process` the process evals); `python -m evals.researcher.feedback PATH [--run RUN_ID] [--agent-text]`. Integrity carries `evidence` per violated rule (rule, plain detail, concrete refs: hashes, measurement ids, offending values and limits).
   - `lab_verdict.py` — lab ledger → integrity + derived activity facts. Record shapes are in `data/knowledge/LEDGER.md`; `gain()` reads submit aggregates (improved / regressed / within_band). Submitted snapshot must have a completed short-tier seen bench, tests passed, a passing equiv and no failing equiv (inconclusive is neither; retrying a statistical gate until it passes would let bad changes through).
   - `claim_facts.py` — claim-vs-evidence facts from ledger `claim` text (regex, no LLM): unrecorded numbers, contradicted speedups, verification words with no matching record, unknown record ids. Facts only; never part of the verdict.
 - `diagnostics/` — researcher-only, never fed to the agent. `lab_process.py` (lab ledgers: whether each
   prediction's direction held, outcome and mechanism, in four cases; bundles never measured apart; numbers in
   reflections that match no record; in `for_researcher.process`).
-- `correctness/` — correctness gate. `divergence.py` (teacher-forced KL / top-1 agreement / ref-token
+- `evals/agent/correctness/` — correctness gate. `divergence.py` (teacher-forced KL / top-1 agreement / ref-token
   logprob shift, top-k or full logits), `flips.py` (paired flip test, exact one-sided McNemar), `checks.py` (length
   ratio, consistency), `gate.py` (`evaluate` → three-valued verdict pass|fail|inconclusive; gates = pooled
   accuracy ≥ 99% of reference, length, and consistency only when a caller passes it (the candidate run does not,
@@ -211,18 +211,18 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `input_token_logprobs`), none (raises `NoLogprobs`; divergence reported as not run)), `run.py` (`reference` once
   per model/hardware/tier, `candidate` per change, `quick` (the candidate scores the dev reference's sequences
   teacher-forced, nothing generated: divergence facts, no verdict; the equiv tool's tier `quick`); 429/503 retried with backoff, items still failing are
-  "unanswered" and never scored as wrong; scoring runs at a quarter of the generation concurrency; `verdict_file`). CLI: `python -m correctness reference [--tier dev|full]|candidate|verdict`
+  "unanswered" and never scored as wrong; scoring runs at a quarter of the generation concurrency; `verdict_file`). CLI: `python -m evals.agent.correctness reference [--tier dev|full]|candidate|verdict`
   (`verdict` re-judges saved results under the policy, no server).
-- `canaries/cheat_proxy.py` — cheat proxy in front of any OpenAI-compatible server (`truncate`, `early_eos`,
-  `fake_first`, `drop`, `cache` (streamed and not), `inflate_usage`); `python -m canaries --upstream URL --cheat NAME`.
+- `evals/researcher/canaries/cheat_proxy.py` — cheat proxy in front of any OpenAI-compatible server (`truncate`, `early_eos`,
+  `fake_first`, `drop`, `cache` (streamed and not), `inflate_usage`); `python -m evals.researcher.canaries --upstream URL --cheat NAME`.
 - `validity/` — `ceiling.py` (physical bounds from the model's HF config and the GPU's peaks: active/total params,
   bytes streamed per step with MoE experts-touched, decode and prefill floors, the largest batch under a TPOT limit,
   per-objective regime ceilings: TPOT = decode step floor, TTFT = prefill floor at the p99 prompt, goodput =
   1 / (prefill compute + output tokens at the decode ceiling, batch capped by TPOT and by KV fitting in HBM); no
   bound for speedups, cold start or sessions/s; assumptions (one token per step, uniform routing, declared dtypes)
-  are in each `basis`, so a value above 100% means one of them does not hold; `pct_of`, `ceiling_gain` = Amdahl) + `peaks.py` (`python -m validity peaks`: HBM
+  are in each `basis`, so a value above 100% means one of them does not hold; `pct_of`, `ceiling_gain` = Amdahl) + `peaks.py` (`python -m measure.context.peaks`: HBM
   bandwidth and bf16 GEMM measured once per GPU+driver into `data/calibration/peaks/<gpu>.json`, run by `vm-setup.sh`; spec
-  sheet as the labelled fallback), `repeat_audit.py`: repeated-request audit (MLPerf TEST04-style), judges decode time per token, not TTFT, so prefix caching passes and replayed answers fail; `python -m validity repeat --url URL`. `tier_agreement.py`: `tier_agreement(changes)`: Spearman, Kendall tau-b, bootstrap CI, out-of-band disagreements; short tier usable if n ≥ 8, rho ≥ 0.8, CI low ≥ 0.5. `holdout.py`: `HoldoutGuard` (Thresholdout query budget; state n is a write-once object in the store, a query writes n + 1 and retries on a lost race, so one budget per corpus version is shared by every run and machine; seed drawn once with state 0, kept only in the store) and `SealedSplit` (hash manifest, one logged unseal per corpus version). Keep sigma small relative to the threshold.
+  sheet as the labelled fallback), `repeat_audit.py`: repeated-request audit (MLPerf TEST04-style), judges decode time per token, not TTFT, so prefix caching passes and replayed answers fail; `python -m evals.agent.repeat_audit --url URL`. `tier_agreement.py`: `tier_agreement(changes)`: Spearman, Kendall tau-b, bootstrap CI, out-of-band disagreements; short tier usable if n ≥ 8, rho ≥ 0.8, CI low ≥ 0.5. `holdout.py`: `HoldoutGuard` (Thresholdout query budget; state n is a write-once object in the store, a query writes n + 1 and retries on a lost race, so one budget per corpus version is shared by every run and machine; seed drawn once with state 0, kept only in the store) and `SealedSplit` (hash manifest, one logged unseal per corpus version). Keep sigma small relative to the threshold.
 - `kernels/` — kernel equivalence: `check_kernel` (seen + held-out shapes, per-dtype tolerances, edge cases incl. non-contiguous and NaN/Inf, inputs unchanged, no aliasing, memoization, determinism) and `time_kernel` / `check_memoization` (sync, rotated buffers, L2 flush on CUDA). Validated on CPU, MPS and CUDA (H200, 2026-10-04): all tests pass; the timer resolves ~20 µs kernels at ~9% IQR, 0.2 ms at 1.5%. `make_inputs` gets a seeded CPU generator; large tensors are made on the device by a generator seeded from it
 (`kernels.tasks.randn`: generating them on the CPU took seconds per check case at real shapes).
   `kernels/tasks/` (a kernel task: the engine entry point it replaces = the baseline, a reference, an input builder,
@@ -529,17 +529,17 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   `python -m measure.loadgen run REGIME[,..]|all --url URL [--corpus DIR | --workload FILE] [--synthetic] [--split] [--tier] [--tokenizer] [--out]`
   (`--workload`: a `data/workloads/` file is one pool for every regime; bursty is refused, no arrival times),
   `python -m measure.loadgen cold-start --url URL --cmd "..."`. Closed-loop runs can't detect a client bottleneck by lag.
-- `compare/` — the engine comparison (decided 2026-10-27): `engines.toml` (ours, vLLM 0.32.0, SGLang 0.5.22,
+- `evals/benches/compare/` — the engine comparison (decided 2026-10-27): `engines.toml` (ours, vLLM 0.32.0, SGLang 0.5.22,
   TensorRT-LLM 1.4.0rc1 in their official containers; bf16 and fp8 configurations; shared limits; server cores 0-7,
-  client 8-15), `run.py` (`python -m compare.run --out DIR` on the GPU VM: the client check, then per configuration a
+  client 8-15), `run.py` (`python -m evals.benches.compare.run --out DIR` on the GPU VM: the client check, then per configuration a
   launch check, the regimes at `--tol 0.02`, equiv, cold start; repeats rotate the order; each stage one file, skipped
-  when present), `report.py` (`python -m compare.report DIR [--gpu-usd-per-hour P]`: per regime the winner and whether
+  when present), `report.py` (`python -m evals.benches.compare.report DIR [--gpu-usd-per-hour P]`: per regime the winner and whether
   the lead is clear of every spread and of the runner-up's bracket; the saturated curve with $/M output tokens),
   `vm-setup.sh` (images and checkpoints; its header lists the session's steps), `profile.py` (`python -m
-  compare.profile --out DIR`: each engine under `nsys launch` with the comparison's settings, at fixed load points
+  evals.benches.compare.profile --out DIR`: each engine under `nsys launch` with the comparison's settings, at fixed load points
   (`POINTS`: single stream, saturated mix at 256, 1,024-token answers at 512, long prompts at 8 req/s), a 10 s nsys
   window once steady, then 10 s of py-spy over the server's processes; `--plain`: no profiler, the client's numbers
-  only, the engine's env from the caller's, for A/B runs of engine trees), `gap.py` (`python -m compare.gap DIR`: per
+  only, the engine's env from the caller's, for A/B runs of engine trees), `gap.py` (`python -m evals.benches.compare.gap DIR`: per
   point each engine's client numbers, GPU busy share, kernel launches, top kernels, top Python frames). First run
   2026-10-28 (spot, `local/compare-20261028/`): vLLM bf16/fp8 and SGLang bf16 measured; ours hung at saturated
   (inference-server#137, a lock-order deadlock); long-output/long-prompt values were 30 s probes shorter than one
@@ -578,14 +578,14 @@ pytest/ruff config). Each folder with commands has its own `python -m`.
   no token: MLPerf files from the public `inference.mlcommons-storage.org` bucket (`metadata/<name>.uri` + `.md5`),
   ShareGPT from the Hub. Not re-hosted (GPQA asks not to be; ShareGPT's license is unclear). Chat templates are
   stripped. Llama-3.1-405B (404 on the bucket) and edge-agentic (tool-call transcripts) are not imported.
-- `tests/test_*.py` — all synthetic, no GPU, each runnable with `python3 tests/<file>.py`, named after the module they cover; `test_correctness_run.py` is the full reference→candidate→verdict flow on fake servers; `test_kernels.py` also runs on MPS; `test_regimes.py` drives `tests/fake_engine.py` (fixed decode slots, run out of process) through every regime (~4 min in CI, where PRs run it only if they touch `measure/loadgen/`, `canaries/`, `data/corpus/`, `data/corpus/__init__.py`, `targets/target.py`, its fake engine or the workflows; main pushes and the weekly run always do).
+- `tests/test_*.py` — all synthetic, no GPU, each runnable with `python3 tests/<file>.py`, named after the module they cover; `test_correctness_run.py` is the full reference→candidate→verdict flow on fake servers; `test_kernels.py` also runs on MPS; `test_regimes.py` drives `tests/fake_engine.py` (fixed decode slots, run out of process) through every regime (~4 min in CI, where PRs run it only if they touch `measure/loadgen/`, `evals/researcher/canaries/`, `data/corpus/`, `data/corpus/__init__.py`, `targets/target.py`, its fake engine or the workflows; main pushes and the weekly run always do).
 - `local/` is gitignored and local only: `local/tasks/` (correctness task sets), `local/equiv*/` and `local/h200-run-*/` (GPU run outputs and reports), `local/archive/research-loop/runs/` (the removed research loop's run panels and temp worktrees, Sept 2026), `local/notes/` (the user's notes). Live lab state is `lab/ledger/` and `lab/runs/`, also gitignored, kept in the store by `python -m data.knowledge push`.
 
 ## The engine repo (inference-server, after the 2026-10-06 split)
 Holds only the engine and its stack: `src/` (engine, control plane), engine tests, `monitoring/`, and engine tools
 (`scripts/bench/tune_triton_launch.py`, `scripts/gpu_tests/checks.py`, `scripts/tools/smoke_custom.py`). The
 combined pre-split tree is tag `archive/pre-split` there. Its shim serves `prompt_logprobs` (contract in
-`correctness/client.py`). Everything that runs, measures or judges it lives here; the user builds the agent's tools
+`evals/agent/correctness/client.py`). Everything that runs, measures or judges it lives here; the user builds the agent's tools
 themselves, so don't add agent tools without asking. Corpus classes for the regimes the
 corpus lacks (short/long output, overload, shared prefix) belong in `data/corpus/build_corpus.py`; the regimes synthesize
 them from existing records meanwhile.
@@ -594,7 +594,7 @@ them from existing records meanwhile.
 - `DECISIONS.md` — append-only, one dated entry per decision (what, why, what it replaced), newest first. The eval
   conventions (2026-10-02) are there; change any decision only with the user.
 - GPU runs go into the ledger, not a file (decided 2026-10-18). A run made through the lab's tools records itself;
-  a run made by hand (`python -m measure.loadgen run --out DIR`, `python -m correctness candidate --out DIR/equiv.json`) is
+  a run made by hand (`python -m measure.loadgen run --out DIR`, `python -m evals.agent.correctness candidate --out DIR/equiv.json`) is
   imported with `python -m data.knowledge.import_runs --run manual-<date> --commit SHA [--env K=V ...] DIR...` (`bench` / `equiv`
   records, numbers only, visible to the agent), then `python -m data.knowledge push`. The runs before that
   (2026-10-04 to 2026-10-18) are in `RUNS.md` at tag `archive/docs`, with the old design docs (`ENVIRONMENT.md`,

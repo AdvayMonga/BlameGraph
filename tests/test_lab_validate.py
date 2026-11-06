@@ -1,4 +1,4 @@
-"""lab.validate on fakes: the reference, a known-good (same fake) and a known-bad (every 4th answer wrong) candidate,
+"""evals.agent.validate on fakes: the reference, a known-good (same fake) and a known-bad (every 4th answer wrong) candidate,
 plus noise bands from repeated runs. Run: python -m pytest tests/test_lab_validate.py"""
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from data.knowledge import ledger
-from lab import validate
+from evals.agent import validate
 from targets import target
 from measure.loadgen import suite
 
@@ -59,7 +59,7 @@ bad = {{ wrong4 = "python {FAKE} --port {{port}} --out-tokens 6 --wrong-every 4"
 
 
 def test_validate_separates_and_measures_bands(spec, tmp_path, monkeypatch):
-    from correctness import tasks
+    from evals.agent.correctness import tasks
     items = [{"id": f"mc-{k}", "task": "mmlu_pro", "gold": "C", "max_tokens": 6,
               "messages": [{"role": "user", "content": f"question {k} pick one"}]} for k in range(60)]
     monkeypatch.setattr(tasks, "load", lambda names, tier="dev", **kw: items)

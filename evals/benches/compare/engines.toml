@@ -1,4 +1,4 @@
-# The engine comparison (compare/run.py): every engine on one H200, the same corpus, client, tokenizer recount and
+# The engine comparison (evals/benches/compare/run.py): every engine on one H200, the same corpus, client, tokenizer recount and
 # correctness reference; each at each precision; each with its own documented serving settings, nothing tuned by us.
 # {model} {port} {cfg} are filled by the driver; {cache} is the cold start's fresh cache dir (empty on a cold launch).
 # Versions: each project's newest release as of 2026-10-27 (TensorRT-LLM's newest stable, 1.2.1, is from April; its

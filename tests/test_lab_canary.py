@@ -1,4 +1,4 @@
-"""lab.canary patches the engine from outside: unknown names refused, each canary changes the behaviour it names."""
+"""evals.researcher.canaries.canary patches the engine from outside: unknown names refused, each canary changes the behaviour it names."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from lab import canary
+from evals.researcher.canaries import canary
 
 
 @pytest.fixture

@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from feedback.report import feedback, render_for_agent  # noqa: E402
+from evals.researcher.feedback.report import feedback, render_for_agent  # noqa: E402
 
 RUN = "run-20261002-120000-abc123"
 A, B = "a" * 24, "b" * 24
@@ -128,7 +128,7 @@ def test_only_refused_tools():
 
 
 def test_session_ledger_is_not_lab_ledger():
-    from feedback.lab_verdict import ledger_file
+    from evals.researcher.feedback.lab_verdict import ledger_file
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / "session.jsonl"
         p.write_text(json.dumps({"kind": "session_start", "t": 1.0, "minute": 0, "tool_version": "0.1.0"}) + "\n")

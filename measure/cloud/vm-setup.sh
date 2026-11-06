@@ -137,7 +137,7 @@ fi
 
 echo "== peaks: HBM bandwidth and bf16 GEMM, measured (measure/context/peaks.py; the ceilings' denominators)"
 ENV_DIR="${LAB_VM_ENV_DIR:-$HOME/BlameGraph}"; ENGINE_DIR="$PWD"
-(cd "$ENV_DIR" && "$ENGINE_DIR/.venv/bin/python" -m validity peaks --seconds 3) || echo "peaks: not measured (finding, not failure)"
+(cd "$ENV_DIR" && "$ENGINE_DIR/.venv/bin/python" -m measure.context.peaks --seconds 3) || echo "peaks: not measured (finding, not failure)"
 
 echo "== model cache: the target's model and the Hub repos its tests read (every jail is offline)"
 mkdir -p "$HOME/.cache/huggingface"

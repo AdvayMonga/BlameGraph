@@ -8,7 +8,7 @@ judged. A mechanism prediction is judged by sign alone (a prediction of 0 by an 
 no direction without a baseline and are reported by gap only."""
 from __future__ import annotations
 
-from feedback.claim_facts import claim_facts
+from evals.researcher.feedback.claim_facts import claim_facts
 from lab.experiments import involved
 
 CASES = {(True, True): "worked as intended", (True, False): "outcome held, mechanism did not",
