@@ -4,7 +4,7 @@ contender's spread and, for a load search, at a load the runner-up failed. Then 
 output tokens/s per GPU against TPOT, with $ per million output tokens when an hourly price is given), equiv's verdicts,
 cold start and the client check.
 
-    python -m evals.benches.compare.report DIR [--gpu-usd-per-hour 3.5] [--out report.md]
+    lab compare report DIR [--gpu-usd-per-hour 3.5] [--out report.md]
 """
 from __future__ import annotations
 

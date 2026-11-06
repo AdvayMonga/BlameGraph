@@ -1,5 +1,5 @@
 """Hardware peaks the ceilings are computed against: HBM bandwidth and bf16 tensor-core throughput, measured once
-per GPU + driver (`python -m measure.context.peaks`, run by measure/cloud/vm-setup.sh) into data/calibration/peaks/<gpu>-<driver>.json. Spec-sheet
+per GPU + driver (`lab peaks`, run by measure/cloud/vm-setup.sh) into data/calibration/peaks/<gpu>-<driver>.json. Spec-sheet
 numbers are the fallback, labelled `source: spec`; a ceiling from them says so."""
 from __future__ import annotations
 
@@ -111,7 +111,7 @@ def write(p: Peaks, peaks_dir: Path | None = None) -> Path:
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="python -m measure.context.peaks",
+    ap = argparse.ArgumentParser(prog="lab peaks",
                                  description="measure this GPU's HBM bandwidth and bf16 GEMM peaks (needs torch+CUDA)")
     ap.add_argument("--seconds", type=float, default=3.0)
     ap.add_argument("--out")

@@ -1020,7 +1020,7 @@ def time_competitor(task, name: str, fn, ours, shapes, calls: dict, iters: int, 
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="generate.kernels.library.competitors")
+    ap = argparse.ArgumentParser(prog="lab kernels competitors")
     ap.add_argument("--task", required=True)
     ap.add_argument("--shapes", required=True, help="a shapes file (generate.kernels.tasks.shapes.write): its seen shapes are timed")
     ap.add_argument("--out", required=True)

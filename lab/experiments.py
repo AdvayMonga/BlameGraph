@@ -16,7 +16,7 @@ PROFILERS = ("profile", "trace", "kernel", "hostprof")      # results with no `m
 PROFILE_WORKLOAD = ("requests", "max_tokens", "prompt_len", "synthetic", "corpus_class", "seed", "capture", "profile")
 UNITS = ("absolute", "change_pct")
 LAYERS = ("kernels", "model_execution", "runtime", "serving")      # measure/context/layers.py's four layers
-# Runs made outside the lab by a researcher (`python -m lab.experiment`): their text is a person's, so no agent view
+# Runs made outside the lab by a researcher (`lab start`, lab/experiment.py): their text is a person's, so no agent view
 # (the `ledger` tool, the agent's SQL index) shows any of their records.
 RESEARCHER = "researcher-"
 

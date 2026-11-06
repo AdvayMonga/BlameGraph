@@ -10,8 +10,8 @@ task's best: the context that blocked them has changed).
 
 A search on the GPU host reads an exported file (`export`), since the ledger's history lives on the controller.
 
-  python -m generate.kernels.archive export --out FILE [--ledger ROOT]
-  python -m generate.kernels.archive query --archive FILE [--task T] [-k N] TEXT
+  lab kernels archive export --out FILE [--ledger ROOT]
+  lab kernels archive query --archive FILE [--task T] [-k N] TEXT
 """
 from __future__ import annotations
 
@@ -179,7 +179,7 @@ def facts(entry: Entry, score: float | None = None) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="generate.kernels.archive")
+    ap = argparse.ArgumentParser(prog="lab kernels archive")
     sub = ap.add_subparsers(dest="cmd", required=True)
     ex = sub.add_parser("export")
     ex.add_argument("--out", required=True)

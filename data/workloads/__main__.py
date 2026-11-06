@@ -1,5 +1,5 @@
-"""python -m data.workloads fetch BENCH[,BENCH...]|all [--tokenizer NAME]   (into local/workloads/)
-python -m data.workloads list"""
+"""lab workloads fetch BENCH[,BENCH...]|all [--tokenizer NAME]   (into local/workloads/)
+lab workloads list"""
 from __future__ import annotations
 
 import argparse
@@ -10,7 +10,7 @@ from . import BENCHES, DATA, fetch
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="workloads", description="fetch frontier benchmark request data")
+    ap = argparse.ArgumentParser(prog="lab workloads", description="fetch frontier benchmark request data")
     sub = ap.add_subparsers(dest="cmd", required=True)
     f = sub.add_parser("fetch"); f.add_argument("benches", help=f"comma-separated, or 'all': {', '.join(BENCHES)}")
     f.add_argument("--tokenizer", help="re-count build_prompt_tokens with this HF tokenizer (chat template applied)")

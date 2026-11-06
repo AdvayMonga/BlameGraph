@@ -4,10 +4,10 @@ user-turn prefix of its messages (the shared-prefix regime's turns). Measured on
 into every trace of both splits; regimes then send each request at that length with ignore_eos
 (`measure.loadgen.workload.to_request`), so a base and a candidate generate the same tokens' worth of work. Every trace
 changes, so the manifest is rebuilt: a new corpus version, whose `prompts_version` keeps the held-out budget's key.
-Held-out traces must be present (`python -m data.knowledge pull --corpus`) and pushed again afterwards. Each answer is
+Held-out traces must be present (`lab store pull --corpus`) and pushed again afterwards. Each answer is
 appended to a log as it arrives (default `local/corpus-lengths-<version>.jsonl`), so a rerun resumes.
 
-    python -m data.corpus.lengths --url URL [--target T] [--concurrency 64]
+    lab corpus lengths --url URL [--target T] [--concurrency 64]
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def _turns(r: TraceRequest) -> list[list[dict]]:
 def _traces(corpus_dir: Path, m: Manifest) -> dict[str, list[TraceRequest]]:
     for rel in _files(m):
         if not (corpus_dir / rel).exists():
-            raise CorpusError(f"trace {rel} is missing; held-out traces are not in git: `python -m data.knowledge pull --corpus`")
+            raise CorpusError(f"trace {rel} is missing; held-out traces are not in git: `lab store pull --corpus`")
     return {rel: read_trace(corpus_dir / rel) for rel in _files(m)}
 
 

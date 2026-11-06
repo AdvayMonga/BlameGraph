@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time bootstrap of a fresh GPU VM for the lab. Idempotent; run via `python -m measure.cloud.vm setup`.
+# One-time bootstrap of a fresh GPU VM for the lab. Idempotent; run via `lab vm setup`.
 # Arg: the engine tree on the VM (default ~/inference-server).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)           # this environment's measure/cloud/

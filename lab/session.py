@@ -288,7 +288,7 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m lab.session")
+    ap = argparse.ArgumentParser(prog="lab session")
     ap.add_argument("--goal", help="plain goal text (or give --task)")
     ap.add_argument("--task", help="task spec TOML: goal, objective regimes, constraints (lab/task.py)")
     ap.add_argument("--budget", type=float, required=True, help="dollars for the whole run")

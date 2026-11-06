@@ -34,7 +34,7 @@ env = { TELEMETRY_DIR = "{dir}", TIMELINE_DIR = "{dir}/timeline" }   # request r
 api = "vllm"
 launch = "vllm serve Qwen/Qwen3-30B-A3B --dtype bfloat16 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}"
 env = { VLLM_BATCH_INVARIANT = "1" }
-dir = "local/equiv/ref"                       # where `python -m evals.agent.correctness reference` wrote its outputs
+dir = "local/equiv/ref"                       # where `lab correctness reference` wrote its outputs
 
 [kernels]                                    # layer-1 kernel equivalence, per dtype [atol, rtol]; lower-precision kernels
 tolerances = { bfloat16 = [1e-2, 1e-2], float16 = [1e-3, 1e-3], float32 = [1e-5, 1e-5] }   # are judged finally by equiv
@@ -64,7 +64,7 @@ serving = ["src/inference_server/server.py", "src/inference_server/openai_shim.p
 [corpus]
 dir = "data/corpus"
 
-[validation]                                 # python -m evals.agent.validate: known-good must PASS, known-bad must FAIL
+[validation]                                 # lab validate: known-good must PASS, known-bad must FAIL
 good = { fp8 = "vllm serve Qwen/Qwen3-30B-A3B-FP8 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}", int8 = "vllm serve nytopop/Qwen3-30B-A3B.w8a8 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}" }
 bad = { int4 = "vllm serve Qwen/Qwen3-30B-A3B-GPTQ-Int4 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}" }
 env = { fp8 = { VLLM_USE_DEEP_GEMM = "0" } }   # per-candidate env (the Verda image's nvcc is too old for DeepGEMM)

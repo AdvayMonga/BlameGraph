@@ -10,8 +10,8 @@ where it was (what `spike` and `cold_start` are defined by). Each message's text
 the seen split, cut at sentence ends and recombined to the original length: it reads and tokenizes like the real
 traffic but repeats no prompt.
 
-  regimes: `python -m measure.loadgen run REGIME --synthetic` (Ctx.synthetic): every pool is generated, not read
-  python -m measure.loadgen.synth compare [--corpus DIR] [--seed N] [--requests N]   the generated shapes beside the real ones
+  regimes: `lab regimes run REGIME --synthetic` (Ctx.synthetic): every pool is generated, not read
+  lab synth compare [--corpus DIR] [--seed N] [--requests N]   the generated shapes beside the real ones
 """
 from __future__ import annotations
 
@@ -191,7 +191,7 @@ def compare(corpus_dir: Path = CORPUS_DIR, seed: int = 0, min_requests: int = 0)
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m measure.loadgen.synth", description=__doc__.split("\n\n")[0])
+    ap = argparse.ArgumentParser(prog="lab synth", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("compare")
     c.add_argument("--corpus", type=Path, default=CORPUS_DIR)

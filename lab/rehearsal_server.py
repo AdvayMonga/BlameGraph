@@ -1,4 +1,4 @@
-"""The practice engine for `python -m lab.rehearsal`: an OpenAI-compatible server with a fixed number of decode
+"""The practice engine for `lab rehearsal`: an OpenAI-compatible server with a fixed number of decode
 slots. Each decode step costs STEP_S on the simulated device plus the host work of choosing the next word, which
 folds the whole output so far. Each word is one token in the target model's tokenizer. Multiple-choice questions
 ("pick one") are answered "(C)". vLLM-shaped teacher-forced scoring at /v1/completions. Stdlib only: this file is

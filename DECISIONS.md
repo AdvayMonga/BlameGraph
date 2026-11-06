@@ -3,6 +3,15 @@
 One entry per decision, newest first: what was decided, why (as recorded at the time), what it replaced. Append-only;
 a reversed decision gets a new entry that names the old one. Change any of these only with the user.
 
+## 2026-11-04 — One command, `lab`, for the person and the agent's tools; the loop's instructions in CLAUDE.md
+`bin/lab <command>` (`python -m lab`, `lab/cli.py`) runs every command of the environment, and each of the agent's
+tools by its own name with its own arguments (its JSON schema as flags) on a researcher run: `lab bench --run RUN
+--hypothesis-id H --expect JSON`. It replaces a `python -m` per folder and `python -m lab.experiment call TOOL --args
+JSON`. The agent still calls its tools as tool calls: its shell is jailed with no network and no copy of this repo, so
+a `lab` inside it would need a way out of the jail. The loop's instructions (the plan's `program.md`) are a section of
+CLAUDE.md. Why (the user): one easy entry point, the same for the person and the agent, with no `python -m`. Replaces
+the plan's `tools.toml` and `program.md` (2026-11-03, the new layout).
+
 ## 2026-11-05 — No stacked-kernels bench: every shipped kernel is judged on its own
 Each kernel that passes its held-out gate is shipped and judged alone by `bench` + `equiv` (the 2026-10-28 merge
 gates). Why (the user): a bench and equiv per kernel is affordable, and a stack would have had nothing to stack: one

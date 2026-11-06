@@ -126,7 +126,7 @@ def test_run_pushes_runs_in_repo_dir_and_fetches(fake, monkeypatch):
     sshs = [c for c in log if c[0] == "ssh"]
     cmd = [c for c in sshs if c[-1].startswith("cd ")][-1][-1]
     assert cmd.startswith("cd ~/repo && LAB_GIT_SHA=")
-    assert cmd.endswith('PATH="$HOME/repo/.venv/bin:$PATH" timeout --signal=TERM --kill-after=60 180m python -m measure.profile.profile')
+    assert cmd.endswith('PATH="$HOME/BlameGraph/bin:$HOME/repo/.venv/bin:$PATH" timeout --signal=TERM --kill-after=60 180m python -m measure.profile.profile')
     assert any(a.startswith("UserKnownHostsFile=") and a.endswith("t4.known_hosts") for a in sshs[-1])
     # the VM is stopped afterwards by default, and the auto-stop was armed on the way in
     assert vm.provider.get("t4").state == "stopped"
@@ -140,11 +140,11 @@ def test_run_in_the_environment_dir(fake, monkeypatch):
     monkeypatch.setattr(ledger, "ROOT", fake / "ledger")
     monkeypatch.delenv("LAB_STORE", raising=False)
     vm = labvm.VM(name="t4e", user="u", remote_dir="~/repo", env_dir="~/env")
-    assert labvm.run(vm, "python -m measure.loadgen run all --url http://localhost:8000", fetch_dir="out", local=fake / "o",
+    assert labvm.run(vm, "lab regimes run all --url http://localhost:8000", fetch_dir="out", local=fake / "o",
                      where="env") == 0
     log = calls(fake)
     cmd = [c for c in log if c[0] == "ssh" and c[-1].startswith("cd ")][-1][-1]
-    assert cmd.startswith("cd ~/env && ") and 'PATH="$HOME/repo/.venv/bin:$PATH" timeout --signal=TERM --kill-after=60 180m python -m measure.loadgen' in cmd
+    assert cmd.startswith("cd ~/env && ") and 'PATH="$HOME/env/bin:$HOME/repo/.venv/bin:$PATH" timeout --signal=TERM --kill-after=60 180m lab regimes' in cmd
     rsyncs = [c for c in log if c[0] == "rsync"]
     assert "--include=data/corpus/*/heldout.jsonl" in rsyncs[1]                     # held-out traces travel, not via git
     assert [r[-2] for r in rsyncs[-3:]] == ["u@10.0.0.7:~/env/out/", "u@10.0.0.7:~/env/local/ledger/",

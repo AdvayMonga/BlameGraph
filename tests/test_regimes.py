@@ -158,7 +158,7 @@ def test_every_regime_runs_on_a_fake_engine():
 
 
 def test_every_regime_runs_from_a_workload_file():
-    """A `python -m data.workloads` file stands in for the corpus: one pool for every regime; bursty has no arrival times."""
+    """A `lab workloads` file stands in for the corpus: one pool for every regime; bursty has no arrival times."""
     recs = [{"id": f"w-{k}", "prompt": f"question {k}", "max_tokens": 16, "build_prompt_tokens": 3, "subset": "s"}
             for k in range(30)]
     recs += [{"id": f"c-{k}", "max_tokens": 16, "subset": "multi", "messages": [

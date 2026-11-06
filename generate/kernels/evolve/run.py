@@ -1,10 +1,10 @@
-"""python -m generate.kernels.evolve run --task T [--shapes SHAPES.json | --captures DIR ...] --out DIR [--iterations N]
+"""lab kernels evolve run --task T [--shapes SHAPES.json | --captures DIR ...] --out DIR [--iterations N]
                                [--config CONFIG.yaml] [--device cuda] [--initial PROGRAM.py]
-python -m generate.kernels.evolve gate --task T --shapes SHAPES.json --program BEST.py [--device cuda]
+lab kernels evolve gate --task T --shapes SHAPES.json --program BEST.py [--device cuda]
    (T may be region:FIRST:LAST with --samples DIR, a CAPTURE_REGION dir, and --shared-weights FILE, a holder file)
-python -m generate.kernels.evolve share --profile BUNDLE [--profile ...] [--gate TASK=GATE.json ...]   (tasks ranked by headroom)
-python -m generate.kernels.evolve initial --task T --engine REPO --ref REF --out P.py   (start from the kernel at an engine commit)
-python -m generate.kernels.evolve ship --task T --program BEST.py --gate GATE.json --engine REPO [--base REF] [--budget USD]
+lab kernels evolve share --profile BUNDLE [--profile ...] [--gate TASK=GATE.json ...]   (tasks ranked by headroom)
+lab kernels evolve initial --task T --engine REPO --ref REF --out P.py   (start from the kernel at an engine commit)
+lab kernels evolve ship --task T --program BEST.py --gate GATE.json --engine REPO [--base REF] [--budget USD]
 
 `run` replicates OpenEvolve (AlphaEvolve's open re-implementation) on one kernel task: the starting program is the
 engine's current kernel (its module's source, with `kernel` bound to the entry point), selection sees the seen shapes
@@ -234,7 +234,7 @@ def _ints(sets: dict, which: tuple[str, ...]) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="generate.kernels.evolve")
+    ap = argparse.ArgumentParser(prog="lab kernels evolve")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("run", "gate", "split"):
         p = sub.add_parser(name)

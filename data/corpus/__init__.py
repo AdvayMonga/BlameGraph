@@ -202,7 +202,7 @@ def load_trace(class_name: str, split: str,
     rel = m.classes[class_name].trace_file(split)
     if not (corpus_dir / rel).exists():
         raise CorpusError(f"trace {rel} listed in the manifest is missing"
-                          + ("; held-out traces are not in git: `python -m data.knowledge pull --corpus`" if split == "heldout" else ""))
+                          + ("; held-out traces are not in git: `lab store pull --corpus`" if split == "heldout" else ""))
     return m, read_trace(corpus_dir / rel)
 
 

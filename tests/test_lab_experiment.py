@@ -8,7 +8,7 @@ import subprocess
 
 import pytest
 
-from lab import experiment, experiments
+from lab import cli, experiment, experiments
 from data.knowledge import ledger
 pytest_plugins = ["tests.test_lab_proftools"]   # its `tb` fixture: an agent Toolbox with fake instruments
 
@@ -80,12 +80,19 @@ def test_the_cli_runs_and_prints_refusals(tb, tmp_path, monkeypatch, capsys):
     commit(repo, {"src/inference_server/engine.py": "def speed():\n    return 3\n"}, "other")
     monkeypatch.setattr(ledger, "ROOT", tb.s.ledger_root)
     monkeypatch.setattr(experiment, "RUNS", tmp_path / "runs")
-    assert experiment.main(["start", "--repo", str(repo), "--base", "HEAD", "--change", "other", "--budget", "5"]) == 0
+    assert cli.main(["start", "--repo", str(repo), "--base", "HEAD", "--change", "other", "--budget", "5"]) == 0
     run = capsys.readouterr().out.strip()
-    assert experiment.main(["hypothesis", "--run", run, "--hypothesis", "h", "--rationale", "r", "--layer", "runtime"]) == 0
+    assert cli.main(["hypothesis", "--run", run, "--hypothesis", "h", "--rationale", "r", "--layer", "runtime"]) == 0
     h = capsys.readouterr().out.split()[1]
-    assert experiment.main(["call", "trace", "--run", run, "--metric", "kernel_ms"]) == 1
+    assert cli.main(["trace", "--run", run, "--hypothesis-id", h, "--expect", '{"metric": "kernel_ms"}']) == 1
     assert "refused" in capsys.readouterr().err
-    assert experiment.main(["call", "trace", "--run", run, "--hypothesis-id", h, "--metric", "kernel_ms",
-                            "--value", "1", "--unit", "absolute", "--why", "w"]) == 0
-    assert experiment.main(["call", "trace", "--run", "run-agent", "--args", "{}"]) == 1
+    assert cli.main(["trace", "--run", run, "--hypothesis-id", h, "--expect", json.dumps(EXPECT)]) == 0
+    assert cli.main(["trace", "--run", "run-agent", "--hypothesis-id", h, "--expect", "{}"]) == 1
+
+
+def test_every_command_names_a_module(capsys):
+    assert cli.main([]) == 0
+    out = capsys.readouterr().out
+    for c, v in cli.COMMANDS.items():
+        for s, m in (v.items() if isinstance(v, dict) else [("", v)]):
+            assert cli.source(m).exists() and f"{c} {s}".strip() in out

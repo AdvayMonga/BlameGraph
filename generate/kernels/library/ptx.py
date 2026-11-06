@@ -4,7 +4,7 @@ does not. The cards are counted from the PTX itself (instruction classes, memory
 the Hopper features in use), not written by a model: facts, not a reading of them. A card may carry its measured time
 on our shapes (`timing_ms`, from a GPU run) beside it.
 
-  python -m generate.kernels.library.ptx card --name NAME PTX [--name NAME PTX ...] [--timing NAME=MS ...] --out CARDS.txt
+  lab kernels ptx card --name NAME PTX [--name NAME PTX ...] [--timing NAME=MS ...] --out CARDS.txt
   (a file of `cuobjdump -sass` output is read as SASS: libraries that ship compiled code without PTX)
 """
 from __future__ import annotations
@@ -119,7 +119,7 @@ def render(cards: list[dict]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="generate.kernels.library.ptx")
+    ap = argparse.ArgumentParser(prog="lab kernels ptx")
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("card")
     c.add_argument("--name", action="append", required=True)

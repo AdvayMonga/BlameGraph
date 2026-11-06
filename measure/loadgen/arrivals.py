@@ -7,8 +7,8 @@ sitting). Load rises by raising the sitting rate: the data says busy hours have 
 (the fit report records turns and gaps by hour of day). `schedule` starts with users already mid-conversation, so a
 short run is at steady state from its first second.
 
-  python -m measure.loadgen.arrivals fit [--cache DIR] [--out measure/loadgen/arrivals.json]     fit on the seen weeks
-  python -m measure.loadgen.arrivals compare [--model F] [--cache DIR]                    the model against the held-out weeks
+  lab arrivals fit [--cache DIR] [--out measure/loadgen/arrivals.json]     fit on the seen weeks
+  lab arrivals compare [--model F] [--cache DIR]                    the model against the held-out weeks
 
 Both are measurements: the fitted file carries its source's hash and the comparison reports statistics, no verdict.
 """

@@ -278,8 +278,9 @@ def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | Non
     t0 = time.monotonic()
     cwd = vm.env_dir if where == "env" else vm.remote_dir
     venv_bin = vm.remote_dir.replace("~", "$HOME", 1) + "/.venv/bin"      # no tilde expansion inside quotes
+    lab_bin = vm.env_dir.replace("~", "$HOME", 1) + "/bin"                # `lab`, run with the engine's python
     try:
-        out = ssh(vm, record, f'cd {cwd} && {env}PATH="{venv_bin}:$PATH" timeout --signal=TERM --kill-after=60 '
+        out = ssh(vm, record, f'cd {cwd} && {env}PATH="{lab_bin}:{venv_bin}:$PATH" timeout --signal=TERM --kill-after=60 '
                               f'{minutes}m {command}', check=False, timeout_s=minutes * 60 + 300)
         code = out.returncode
     except subprocess.TimeoutExpired:
@@ -291,7 +292,7 @@ def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | Non
         spot = "LAB_VM_SPOT=1 " if getattr(vm.provider, "spot", False) else ""
         again = f"run --no-push --fetch {fetch_dir} true" if fetch_dir and where != "env" else "run --env --no-push true"
         print(f"[measure.cloud.vm] {vm.name} stopped under the command (preempted, or stopped from outside); its disk is kept: "
-              f"`{spot}python -m measure.cloud.vm {again}` restarts it and brings the results home", file=sys.stderr)
+              f"`{spot}lab vm {again}` restarts it and brings the results home", file=sys.stderr)
     if fetch_dir and not lost:
         try:
             fetch(vm, record, fetch_dir, local or engine.ENV_ROOT / "local" / "runs", base=cwd)

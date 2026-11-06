@@ -4,10 +4,10 @@ answers, a fixed-length answer runs to its length), the regimes, equiv once, and
 configurations in a rotated order, so drift over the session falls on every engine alike. Every stage writes one file
 and is skipped when that file exists, so a rerun resumes. Run from the BlameGraph checkout with the engine's python:
 
-    python -m evals.benches.compare.run --out ~/compare [--engines ours,vllm,sglang,trtllm] [--precisions bf16,fp8]
+    lab compare run --out ~/compare [--engines ours,vllm,sglang,trtllm] [--precisions bf16,fp8]
                           [--stages clientcheck,launch,regimes,equiv,cold] [--repeats 1] [--regimes all] [--tol 0.02]
     # more repeats of the contested regimes, numbered after the first pass's:
-    python -m evals.benches.compare.run --out ~/compare --stages launch,regimes --regimes bursty,overload --repeats 2 --first-repeat 1
+    lab compare run --out ~/compare --stages launch,regimes --regimes bursty,overload --repeats 2 --first-repeat 1
 """
 from __future__ import annotations
 

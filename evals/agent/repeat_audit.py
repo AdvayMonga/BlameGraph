@@ -2,7 +2,7 @@
 Prefix caching legitimately cuts a repeat's TTFT, so only decode-side timing is judged: TPOT = (E2E - TTFT)/(n - 1),
 streamed and timed client-side. Stdlib only.
 
-  python -m evals.agent.repeat_audit --url http://127.0.0.1:8000 [--model M] [--n 20] [--api chat|completions]
+  lab repeat-audit --url http://127.0.0.1:8000 [--model M] [--n 20] [--api chat|completions]
 """
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ def repeat_audit(base_url: str, model: str, requests: list[str], repeats: int = 
 
 def main():
     from targets import target
-    ap = argparse.ArgumentParser(prog="python -m evals.agent.repeat_audit",
+    ap = argparse.ArgumentParser(prog="lab repeat-audit",
                                  description="the repeated-request audit against a live server")
     target.add_argument(ap)
     ap.add_argument("--url", required=True)

@@ -6,7 +6,7 @@ plus an entry point; its leaderboard (bench.flashinfer.ai) scores a definition a
 FlashInfer baseline's latency over the solution's, 0 if any workload fails. Researcher-only: nothing in `lab/` reads it,
 and it is no agent tool.
 
-`python -m generate.kernels.tasks.flashinfer_bench fetch [--definitions A,B]` downloads the dataset at REVISION (every definition,
+`lab kernels flashinfer-bench fetch [--definitions A,B]` downloads the dataset at REVISION (every definition,
 workload list and baseline solution; the named definitions' safetensors too) into local/flashinfer_bench/<revision>/,
 laid out as the benchmark's own TraceSet, with a manifest of every file's sha256; nothing is re-hosted. Each
 definition the default evaluator judges is a kernel task `fib:NAME` (`generate.kernels.tasks.load`): a shape is a workload,
@@ -57,7 +57,7 @@ SCORE_TIMEOUT_S = 3600.0
 def root() -> Path:
     d = DATA / REVISION[:12]
     if not (d / "manifest.json").exists():
-        raise SystemExit(f"FlashInfer-Bench is not fetched: python -m generate.kernels.tasks.flashinfer_bench fetch (into {d})")
+        raise SystemExit(f"FlashInfer-Bench is not fetched: lab kernels flashinfer-bench fetch (into {d})")
     return d
 
 
@@ -413,7 +413,7 @@ def run(names: list[str], arms: str, out: Path, extra: list[str]) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m generate.kernels.tasks.flashinfer_bench", description=__doc__.split("\n")[0])
+    ap = argparse.ArgumentParser(prog="lab kernels flashinfer-bench", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     fe = sub.add_parser("fetch")
     fe.add_argument("--definitions", help="comma-separated names whose safetensors to fetch too")
