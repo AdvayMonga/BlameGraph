@@ -1,4 +1,4 @@
-"""The three tools that can make a change count: bench, equiv and submit. Each has the worker (lab/worker.py) serve
+"""The three tools that can make a change count: bench, equiv and submit. Each has the worker (measure/runner/worker.py) serve
 the agent's pristine tree outside the jail and measure it with the environment's own instruments; the policy and the
 ledger stay here.
 
@@ -9,7 +9,7 @@ ledger stay here.
            way, and records one aggregate per metric through the Thresholdout guard (the held-out numbers
            themselves never reach the ledger). Verdict per metric: improved | regressed | within_band | unknown_band.
 
-Each also keeps the run's passive data (lab/artifacts.py): bench and equiv as ledger blobs under `result.artifacts`,
+Each also keeps the run's passive data (measure/runner/artifacts.py): bench and equiv as ledger blobs under `result.artifacts`,
 submit only under `<run>/heldout-private/`, outside the ledger and the jail.
 `baseline` is not a tool: the run measures its base commit under bench's defaults once, before the first session,
 in the same cache submit compares against.
@@ -23,15 +23,19 @@ import tempfile
 import time
 from pathlib import Path
 
-from lab import artifacts, calibrate, ledger, live, profiles, serve, target, worker
-from validity.holdout import HoldoutGuard, Refused
+from measure.runner import artifacts, profiles, serve, worker
+from measure.context import calibrate
+from evals.researcher import live
+from data.knowledge import ledger
+from targets import target
+from evals.agent.holdout import HoldoutGuard, Refused
 
 HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT = 100, 2.0, 0.5
 BENCH_TIER = "min"            # bench's default tier, which submit compares against (base is measured at the same tier)
 
 
 def _regimes(args: dict, default: tuple[str, ...]) -> list[str]:
-    from regimes import suite
+    from measure.loadgen import suite
     want = args.get("regimes") or list(default)
     if want == "all" or want == ["all"]:
         want = list(suite.REGIMES)
@@ -45,7 +49,7 @@ def run_regimes(url: str, t: target.Target, names: list[str], split: str, tier: 
                 rows: list | None = None, hints: dict | None = None, bands: dict | None = None) -> list[dict]:
     """Each regime's result; with `rows`, every measured client row is appended to it, tagged with its regime.
     `hints` / `bands`: where the base's searches ended and each regime's noise band (`suite.Ctx`)."""
-    from regimes import suite
+    from measure.loadgen import suite
     watch = split == "seen"             # the dashboard gets the seen split's progress, never the held-out's
     ctx = suite.Ctx.from_target(t, url, split=split, tier=tier, seed=seed, rows=rows, hints=hints or {},
                                 bands=bands or {}, on_rows=_progress if watch else None)
@@ -61,8 +65,8 @@ def run_regimes(url: str, t: target.Target, names: list[str], split: str, tier: 
 
 
 def _progress(rows) -> None:
-    """One load call's raw numbers for the dashboard (`lab.live`), computed after the call: never during it."""
-    from regimes.runner import _q
+    """One load call's raw numbers for the dashboard (`evals.researcher.live`), computed after the call: never during it."""
+    from measure.loadgen.runner import _q
     ok = [r for r in rows if r.status == "ok"]
     ttft, tpot = [r.ttft_s for r in ok if r.ttft_s is not None], [r.tpot_s for r in ok if r.tpot_s is not None]
     live.emit("probe", n=len(rows), ok=len(ok), ttft_p50_s=_q(ttft, 0.5), ttft_p99_s=_q(ttft, 0.99),
@@ -88,7 +92,7 @@ def noise_band_pct(regime: str, t: target.Target | None = None, root: Path = led
     """The latest run-to-run band for a regime from the ledger's `noise` records, only if it was measured on this
     target's engine (at any engine commit: the calibration is once per user) and on its current corpus version (a
     record without one counts); a band from another target or corpus version is ignored."""
-    from regimes.workload import corpus_version
+    from measure.loadgen.workload import corpus_version
     version = corpus_version(t.corpus_dir) if t is not None and t.corpus_dir.is_dir() else None
     d = None
     for r in ledger.records(root, kind="noise"):
@@ -141,7 +145,7 @@ def heldout_context(seen_cal: dict, base: dict, delta: float | None, better: str
     """A held-out aggregate's context: the ceiling computed from the base commit's seen-split request shape (nothing
     about the held-out requests goes into it), as % for the base and the new value. The reference is measured on the
     seen split at the short tier, so it is not comparable to a held-out full-tier number."""
-    from validity.ceiling import pct_of
+    from measure.context.ceiling import pct_of
     c = seen_cal.get("ceiling")
     b = base.get("value")
     new = b * (1 + delta / 100) if b is not None and delta is not None else None
@@ -153,10 +157,10 @@ def heldout_context(seen_cal: dict, base: dict, delta: float | None, better: str
 
 def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
     """What the referee measures against: the parameters the agent cannot read off its ledger. Facts, not advice."""
-    from lab import validate                        # validate imports this module
+    from evals.agent import validate                        # validate imports this module
 
-    from regimes import suite
-    from regimes.workload import corpus_version
+    from measure.loadgen import suite
+    from measure.loadgen.workload import corpus_version
     facts = {
         "model": t.model, "reference": t.reference.launch if t.reference else None,
         "latency_limits": {"interactive": t.interactive.__dict__, "conversational": t.conversational.__dict__},
@@ -167,7 +171,7 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
                         "tasks": list(t.tasks)},
         "noise_bands_pct": {n: noise_band_pct(n, t, ledger_root or ledger.ROOT) for n in suite.REGIMES},
         "noise_bands_measured_on": "the base commit's engine with its general config, repeated unchanged runs "
-                                   "(lab.validate, the latest at any engine commit on this corpus version; a searched regime's band is at "
+                                   "(evals.agent.validate, the latest at any engine commit on this corpus version; a searched regime's band is at "
                                    f"least the search's resolution, {validate.RESOLUTION_PCT}%); submit applies them "
                                    "to every candidate and "
                                    "every launch profile; None where no band was measured for this target",
@@ -186,12 +190,12 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
 def holdout_guard(t: target.Target) -> HoldoutGuard:
     """The one Thresholdout guard of the target's corpus prompts (`Manifest.budget_key`), shared by every run and machine through the store
     (LAB_STORE). Refused where there is no store: a local budget would start over on every machine."""
-    from store.remote import NoRemote, open_remote
+    from data.knowledge.remote import NoRemote, open_remote
     try:
         remote = open_remote()
     except NoRemote as e:
         raise Refused(f"no shared held-out budget on this host ({e})") from None
-    from lab.corpus import load_manifest
+    from data.corpus import load_manifest
     version = load_manifest(t.corpus_dir).budget_key if t.corpus_dir.is_dir() else "no-corpus"   # synthetic workloads
     return HoldoutGuard(remote, f"heldout/guard/{version}", HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT)
 
@@ -208,7 +212,7 @@ def _ceiling_facts(t: target.Target, ledger_root: Path | None) -> dict:
 
 
 def _layer_facts(ledger_root: Path | None, key: str = "layers") -> dict:
-    """The latest profile's per-layer shares and distances (lab/layers.py), or with `key="kernel_tasks"` each kernel
+    """The latest profile's per-layer shares and distances (measure/context/layers.py), or with `key="kernel_tasks"` each kernel
     task's share of its window, with the record they come from: a `profile` record or a bench's or baseline's
     after-measurement profile (`profiled`)."""
     if not ledger_root or not (Path(ledger_root) / "ledger.jsonl").exists():
@@ -328,7 +332,7 @@ class EvalTools:
         ref = t.reference_dir_for("dev" if tier == "quick" else tier)
         if not target.reference_complete(ref):
             self._record("equiv", "equiv", args, {"verdict": "refused", "reason": f"no {tier}-tier reference outputs; "
-                         "run `python -m correctness reference` for this target first"}, snap, config=config)
+                         "run `lab correctness reference` for this target first"}, snap, config=config)
             return "equiv refused: no reference outputs for this target"
         tree = self._pristine()
         why = profiles.refusal(tree, t, profile)
@@ -442,7 +446,7 @@ class EvalTools:
         extra = (*task.regimes, *task.constraints) if task else ()
         return tuple(dict.fromkeys((*self.bench_default_regimes, *extra)))
     seed = 0
-    equiv_concurrency = 32       # dev tier ~26 min on inference-server #107 at 32 (RUNS.md 2026-10-15); sheds are retried
+    equiv_concurrency = 32       # dev tier ~26 min on inference-server #107 at 32 (RUNS.md 2026-10-15, tag archive/docs); sheds are retried
     serve_jailed = True
 
     def _bands(self, names: list[str]) -> dict:
@@ -483,7 +487,7 @@ class EvalTools:
 
     def _base_cache(self, split: str, tier: str) -> Path:
         """The base's cached measurement, one per corpus version: a base from another corpus is never compared."""
-        from regimes.workload import corpus_version
+        from measure.loadgen.workload import corpus_version
         t = target.load()
         v = corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None
         return self.s.run_dir / (f"base-{split}-{tier}-{v[:12]}.json" if v else f"base-{split}-{tier}.json")
@@ -495,7 +499,7 @@ class EvalTools:
         missing = [n for n in names if n not in have]
         if missing:
             tree = self.s.run_dir / f"base-tree-{split}"
-            from lab.safety import grader
+            from measure.sandbox import grader
             grader.export(self.s.workspace.repo, self.s.workspace.base, tree)
             work = self._work("base")
             try:                                # a contaminated base raises: never cached, every later submit reads it
@@ -530,7 +534,7 @@ class EvalTools:
         except Exception as e:                      # no GPU or a base that will not serve is itself the fact
             result = _failed(e)
         else:                                       # profiled like every bench, for change_pct mechanism predictions
-            from lab.safety import grader
+            from measure.sandbox import grader
             tree = self.s.run_dir / "base-tree-profile"
             shutil.rmtree(tree, ignore_errors=True)
             try:

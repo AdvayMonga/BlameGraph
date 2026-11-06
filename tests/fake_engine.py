@@ -17,8 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 def fast_arrivals():
-    """A small regimes.arrivals model for wiring tests: sittings of 1-3 turns, 0.2-0.5 s apart, some resumed."""
-    from regimes.arrivals import Model, quantiles
+    """A small measure.loadgen.arrivals model for wiring tests: sittings of 1-3 turns, 0.2-0.5 s apart, some resumed."""
+    from measure.loadgen.arrivals import Model, quantiles
     gaps = quantiles([0.2 + 0.3 * k / 99 for k in range(100)])
     return Model({"shapes": {"0:1": 5, "0:2": 3, "0:3": 1, "1:1": 1, "2:2": 1}, "gap_s": {str(k): gaps for k in range(6)},
                   "horizon_s": 1.0})

@@ -1,8 +1,8 @@
-"""Process evals on lab ledgers (diagnostics/lab_process.py): prediction directions, the four cases, bundles never
+"""Process evals on lab ledgers (evals/researcher/lab_process.py): prediction directions, the four cases, bundles never
 measured apart, reflections checked against recorded numbers."""
 from __future__ import annotations
 
-from diagnostics.lab_process import process, record_facts
+from evals.researcher.lab_process import process, record_facts
 
 
 def rec(i, h, actual, expected, mech=(), bundle=None, band=1.0, unit="change_pct"):

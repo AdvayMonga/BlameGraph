@@ -13,7 +13,7 @@ import pytest
 # Every lab test runs against the example target unless the caller chose one.
 os.environ.setdefault("LAB_TARGET", str(pathlib.Path(__file__).resolve().parents[1] / "targets" / "inference-server.toml"))
 
-from lab import engine  # noqa: E402
+from targets import engine  # noqa: E402
 
 _src = engine.repo() / "src"
 if _src.is_dir() and str(_src) not in sys.path:

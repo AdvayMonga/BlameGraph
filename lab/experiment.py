@@ -2,30 +2,29 @@
 workspace is the change, a `hypothesis`, measurements through the lab's own tools with an `expect`, and a
 `reflection` on each. Run ids start with `researcher-`, so no agent view shows these records (lab/experiments.py).
 
-  python -m lab.experiment start --base REF --change REF --budget USD [--repo PATH]   -> prints the run id
-  python -m lab.experiment baseline --run ID
-  python -m lab.experiment hypothesis --run ID --hypothesis TEXT --rationale TEXT --layer LAYER [--abandon-if TEXT]
-  python -m lab.experiment call TOOL --run ID [--args JSON] [--hypothesis-id H --metric M --value V --unit U --why T]
-  python -m lab.experiment reflect --run ID --record ID --reflection TEXT [--alternative TEXT]
+  lab start --base REF --change REF --budget USD [--repo PATH]   -> prints the run id
+  lab baseline --run ID
+  lab hypothesis --run ID --hypothesis TEXT --rationale TEXT --layer LAYER [--abandon-if TEXT]
+  lab TOOL --run ID --hypothesis-id H --expect JSON [the tool's own arguments]   (lab/cli.py)
+  lab reflect --run ID --record ID --reflection TEXT [--alternative TEXT]
 
 The change's files outside the target's write surface are left out of the measured tree, and the start record lists
 them: what is measured is what an agent's change could have been."""
 from __future__ import annotations
 
-import argparse
-import json
 import subprocess
-import sys
 import time
 import uuid
 from pathlib import Path
 
-from lab import engine, experiments, ledger
+from targets import engine
+from lab import experiments
+from data.knowledge import ledger
 from lab.budget import Budget
-from lab.safety.surfaces import may_write
+from measure.sandbox.surfaces import may_write
 from lab.workspace import Workspace
 
-RUNS = engine.ENV_ROOT / "lab" / "runs"
+RUNS = engine.ENV_ROOT / "local" / "runs"
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -84,68 +83,3 @@ def call(tb, tool: str, args: dict) -> str:
     if spec is None:
         raise ValueError(f"no lab tool {tool!r}; one of {sorted(t.name for t in tb.specs())}")
     return spec.fn(args)
-
-
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m lab.experiment", description=__doc__.split("\n\n")[0])
-    sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("start")
-    p.add_argument("--repo", type=Path, default=None, help="the engine repo (default: LAB_ENGINE_REPO)")
-    p.add_argument("--base", required=True)
-    p.add_argument("--change", required=True)
-    p.add_argument("--budget", type=float, required=True, help="dollars of GPU time for this run")
-    p = sub.add_parser("baseline")
-    p.add_argument("--run", required=True)
-    p = sub.add_parser("hypothesis")
-    p.add_argument("--run", required=True)
-    p.add_argument("--hypothesis", required=True)
-    p.add_argument("--rationale", required=True)
-    p.add_argument("--layer", required=True, choices=experiments.LAYERS)
-    p.add_argument("--abandon-if")
-    p = sub.add_parser("call")
-    p.add_argument("tool")
-    p.add_argument("--run", required=True)
-    p.add_argument("--args", default="{}", help="the tool's arguments as JSON")
-    p.add_argument("--hypothesis-id")
-    p.add_argument("--metric")
-    p.add_argument("--value", type=float)
-    p.add_argument("--unit", choices=experiments.UNITS)
-    p.add_argument("--why")
-    p = sub.add_parser("reflect")
-    p.add_argument("--run", required=True)
-    p.add_argument("--record", required=True)
-    p.add_argument("--reflection", required=True)
-    p.add_argument("--alternative")
-    a = ap.parse_args(argv)
-
-    try:
-        print(_run(a))
-    except (ValueError, PermissionError) as e:      # a refusal is the lab's answer, not a crash
-        print(f"refused: {e}", file=sys.stderr)
-        return 1
-    return 0
-
-
-def _run(a) -> str:
-    if a.cmd == "start":
-        return start(a.repo or engine.repo(), a.base, a.change, a.budget, ledger.ROOT, RUNS)
-    tb = toolbox(a.run, ledger.ROOT, RUNS)
-    if a.cmd == "baseline":
-        return json.dumps(tb.baseline(tb.s.workspace.base)["result"])
-    if a.cmd == "hypothesis":
-        return call(tb, "hypothesis", {k: v for k, v in {"hypothesis": a.hypothesis, "rationale": a.rationale,
-                                                          "layer": a.layer,
-                                                          "abandon_if": a.abandon_if}.items() if v})
-    if a.cmd == "reflect":
-        return call(tb, "reflect", {k: v for k, v in {"record": a.record, "reflection": a.reflection,
-                                                       "alternative": a.alternative}.items() if v})
-    args = json.loads(a.args)
-    if a.hypothesis_id:
-        args["hypothesis_id"] = a.hypothesis_id
-    if a.metric is not None:
-        args["expect"] = {"metric": a.metric, "value": a.value, "unit": a.unit, "why": a.why}
-    return call(tb, a.tool, args)
-
-
-if __name__ == "__main__":
-    sys.exit(main())

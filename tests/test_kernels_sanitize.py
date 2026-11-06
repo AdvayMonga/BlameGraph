@@ -1,4 +1,4 @@
-"""compute-sanitizer at the held-out gate (kernels/evolve/sanitize.py, stage 6 of kernels.evolve.jailed): the command
+"""compute-sanitizer at the held-out gate (evals/kernels/sanitize.py, stage 6 of evals.kernels.jailed): the command
 line per tool, the shapes it runs, its output parsed (clean, memcheck and racecheck errors, no report, a forged
 summary), and the gate failing on an error, passing clean, and stating a missing sanitizer as a fact. CPU only: a fake
 sanitizer script stands in for NVIDIA's."""
@@ -13,7 +13,7 @@ __import__("os").environ.setdefault("LAB_TARGET", str(Path(__file__).resolve().p
 import json  # noqa: E402
 import os  # noqa: E402
 
-from kernels.evolve import jailed, sanitize  # noqa: E402
+from evals.kernels import jailed, sanitize  # noqa: E402
 
 CLEAN = """========= COMPUTE-SANITIZER
 ========= ERROR SUMMARY: 0 errors
@@ -98,7 +98,7 @@ PROGRAM = "import torch\ndef kernel(x, w, eps=1e-6):\n    return x * torch.rsqrt
 
 
 def test_the_gate_fails_on_an_error_and_passes_clean(tmp_path, monkeypatch):
-    from kernels.evolve.ship import gate_passed
+    from evals.kernels.ship import gate_passed
     os.environ.setdefault("LAB_NO_JAIL", "1")
     monkeypatch.setattr(jailed, "sanitizer", lambda: _fake(tmp_path, None))
     clean = jailed._sanitized(CFG, PROGRAM, PASSED, 600)
@@ -113,7 +113,7 @@ def test_the_gate_fails_on_an_error_and_passes_clean(tmp_path, monkeypatch):
 
 
 def test_shared_weights_are_a_fact_not_a_failure(monkeypatch):
-    from kernels.evolve.ship import gate_passed
+    from evals.kernels.ship import gate_passed
     monkeypatch.setattr(jailed, "sanitizer", lambda: 1 / 0)           # never looked for
     r = jailed._sanitized({**CFG, "shared_weights": "/holder/weights.pkl"}, PROGRAM, PASSED, 600)
     assert r["artifacts"]["sanitizer"].startswith("not run: the weights are attached over CUDA IPC") and gate_passed(r)
@@ -121,7 +121,7 @@ def test_shared_weights_are_a_fact_not_a_failure(monkeypatch):
 
 
 def test_a_missing_sanitizer_is_a_fact_not_a_failure(monkeypatch):
-    from kernels.evolve.ship import gate_passed
+    from evals.kernels.ship import gate_passed
     monkeypatch.setattr(jailed, "sanitizer", lambda: None)
     r = jailed._sanitized(CFG, PROGRAM, PASSED, 600)
     assert r["artifacts"]["sanitizer"] == "not run: compute-sanitizer not found" and gate_passed(r)

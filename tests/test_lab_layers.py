@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from lab import layers
+from measure.context import layers
 
-REAL = Path(__file__).resolve().parents[1] / "data" / "engine-h200-20261017" / "session6" / "prof6-b1"
+REAL = Path(__file__).resolve().parents[1] / "local" / "engine-h200-20261017" / "session6" / "prof6-b1"
 
 
 def bundle(tmp_path: Path, kernel_s: float = 0.4, with_steps: bool = True) -> Path:
@@ -60,7 +60,7 @@ def test_shares_come_from_the_window_only_and_add_up(tmp_path):
 
 
 def test_the_decode_floor_needs_a_target_and_peaks_and_says_so(tmp_path, monkeypatch):
-    from lab import target
+    from targets import target
     b = bundle(tmp_path)
     out = layers.from_bundle(b)
     assert out["model_execution"]["pct_of_ceiling"] is None and "no target" in out["model_execution"]["ceiling_missing"]

@@ -1,4 +1,4 @@
-"""`python -m lab.rehearsal setup`: the practice engine is a working git repo, the target loads, and the references
+"""`lab rehearsal setup`: the practice engine is a working git repo, the target loads, and the references
 are complete. A word-per-token encoder stands in for the model's tokenizer."""
 from __future__ import annotations
 
@@ -7,7 +7,8 @@ import sys
 
 import pytest
 
-from lab import rehearsal, target
+from lab import rehearsal
+from targets import target
 
 
 class Words:

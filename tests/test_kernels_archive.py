@@ -1,4 +1,4 @@
-"""The idea archive (kernels/archive.py): ideas and outcomes from `kernels` records, near-duplicates folded, similarity
+"""The idea archive (generate/kernels/archive.py): ideas and outcomes from `kernels` records, near-duplicates folded, similarity
 lookup, the retry list, export and load. A fake embedder: no model download."""
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import json
 from pathlib import Path
 
-from kernels import archive
-from lab import ledger
+from generate.kernels import archive
+from data.knowledge import ledger
 
 
 class FakeEmbed:

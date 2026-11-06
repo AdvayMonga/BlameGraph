@@ -2,6 +2,7 @@
 
 The environment for autoresearch loops that optimize LLM inference. The engine lives in [inference-server](https://github.com/AdvayMonga/inference-server).
 
+- **One command:** `bin/lab <command>` runs everything, and the agent's own tools by the same names
 - **Lab:** the agent loop, its tools, ledger, sandbox and cloud GPUs
 - **Workloads:** real-trace corpus
 - **Data store:** every run's data kept in R2 and queryable with SQL

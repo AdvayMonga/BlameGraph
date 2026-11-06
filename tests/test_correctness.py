@@ -8,10 +8,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from correctness import (Position, Thresholds, compare_positions, consistency,  # noqa: E402
-                                    divergence_summary, evaluate, flip_test, length_ratio)
-from correctness.gate import to_ledger_record  # noqa: E402
-from correctness.scoring import extract_choice, extract_math, score  # noqa: E402
+from evals.agent.correctness import Position, Thresholds, compare_positions, consistency, divergence_summary, evaluate, flip_test, length_ratio
+from evals.agent.correctness.gate import to_ledger_record  # noqa: E402
+from evals.agent.correctness.scoring import extract_choice, extract_math, score  # noqa: E402
 
 V, K = 50, 10   # toy vocabulary and top-k
 
@@ -105,7 +104,7 @@ def test_client_contract_against_fake_server():
     import json
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
-    from correctness.client import Api, NoLogprobs, generate, score_tokens
+    from evals.agent.correctness.client import Api, NoLogprobs, generate, score_tokens
 
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -165,7 +164,7 @@ def test_sglang_adapter_scores_tokens():
     import json
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
-    from correctness.client import Api, score_tokens
+    from evals.agent.correctness.client import Api, score_tokens
 
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -194,7 +193,7 @@ def test_shed_requests_are_retried_and_persistent_errors_are_unanswered(monkeypa
     import tempfile
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
-    from correctness import run as crun
+    from evals.agent.correctness import run as crun
     seen = {}
 
     class H(BaseHTTPRequestHandler):
@@ -232,7 +231,7 @@ def test_shed_requests_are_retried_and_persistent_errors_are_unanswered(monkeypa
 def test_verdict_file_rejudges_saved_result():
     import json
     import tempfile
-    from correctness.run import verdict_file
+    from evals.agent.correctness.run import verdict_file
     flips = {"math": {"n": 1000, "lost": 20, "gained": 12, "ref_accuracy": 0.700, "cand_accuracy": 0.692}}
     saved = evaluate({"kl_mean": 0.01, "kl_p99": 0.1}, flips, length_ratio([10], [10]), CONS, Thresholds(min_score_ratio=0.98))
     assert saved["passed"]                                   # 692 / 700 = 0.9886
@@ -249,8 +248,8 @@ def test_stream_role_chunk_is_not_a_first_token():
     import json
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    from canaries.cheat_proxy import serve
-    from correctness.client import generate_stream
+    from evals.researcher.canaries.cheat_proxy import serve
+    from evals.agent.correctness.client import generate_stream
 
     class H(BaseHTTPRequestHandler):
         """vLLM-shaped stream: a role chunk with content "", then the tokens."""

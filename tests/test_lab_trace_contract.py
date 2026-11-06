@@ -1,4 +1,4 @@
-"""lab.trace_contract: conforming trace dirs pass (JSONL, SQLite, the engine's own writer); bad clocks, ids and units fail."""
+"""measure.runner.trace_contract: conforming trace dirs pass (JSONL, SQLite, the engine's own writer); bad clocks, ids and units fail."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from lab import trace_contract as tc
+from measure.runner import trace_contract as tc
 
 NOW = 1_790_000_000.0
 

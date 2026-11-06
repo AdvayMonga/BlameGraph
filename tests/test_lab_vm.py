@@ -1,4 +1,4 @@
-"""lab.vm against a fake `crusoe` CLI, ssh and rsync on PATH: the lifecycle it drives, not the cloud."""
+"""measure.cloud.vm against a fake `crusoe` CLI, ssh and rsync on PATH: the lifecycle it drives, not the cloud."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ import stat
 
 import pytest
 
-from lab import vm as labvm
-from lab.providers import ProviderError, crusoe
+from measure.cloud import vm as labvm
+from measure.cloud.providers import ProviderError, crusoe
 
 FAKE_CRUSOE = r'''#!/usr/bin/env python3
 """Fake crusoe CLI: state lives in $FAKE_STATE, every call is appended to $FAKE_LOG."""
@@ -117,7 +117,7 @@ def test_run_pushes_runs_in_repo_dir_and_fetches(fake, monkeypatch):
     monkeypatch.setenv("LAB_ENGINE_REPO", str(labvm.engine.ENV_ROOT))     # any git checkout: its sha ships as LAB_GIT_SHA
     vm = labvm.VM(name="t4", user="u", remote_dir="~/repo")
     local = fake / "out"
-    assert labvm.run(vm, "python -m lab.profile", fetch_dir="lab/runs", local=local) == 0
+    assert labvm.run(vm, "python -m measure.profile.profile", fetch_dir="lab/runs", local=local) == 0
     log = calls(fake)
     rsyncs = [c for c in log if c[0] == "rsync"]
     assert rsyncs[0][-1] == "u@10.0.0.7:~/repo/" and "--filter=:- .gitignore" in rsyncs[0]          # the engine
@@ -126,7 +126,7 @@ def test_run_pushes_runs_in_repo_dir_and_fetches(fake, monkeypatch):
     sshs = [c for c in log if c[0] == "ssh"]
     cmd = [c for c in sshs if c[-1].startswith("cd ")][-1][-1]
     assert cmd.startswith("cd ~/repo && LAB_GIT_SHA=")
-    assert cmd.endswith('PATH="$HOME/repo/.venv/bin:$PATH" timeout --signal=TERM --kill-after=60 180m python -m lab.profile')
+    assert cmd.endswith('PATH="$HOME/BlameGraph/bin:$HOME/repo/.venv/bin:$PATH" timeout --signal=TERM --kill-after=60 180m python -m measure.profile.profile')
     assert any(a.startswith("UserKnownHostsFile=") and a.endswith("t4.known_hosts") for a in sshs[-1])
     # the VM is stopped afterwards by default, and the auto-stop was armed on the way in
     assert vm.provider.get("t4").state == "stopped"
@@ -136,30 +136,30 @@ def test_run_pushes_runs_in_repo_dir_and_fetches(fake, monkeypatch):
 
 
 def test_run_in_the_environment_dir(fake, monkeypatch):
-    from lab import ledger
+    from data.knowledge import ledger
     monkeypatch.setattr(ledger, "ROOT", fake / "ledger")
     monkeypatch.delenv("LAB_STORE", raising=False)
     vm = labvm.VM(name="t4e", user="u", remote_dir="~/repo", env_dir="~/env")
-    assert labvm.run(vm, "python -m regimes run all --url http://localhost:8000", fetch_dir="out", local=fake / "o",
+    assert labvm.run(vm, "lab regimes run all --url http://localhost:8000", fetch_dir="out", local=fake / "o",
                      where="env") == 0
     log = calls(fake)
     cmd = [c for c in log if c[0] == "ssh" and c[-1].startswith("cd ")][-1][-1]
-    assert cmd.startswith("cd ~/env && ") and 'PATH="$HOME/repo/.venv/bin:$PATH" timeout --signal=TERM --kill-after=60 180m python -m regimes' in cmd
+    assert cmd.startswith("cd ~/env && ") and 'PATH="$HOME/env/bin:$HOME/repo/.venv/bin:$PATH" timeout --signal=TERM --kill-after=60 180m lab regimes' in cmd
     rsyncs = [c for c in log if c[0] == "rsync"]
-    assert "--include=corpus/*/heldout.jsonl" in rsyncs[1]                     # held-out traces travel, not via git
-    assert [r[-2] for r in rsyncs[-3:]] == ["u@10.0.0.7:~/env/out/", "u@10.0.0.7:~/env/lab/ledger/",
-                                            "u@10.0.0.7:~/env/lab/runs/"]      # a lab run is always brought home
+    assert "--include=data/corpus/*/heldout.jsonl" in rsyncs[1]                     # held-out traces travel, not via git
+    assert [r[-2] for r in rsyncs[-3:]] == ["u@10.0.0.7:~/env/out/", "u@10.0.0.7:~/env/local/ledger/",
+                                            "u@10.0.0.7:~/env/local/runs/"]      # a lab run is always brought home
     assert "--exclude=workspace/" in rsyncs[-1]
 
 
 def test_collect_merges_the_vms_ledger(fake, monkeypatch):
-    from lab import ledger
+    from data.knowledge import ledger
     monkeypatch.setattr(ledger, "ROOT", fake / "ledger")
     monkeypatch.delenv("LAB_STORE", raising=False)
     remote = fake / "vm-ledger"
     rec = ledger.append({"kind": "note", "run": "on-vm"}, remote)
     def fetch(vm, record, path, local, base=None, *extra):
-        if path == "lab/ledger":
+        if path == "local/ledger":
             shutil.copytree(remote, local, dirs_exist_ok=True)
     monkeypatch.setattr(labvm, "fetch", fetch)
     labvm.collect(labvm.VM(name="t4c", user="u"), None)
@@ -268,7 +268,7 @@ def test_run_reports_a_vm_stopped_under_the_command(fake, monkeypatch, capsys):
 
 
 def _nebius(monkeypatch, instances, spot):
-    from lab.providers import nebius
+    from measure.cloud.providers import nebius
     monkeypatch.setenv("LAB_VM_SPOT", "1" if spot else "0")
     seen = []
 
@@ -306,7 +306,7 @@ def test_start_refuses_the_other_pricing_running_or_not(monkeypatch):
 
 
 def test_spot_flag_refuses_other_spellings(monkeypatch):
-    from lab.providers import nebius
+    from measure.cloud.providers import nebius
     monkeypatch.setenv("LAB_VM_SPOT", "true")
     with pytest.raises(ProviderError, match="use 1 or 0"):
         nebius.Nebius()

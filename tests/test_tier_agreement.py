@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from validity.tier_agreement import tier_agreement  # noqa: E402
+from evals.researcher.tier_agreement import tier_agreement  # noqa: E402
 
 
 def _changes(short, full, **bands):

@@ -10,8 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fake_engine import make_server  # noqa: E402
 
-from regimes import workload as W  # noqa: E402
-from regimes.client import Request, send, wall_clock  # noqa: E402
+from measure.loadgen import workload as W  # noqa: E402
+from measure.loadgen.client import Request, send, wall_clock  # noqa: E402
 
 REC = {"id": "r", "prompt": "hi", "max_tokens": 2048, "session_id": "s", "turn_index": 0}
 

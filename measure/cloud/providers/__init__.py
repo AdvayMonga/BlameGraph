@@ -1,0 +1,50 @@
+"""Cloud adapters for measure.cloud.vm: each exposes get/create/start/stop/types over one provider's API."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class Record:
+    """What measure.cloud.vm needs to know about a VM, whichever cloud it is on."""
+    name: str
+    state: str          # running | stopped | absent | anything else = transitional
+    ip: str | None
+    type: str
+    detail: str = ""    # provider wording, for status output
+    spot: bool | None = None   # preemptible; None where the provider has no such option
+
+
+def pricing(spot: bool | None) -> str:
+    return "spot" if spot else "on-demand"
+
+
+class ProviderError(RuntimeError):
+    """The provider refused; its message is here."""
+
+
+def env_field(name: str, default: str):
+    """A dataclass default read from env at construction, not import."""
+    return field(default_factory=lambda: os.environ.get(name, default))
+
+
+def as_list(payload, what: str) -> list:
+    """An API answer that must be a list, or a ProviderError naming the endpoint."""
+    if not isinstance(payload, list):
+        raise ProviderError(f"{what}: expected a list, got {type(payload).__name__}: {str(payload)[:200]}")
+    return payload
+
+
+def load(name: str):
+    if name == "verda":
+        from measure.cloud.providers import verda
+        return verda.Verda()
+    if name == "crusoe":
+        from measure.cloud.providers import crusoe
+        return crusoe.Crusoe()
+    if name == "nebius":
+        from measure.cloud.providers import nebius
+        return nebius.Nebius()
+    raise ProviderError(f"unknown provider {name!r}; LAB_VM_PROVIDER is verda, nebius or crusoe")

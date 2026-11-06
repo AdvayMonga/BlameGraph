@@ -13,8 +13,8 @@ def make_repo(root: Path) -> Path:
         "src/inference_server/engine.py": "def speed():\n    return 1\n",
         "tests/test_engine.py": "from inference_server.engine import speed\n\n\ndef test_speed():\n    assert speed() >= 1\n",
         "tests/conftest.py": "",
-        "corpus/a/seen.jsonl": "{}\n",
-        "corpus/a/heldout.jsonl": "{\"secret\": 1}\n",
+        "data/corpus/a/seen.jsonl": "{}\n",
+        "data/corpus/a/heldout.jsonl": "{\"secret\": 1}\n",
         "pyproject.toml": "[tool.ruff]\nline-length = 100\n[tool.ruff.lint]\nselect = ['F']\n",
         "README.md": "# tiny\n",
     }

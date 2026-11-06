@@ -1,4 +1,4 @@
-"""kernels.search on CPU with no model calls: the SEARCH/REPLACE parser, the tree's selection and caps, a whole search
+"""generate.kernels.search on CPU with no model calls: the SEARCH/REPLACE parser, the tree's selection and caps, a whole search
 on the toy task with a scripted model and the real (jailed) evaluator, and the Claude client's request against a fake
 SDK client. Run: python tests/test_kernels_search.py"""
 from __future__ import annotations
@@ -16,10 +16,10 @@ os.environ.setdefault("LAB_TARGET", str(ROOT / "targets" / "inference-server.tom
 os.environ.setdefault("LAB_ENGINE_PYTHON", sys.executable)
 os.environ.setdefault("LAB_NO_JAIL", "1")
 
-from kernels.search import diff  # noqa: E402
-from kernels.search.tree import Node, Tree, fingerprint  # noqa: E402
+from generate.kernels.search import diff  # noqa: E402
+from generate.kernels.search.tree import Node, Tree, fingerprint  # noqa: E402
 
-SEED = ROOT / "kernels" / "evolve" / "seeds" / "toy_rmsnorm.py"
+SEED = ROOT / "generate" / "kernels" / "evolve" / "seeds" / "toy_rmsnorm.py"
 LOOP = '''    out = torch.empty_like(x)
     for i in range(x.shape[0]):
         r = x[i].float()
@@ -96,7 +96,7 @@ def test_review_fixes_parents_repairs_duplicates_and_noise():
 
 
 def test_counters_are_not_asked_for_again_once_the_host_refuses_them():
-    from kernels.search.loop import cascade
+    from generate.kernels.search.loop import cascade
     calls = []
 
     def stage(path, n):
@@ -111,13 +111,13 @@ def test_counters_are_not_asked_for_again_once_the_host_refuses_them():
 
 
 def test_every_ab_arm_gets_the_same_promotion():
-    from kernels.search import ab
+    from generate.kernels.search import ab
     assert ab.SAME_PROMOTION == ("--retime", "3", "--detector-model", "none")   # same for both
 
 
 def test_share_with_gates_ranks_only_the_gated_tasks():
-    from kernels import share
-    from kernels.evolve import run
+    from generate.kernels.tasks import share
+    from generate.kernels.evolve import run
     seen, orig = {}, share.rank
     share.rank = lambda bundles, tasks, gates: seen.update(tasks=[t.name for t in tasks]) or {"tasks": []}
     try:
@@ -146,11 +146,11 @@ def test_a_branch_is_worth_its_best_program_so_a_strong_child_of_a_weak_parent_i
 
 
 def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_node():
-    from kernels.evolve import evaluator
-    from kernels.evolve.run import record, retime, system_message
-    from kernels.search.loop import cascade, search
-    from kernels.tasks import load
-    from lab import ledger
+    from evals.kernels import evaluator
+    from generate.kernels.evolve.run import record, retime, system_message
+    from generate.kernels.search.loop import cascade, search
+    from generate.kernels.tasks import load
+    from data.knowledge import ledger
     t = load("toy_rmsnorm")
     naive = iter([WRONG, "no diff here", FAST])                         # answers when shown the naive seed
     comment = "<<<<<<< SEARCH\n    xf = x.float()\n=======\n    # same\n    xf = x.float()\n>>>>>>> REPLACE"
@@ -187,21 +187,21 @@ def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_node():
         best_file.write_text(code)
         rec = record(t, {"seen": list(t.seen_default)}, [{"name": "scripted", "weight": 1.0}], 4, "cpu",
                      out / "trace.jsonl", best_file, metrics, root=Path(d) / "ledger", retimed=retimed,
-                     tool="kernels.search", cost=cost)
+                     tool="generate.kernels.search", cost=cost)
         stored = list(ledger.records(Path(d) / "ledger", kind="kernels"))
-        assert stored[0]["tool"] == "kernels.search" and stored[0]["cost"] == cost
+        assert stored[0]["tool"] == "generate.kernels.search" and stored[0]["cost"] == cost
         assert len(rec["result"]["candidates"]) == len(tree.nodes)
 
 
 def test_the_judges_json_is_read_best_effort():
-    from kernels.search.loop import hypotheses
+    from generate.kernels.search.loop import hypotheses
     assert len(hypotheses("pre " + json.dumps([{"a": 1}, {"b": 2}, 3]) + " post", 16)) == 2
     assert hypotheses("not json", 4) == [{"plan": "not json"}] and hypotheses("", 4) == []
 
 
 def test_the_prompt_states_the_roofline_gap_and_the_search_does_not_stop_there():
-    from kernels.search.loop import prompt, search
-    from kernels.search.tree import Node, Tree
+    from generate.kernels.search.loop import prompt, search
+    from generate.kernels.search.tree import Node, Tree
     rows = [{"shape": [1], "weight": 0.75, "pct_of_roofline": 96.0}, {"shape": [2], "weight": 0.25,
                                                                       "pct_of_roofline": 80.0}]
     n = Node("a", None, "x = 1\n", {"combined_score": 1.0, "correct": 1.0}, {"timings": json.dumps(rows)}, 0)
@@ -219,11 +219,11 @@ def test_the_prompt_states_the_roofline_gap_and_the_search_does_not_stop_there()
 def test_diagnosis_facts_bound_type_two_shape_counters_ranking_and_patience():
     from types import SimpleNamespace
     import torch
-    from kernels.evolve.core import _roofline
-    from kernels.search.loop import ncu_facts, search
-    from kernels.search.tree import Node
-    from kernels.share import rank
-    from kernels.tasks import load
+    from evals.kernels.core import _roofline
+    from generate.kernels.search.loop import ncu_facts, search
+    from generate.kernels.search.tree import Node
+    from generate.kernels.tasks.share import rank
+    from generate.kernels.tasks import load
     t = load("toy_rmsnorm")                     # 4 FLOPs and ~8 bytes per element: memory-bound on any GPU
     hw = SimpleNamespace(bf16_flops=1e15, bw_bytes_s=4e12)
     x = t.make_inputs((1024, 4096), torch.float32, "cpu", torch.Generator().manual_seed(0))
@@ -260,9 +260,9 @@ def test_diagnosis_facts_bound_type_two_shape_counters_ranking_and_patience():
 
 
 def test_ncu_counters_parse_and_a_host_without_ncu_says_so():
-    from kernels.evolve import jailed, ncu
-    from kernels.search.loop import cascade, facts
-    from kernels.search.tree import Node
+    from evals.kernels import jailed, ncu
+    from generate.kernels.search.loop import cascade, facts
+    from generate.kernels.search.tree import Node
     head = ",".join(f'"{h}"' for h in ["ID", "Kernel Name", *ncu.METRICS])
     units = ",".join(['""', '""'] + ['"%"'] * len(ncu.METRICS))
     row = lambda i, name, dur: ",".join([f'"{i}"', f'"{name}"'] + ['"1,234.5"'] * (len(ncu.METRICS) - 1) + [f'"{dur}"'])
@@ -285,8 +285,8 @@ def test_ncu_counters_parse_and_a_host_without_ncu_says_so():
 
 
 def test_the_ab_harness_runs_both_arms_and_gates_each_winner_on_held_out_shapes():
-    from kernels.search import ab
-    from kernels.tasks import load
+    from generate.kernels.search import ab
+    from generate.kernels.tasks import load
     t = load("toy_rmsnorm")
     fast = SEED.read_text().replace(LOOP, "    xf = x.float()\n    return (xf * torch.rsqrt(xf.pow(2).mean(-1, "
                                          "keepdim=True) + 1e-6) * w.float()).to(x.dtype)")
@@ -297,37 +297,37 @@ def test_the_ab_harness_runs_both_arms_and_gates_each_winner_on_held_out_shapes(
         return run
     saved = dict(ab.ARMS)
     ab.ARMS.clear()
-    ab.ARMS.update({"openevolve": arm(SEED.read_text()), "kernels.search": arm(fast)})
+    ab.ARMS.update({"openevolve": arm(SEED.read_text()), "generate.kernels.search": arm(fast)})
     try:
         with tempfile.TemporaryDirectory() as d:
             shapes = Path(d) / "shapes.json"
             shapes.write_text(json.dumps({"seen": [list(x) for x in t.seen_default],
                                           "heldout": [list(x) for x in t.heldout_default]}))
             assert ab.main(["--task", t.name, "--shapes", str(shapes), "--out", str(Path(d) / "ab"), "--device", "cpu",
-                            "--evals", "2", "--arms", "openevolve,kernels.search"]) == 0
+                            "--evals", "2", "--arms", "openevolve,generate.kernels.search"]) == 0
             rows = json.loads((Path(d) / "ab" / "ab.json").read_text())
-            assert json.loads((Path(d) / "ab" / "kernels.search-0" / "gate.json").read_text())["passed"]
-            ab.ARMS.update({"openevolve": None, "kernels.search": None})      # finished arms are reused, not rerun
+            assert json.loads((Path(d) / "ab" / "generate.kernels.search-0" / "gate.json").read_text())["passed"]
+            ab.ARMS.update({"openevolve": None, "generate.kernels.search": None})      # finished arms are reused, not rerun
             env = {"KERNEL_EVAL_SSH": json.dumps(["sh", "-c"]),                  # the gate over a stand-in for ssh
                    "KERNEL_EVAL_REMOTE": f"cd {Path(__file__).parent.parent} && PATH={Path(sys.executable).parent}:$PATH"}
             with mock.patch.dict(os.environ, env):
                 assert ab.main(["--task", t.name, "--shapes", str(shapes), "--out", str(Path(d) / "ab"),
-                                "--device", "cpu", "--evals", "2", "--arms", "openevolve,kernels.search"]) == 0
+                                "--device", "cpu", "--evals", "2", "--arms", "openevolve,generate.kernels.search"]) == 0
             again = json.loads((Path(d) / "ab" / "ab.json").read_text())
     finally:
         ab.ARMS.clear()
         ab.ARMS.update(saved)
     assert [r["seen_score"] > 0 and r["gates_passed"] for r in again] == [True, True]
     by = {r["arm"]: r for r in rows}
-    assert set(by) == {"openevolve", "kernels.search"} and all(r["gates_passed"] for r in rows)
-    assert by["kernels.search"]["seen_score"] > 3 * by["openevolve"]["seen_score"]    # rsqrt vs the naive row loop
-    assert by["kernels.search"]["heldout_speedup"] > 0
+    assert set(by) == {"openevolve", "generate.kernels.search"} and all(r["gates_passed"] for r in rows)
+    assert by["generate.kernels.search"]["seen_score"] > 3 * by["openevolve"]["seen_score"]    # rsqrt vs the naive row loop
+    assert by["generate.kernels.search"]["heldout_speedup"] > 0
 
 
 def test_the_openevolve_arm_gets_the_same_single_model_and_the_facts_only_prompts():
     from types import SimpleNamespace
-    from kernels.evolve import run
-    from kernels.search import ab
+    from generate.kernels.evolve import run
+    from generate.kernels.search import ab
     seen = {}
     orig = run.main
     run.main = lambda argv: seen.update(argv=argv) or print('{"ledger": "x"}')
@@ -345,8 +345,8 @@ def test_the_openevolve_arm_gets_the_same_single_model_and_the_facts_only_prompt
 
 
 def test_every_arm_differs_from_kernels_search_in_one_flag():
-    from kernels.search import ab
-    from kernels.search import __main__ as cli
+    from generate.kernels.search import ab
+    from generate.kernels.search import __main__ as cli
     seen = []
     orig = cli.main
     cli.main = lambda argv: seen.append(argv) or print('{"ledger": null}')
@@ -354,7 +354,7 @@ def test_every_arm_differs_from_kernels_search_in_one_flag():
         from types import SimpleNamespace
         a = SimpleNamespace(task="t", shapes="s", evals=3, model="m", device="cpu", initial=None)
         assert "search-beam" not in ab.ARMS                       # the beam was removed (2026-10-27)
-        for arm in ("kernels.search", "search-no-tools", "search-mcts", "search-untyped"):
+        for arm in ("generate.kernels.search", "search-no-tools", "search-mcts", "search-untyped"):
             ab.ARMS[arm](a, Path("/tmp/x"), 0)
     finally:
         cli.main = orig
@@ -371,7 +371,7 @@ def test_every_arm_differs_from_kernels_search_in_one_flag():
 
 
 def test_openevolve_calls_are_priced_into_a_usage_log():
-    from kernels.evolve.run import usage
+    from generate.kernels.evolve.run import usage
     with tempfile.TemporaryDirectory() as d:
         log = Path(d) / "usage.jsonl"
         log.write_text(json.dumps({"model": "claude-opus-5-5", "usd": 0.5}) + "\n" +
@@ -381,7 +381,7 @@ def test_openevolve_calls_are_priced_into_a_usage_log():
 
 def test_the_judge_can_query_the_ledger_and_search_the_web_across_turns():
     from types import SimpleNamespace
-    from kernels.search import llm
+    from generate.kernels.search import llm
     turns, sent = iter(["tool_use", "pause_turn", "end_turn"]), []
 
     class Stream:
@@ -422,7 +422,7 @@ def test_the_judge_can_query_the_ledger_and_search_the_web_across_turns():
 
 def test_the_stable_parts_of_a_prompt_are_sent_as_cached_blocks_and_the_marker_never_reaches_the_model():
     from types import SimpleNamespace
-    from kernels.search import llm
+    from generate.kernels.search import llm
     sent = []
 
     def stream(client, **kw):
@@ -450,7 +450,7 @@ def test_the_stable_parts_of_a_prompt_are_sent_as_cached_blocks_and_the_marker_n
 
 def test_a_turn_whose_stream_dies_is_sent_again_and_a_real_error_is_not():
     from types import SimpleNamespace
-    from kernels.search import llm
+    from generate.kernels.search import llm
 
     class ReadTimeout(Exception):
         pass
@@ -484,7 +484,7 @@ def test_a_turn_whose_stream_dies_is_sent_again_and_a_real_error_is_not():
 
 
 def test_the_prompt_shows_other_branches_and_the_start_as_full_code():
-    from kernels.search.loop import prompt
+    from generate.kernels.search.loop import prompt
     t = Tree()
     ok = lambda sc: {"combined_score": sc, "correct": 1.0, "stage": 2}        # noqa: E731
     t.add(Node("r", None, "a = 1\nb = 1\n", ok(1.0), {}, 0))
@@ -497,9 +497,9 @@ def test_the_prompt_shows_other_branches_and_the_start_as_full_code():
 
 
 def test_a_flagged_candidate_is_passed_over_at_promotion():
-    from kernels.evolve.run import retime
-    from kernels.search.detect import detector
-    from kernels.tasks import load
+    from generate.kernels.evolve.run import retime
+    from generate.kernels.search.detect import detector
+    from generate.kernels.tasks import load
     spent = []
     flag = detector(lambda s, u: (('{"gaming": true, "evidence": "if x.shape[0] == 64"}' if "SPECIAL" in u
                                    else '{"gaming": false, "evidence": ""}'), 0.003), spent)
@@ -525,7 +525,7 @@ def test_a_flagged_candidate_is_passed_over_at_promotion():
 
 def test_the_claude_client_streams_with_effort_and_fallbacks_and_prices_the_call():
     from types import SimpleNamespace
-    from kernels.search.llm import FALLBACK_BETA, Claude
+    from generate.kernels.search.llm import FALLBACK_BETA, Claude
     seen = {}
 
     class Stream:
@@ -567,9 +567,9 @@ if __name__ == "__main__":
 
 
 def test_the_setting_states_seen_shapes_with_calls_weight_and_traffic_never_the_heldout_ones():
-    from kernels.evolve.run import setting
-    from kernels.shapes import source
-    from kernels.tasks import load
+    from generate.kernels.evolve.run import setting
+    from generate.kernels.tasks.shapes import source
+    from generate.kernels.tasks import load
     task = load("toy_rmsnorm")
     sets = {"seen": [(64, 1024), (8, 1024)], "heldout": [(4096, 1024)],
             "calls": {"[64, 1024]": 30, "[8, 1024]": 10, "[4096, 1024]": 99},
@@ -582,8 +582,8 @@ def test_the_setting_states_seen_shapes_with_calls_weight_and_traffic_never_the_
 
 
 def test_selection_carries_each_buckets_sources():
-    from kernels.shapes import select
-    from kernels.tasks import load
+    from generate.kernels.tasks.shapes import select
+    from generate.kernels.tasks import load
     task = load("paged_decode")
     seen = [(b, 32, 4, 128, 16, c) for b in (1, 8, 64, 128, 256) for c in (512, 4096)]
     sets = {"seen": seen, "heldout": [], "calls": {json.dumps(list(s)): 1 for s in seen},
@@ -593,8 +593,8 @@ def test_selection_carries_each_buckets_sources():
 
 
 def test_a_query_tool_that_cannot_run_answers_the_model_instead_of_crashing_the_search():
-    from kernels.search import llm
-    with mock.patch.dict(sys.modules, {"store.index": None, "store": None}):
+    from generate.kernels.search import llm
+    with mock.patch.dict(sys.modules, {"data.knowledge.index": None}):
         out = llm.run_query("SELECT 1")
     assert out.startswith("query failed: ") and "Error" in out
 
@@ -602,24 +602,24 @@ def test_a_query_tool_that_cannot_run_answers_the_model_instead_of_crashing_the_
 def test_the_cli_builds_its_funnel_with_every_task_in_the_memory(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
-    from kernels import archive
-    from kernels.search import __main__ as cli
+    from generate.kernels import archive
+    from generate.kernels.search import __main__ as cli
     monkeypatch.setattr(cli, "Claude", lambda *a, **k: (lambda s, u: ("", 0.0)))
     path = archive.export([archive.Entry("i1", "toy", "t", {}), archive.Entry("i2", "other", "u", {})],
                           tmp_path / "archive.jsonl")
     a = SimpleNamespace(archive=str(path), second_judge_model="none", second_judge_share=4, effort="high",
                         judge_tools=False, model="m", per_call=20, parallel=4, ncu=False, precheck=True,
                         workers=8)
-    import lab.search
-    monkeypatch.setattr(lab.search, "FastEmbed", lambda cache: "EMBEDDER")
+    import data.knowledge.search
+    monkeypatch.setattr(data.knowledge.search, "FastEmbed", lambda cache: "EMBEDDER")
     f = cli._funnel(a, SimpleNamespace(name="moe_gemm_fp8"), lambda s, u: ("", 0.0))
     assert [e.id for e in f.library] == ["i1", "i2"] and f.embedder == "EMBEDDER"
     assert f.task == "moe_gemm_fp8" and f.precheck and f.workers == 8 and f.parallel == 4
 
 
 def test_the_cli_starts_the_generations_from_every_competitor_port_of_its_task(monkeypatch, tmp_path):
-    from kernels.search import __main__ as cli
-    from kernels.search import generations
+    from generate.kernels.search import __main__ as cli
+    from generate.kernels.search import generations
     program = tmp_path / "start.py"
     program.write_text("# EVOLVE-BLOCK-START\nimport torch\n\n\ndef silu_mul(x):\n    return x\n"
                        "# EVOLVE-BLOCK-END\n\nkernel = silu_mul\n")

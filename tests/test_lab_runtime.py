@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from lab import ledger, session
+from data.knowledge import ledger
+from lab import session
 from lab.agent import AgentReply, AgentSpec
 from lab.session import RunConfig
 from tests.lab_fixtures import make_repo
@@ -241,7 +242,7 @@ ADVICE = re.compile(r"\b(should|try|tries|recommend\w*|consider\w*|best|first|ch
 
 
 def test_system_prompt_is_generated_from_the_target_and_tools_and_advises_nothing(cfg):
-    from lab import target
+    from targets import target
 
     def script(n, ws: Path):
         yield ("reply", AgentReply({"status": "stop", "note": None}, 0.1, 1, None))
@@ -259,7 +260,7 @@ def test_system_prompt_is_generated_from_the_target_and_tools_and_advises_nothin
     assert "{" not in system.replace(t.engine.launch, "").replace(json.dumps(t.engine.env), "")   # all filled
     assert not ADVICE.search(system), ADVICE.search(system)
     assert system.startswith("You are an expert in LLM inference performance engineering.")
-    from regimes import suite
+    from measure.loadgen import suite
     for name in suite.FACTS:
         assert f"- `{name}`:" in system                                    # every regime's definition
     assert "  - kernels:" in system and "  - runtime:" in system           # the layer map
@@ -270,7 +271,7 @@ def test_system_prompt_is_generated_from_the_target_and_tools_and_advises_nothin
 
 
 def test_a_provider_that_works_locally_is_refused_with_a_remote_worker(cfg, monkeypatch):
-    from lab import worker
+    from measure.runner import worker
 
     class Far(worker.Remote):
         def __init__(self):

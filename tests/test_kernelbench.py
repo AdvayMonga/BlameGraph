@@ -15,10 +15,10 @@ os.environ.setdefault("LAB_TARGET", str(ROOT / "targets" / "inference-server.tom
 
 import torch  # noqa: E402
 
-from kernels import kernelbench as kb  # noqa: E402
-from kernels.evolve.core import judge, screen  # noqa: E402
-from kernels.evolve.run import _target_tolerances, initial_program, system_message  # noqa: E402
-from kernels.tasks import from_config, load  # noqa: E402
+from generate.kernels.tasks import kernelbench as kb  # noqa: E402
+from evals.kernels.core import judge, screen  # noqa: E402
+from generate.kernels.evolve.run import _target_tolerances, initial_program, system_message  # noqa: E402
+from generate.kernels.tasks import from_config, load  # noqa: E402
 
 PROBLEM = '''import torch
 import torch.nn as nn
@@ -114,7 +114,7 @@ def test_the_judge_passes_a_correct_rewrite_and_zeroes_a_wrong_one():
 
 
 def test_a_jailed_judgment_reads_the_problem_from_its_config_and_verifies_outside():
-    from kernels.evolve.jailed import judge_jailed
+    from evals.kernels.jailed import judge_jailed
     with tempfile.TemporaryDirectory() as d:
         src = program(d, FAST).read_text()
     cfg = {"task": "kb:9:1", "source": PROBLEM, "seen": [[1]], "device": "cpu", "iters": 3,

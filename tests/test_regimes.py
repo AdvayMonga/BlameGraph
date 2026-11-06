@@ -9,11 +9,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from canaries.cheat_proxy import serve  # noqa: E402
+from evals.researcher.canaries.cheat_proxy import serve  # noqa: E402
 from fake_engine import fast_arrivals, make_server, spawn  # noqa: E402
-from regimes import runner, suite, workload as W  # noqa: E402
-from regimes.client import Request, send, wall_clock  # noqa: E402
-from regimes.runner import Limits, find_goodput, run_open, summarize  # noqa: E402
+from measure.loadgen import runner, suite, workload as W  # noqa: E402
+from measure.loadgen.client import Request, send, wall_clock  # noqa: E402
+from measure.loadgen.runner import Limits, find_goodput, run_open, summarize  # noqa: E402
 
 LOOSE = Limits(ttft_s=0.3, tpot_s=0.05)
 
@@ -118,7 +118,7 @@ def test_workload_builders():
     assert 2400 <= len(W.scaled(many, 2.5)) <= 2600 and 450 <= len(W.scaled(many, 0.5)) <= 550
     lo, hi = W.peak_window(trace + [{"id": "b", "prompt": "p", "arrival_s": 500.0 + k / 10, "max_tokens": 8} for k in range(30)])
     assert lo < 500 < hi
-    from lab.corpus import CorpusError, TraceRequest, WorkloadClass, build_manifest, write_trace
+    from data.corpus import CorpusError, TraceRequest, WorkloadClass, build_manifest, write_trace
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
         cls = {"spike": WorkloadClass("spike", "", 2000.0, None, 1.0, "spike/seen.jsonl", "spike/heldout.jsonl")}
@@ -158,7 +158,7 @@ def test_every_regime_runs_on_a_fake_engine():
 
 
 def test_every_regime_runs_from_a_workload_file():
-    """A `python -m workloads` file stands in for the corpus: one pool for every regime; bursty has no arrival times."""
+    """A `lab workloads` file stands in for the corpus: one pool for every regime; bursty has no arrival times."""
     recs = [{"id": f"w-{k}", "prompt": f"question {k}", "max_tokens": 16, "build_prompt_tokens": 3, "subset": "s"}
             for k in range(30)]
     recs += [{"id": f"c-{k}", "max_tokens": 16, "subset": "multi", "messages": [

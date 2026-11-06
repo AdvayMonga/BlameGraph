@@ -1,6 +1,6 @@
-"""Shared read-only weights (kernels/shared_weights.py), on the CPU's shared memory: another process attaches to the
+"""Shared read-only weights (generate/kernels/tasks/shared_weights.py), on the CPU's shared memory: another process attaches to the
 holder's tensors without copying, reads the same values, and a write it makes is caught against the pristine copy;
-the jailed evaluator (kernels/evolve/jailed.py) voids a judgment that wrote one, restores it on every exit path, and
+the jailed evaluator (evals/kernels/jailed.py) voids a judgment that wrote one, restores it on every exit path, and
 runs judgments on one holder one at a time."""
 from __future__ import annotations
 
@@ -15,13 +15,13 @@ import subprocess  # noqa: E402
 import torch  # noqa: E402
 
 
-from kernels.shared_weights import Holder, attach, constants, harness, restore  # noqa: E402
+from generate.kernels.tasks.shared_weights import Holder, attach, constants, harness, restore  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CHILD = """
 import sys, torch
 sys.path.insert(0, {root!r})
-from kernels.shared_weights import attach
+from generate.kernels.tasks.shared_weights import attach
 w = attach({path!r})
 print(float(w["a"].sum()), w["a"].data_ptr() != 0)
 if {write}:
@@ -49,7 +49,7 @@ def test_a_child_reads_the_holders_weights_and_a_write_is_caught_and_restored(tm
 
 
 def test_a_one_bit_write_is_caught():
-    from kernels.shared_weights import _equal
+    from generate.kernels.tasks.shared_weights import _equal
     a = torch.arange(9, dtype=torch.uint8)
     b = a.clone()
     b[4] ^= 1
@@ -58,7 +58,7 @@ def test_a_one_bit_write_is_caught():
 
 def test_files_others_can_write_or_under_dev_shm_are_never_unpickled(tmp_path):
     import pytest
-    from kernels.shared_weights import _trusted
+    from generate.kernels.tasks.shared_weights import _trusted
     h = holder(tmp_path)
     for f in (h.path, h.path.with_name("w.pkl.constants"), h.path.with_name("w.pkl.pristine")):
         f.chmod(0o666)
@@ -71,7 +71,7 @@ def test_files_others_can_write_or_under_dev_shm_are_never_unpickled(tmp_path):
 
 
 def test_poison_never_writes_a_shared_weight(tmp_path):
-    from kernels.check import _poison
+    from evals.kernels.check import _poison
     w, x = attach(holder(tmp_path).path)["a"], torch.ones(3)
     _poison((w, x))
     assert torch.equal(w, torch.arange(12, dtype=torch.float32).view(3, 4)) and x.isnan().any()
@@ -80,14 +80,14 @@ def test_poison_never_writes_a_shared_weight(tmp_path):
 def test_the_check_mounts_only_this_module(tmp_path):
     root = harness(tmp_path / "h")
     assert sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()) == \
-        ["kernels/__init__.py", "kernels/shared_weights.py"]
+        ["evals/kernels/__init__.py", "generate/kernels/tasks/shared_weights.py"]
     assert run(holder(tmp_path).path, False, root)[0] == "66.0"
 
 
 def fake_jail(monkeypatch, calls, result, write=None):
     """grader.jailed replaced: records its kwargs and the config it was given, optionally writes a shared weight (the
     candidate), and prints the keyed result line."""
-    from kernels.evolve import jailed
+    from evals.kernels import jailed
 
     def fake(tree, argv, **kw):
         calls.append({**kw, "cfg": json.loads((tree / "eval_config.json").read_text())})
@@ -174,7 +174,7 @@ def test_judgments_on_one_holder_run_one_at_a_time(tmp_path, monkeypatch):
 
 def test_a_holder_under_a_dir_the_jail_writes_is_refused(tmp_path, monkeypatch):
     import pytest
-    from kernels.evolve import jailed
+    from evals.kernels import jailed
     monkeypatch.setattr(jailed, "EVAL_DIRS", tmp_path)
     h = holder(tmp_path)
     with pytest.raises(ValueError, match="which a jail writes"):
@@ -182,7 +182,7 @@ def test_a_holder_under_a_dir_the_jail_writes_is_refused(tmp_path, monkeypatch):
 
 
 def test_a_dir_a_program_made_unwritable_is_still_removed(tmp_path):
-    from kernels.evolve import jailed
+    from evals.kernels import jailed
     d = tmp_path / "torch_extensions" / "ext"
     (d / "keep").mkdir(parents=True)
     (d / "keep" / "answers").write_text("42")
@@ -192,7 +192,7 @@ def test_a_dir_a_program_made_unwritable_is_still_removed(tmp_path):
     assert list(d.iterdir()) == []
 
 def test_the_holders_own_process_restores_without_reopening_its_handles(tmp_path, monkeypatch):
-    from kernels import shared_weights as sw
+    from generate.kernels.tasks import shared_weights as sw
     h = sw.Holder({"w": torch.ones(4)}, tmp_path / "w.pkl")
     monkeypatch.setattr(sw.pickle, "loads", lambda b: (_ for _ in ()).throw(AssertionError("reopened its own handles")))
     h.tensors["w"].add_(1)
@@ -201,7 +201,7 @@ def test_the_holders_own_process_restores_without_reopening_its_handles(tmp_path
 
 def test_a_refused_ipc_attach_falls_back_to_a_copy_only_where_asked_and_restore_refuses(tmp_path, monkeypatch):
     import pytest
-    from kernels import shared_weights as sw
+    from generate.kernels.tasks import shared_weights as sw
     h = sw.Holder({"w": torch.arange(6.0)}, tmp_path / "w.pkl", {"cfg": 3})
     assert sw.constants(h.path) == {"cfg": 3} and sw._device(h.path) == "cpu"     # the device kept, not a constant
     sw._HELD.clear()                                        # as in another process
@@ -220,7 +220,7 @@ def test_a_refused_ipc_attach_falls_back_to_a_copy_only_where_asked_and_restore_
 
 
 def test_an_attached_tensor_stops_counting_once_it_is_freed(tmp_path):
-    from kernels import shared_weights as sw
+    from generate.kernels.tasks import shared_weights as sw
     h = sw.Holder({"w": torch.ones(4)}, tmp_path / "w.pkl")
     sw._HELD.clear()
     got = sw.attach(h.path)
@@ -232,7 +232,7 @@ def test_an_attached_tensor_stops_counting_once_it_is_freed(tmp_path):
 def test_a_holders_ipc_pools_are_linked_under_the_jail_users_name_and_open_to_its_group(tmp_path):
     import os
     import pytest
-    from kernels import shared_weights as sw
+    from generate.kernels.tasks import shared_weights as sw
     other = next((g for g in os.getgroups() if g != os.getuid()), None)
     if other is None:
         pytest.skip("this user has no group other than its uid to stand in for the jail's")

@@ -7,9 +7,9 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from lab import ledger
-from lab.safety import grader
-from lab.safety.grader import Audit
+from data.knowledge import ledger
+from measure.sandbox import grader
+from measure.sandbox.grader import Audit
 
 
 @dataclass

@@ -1,4 +1,4 @@
-"""One round (kernels/search/funnel.py) with a fake model and a fake evaluator: one call per change, its hypothesis
+"""One round (generate/kernels/search/funnel.py) with a fake model and a fake evaluator: one call per change, its hypothesis
 and its SEARCH/REPLACE blocks in one answer, edits that do not apply or repeat a program dropped, every correct program
 measured and in the tree, and every idea's fate in the log (which the archive reads back)."""
 from __future__ import annotations
@@ -11,10 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import json  # noqa: E402
 import re  # noqa: E402
 
-from kernels import archive  # noqa: E402
-from kernels.search.funnel import Funnel, Models, expand  # noqa: E402
-from kernels.search.loop import search  # noqa: E402
-from kernels.search.tree import Node, Tree  # noqa: E402
+from generate.kernels import archive  # noqa: E402
+from generate.kernels.search.funnel import Funnel, Models, expand  # noqa: E402
+from generate.kernels.search.loop import search  # noqa: E402
+from generate.kernels.search.tree import Node, Tree  # noqa: E402
 
 START = "a = 1\nb = 0\n"
 
@@ -80,7 +80,7 @@ def test_a_call_sees_the_starting_program_other_programs_as_full_code_the_memory
 
 
 def test_the_search_runs_rounds_and_the_archive_reads_them_back(tmp_path):
-    from lab import ledger
+    from data.knowledge import ledger
     tree, cost = search(START, "SYS", Model(), lambda c: stage(c, 2), tmp_path, evals=5, funnel=funnel())
     assert tree.best().score >= 2.2 and cost["usd"] > 0
     root = tmp_path / "ledger"
@@ -94,7 +94,7 @@ def test_the_search_runs_rounds_and_the_archive_reads_them_back(tmp_path):
 
 
 def test_a_predicted_counter_change_is_measured_against_the_parent():
-    from kernels.search.funnel import mechanism
+    from generate.kernels.search.funnel import mechanism
     ncu = lambda v: {"ncu": json.dumps({"shapes": [{"shape": [1], "kernels": [{"name": "k", "dram__bytes.sum": v}]}]})}  # noqa: E731
     parent = Node("p", None, START, {}, ncu(100.0), 0)
     child = Node("c", "p", START, {}, ncu(70.0), 1)
@@ -157,7 +157,7 @@ def test_a_program_whose_change_is_like_one_already_written_is_refused_before_an
 
 
 def test_a_change_is_compared_with_its_siblings_changes_never_with_its_parents():
-    from kernels.search.funnel import near_duplicates
+    from generate.kernels.search.funnel import near_duplicates
     t = Tree()
     root = root_of(t)
     kid = t.add(Node("p5", root.id, START.replace("a = 1", "a = 5"), {"correct": 1.0, "combined_score": 0.2,
@@ -169,7 +169,7 @@ def test_a_change_is_compared_with_its_siblings_changes_never_with_its_parents()
 
 
 def test_ncu_is_not_asked_for_again_once_the_host_refuses_and_programs_are_never_written_twice():
-    from kernels.search.loop import REFUSED
+    from generate.kernels.search.loop import REFUSED
     calls = []
 
     def staged(code, n):
@@ -208,7 +208,7 @@ def test_counters_are_taken_when_a_program_first_becomes_a_parent():
 def test_model_calls_run_in_parallel_the_first_alone_and_a_program_written_twice_in_a_batch_is_refused():
     import threading
     import time
-    from kernels.search.funnel import pmap, written
+    from generate.kernels.search.funnel import pmap, written
     f = Funnel(Models(None), stage, workers=4)
     live, peak, order = [0], [0], []
     lock = threading.Lock()

@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from regimes import clientcheck as C  # noqa: E402
+from measure.loadgen import clientcheck as C  # noqa: E402
 
 
 def test_the_check_measures_the_clients_own_tpot_error():

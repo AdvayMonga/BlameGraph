@@ -1,4 +1,4 @@
-"""lab.ledger appends stamped records, stores blobs by hash, guards held-out detail, and merges another ledger."""
+"""data.knowledge.ledger appends stamped records, stores blobs by hash, guards held-out detail, and merges another ledger."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from lab import ledger
+from data.knowledge import ledger
 
 
 def test_append_stamps_and_reads_back(tmp_path):
@@ -97,7 +97,7 @@ def test_merge_keeps_legacy_findings_readable(tmp_path):
 
 
 def test_root_is_anchored_on_the_repo_not_cwd():
-    assert ledger.ROOT.is_absolute() and ledger.ROOT.parts[-2:] == ("lab", "ledger")
+    assert ledger.ROOT.is_absolute() and ledger.ROOT.parts[-2:] == ("local", "ledger")
 
 
 def test_heldout_detail_cannot_hide_in_nested_or_extra_fields(tmp_path):

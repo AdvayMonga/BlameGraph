@@ -12,10 +12,14 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lab import agent, engine, experiments, ledger, live, target, worker
+from lab import agent, experiments
+from evals.researcher import live
+from measure.runner import worker
+from data.knowledge import ledger
+from targets import engine, target
 from lab.budget import Budget, BudgetExceeded
 from lab.evaltools import BENCH_TIER
-from lab.safety import grader
+from measure.sandbox import grader
 from lab.task import Task
 from lab.tools import Toolbox, clean_pristine
 from lab.workspace import Workspace
@@ -39,7 +43,7 @@ class Session:
     profile_runner: object = None          # None: lab.tools.default_profile_runner
     task: Task | None = None
     workbench: str | None = None           # the agent's container: paused while the tools measure
-    worker: object = None                  # None: lab.worker.load() per toolbox
+    worker: object = None                  # None: measure.runner.worker.load() per toolbox
     remote_workspace: str | None = None    # the workspace's mirror on a Remote worker, where the agent works
 
 
@@ -50,7 +54,7 @@ class RunConfig:
     task: Task | None = None              # the objective and constraints; `goal` is its text when given
     repo: Path = field(default_factory=engine.repo)     # the engine; the agent's workspace is exported from it
     base: str = "HEAD"
-    runs_dir: Path = engine.ENV_ROOT / "lab" / "runs"
+    runs_dir: Path = engine.ENV_ROOT / "local" / "runs"
     ledger_root: Path = ledger.ROOT
     run_id: str | None = None             # resume an earlier run's workspace and spend
     max_sessions: int = 50
@@ -64,7 +68,7 @@ class RunConfig:
 def referee(s: Session) -> dict:
     """What the agent gets from the referee at the start of every session: the integrity verdict on this run so
     far, with evidence, and the harness facts it cannot read off its ledger. Nothing judged, nothing advised."""
-    from feedback.report import lab_feedback
+    from evals.researcher.feedback.report import lab_feedback
     from lab.evaltools import harness_facts
     recs = list(ledger.records(s.ledger_root, run=s.run_id))
     try:
@@ -93,8 +97,8 @@ def system_prompt(t: target.Target, spec: agent.AgentSpec) -> str:
     """The agent's objective from the target spec, the regimes' definitions and the tool specs: what is there, how it
     is scored and what it costs, nothing advised. Task-specific facts go in each session's brief."""
     from lab.evaltools import HOLDOUT_BUDGET
-    from lab.safety.surfaces import ALWAYS_DENY
-    from regimes import suite
+    from measure.sandbox.surfaces import ALWAYS_DENY
+    from measure.loadgen import suite
 
     def globs(g):
         return ", ".join(f"`{x}`" for x in g) or "nothing"
@@ -284,7 +288,7 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m lab.session")
+    ap = argparse.ArgumentParser(prog="lab session")
     ap.add_argument("--goal", help="plain goal text (or give --task)")
     ap.add_argument("--task", help="task spec TOML: goal, objective regimes, constraints (lab/task.py)")
     ap.add_argument("--budget", type=float, required=True, help="dollars for the whole run")

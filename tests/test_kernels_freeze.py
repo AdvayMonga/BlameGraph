@@ -1,4 +1,4 @@
-"""A winner's autotune frozen into a table before the gate and ship (kernels/evolve/freeze.py), on CPU: the rewrite,
+"""A winner's autotune frozen into a table before the gate and ship (evals/kernels/freeze.py), on CPU: the rewrite,
 the nearest-key lookup, the freeze stage with a stand-in for Triton's autotuner, and ship's refusal of a live one.
 Run: python tests/test_kernels_freeze.py"""
 from __future__ import annotations
@@ -18,9 +18,9 @@ os.environ.setdefault("LAB_TARGET", str(ROOT / "targets" / "inference-server.tom
 
 import torch  # noqa: E402
 
-from kernels.evolve import freeze  # noqa: E402
-from kernels.evolve.core import judge, screen  # noqa: E402
-from kernels.tasks import load  # noqa: E402
+from evals.kernels import freeze  # noqa: E402
+from evals.kernels.core import judge, screen  # noqa: E402
+from generate.kernels.tasks import load  # noqa: E402
 
 TWO = '''import triton
 import triton.language as tl
@@ -158,7 +158,7 @@ def test_the_freeze_stage_records_each_choice_and_the_frozen_program_judges_and_
         frozen.write_text(new)
         ok = judge(t, frozen, seen, list(t.heldout_default), None, "cpu", None, 2, iters=3)   # the gate's checks
         assert ok["metrics"]["correct"] == 1.0 and ok["metrics"]["combined_score"] > 0, ok["artifacts"]
-        from kernels.evolve.core import load_module
+        from evals.kernels.core import load_module
         mod = load_module(frozen)
         for rows, block in ((4, 1), (8, 1), (10, 2), (64, 2), (500, 2)):    # tuned, between, beyond
             mod.kernel(torch.randn(rows, 16), torch.randn(16))
@@ -180,7 +180,7 @@ def test_the_freeze_stage_records_each_choice_and_the_frozen_program_judges_and_
 
 
 def test_pipeline_freezes_where_the_evaluator_runs_and_writes_the_frozen_program():
-    from kernels import pipeline
+    from generate.kernels.tasks import pipeline
     t = load("toy_rmsnorm")
     calls = []
 
@@ -202,7 +202,7 @@ def test_pipeline_freezes_where_the_evaluator_runs_and_writes_the_frozen_program
 
 
 def test_ship_refuses_a_live_autotune_the_engine_did_not_have():
-    from kernels.evolve.ship import ship
+    from evals.kernels.ship import ship
     base = ("import triton\n\n@triton.jit\ndef _k(x, M, N):\n    pass\n\n"
             "tuned = triton.autotune(configs=C, key=['N'])(_k)\n\ndef entry(x):\n    return x\n")
     assert freeze.introduced(base.replace("key=['N']", "key=[ 'N' ]"), base) == []      # as written, spacing aside

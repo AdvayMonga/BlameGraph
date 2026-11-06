@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from feedback.report import feedback, render_for_agent  # noqa: E402
+from evals.researcher.feedback.report import feedback, render_for_agent  # noqa: E402
 
 RUN = "run-20261002-120000-abc123"
 A, B = "a" * 24, "b" * 24
@@ -19,7 +19,7 @@ _ids = itertools.count(1)
 
 
 def rec(kind: str, snapshot: str, result: dict, tool: str | None = None, run: str = RUN) -> dict:
-    """A record as lab/tools.py `_record` writes it, stamped as lab/ledger.py `append` does."""
+    """A record as lab/tools.py `_record` writes it, stamped as data/knowledge/ledger.py `append` does."""
     return {"id": f"ev-20261002-{next(_ids):012x}", "at": "2026-10-02T12:00:00+00:00", "schema": 1,
             "kind": kind, "run": run, "session": f"{run}-s1", "tool": tool or kind, "args": {},
             "snapshot": snapshot, "snapshot_blob": f"blobs/{snapshot}", "patch": f"blobs/{snapshot}x.patch",
@@ -128,7 +128,7 @@ def test_only_refused_tools():
 
 
 def test_session_ledger_is_not_lab_ledger():
-    from feedback.lab_verdict import ledger_file
+    from evals.researcher.feedback.lab_verdict import ledger_file
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / "session.jsonl"
         p.write_text(json.dumps({"kind": "session_start", "t": 1.0, "minute": 0, "tool_version": "0.1.0"}) + "\n")

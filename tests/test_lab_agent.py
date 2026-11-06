@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from lab import agent
-from lab.safety import container
+from measure.sandbox import container
 
 
 def spec(tmp_path: Path) -> agent.AgentSpec:
@@ -53,7 +53,7 @@ def test_a_remote_workbench_is_launched_over_ssh_with_the_proxy_tunnelled_and_ar
     monkeypatch.setitem(sys.modules, "claude_agent_sdk", types.SimpleNamespace(__version__="9.9.9"))
     s = spec(tmp_path)
     s.scratch.mkdir()
-    s.remote, s.remote_workspace = FakeRemote(), "/root/BlameGraph/lab/runs/remote/r1/workspace"
+    s.remote, s.remote_workspace = FakeRemote(), "/root/BlameGraph/local/runs/remote/r1/workspace"
     script = agent.ClaudeAgentSDK()._wrapper(s, Path("/unused"), "http://127.0.0.1:5555")
     text = script.read_text()
     assert "sk-secret" not in text

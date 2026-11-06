@@ -1,4 +1,4 @@
-"""The genetic search (kernels/search/generations.py) with a fake model and a fake evaluator: generation 0 from the
+"""The genetic search (generate/kernels/search/generations.py) with a fake model and a fake evaluator: generation 0 from the
 start alone, parents drawn by fitness with the best always among them, one slice per call rotated, the model mix
 cycling, children under their own parent, exactly `generations` generations whatever they score, the four idea types
 and their adaptive split, persistence lines, the memory in every call, and the archive reading each idea's own parent
@@ -13,11 +13,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from kernels import archive  # noqa: E402
-from kernels.search import generations as G  # noqa: E402
-from kernels.search.funnel import Funnel, Models, generation  # noqa: E402
-from kernels.search.llm import CACHE_SPLIT  # noqa: E402
-from kernels.search.tree import Node, Tree  # noqa: E402
+from generate.kernels import archive  # noqa: E402
+from generate.kernels.search import generations as G  # noqa: E402
+from generate.kernels.search.funnel import Funnel, Models, generation  # noqa: E402
+from generate.kernels.search.llm import CACHE_SPLIT  # noqa: E402
+from generate.kernels.search.tree import Node, Tree  # noqa: E402
 
 START = "a = 1\n"
 MADE = [0]                   # changes made so far, so every program is distinct: `a = <parent's a>*100 + k`
@@ -216,7 +216,7 @@ def test_every_call_gets_the_memory(tmp_path):
 
 
 def test_the_archive_reads_each_ideas_own_parent_from_a_generation(tmp_path):
-    from lab import ledger
+    from data.knowledge import ledger
     f = funnel()
     tree, _ = G.search(START, "SYS", f, lambda c: stage(c, 2), tmp_path, gen_size=6, n_parents=2,
                        generations=1)

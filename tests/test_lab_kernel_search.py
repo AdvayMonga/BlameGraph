@@ -1,4 +1,4 @@
-"""The `kernel_search` tool (lab/tools.py) and the pipeline it runs (kernels/pipeline.py): the start program and the
+"""The `kernel_search` tool (lab/tools.py) and the pipeline it runs (generate/kernels/tasks/pipeline.py): the start program and the
 patch from the agent's engine tree, the ssh environment for a worker host, the tool's refusals, and one call end to end
 with the capture, search and gate faked (no GPU, no model)."""
 from __future__ import annotations
@@ -12,9 +12,9 @@ import pytest
 torch = pytest.importorskip("torch")             # the kernel tasks import it
 pytest_plugins = ["tests.test_lab_proftools"]   # its `tb` fixture: a Toolbox with fake instruments
 
-from kernels import pipeline  # noqa: E402
-from kernels.tasks import load  # noqa: E402
-from lab import ledger  # noqa: E402
+from generate.kernels.tasks import pipeline  # noqa: E402
+from generate.kernels.tasks import load  # noqa: E402
+from data.knowledge import ledger  # noqa: E402
 
 EXPECT = {"metric": "speedup", "value": 1.1, "unit": "absolute", "why": "fewer launches"}
 MODULE = "import torch\n\n\ndef fn(x):\n    return x * 2\n"
@@ -50,7 +50,7 @@ def test_a_worker_host_gets_the_evaluators_ssh_mode_quoted_as_the_worker_quotes(
 
 
 def test_every_capture_regime_is_a_real_regime():
-    from regimes import suite
+    from measure.loadgen import suite
     assert set(pipeline.REGIME_CAPTURE) <= set(suite.REGIMES)
 
 
@@ -79,10 +79,10 @@ def test_refused_off_the_kernels_layer_and_beyond_the_budget(tb, monkeypatch):
 def test_one_call_records_the_search_and_saves_a_patch_when_the_gate_passes(tb, monkeypatch, tmp_path):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     monkeypatch.setenv("LAB_GPU_USD_PER_HOUR", "3")
-    from kernels.tasks import load as real_load
-    import kernels.tasks
+    from generate.kernels.tasks import load as real_load
+    import generate.kernels.tasks
     engine_task = dataclasses.replace(task(), entry="inference_server.engine:speed")     # the fixture repo's module
-    monkeypatch.setattr(kernels.tasks, "load", lambda n: engine_task if n == "silu_mul" else real_load(n))
+    monkeypatch.setattr(generate.kernels.tasks, "load", lambda n: engine_task if n == "silu_mul" else real_load(n))
     caps = tmp_path / "captures"
     caps.mkdir()
     monkeypatch.setattr(pipeline, "captures", lambda t, tree, profile, *a: [caps])
@@ -109,7 +109,7 @@ def test_one_call_records_the_search_and_saves_a_patch_when_the_gate_passes(tb, 
 
 
 def test_captures_follow_the_scored_regimes_weigh_each_the_same_and_are_reused(tmp_path, monkeypatch):
-    from kernels import shapes
+    from generate.kernels.tasks import shapes
     assert pipeline.specs(("saturated", "bursty", "nope")) == (("mixed_1", 256), ("mixed_3", 64))
     assert pipeline.specs() == pipeline.CAPTURE_SPECS
     tree = tmp_path / "tree"
@@ -145,18 +145,18 @@ def test_captures_follow_the_scored_regimes_weigh_each_the_same_and_are_reused(t
 
 
 def test_a_search_that_dies_still_charges_what_it_spent(tb, monkeypatch, tmp_path):
-    from kernels.tasks import load as real_load
-    import kernels.tasks
+    from generate.kernels.tasks import load as real_load
+    import generate.kernels.tasks
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     monkeypatch.setenv("LAB_GPU_USD_PER_HOUR", "3")
     engine_task = dataclasses.replace(task(), entry="inference_server.engine:speed")
-    monkeypatch.setattr(kernels.tasks, "load", lambda n: engine_task if n == "silu_mul" else real_load(n))
+    monkeypatch.setattr(generate.kernels.tasks, "load", lambda n: engine_task if n == "silu_mul" else real_load(n))
     monkeypatch.setattr(pipeline, "captures", lambda *a: [tmp_path])
 
     def dies(t, cs, start, out, *a, **k):
         out.mkdir(parents=True)
         (out / "trace.jsonl").write_text(json.dumps({"cost_usd": 1.25}) + "\n" + json.dumps({"cost_usd": 0.5}) + "\n")
-        raise RuntimeError("kernels.search exited 1")
+        raise RuntimeError("generate.kernels.search exited 1")
     monkeypatch.setattr(pipeline, "search", dies)
     h = next(s for s in tb.specs() if s.name == "hypothesis").fn
     k = h({"hypothesis": "fuse", "rationale": "r", "layer": "kernels"}).split()[1]

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from lab import ledger
+from data.knowledge import ledger
 from lab.budget import Budget, BudgetExceeded
 from lab.workspace import Workspace
 from tests.lab_fixtures import make_repo
@@ -61,7 +61,7 @@ def test_budget_resumes_from_the_ledger(tmp_path):
 
 
 def test_engine_commit_is_none_for_a_dirty_tree_when_asked(tmp_path):
-    from lab import engine
+    from targets import engine
     from tests.lab_fixtures import make_repo
     repo = make_repo(tmp_path)
     head = engine.commit(repo)

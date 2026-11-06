@@ -20,21 +20,21 @@ test = "python -m pytest -q -p no:cacheprovider -m 'not heavy and not needs_host
 lint = "python -m ruff check ."
 hub = ["gpt2"]                               # Hub repos whose tokenizer the engine's tests read; cached at setup (jails are offline)
 deps = ["pyproject.toml", "uv.lock"]        # the agent may change these (pyproject: its dependency tables only)
-profiles = "src/inference_server/profiles.toml"   # launch profiles in the engine's tree (lab/profiles.py)
+profiles = "src/inference_server/profiles.toml"   # launch profiles in the engine's tree (measure/runner/profiles.py)
 profile_env = "ENGINE_PROFILE"                    # names a launch's profile
-# Installs a changed `deps` into $UV_PROJECT_ENVIRONMENT (lab/build.py), and the VM's venv (lab/vm-setup.sh): the lock
+# Installs a changed `deps` into $UV_PROJECT_ENVIRONMENT (measure/sandbox/build.py), and the VM's venv (measure/cloud/vm-setup.sh): the lock
 # with the CUDA torch wheel at the locked version (the lock pins the CPU index on Linux) and the flashinfer extra
 # (the paged prefill attention; without it prefill fell back to the SDPA gather: bursty 256x -> 80x, 2026-10-24).
 build = '''uv sync --locked --extra dev --extra flashinfer --no-install-project && uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" --reinstall "torch==$(awk '/^name = "torch"$/{getline; sub(/version = "/,""); sub(/"/,""); print; exit}' uv.lock)" --index-url https://download.pytorch.org/whl/cu130'''
 
 [engine.telemetry]                           # optional: engine-native files serve collects after teardown
-env = { TELEMETRY_DIR = "{dir}", TIMELINE_DIR = "{dir}/timeline" }   # request rows (lab/TRACE.md); events.jsonl apart
+env = { TELEMETRY_DIR = "{dir}", TIMELINE_DIR = "{dir}/timeline" }   # request rows (measure/runner/trace_contract.py); events.jsonl apart
 
 [reference]                                  # the unmodified model the correctness gate compares against
 api = "vllm"
 launch = "vllm serve Qwen/Qwen3-30B-A3B --dtype bfloat16 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}"
 env = { VLLM_BATCH_INVARIANT = "1" }
-dir = "data/equiv/ref"                       # where `python -m correctness reference` wrote its outputs
+dir = "local/equiv/ref"                       # where `lab correctness reference` wrote its outputs
 
 [kernels]                                    # layer-1 kernel equivalence, per dtype [atol, rtol]; lower-precision kernels
 tolerances = { bfloat16 = [1e-2, 1e-2], float16 = [1e-3, 1e-3], float32 = [1e-5, 1e-5] }   # are judged finally by equiv
@@ -62,9 +62,9 @@ serving = ["src/inference_server/server.py", "src/inference_server/openai_shim.p
            "src/inference_server/config.py", "src/inference_server/profiles.*"]
 
 [corpus]
-dir = "corpus"
+dir = "data/corpus"
 
-[validation]                                 # python -m lab.validate: known-good must PASS, known-bad must FAIL
+[validation]                                 # lab validate: known-good must PASS, known-bad must FAIL
 good = { fp8 = "vllm serve Qwen/Qwen3-30B-A3B-FP8 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}", int8 = "vllm serve nytopop/Qwen3-30B-A3B.w8a8 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}" }
 bad = { int4 = "vllm serve Qwen/Qwen3-30B-A3B-GPTQ-Int4 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}" }
 env = { fp8 = { VLLM_USE_DEEP_GEMM = "0" } }   # per-candidate env (the Verda image's nvcc is too old for DeepGEMM)

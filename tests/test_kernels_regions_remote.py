@@ -1,8 +1,8 @@
-"""Regions through the kernel layer's pipeline (kernels/pipeline.py, kernels/hold.py) with the controller unable to
+"""Regions through the kernel layer's pipeline (generate/kernels/tasks/pipeline.py, generate/kernels/tasks/hold.py) with the controller unable to
 load them: captures packed into one samples dir, the hold process's protocol (local and over a stand-in for ssh), its
 description of a region on the fake stations, the winner as an override-module patch of the agent's tree, and the
 `kernel_search` tool on a region end to end: once with the capture, hold, search and gate faked, and once for real on
-the CPU with a fake engine held by `kernels.hold` and a fake model answering `python -m kernels.search` (no GPU)."""
+the CPU with a fake engine held by `generate.kernels.tasks.hold` and a fake model answering `python -m generate.kernels.search` (no GPU)."""
 from __future__ import annotations
 
 import json
@@ -18,7 +18,7 @@ import pytest  # noqa: E402
 torch = pytest.importorskip("torch")
 pytest_plugins = ["tests.test_lab_proftools"]   # its `tb` fixture: a Toolbox with fake instruments
 
-from kernels import pipeline  # noqa: E402
+from generate.kernels.tasks import pipeline  # noqa: E402
 from tests.test_kernels_region_engine import captures, engine, held  # noqa: E402
 
 EXPECT = {"metric": "speedup", "value": 1.1, "unit": "absolute", "why": "fused"}
@@ -40,7 +40,7 @@ def two_traffics(tmp):
 
 
 def test_captures_pack_into_one_samples_dir_each_traffic_counted_apart(tmp_path, monkeypatch):
-    from kernels import shapes
+    from generate.kernels.tasks import shapes
     regions = engine(tmp_path, monkeypatch)
     caps = two_traffics(tmp_path)
     pack = pipeline.pack(caps, tmp_path / "pack")
@@ -54,7 +54,7 @@ def test_captures_pack_into_one_samples_dir_each_traffic_counted_apart(tmp_path,
 
 
 def test_the_hold_side_describes_a_region_from_its_samples_and_holder(tmp_path, monkeypatch):
-    from kernels import hold
+    from generate.kernels.tasks import hold
     regions = engine(tmp_path, monkeypatch)
     pack = pipeline.pack(two_traffics(tmp_path), tmp_path / "pack")
     d = hold.describe("region:norm:add", pack, held(tmp_path, regions).path)
@@ -74,7 +74,7 @@ def test_the_hold_process_runs_where_the_evaluator_does_and_ends_with_the_block(
     out.mkdir()
     pushed = []
 
-    class Worker:                                # lab.worker.Remote's push and root, over the local disk
+    class Worker:                                # measure.runner.worker.Remote's push and root, over the local disk
         def root(self):
             return str(tmp_path / "worker")
 
@@ -85,14 +85,14 @@ def test_the_hold_process_runs_where_the_evaluator_does_and_ends_with_the_block(
     env = {"KERNEL_EVAL_SSH": json.dumps(["sh", "-c"]),
            "KERNEL_EVAL_REMOTE": f'cd ~ && PATH="{Path(sys.executable).parent}:$PATH" PYTHONPATH="{tmp_path}"'} \
         if remote else {}
-    from kernels.tasks import load
+    from generate.kernels.tasks import load
     task = load("region:norm:add")
     with pipeline.hold(task, caps, out, env, Worker() if remote else None) as d:
         assert d["task"] == "region:norm:add" and Path(d["samples"]).is_dir()
         assert (Path(d["samples"]) / "calls.jsonl").exists() and d["holder"].endswith("/holder/weights.pkl")
         assert not (Path(d["samples"]).parent / "released").exists()
     assert (Path(d["samples"]).parent / "released").exists()                    # stdin closed: it let go
-    assert pushed == ([str(tmp_path / "worker" / "lab/runs/remote/kernel_search/out/samples")] if remote else [])
+    assert pushed == ([str(tmp_path / "worker" / "local/runs/remote/kernel_search/out/samples")] if remote else [])
 
 
 def test_a_region_winner_is_a_patch_adding_its_override_module(tmp_path, monkeypatch):
@@ -147,7 +147,7 @@ def test_kernel_search_runs_a_region_and_hands_back_its_override_module(tb, monk
     assert "+++ b/src/inference_server/models/regions/norm_add.py" in patch and "OVERRIDES = {('norm', 'add')" in patch
 
 
-FAKE_ENGINE = {                      # the engine as kernels.hold loads it: settings, a backend with a model, stations
+FAKE_ENGINE = {                      # the engine as generate.kernels.tasks.hold loads it: settings, a backend with a model, stations
     "inference_server/__init__.py": "",
     "inference_server/config.py": "def load_settings():\n    return None\n",
     "inference_server/server.py": "import torch\n\nclass _M:\n    w = torch.randn(64, 64, generator=torch.Generator()"
@@ -164,12 +164,12 @@ def layer_weights(model, i):
 def layer_config(model):
     return LayerConfig(1e-6)
 """
-# python -m kernels.search runs in its own process: its model is faked where every process starts (sitecustomize).
+# python -m generate.kernels.search runs in its own process: its model is faked where every process starts (sitecustomize).
 FAKE_MODEL = """
 import json, sys
 sys.path.insert(0, {root!r})
 try:
-    from kernels.search import llm
+    from generate.kernels.search import llm
 except Exception:
     llm = None
 
@@ -191,11 +191,11 @@ if llm is not None:
 
 
 def test_kernel_search_runs_a_region_through_hold_search_and_gate_on_the_cpu(tb, monkeypatch, tmp_path):
-    """The real pipeline with only the capture and the model faked: `kernels.hold` loads a fake engine and shares its
-    weights, `python -m kernels.search` evolves the region's start program (every call answering one change) with the
+    """The real pipeline with only the capture and the model faked: `generate.kernels.tasks.hold` loads a fake engine and shares its
+    weights, `python -m generate.kernels.search` evolves the region's start program (every call answering one change) with the
     jailed evaluator on the CPU, the held-out gate judges the winner there too, and the override module comes back."""
     from tests.test_kernels_region_engine import FAKE as STATIONS
-    from lab import ledger
+    from data.knowledge import ledger
     fake = tmp_path / "fake"
     for rel, text in {**FAKE_ENGINE, "inference_server/models/stations.py": STATIONS + FAKE_WEIGHTS,
                       "sitecustomize.py": FAKE_MODEL.format(root=str(pipeline.ROOT))}.items():
@@ -223,7 +223,7 @@ def test_kernel_search_runs_a_region_through_hold_search_and_gate_on_the_cpu(tb,
     patch = (tb.s.workspace.path / out["patch"]).read_text()
     assert "+++ b/src/inference_server/models/regions/norm_add.py" in patch and "OVERRIDES = {('norm', 'add')" in patch
     assert "+_K = 1" in patch or "_CONST['w.mm_scale'] = None" in patch     # the child or the start itself won
-    rec = next(r for r in ledger.records(tb.s.ledger_root, kind="kernels") if r.get("tool") == "kernels.search")
+    rec = next(r for r in ledger.records(tb.s.ledger_root, kind="kernels") if r.get("tool") == "generate.kernels.search")
     assert rec["config"]["task"] == "region:norm:add" and len(rec["result"]["candidates"]) >= 2   # start + the change
     run = next(d for d in (tb.s.run_dir / "kernel_search").iterdir() if d.is_dir() and "region" in d.name)
     assert (run / "holder" / "weights.pkl").exists() and (run / "samples" / "calls.jsonl").exists()
