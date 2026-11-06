@@ -187,9 +187,9 @@ def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_node():
         best_file.write_text(code)
         rec = record(t, {"seen": list(t.seen_default)}, [{"name": "scripted", "weight": 1.0}], 4, "cpu",
                      out / "trace.jsonl", best_file, metrics, root=Path(d) / "ledger", retimed=retimed,
-                     tool="generate.kernels.search", cost=cost)
+                     tool="kernels.search", cost=cost)
         stored = list(ledger.records(Path(d) / "ledger", kind="kernels"))
-        assert stored[0]["tool"] == "generate.kernels.search" and stored[0]["cost"] == cost
+        assert stored[0]["tool"] == "kernels.search" and stored[0]["cost"] == cost
         assert len(rec["result"]["candidates"]) == len(tree.nodes)
 
 
@@ -297,31 +297,31 @@ def test_the_ab_harness_runs_both_arms_and_gates_each_winner_on_held_out_shapes(
         return run
     saved = dict(ab.ARMS)
     ab.ARMS.clear()
-    ab.ARMS.update({"openevolve": arm(SEED.read_text()), "generate.kernels.search": arm(fast)})
+    ab.ARMS.update({"openevolve": arm(SEED.read_text()), "kernels.search": arm(fast)})
     try:
         with tempfile.TemporaryDirectory() as d:
             shapes = Path(d) / "shapes.json"
             shapes.write_text(json.dumps({"seen": [list(x) for x in t.seen_default],
                                           "heldout": [list(x) for x in t.heldout_default]}))
             assert ab.main(["--task", t.name, "--shapes", str(shapes), "--out", str(Path(d) / "ab"), "--device", "cpu",
-                            "--evals", "2", "--arms", "openevolve,generate.kernels.search"]) == 0
+                            "--evals", "2", "--arms", "openevolve,kernels.search"]) == 0
             rows = json.loads((Path(d) / "ab" / "ab.json").read_text())
-            assert json.loads((Path(d) / "ab" / "generate.kernels.search-0" / "gate.json").read_text())["passed"]
-            ab.ARMS.update({"openevolve": None, "generate.kernels.search": None})      # finished arms are reused, not rerun
+            assert json.loads((Path(d) / "ab" / "kernels.search-0" / "gate.json").read_text())["passed"]
+            ab.ARMS.update({"openevolve": None, "kernels.search": None})      # finished arms are reused, not rerun
             env = {"KERNEL_EVAL_SSH": json.dumps(["sh", "-c"]),                  # the gate over a stand-in for ssh
                    "KERNEL_EVAL_REMOTE": f"cd {Path(__file__).parent.parent} && PATH={Path(sys.executable).parent}:$PATH"}
             with mock.patch.dict(os.environ, env):
                 assert ab.main(["--task", t.name, "--shapes", str(shapes), "--out", str(Path(d) / "ab"),
-                                "--device", "cpu", "--evals", "2", "--arms", "openevolve,generate.kernels.search"]) == 0
+                                "--device", "cpu", "--evals", "2", "--arms", "openevolve,kernels.search"]) == 0
             again = json.loads((Path(d) / "ab" / "ab.json").read_text())
     finally:
         ab.ARMS.clear()
         ab.ARMS.update(saved)
     assert [r["seen_score"] > 0 and r["gates_passed"] for r in again] == [True, True]
     by = {r["arm"]: r for r in rows}
-    assert set(by) == {"openevolve", "generate.kernels.search"} and all(r["gates_passed"] for r in rows)
-    assert by["generate.kernels.search"]["seen_score"] > 3 * by["openevolve"]["seen_score"]    # rsqrt vs the naive row loop
-    assert by["generate.kernels.search"]["heldout_speedup"] > 0
+    assert set(by) == {"openevolve", "kernels.search"} and all(r["gates_passed"] for r in rows)
+    assert by["kernels.search"]["seen_score"] > 3 * by["openevolve"]["seen_score"]    # rsqrt vs the naive row loop
+    assert by["kernels.search"]["heldout_speedup"] > 0
 
 
 def test_the_openevolve_arm_gets_the_same_single_model_and_the_facts_only_prompts():
@@ -354,7 +354,7 @@ def test_every_arm_differs_from_kernels_search_in_one_flag():
         from types import SimpleNamespace
         a = SimpleNamespace(task="t", shapes="s", evals=3, model="m", device="cpu", initial=None)
         assert "search-beam" not in ab.ARMS                       # the beam was removed (2026-10-27)
-        for arm in ("generate.kernels.search", "search-no-tools", "search-mcts", "search-untyped"):
+        for arm in ("kernels.search", "search-no-tools", "search-mcts", "search-untyped"):
             ab.ARMS[arm](a, Path("/tmp/x"), 0)
     finally:
         cli.main = orig
