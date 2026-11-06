@@ -189,6 +189,19 @@ generated from the engine's own code). A prefill wave runs through the stations 
 or captured, so the default path is unchanged. Known limits: one layer captured, writers in place (K/V) outside
 regions, the whole step's weights large to share.
 
+## 2026-11-03 — The new layout: lab, targets, measure, evals, generate, data
+Six top-level folders replace the fifteen: `lab/` (the loop: session, agent, tools, experiments, rehearsal),
+`targets/` (spec + engine), `measure/` (runner, cloud, sandbox, profile, loadgen, sim, context), `evals/` (agent:
+correctness, holdout, repeat audit, validate; researcher: feedback, canaries, process evals, tier agreement,
+dashboard; benches: the engine comparison; kernels: the layer-1 evaluator), `generate/kernels/` (search, the
+OpenEvolve arm, tasks, the library of other implementations, the idea archive) and `data/` (corpus, workloads,
+calibration, knowledge: ledger, store, search). The gitignored `data/` becomes `local/`, with the ledger and runs.
+Pure moves, one PR per group. Why (the user): one interface for them and the agent, generators kept apart from
+the code that judges them, and a structure as simple as it can be. Simpler than the 2026-10-26 plan: `lab/` and
+`tests/` stay flat (no `experiment/`, `agent/` or mirrored test folders), no `measure/bench/` (bench lives in the
+lab's tools), and not yet done: one `python -m lab` CLI with `tools.toml`, `program.md`, `DECISIONS.md` out of git,
+`vllm_sources.py` merged into the library's sources.
+
 ## 2026-11-03 — The reorganization starts; the old design docs leave the tree
 The agreed reorganization (one PR per top-level group, no behavior change, a structure as simple as it can be) starts
 with the docs nobody reads any more: `RUNS.md` (frozen since 2026-10-18; runs are ledger records),
