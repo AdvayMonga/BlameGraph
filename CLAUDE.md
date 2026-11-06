@@ -444,7 +444,8 @@ workloads, calibration, knowledge); `tests/` stays flat; `local/` (gitignored) h
   is a tensor are left out; a shipped override runs the engine's own stations on such a call): `Station(name, reads, writes, fn)`; `interface` (inputs read before written,
   outputs read after the region or `live`), the stations as the baseline (`Task.baseline_fn`), an fp32 run as the
   reference, `bytes_moved` (fused vs one-by-one), and the error budget: `Task.error_budget` (2) lets each element differ from the reference by
-  that many times the baseline's own error there (the farthest of 3 calls, `check.baseline_envelope`: a non-deterministic baseline's spread is its error), on top of the dtype's tolerance, and a NaN/Inf mismatch is within it
+  that many times the baseline's own largest error among reference values of that element's size (the same power of two; the farthest of 3 calls, `check.baseline_envelope`, so a
+  non-deterministic baseline's spread is its error, and its error may land anywhere, `check._by_size`), on top of the dtype's tolerance, and a NaN/Inf mismatch is within it
   where the baseline has one there too (`check._compare(base=, k=)`), in the
   checker, the timed outputs and `verify.py`; the baseline is bound before the candidate loads and its modules (`Task.watch`) are watched for
   patches. The engine's stations (`models/stations.py`) and region capture are merged in the engine (main 0a00b0c); the
@@ -496,7 +497,8 @@ workloads, calibration, knowledge); `tests/` stays flat; `local/` (gitignored) h
   region:embed:argmax`: wraps decode_step; the first call per (rows, block-table width) kept whole up to 256 MiB:
   tokens, pos, bt renumbered to the blocks its rows touch, every layer's K/V of those blocks stacked [layers, blocks,
   ...], and logits, next tokens and those blocks after). Inputs (tokens, pos, bt, k_cache, v_cache), outputs (logits,
-  next, K/V): pure, so baseline and programs copy the K/V per call. The weights are not inputs: `Task.call` passes the
+  K/V; `next` is checked as a greatest logit of its row and dropped, `step.derived`: an integer fits no budget and a
+  bf16 step's argmax flips where the fp32 reference's does not): pure, so baseline and programs copy the K/V per call. The weights are not inputs: `Task.call` passes the
   holder's dict (`step.weights`: every layer's `<i>.w.*`, embed, final norm, lm_head, inv_freq; cfg, n_layers) after
   the inputs, so the checker never clones them; attached over IPC only (no copy fallback). Baseline: the engine's
   decode_step on a Model namespace built from the held weights; reference: the engine's `stations.reference()` in
@@ -509,8 +511,9 @@ workloads, calibration, knowledge); `tests/` stays flat; `local/` (gitignored) h
   k_pools, v_pools, weights)`) writes the pools in place while the task's K/V is pure, so `ship.region_files` refuses
   it and kernel_search reports `patch_refused`. Tested on the CPU with a fake megakernel and the engine's stations; on
   the H200 (lab-gpu-18, 2026-11-04, steady_interactive 1 and 8) the start program failed correctness on 3 of 6 cases
-  (max_abs 0.5) while the determinism check found the megakernel's own outputs differ across identical calls; the
-  error budget now covers that spread (`check.baseline_envelope`), not re-run yet.
+  (max_abs 0.5) while the determinism check found the megakernel's own outputs differ across identical calls; with
+  the spread in the budget (lab-gpu-19, 2026-11-05) still 1 of 6 cases and memoization (a `next` flip) failed, hence
+  the budget by size and the `next` rule (decided 2026-11-06); not re-run yet.
 - `generate/kernels/library/ptx.py` — the PTX comparison's cards (decided 2026-10-22, after Standard Kernel): each implementation's
   kernels counted from its PTX (or `cuobjdump -sass` output, for libraries that ship no PTX): instruction classes,
   widest vector access, declared registers, static shared memory, and the Hopper features in use (wgmma, TMA,

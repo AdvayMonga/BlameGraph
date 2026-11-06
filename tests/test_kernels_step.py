@@ -124,8 +124,12 @@ def test_the_step_task_reads_its_captures_and_passes_the_weights_uncloned(tmp_pa
     x0, x1 = t.make_inputs((2, 3), torch.bfloat16, "cpu", _gen(0)), t.make_inputs((2, 3), torch.bfloat16, "cpu", _gen(1))
     assert [a.shape for a in x0] == [(2,), (2,), (2, 3), (L, 5, NKV, BS, D), (L, 5, NKV, BS, D)]
     assert all(torch.equal(a, b) for a, b in zip(x0[:3], x1[:3])) and not torch.equal(x0[3], x1[3])  # only K/V vary
-    w = t.bind(lambda *xs: xs[-1])(*x0)
+    seen = []
+    logits, nxt = torch.zeros(2, V, dtype=torch.bfloat16), torch.zeros(2, dtype=torch.long)
+    out = t.bind(lambda *xs: seen.append(xs[-1]) or (logits, nxt, xs[3], xs[4]))(*x0)
+    w = seen[0]
     assert len(w) > len(x0) and w["0.w.qkv"].data_ptr() == h.tensors["0.w.qkv"].data_ptr()   # the holder's memory
+    assert len(out) == 3 and out[0] is logits                                 # `next` checked against the logits, dropped
     flops, nbytes = t.cost((2, 3), torch.bfloat16, x0)
     assert flops == 0 and nbytes > 2 * x0[3].numel() * 2
 
@@ -215,3 +219,7 @@ def test_the_step_is_judged_end_to_end_on_the_cpu(tmp_path, monkeypatch):
     gates = json.loads(r["artifacts"]["gates"])
     assert gates["inputs_unchanged"]["passed"] and gates["memoization"]["passed"] and r["metrics"]["combined_score"] > 0
     assert h.changed() == []
+    wrong = tmp_path / "wrong_token.py"
+    wrong.write_text(PROGRAM.replace("logits.argmax(-1)", "logits.argmin(-1)"))       # right logits, wrong token
+    r = core.judge(t, wrong, [(2, 3), (1, 1)], [], None, "cpu", None, 2, iters=3)
+    assert r["metrics"]["correct"] == 0.0 and "not a greatest logit" in r["artifacts"]["gates"]

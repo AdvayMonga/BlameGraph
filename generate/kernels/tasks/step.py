@@ -4,7 +4,8 @@ layer's K/V written into the paged cache) as a kernel task (local/notes/handoff-
 
 Inputs, captured at a step's start (measure.profile.capture.step): tokens [B], pos [B] (each row's length so far), the block
 table [B, cols] and every layer's K/V of the blocks the rows touch, stacked [layers, blocks, kv heads, 16, head dim].
-Outputs: logits [B, V], next tokens [B], and the K/V after the step. A pure function: the K/V comes back as new
+Outputs: logits [B, V], next tokens [B] (judged only as a greatest logit of their row, `derived`), and the K/V after
+the step. A pure function: the K/V comes back as new
 tensors, so the baseline and every program copy it per call (the engine writes in place). The weights are not inputs:
 the call passes the holder's (kernels/shared_weights, CUDA IPC; a step's do not fit the copy fallback) as a dict `w`
 after the inputs, so the checker never clones them; a write into them voids the judgment (`restore`). The baseline is
@@ -27,7 +28,7 @@ from generate.kernels.tasks import Task, randn
 from measure.profile.capture import STEP, STEP_ENTRY
 
 INPUTS = ("tokens", "pos", "bt", "k_cache", "v_cache")
-OUTPUTS = ("logits", "next", "k_cache", "v_cache")
+OUTPUTS = ("logits", "k_cache", "v_cache")      # judged; `next` is checked against the logits and dropped (`derived`)
 ROW = ("w.input_norm", "w.qkv", "w.q_norm", "w.k_norm", "w.o_proj", "w.post_norm", "w.router", "w.gate_up",
        "w.gate_up_scale", "w.down", "w.down_scale")      # the megakernel's per-layer pointer table, then K and V
 EXPERTS = ("w.gate_up", "w.down")        # the reference widens these per expert used, never whole
@@ -116,6 +117,18 @@ def _cost(w: dict):
     return cost
 
 
+def derived(out):
+    """A step's (logits, next, k, v) as the checker judges it: `next` must be a greatest logit of its row (a tie counts)
+    and is then dropped. An integer fits no error budget, and a bf16 step's argmax flips where the fp32 reference's does
+    not when two logits are close, as the engine's own megakernel does run to run; the logits are judged under the
+    budget."""
+    logits, nxt, k, v = out
+    top, best = logits.gather(-1, nxt.long()[:, None])[:, 0], logits.amax(-1)
+    if not bool(((top == best) | (top.isnan() & best.isnan())).all()):
+        raise ValueError("`next` is not a greatest logit of its row")
+    return logits, k, v
+
+
 def task(samples: str | None = None, shared_weights: str | None = None) -> Task:
     """The step as a task: inputs from a capture's samples (`samples`: measure.profile.capture.step's dir, its first call per
     (rows, block-table width) kept whole), the weights attached from a holder (`shared_weights`, `weights`'s
@@ -142,8 +155,9 @@ def task(samples: str | None = None, shared_weights: str | None = None) -> Task:
     def shape_of(call):
         return _shape(call) if call.get("fn") == STEP and _shape(call) in by_shape else None
     ok = bool(w)
-    return Task(name=STEP, entry=STEP_ENTRY, reference=reference(w) if ok else _missing, make_inputs=make_inputs,
-                shape_of=shape_of, cost=_cost(w) if ok else _missing, call=lambda fn, *xs: fn(*xs, dict(w)),
+    ref = reference(w) if ok else _missing
+    return Task(name=STEP, entry=STEP_ENTRY, reference=lambda *xs: derived(ref(*xs)), make_inputs=make_inputs,
+                shape_of=shape_of, cost=_cost(w) if ok else _missing, call=lambda fn, *xs: derived(fn(*xs, dict(w))),
                 heldout_axes=(0, 1), edge_shapes=lambda shape: [], layouts=(), nonfinite=False, error_budget=ERROR_BUDGET,
                 baseline_fn=baseline, watch=_watch(), capture_fn=STEP, seen_default=tuple(by_shape),
                 start_program=(lambda: start_program()) if ok else None)

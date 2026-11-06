@@ -98,7 +98,7 @@ def test_fusing_moves_fewer_bytes_than_the_stations_one_by_one():
     assert m["fused_bytes"] == (8 * 64 + 64 * 64 + 8 * 64) * 4 and m["unfused_bytes"] > m["fused_bytes"]
 
 
-def test_the_error_budget_is_per_element_twice_the_baselines_own_error_there():
+def test_the_error_budget_is_twice_the_baselines_own_error_on_numbers_of_that_size():
     t = task("toy_region", STATIONS, "norm", "add", ctx, lambda call: None, live=("x",),
              seen_default=((4, 64),))
     base, ref = t.baseline(), t.reference
@@ -132,6 +132,32 @@ def test_the_budget_covers_the_baselines_own_run_to_run_spread():
     assert check_kernel(ref, toward(1.5), t.make_inputs, [(4, 64)], [], baseline=jittery, **common)["passed"]
     assert not check_kernel(ref, toward(1.5), t.make_inputs, [(4, 64)], [],
                             baseline=lambda *a: (ref(*a)[0],), **common)["passed"]    # an exact baseline: no slack
+
+
+def test_the_budget_bounds_how_wrong_a_number_may_be_not_where():
+    """The step's case: a non-deterministic baseline's error lands anywhere, so a candidate off by more than 2x the
+    baseline's error at one element passes while within 2x the baseline's largest error on values of that size."""
+    t = task("toy_region", STATIONS, "norm", "add", ctx, lambda call: None, live=("x",), seen_default=((4, 64),))
+    base, ref = t.baseline(), t.reference
+
+    def off_by(times):                                      # one element, a tiny baseline error there, moved by
+        def fn(*a):                                         # `times` the largest baseline error on values of its size
+            r, b = ref(*a)[0].float(), base(*a)[0].float()
+            if not (r.isfinite().all() and b.isfinite().all()):        # the poisoned case: the reference as is
+                return (r.to(torch.bfloat16),)
+            err, lvl = (b - r).abs(), torch.floor(torch.log2(r.abs().clamp_min(2.0 ** -60)))
+            i = err.argmax()
+            same = (lvl == lvl.flatten()[i]).flatten()
+            j = torch.where(same, err.flatten(), torch.full_like(err.flatten(), torch.inf)).argmin()  # least wrong there
+            assert err.flatten()[j] < err.flatten()[i] / 4
+            out = r.clone().flatten()
+            out[j] += times * err.flatten()[i]
+            return (out.view_as(r).to(torch.bfloat16),)
+        return fn
+    common = dict(dtypes=(torch.bfloat16,), tolerances={torch.bfloat16: (1e-6, 0.0)}, edge_shapes=[], layouts=(),
+                  seeds=(0,), repeats=1, baseline=base, budget=t.error_budget)
+    assert check_kernel(ref, off_by(1.5), t.make_inputs, [(4, 64)], [], **common)["passed"]
+    assert not check_kernel(ref, off_by(3.0), t.make_inputs, [(4, 64)], [], **common)["passed"]
 
 
 def test_one_large_value_loosens_nothing_else():
