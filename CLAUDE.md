@@ -23,8 +23,8 @@ optimization is a separate repo, github.com/AdvayMonga/inference-server, found v
 - `README.md` stays a few one-line feature bullets.
 
 ## Running the loop
-One command: `lab <command> [args]` (`bin/lab`: this repo's `.venv` python if present, else `python3`; put `bin/` on
-PATH). `lab` lists every command, `lab <command> -h` its arguments; the table is `lab/cli.py`, where a new module
+One command: `lab <command> [args]` (`pip install -e .` puts it on PATH; else `bin/lab`, this repo's `.venv` python
+if present, else `python3`). `lab` lists every command, `lab <command> -h` its arguments; the table is `lab/cli.py`, where a new module
 with a CLI gets its entry. The agent's tools are the same commands by the same names, run by a person on a researcher
 run. Jailed and remote internals keep `python -m`.
 1. Once per target and GPU: `lab store pull --corpus`; the reference's answers (`lab correctness reference --url URL
