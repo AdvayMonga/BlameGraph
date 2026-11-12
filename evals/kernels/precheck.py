@@ -1,4 +1,4 @@
-"""The precheck (decided 2026-10-22, step 7 of the funnel): what can be judged without a GPU, run jailed with no GPU
+"""The precheck (step 7 of the funnel): what can be judged without a GPU, run jailed with no GPU
 attached (evals.kernels.jailed's PRECHECK_STAGE), so it costs no GPU time and can run beside GPU jobs.
 
 The program's source screen, then its import with no visible device: a program that builds CUDA C++ with
