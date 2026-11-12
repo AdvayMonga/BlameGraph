@@ -1,4 +1,4 @@
-"""Where the decode megakernel stops beating the separate kernels (decided 2026-10-23: a measured routing table, by batch
+"""Where the decode megakernel stops beating the separate kernels (a measured routing table, by batch
 size and context length, instead of MEGAKERNEL_MAX_ROWS). One `measure.profile.profile` run per path, prompt length and batch
 size, its requests decoding together: the engine's timeline records each scheduler step's wall time and its batch
 (`step` events); only steps at the run's own batch size count (a run's tail, as requests finish, has a few).

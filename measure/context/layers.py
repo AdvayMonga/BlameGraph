@@ -1,4 +1,4 @@
-"""Each layer's share of a profiled window and its distance from a ceiling, as facts (decided 2026-10-14: the agent
+"""Each layer's share of a profiled window and its distance from a ceiling, as facts (the agent
 chooses the layer; it is given these, never a recommendation). From one `profile` bundle (measure/profile/bundle.py: meta.json's
 window, kernels.json, the engine's timeline in events.jsonl, stats.json):
 

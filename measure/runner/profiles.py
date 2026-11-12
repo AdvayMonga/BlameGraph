@@ -1,4 +1,4 @@
-"""Launch profiles (decided 2026-10-14): an engine may ship a config per regime in a TOML file of its own tree, named
+"""Launch profiles: an engine may ship a config per regime in a TOML file of its own tree, named
 by the target (`[engine] profiles`): `[general]` plus a table per regime. A measurement serves the general config once
 for every regime, then serves each regime whose table is non-empty on its own with `<profile_env>=<regime>`; that
 launch's number is the regime's headline. The harness reads only the file, never engine code, to decide the launches."""

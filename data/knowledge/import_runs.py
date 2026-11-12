@@ -1,4 +1,4 @@
-"""Manual measurements into the ledger as numbers only (decided 2026-10-18).
+"""Manual measurements into the ledger as numbers only.
 
 A run dir written by `lab regimes run --out DIR` (`regimes.json`) or `lab correctness candidate --out
 DIR/equiv.json` becomes a `bench` or `equiv` record under a `manual-<date>` run: the engine commit and the launch env
