@@ -1,2 +1,2 @@
-"""Layer-1 generator, our own: a tree of refinement chains over kernel programs, judged by generate.kernels.evolve's evaluator
-(jailed, hardened, held-out gate). Replaces the OpenEvolve package; see generate/kernels/search/loop.py."""
+"""The kernel search: generations of model-written changes to one kernel program, each judged by the jailed evaluator
+(lab kernels search)."""
