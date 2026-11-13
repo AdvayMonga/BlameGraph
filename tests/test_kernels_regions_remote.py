@@ -130,7 +130,7 @@ def test_kernel_search_runs_a_region_and_hands_back_its_override_module(tb, monk
                "shapes": {"seen": [[4, 64]], "heldout": [[64, 64]], "heldout_axes": [0]}}
     monkeypatch.setattr(pipeline, "hold", hold)
 
-    def search(t, cs, s, out, evals, root, env, device="cuda", facts_text=None, held=None):
+    def search(t, cs, s, out, root, env, device="cuda", facts_text=None, held=None):
         seen["search"] = (s.read_text(), held["holder"])
         out.mkdir(parents=True)
         (out / "best_program.py").write_text(s.read_text().replace("(h,)", "(h + 0,)"))
@@ -142,7 +142,7 @@ def test_kernel_search_runs_a_region_and_hands_back_its_override_module(tb, monk
     h = next(s for s in tb.specs() if s.name == "hypothesis").fn
     k = h({"hypothesis": "fuse norm..add", "rationale": "r", "layer": "kernels"}).split()[1]
     fn = next(s for s in tb.specs() if s.name == "kernel_search").fn
-    out = json.loads(fn({"hypothesis_id": k, "expect": EXPECT, "task": "region:norm:add", "budget": 20}
+    out = json.loads(fn({"hypothesis_id": k, "expect": EXPECT, "task": "region:norm:add"}
                         ).split("\n\nExperiment record")[0])
     assert seen["hold"] == "region:norm:add" and seen["search"] == (start, "/gpu/w.pkl") and seen["gate"]["samples"]
     patch = (tb.s.workspace.path / out["patch"]).read_text()
@@ -215,7 +215,7 @@ def test_kernel_search_runs_a_region_through_hold_search_and_gate_on_the_cpu(tb,
     h = next(s for s in tb.specs() if s.name == "hypothesis").fn
     k = h({"hypothesis": "fuse norm..add", "rationale": "r", "layer": "kernels"}).split()[1]
     fn = next(s for s in tb.specs() if s.name == "kernel_search").fn
-    text = fn({"hypothesis_id": k, "expect": EXPECT, "task": "region:norm:add", "budget": 20})
+    text = fn({"hypothesis_id": k, "expect": EXPECT, "task": "region:norm:add"})
     out = json.loads(text.split("\n\nExperiment record")[0])
     assert out["gate"]["passed"] is True, out
     gates = out["gate"]["gates"]

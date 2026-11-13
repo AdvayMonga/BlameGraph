@@ -215,7 +215,7 @@ def facts(task, kernel_tasks: dict | None, regimes: tuple[str, ...] = ()) -> str
     return "\n".join(out)
 
 
-def search(task, caps: list[Path], start: Path, out: Path, evals: int, ledger_root: Path, env: dict,
+def search(task, caps: list[Path], start: Path, out: Path, ledger_root: Path, env: dict,
            device: str = "cuda", facts_text: str | None = None, held: dict | None = None) -> dict:
     """`lab kernels search` on the captures (a region: on its shapes, samples and holder, `hold`'s): its last
     JSON line (best, cost, out, ledger record id)."""
@@ -228,7 +228,7 @@ def search(task, caps: list[Path], start: Path, out: Path, evals: int, ledger_ro
     else:
         given = [w for c in caps for w in ("--captures", str(c))]
     argv = [sys.executable, "-m", "generate.kernels.search", "--task", task.name, "--out", str(out),
-            "--evals", str(evals), "--initial", str(start), "--ledger", str(ledger_root), "--equal-captures",
+            "--initial", str(start), "--ledger", str(ledger_root), "--equal-captures",
             "--device", device, *(["--facts", str(out / "facts.txt")] if facts_text else []), *given]
     p = subprocess.run(argv, capture_output=True, text=True, cwd=ROOT, env={**os.environ, **env})
     lines = [x for x in p.stdout.splitlines() if x.startswith("{")]

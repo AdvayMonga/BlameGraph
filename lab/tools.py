@@ -24,11 +24,6 @@ QUERY_MAX_BYTES = 64_000           # a query's reply: whole rows up to this, so 
 AFTER_BENCH_TIMEOUT_S = 900          # the after-bench profile: 1-7 min measured; a hang costs at most this
 GPU_TOOLS = frozenset({"profile", "trace", "kernel", "hostprof", "bench", "equiv", "submit", "baseline",
                        "kernel_search"})
-KERNEL_SEARCH_GPU_MIN = 3.0          # GPU minutes per judged program, for sizing a search to its budget (an estimate)
-KERNEL_SEARCH_MIN_EVALS = 8          # fewer judged programs than this is not a search
-KERNEL_SEARCH_ROUND_USD = 15.0       # model spend of generation 0 and one more (a 40-idea round measured $9-14 on
-                                     # 2026-10-24/25, a 24-idea generation ~$5; a $6 share ended a round before any
-                                     # program was timed); further generations run while the budget lasts
 
 
 def _drop_links(root: Path) -> None:
@@ -181,22 +176,8 @@ class Toolbox(EvalTools, ProfTools):
             task_name(str(args.get("task")))
         except argparse.ArgumentTypeError:
             raise ValueError(f"`task` must be one of {list(TASKS)} or region:FIRST:LAST") from None
-        usd = args.get("budget")
-        if isinstance(usd, bool) or not isinstance(usd, (int, float)) or usd <= 0:
-            raise ValueError("`budget` must be a positive number")
-        if usd > self.s.budget.remaining_usd:
-            raise ValueError(f"`budget` {usd} is more than the run has left (${self.s.budget.remaining_usd:.2f})")
         if not os.environ.get("ANTHROPIC_API_KEY"):
             raise ValueError("kernel_search needs ANTHROPIC_API_KEY on this host (its search calls the models)")
-        rate = gpu_rate()[0]
-        model_usd = max(usd / 2, KERNEL_SEARCH_ROUND_USD) if rate else usd    # the models get two generations at least
-        evals = int((usd - model_usd) / (rate * KERNEL_SEARCH_GPU_MIN / 60)) if rate else 30
-        if evals < KERNEL_SEARCH_MIN_EVALS:
-            least = KERNEL_SEARCH_ROUND_USD + KERNEL_SEARCH_MIN_EVALS * rate * KERNEL_SEARCH_GPU_MIN / 60
-            raise ValueError(f"`budget` {usd} leaves ${usd - model_usd:.2f} of GPU time after two generations of model calls "
-                             f"(${KERNEL_SEARCH_ROUND_USD:g}): {evals} judged programs at ${rate:g}/GPU-hour; a search needs "
-                             f"at least {KERNEL_SEARCH_MIN_EVALS} (~${least:.2f} in all)")
-        evals = min(60, evals)
         task = load(args["task"])
         snap = self._audited("kernel_search", args)
         tree = self._pristine()
@@ -226,7 +207,7 @@ class Toolbox(EvalTools, ProfTools):
                 start = out / "start.py"
                 start.write_text(held["start"] if held else pipeline.start_program(task, tree))
                 from lab.evaltools import _layer_facts
-                found = pipeline.search(task, caps, start, out / "search", evals, self.s.ledger_root, env,
+                found = pipeline.search(task, caps, start, out / "search", self.s.ledger_root, env,
                                         device=device, held=held,
                                         facts_text=pipeline.facts(task, _layer_facts(self.s.ledger_root,
                                                                                      "kernel_tasks"), scored))
@@ -253,7 +234,7 @@ class Toolbox(EvalTools, ProfTools):
         gm = g.get("metrics") or {}
         result = {"verdict": "ok", "metrics": {"speedup": (found.get("best") or {}).get("combined_score"),
                                                "heldout_speedup": gm.get("heldout_speedup")},
-                  "best": found.get("best"), "search_record": found.get("ledger"), "evals": evals,
+                  "best": found.get("best"), "search_record": found.get("ledger"),
                   "model_usd": model_cost, "gate": {"passed": passed, "metrics": gm,
                                                     "gates": json.loads((g.get("artifacts") or {}).get("gates") or "{}"),
                                                     **({"error": g["artifacts"]["error"][-1500:]}
@@ -481,18 +462,13 @@ class Toolbox(EvalTools, ProfTools):
                      self.submit),
             *self.prof_specs(gpu),
             ToolSpec("kernel_search", "Search for a faster version of one engine kernel: `task` (one of the kernel "
-                     "tasks, the engine entry point it replaces), `budget` (USD: model calls plus GPU time, charged to "
-                     "the run). Captures the task's calls under real seen-split traffic at several concurrencies, splits "
+                     "tasks, the engine entry point it replaces). Captures the task's calls under real seen-split traffic at several concurrencies, splits "
                      "the shapes seen / held-out, searches from your workspace's version of the kernel (generate.kernels.search), "
                      "and gates the winner on the held-out shapes. Returns the winner's seen-shape speedup, the gate's "
                      "verdict and held-out speedup, the `kernels` ledger record of the search, and, if the gate passed, "
-                     "the path of a patch of the engine module in your workspace (not applied). Blocks until done. "
-                     f"`budget` covers two generations of the search's model calls (${KERNEL_SEARCH_ROUND_USD:g}; "
-                     f"later generations run while the model half lasts) plus GPU time at {KERNEL_SEARCH_GPU_MIN:g} min "
-                     f"per judged program, {KERNEL_SEARCH_MIN_EVALS} programs at least."
-                     + gpu("hours, sized to `budget`"),
-                     {"type": "object", "required": ["task", "budget"],
-                      "properties": {"task": {"type": "string"}, "budget": {"type": "number"}}},
+                     "the path of a patch of the engine module in your workspace (not applied). Blocks until done; "
+                     "its model calls and GPU time are charged to the run." + gpu("hours"),
+                     {"type": "object", "required": ["task"], "properties": {"task": {"type": "string"}}},
                      self.kernel_search),
             ToolSpec("hypothesis", "Record a hypothesis: `hypothesis` (the bottleneck and the proposed change), "
                      f"`rationale` (why), `layer` (where the change is: {', '.join(experiments.LAYERS)}), optional "

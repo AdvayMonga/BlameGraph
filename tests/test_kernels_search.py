@@ -1,4 +1,4 @@
-"""generate.kernels.search on CPU with no model calls: the SEARCH/REPLACE parser, the tree's selection and caps, a whole search
+"""generate.kernels.search on CPU with no model calls: the SEARCH/REPLACE parser, a whole search
 on the toy task with a scripted model and the real (jailed) evaluator, and the Claude client's request against a fake
 SDK client. Run: python tests/test_kernels_search.py"""
 from __future__ import annotations
@@ -17,7 +17,6 @@ os.environ.setdefault("LAB_ENGINE_PYTHON", sys.executable)
 os.environ.setdefault("LAB_NO_JAIL", "1")
 
 from generate.kernels.search import diff  # noqa: E402
-from generate.kernels.search.tree import Node, Tree, fingerprint  # noqa: E402
 
 SEED = ROOT / "generate" / "kernels" / "evolve" / "seeds" / "toy_rmsnorm.py"
 LOOP = '''    out = torch.empty_like(x)
@@ -51,68 +50,24 @@ def test_diff_applies_exact_blocks_and_refuses_the_rest():
         ("def f():\n    return 2\n", "")
 
 
-def test_mcts_descends_by_uct_widens_progressively_and_skips_closed_nodes():
-    import math
-    t = Tree(seed=0, c=math.sqrt(2), max_failures=2)
-    ok = lambda sc: {"combined_score": sc, "correct": 1.0, "stage": 2}        # noqa: E731
-    root = t.add(Node("r", None, "x = 1", ok(1.0), {}, 0))
-    assert t.select().id == "r" and root.visits == 1 and t.reward(root) == 0.5           # alone: the middle
-    t.add(Node("a", "r", "x = 2", ok(1.8), {}, 1))
-    t.add(Node("b", "r", "x = 3", ok(0.6), {}, 1))
-    assert root.visits == 3 and len(root.children) == 2 > math.ceil(3 ** 0.5) - 1
-    assert t.select().id == "a"                         # root may not widen (2 >= ceil(3^0.5)); UCT prefers `a`
-    assert (t.reward(t.nodes["a"]), t.reward(root), t.reward(t.nodes["b"])) == (1.0, 0.5, 0.0)   # percentiles
-    t.add(Node("c", "r", "x = 9", ok(1.8), {}, 1))
-    assert t.reward(t.nodes["c"]) == t.reward(t.nodes["a"]) == (2 + 0.5) / 3                # a tie splits
-    t.nodes["r"].children.remove("c"); del t.nodes["c"]; root.visits -= 1
-    for i in range(2):
-        t.add(Node(f"f{i}", "a", "", {"combined_score": 0.0, "correct": 0.0, "stage": 1}, {}, 2 + i))
-    assert not t.expandable(t.nodes["a"]) and t.select().id in ("r", "b")      # `a` closed after 2 failed children
-    assert [n.id for n in t.lineage(t.nodes["f0"])] == ["r", "a", "f0"]
-    assert t.nodes["f0"].visits == 1 and t.nodes["a"].visits == 3
-    t.add(Node("u", "b", "", {"combined_score": 0.0, "correct": 0.0, "stage": 0}, {"error": "no diff"}, 9))
-    assert t.nodes["u"].visits == 0                     # never judged: no reward backed up
-    for i in range(8):                                   # a strong, well-visited branch under `a`
-        t.add(Node(f"a{i}", "a", f"x = {10 + i}", ok(2.0 + i / 10), {}, 3))
-    assert len(root.children) < math.ceil(root.visits ** 0.5)           # the root is under its widening cap...
-    assert t.select().id == "b"               # ...but C = sqrt 2 explores the once-visited `b` over widening or `a`
-    t.c = 0.1
-    assert t.lineage(t.select())[1].id == "a"                            # a small C descends into `a`'s subtree
-    t.c = math.sqrt(2)
-    assert fingerprint("x = 1  # note\n") == fingerprint("x=1\n")
-
-
-def test_review_fixes_parents_repairs_duplicates_and_noise():
-    ok = lambda sc: {"combined_score": sc, "correct": 1.0, "stage": 2}        # noqa: E731
-    t = Tree(seed=0)
-    t.add(Node("r", None, "r", ok(1.0), {}, 0))
-    t.add(Node("z", "r", "z", {"combined_score": 0.0, "correct": 1.0, "stage": 2}, {}, 1))   # correct, zeroed by a gate
-    assert not t.expandable(t.nodes["z"])
-    for i in range(3):                                   # edits that never reached the GPU: misses, not failures
-        t.add(Node(f"m{i}", "r", "r", {"combined_score": 0.0, "correct": 0.0, "stage": 0}, {"error": "x"}, 1))
-    assert t.nodes["r"].failures == 1 and t.nodes["r"].misses == 3 and not t.expandable(t.nodes["r"])
-    a = 'C = """\n#define B 64\n"""\n'
-    assert fingerprint(a) != fingerprint(a.replace("64", "128")) and fingerprint("x = 1  # n\n") == fingerprint("x=1\n")
-
-
-def test_counters_are_not_asked_for_again_once_the_host_refuses_them():
-    from generate.kernels.search.loop import cascade
-    calls = []
-
-    def stage(path, n):
-        calls.append(n)
-        if n == 3:
-            return {"metrics": {}, "artifacts": {"ncu": json.dumps({"shapes": [{"error": "==ERROR== ERR_NVGPUCTRPERM"}]})}}
-        return {"metrics": {"correct": 1.0, "combined_score": 1.1, "stage": n}, "artifacts": {}}
-    judge = cascade(stage, counters=True)
-    first, second = judge("x = 1\n"), judge("x = 2\n")
-    assert calls == [1, 2, 3, 1, 2] and "unavailable on this host" in first["artifacts"]["ncu_missing"]
-    assert "ncu" not in second["artifacts"]
-
-
-def test_every_ab_arm_gets_the_same_promotion():
+def test_the_search_arm_gets_the_one_model_and_openevolves_promotion():
+    from types import SimpleNamespace
     from generate.kernels.search import ab
-    assert ab.SAME_PROMOTION == ("--retime", "3", "--detector-model", "none")   # same for both
+    from generate.kernels.search import __main__ as cli
+    seen, orig = [], cli.main
+    cli.main = lambda argv, **kw: seen.append((argv, kw)) or print('{"ledger": null}')
+    try:
+        ab.ARMS["kernels.search"](SimpleNamespace(task="t", shapes="s", evals=3, model="m", device="cpu", initial=None),
+                                  Path("/tmp/x"), 0)
+    finally:
+        cli.main = orig
+    assert seen[0][1] == {"models": ("m",), "retime_k": 3, "detector": None} and set(ab.ARMS) == {"openevolve",
+                                                                                                 "kernels.search"}
+    try:
+        ab.main(["--task", "t", "--shapes", "s", "--out", "/tmp/x", "--arms", "nope"])
+        raise AssertionError("an unknown arm ran")
+    except SystemExit:
+        pass
 
 
 def test_share_with_gates_ranks_only_the_gated_tasks():
@@ -131,24 +86,12 @@ def test_share_with_gates_ranks_only_the_gated_tasks():
         share.rank = orig
 
 
-def test_a_branch_is_worth_its_best_program_so_a_strong_child_of_a_weak_parent_is_expanded():
-    t = Tree(seed=0)                                     # the 2026-10-19 run's shape: the best under a weak parent
-    ok = lambda sc: {"combined_score": sc, "correct": 1.0, "stage": 2}        # noqa: E731
-    t.add(Node("r", None, "r", ok(1.0), {}, 0))
-    for i, sc in enumerate((0.86, 1.0, 0.99, 0.0)):
-        t.add(Node(f"c{i}", "r", f"c{i}", ok(sc) if sc else {"combined_score": 0.0, "correct": 0.0, "stage": 1}, {}, 1))
-    for i, sc in enumerate((1.42, 1.25, 1.27, 0.92)):    # under the 0.86x one
-        t.add(Node(f"w{i}", "c0", f"w{i}", ok(sc), {}, 2))
-    for i, sc in enumerate((1.02, 1.04, 1.0, 1.26)):     # under the 1.0x one
-        t.add(Node(f"s{i}", "c1", f"s{i}", ok(sc), {}, 3))
-    assert t.value(t.nodes["c0"]) == t.reward(t.nodes["w0"]) == 1.0        # the branch's best, not its mean
-    assert t.select().id == "w0"
-
-
-def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_node():
-    from evals.kernels import evaluator
+def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_program():
     from generate.kernels.evolve.run import record, retime, system_message
-    from generate.kernels.search.loop import cascade, search
+    from generate.kernels.search.diversity import Novelty
+    from generate.kernels.search.evaluate import Evaluator
+    from generate.kernels.search.loop import search
+    from generate.kernels.search.program import Config
     from generate.kernels.tasks import load
     from data.knowledge import ledger
     t = load("toy_rmsnorm")
@@ -156,9 +99,9 @@ def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_node():
     comment = "<<<<<<< SEARCH\n    xf = x.float()\n=======\n    # same\n    xf = x.float()\n>>>>>>> REPLACE"
     prompts = []
 
-    def scripted(system, user):                     # a comment-only edit, or FAST again, is a duplicate
+    def scripted(system, user):                     # a comment-only edit is a duplicate
         prompts.append((system, user))
-        return (next(naive, FAST) if "for i in range" in user else comment), 0.25
+        return (next(naive, FAST) if "for i in range" in user.split("# The starting program")[0] else comment), 0.25
 
     with tempfile.TemporaryDirectory() as d:
         cfg = Path(d) / "eval.json"
@@ -166,21 +109,21 @@ def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_node():
                                    "iters": 3}))
         os.environ["KERNEL_EVAL_CONFIG"] = str(cfg)
         out = Path(d) / "run"
-        tree, cost = search(SEED.read_text(), system_message(t), scripted,
-                            cascade(evaluator.judge_stage), out, evals=10)
-        best = tree.best()
-        root = next(n for n in tree.nodes.values() if n.parent is None)    # the naive seed is ~0.1x the baseline
+        pop, cost = search(SEED.read_text(), {}, system_message(t), [scripted], Evaluator(), Novelty(), out,
+                           Config(generations=2, ideas=3, parents=1, workers=1))
+        root, best = pop[0], max(pop, key=lambda p: p.score)             # the naive seed is ~0.1x the baseline
         assert "rsqrt" in best.code and best.metrics["correct"] == 1.0 and best.score > 3 * root.score
-        assert cost["evals"] == 3 and cost["usd"] == 0.25 * cost["model_calls"]    # stopped: no node left open
-        assert tree.select() is None
-        errors = [n.artifacts.get("error", "") for n in tree.nodes.values()]
-        assert any("no SEARCH/REPLACE" in e for e in errors) and any("identical to a program" in e for e in errors)
+        assert cost == {"usd": 1.5, "model_calls": 6, "evals": 2, "generations": 2} and len(pop) == 2
+        fates = [x["fate"] for line in (out / "hypotheses.jsonl").read_text().splitlines()
+                 for x in json.loads(line)["ideas"]]
+        assert fates[0] == "failed correctness" and "no SEARCH/REPLACE" in fates[1] and fates[2] == "full exam"
+        assert all("identical to a program" in f for f in fates[3:])
         system, first = prompts[0]
         assert "How a program is judged" in system and "SEARCH/REPLACE" in system
         assert "# Its measurements" in first and "timings (per seen shape" in first and "consider" not in first.lower()
-        assert "Programs already derived from it\n- " in prompts[1][1]           # the failed child is shown as a fact
+        assert "# The starting program" in prompts[3][1] and f"-> {best.id}" in prompts[3][1]
         rows = [json.loads(x) for x in (out / "trace.jsonl").read_text().splitlines()]
-        assert len(rows) == len(tree.nodes) and rows[0]["parent_id"] is None
+        assert len(rows) == len(pop) and rows[0]["parent_id"] is None
         code, metrics, retimed = retime(out / "trace.jsonl", 2)
         assert "rsqrt" in code and all(len(x["scores"]) == 3 for x in retimed)
         best_file = out / "best.py"
@@ -190,38 +133,15 @@ def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_node():
                      tool="kernels.search", cost=cost)
         stored = list(ledger.records(Path(d) / "ledger", kind="kernels"))
         assert stored[0]["tool"] == "kernels.search" and stored[0]["cost"] == cost
-        assert len(rec["result"]["candidates"]) == len(tree.nodes)
+        assert len(rec["result"]["candidates"]) == len(pop)
 
 
-def test_the_judges_json_is_read_best_effort():
-    from generate.kernels.search.loop import hypotheses
-    assert len(hypotheses("pre " + json.dumps([{"a": 1}, {"b": 2}, 3]) + " post", 16)) == 2
-    assert hypotheses("not json", 4) == [{"plan": "not json"}] and hypotheses("", 4) == []
-
-
-def test_the_prompt_states_the_roofline_gap_and_the_search_does_not_stop_there():
-    from generate.kernels.search.loop import prompt, search
-    from generate.kernels.search.tree import Node, Tree
-    rows = [{"shape": [1], "weight": 0.75, "pct_of_roofline": 96.0}, {"shape": [2], "weight": 0.25,
-                                                                      "pct_of_roofline": 80.0}]
-    n = Node("a", None, "x = 1\n", {"combined_score": 1.0, "correct": 1.0}, {"timings": json.dumps(rows)}, 0)
-    assert abs(n.pct_of_roofline - 92.0) < 1e-9
-    t = Tree()
-    t.add(n)
-    assert "92.0% of its roofline bound" in prompt(t, n)
-    judge = lambda code: {"metrics": n.metrics, "artifacts": n.artifacts}
-    silent = lambda system, user: ("", 0.0)
-    with tempfile.TemporaryDirectory() as d:
-        _, cost = search("x = 1\n", "S", silent, judge, Path(d), evals=5)
-    assert cost["model_calls"] > 0 and "stopped_near_roofline" not in cost
-
-
-def test_diagnosis_facts_bound_type_two_shape_counters_ranking_and_patience():
+def test_diagnosis_facts_bound_type_two_shape_counters_and_ranking():
     from types import SimpleNamespace
     import torch
     from evals.kernels.core import _roofline
-    from generate.kernels.search.loop import ncu_facts, search
-    from generate.kernels.search.tree import Node
+    from generate.kernels.search import context
+    from generate.kernels.search.program import Program
     from generate.kernels.tasks.share import rank
     from generate.kernels.tasks import load
     t = load("toy_rmsnorm")                     # 4 FLOPs and ~8 bytes per element: memory-bound on any GPU
@@ -233,7 +153,7 @@ def test_diagnosis_facts_bound_type_two_shape_counters_ranking_and_patience():
                                                                              [x]) == {"pct_of_roofline": None}
     two = {"shapes": [{"shape": [1, 256], "kernels": [{"name": "k_small"}]},
                       {"shape": [512, 256], "kernels": [{"name": "k_big"}]}]}
-    f = ncu_facts(Node("n", None, "", {}, {"ncu": json.dumps(two)}, 0))
+    f = context.counters(Program("n", None, "", {}, {"ncu": json.dumps(two)}, 0))
     assert "shape [1, 256]" in f and "k_big" in f
     with tempfile.TemporaryDirectory() as d:
         bundles = []
@@ -250,19 +170,13 @@ def test_diagnosis_facts_bound_type_two_shape_counters_ranking_and_patience():
     moe, pd = (next(r for r in out["tasks"] if r["task"] == n) for n in ("moe_gemm", "paged_decode"))
     assert moe["share_by_profile"] == [0.2, 0.1] and abs(moe["share"] - 0.15) < 1e-9 and moe["gain_at_roofline"] is None
     assert abs(pd["gain_at_roofline"] - 0.1 * 0.1) < 1e-9 and pd["pct_of_roofline"] == 90.0
-    flat = {"metrics": {"combined_score": 1.0, "correct": 1.0}, "artifacts": {}}
-    n = iter(range(100))
-    with tempfile.TemporaryDirectory() as d:
-        _, cost = search("x = 0\n", "S", lambda s, u: (f"<<<<<<< SEARCH\nx = 0\n=======\nx = {next(n) + 1}\n>>>>>>> "
-                                                       "REPLACE", 0.0), lambda code: flat, Path(d), evals=50,
-                         patience=3)
-    assert cost["stopped_no_progress"] and cost["evals"] <= 5                # no score ever beats the root's
 
 
 def test_ncu_counters_parse_and_a_host_without_ncu_says_so():
     from evals.kernels import jailed, ncu
-    from generate.kernels.search.loop import cascade, facts
-    from generate.kernels.search.tree import Node
+    from generate.kernels.search import context
+    from generate.kernels.search.evaluate import Evaluator
+    from generate.kernels.search.program import Program
     head = ",".join(f'"{h}"' for h in ["ID", "Kernel Name", *ncu.METRICS])
     units = ",".join(['""', '""'] + ['"%"'] * len(ncu.METRICS))
     row = lambda i, name, dur: ",".join([f'"{i}"', f'"{name}"'] + ['"1,234.5"'] * (len(ncu.METRICS) - 1) + [f'"{dur}"'])
@@ -273,15 +187,9 @@ def test_ncu_counters_parse_and_a_host_without_ncu_says_so():
     if __import__("shutil").which("ncu") is None:
         r = jailed.judge_jailed({"task": "toy_rmsnorm", "seen": [[8, 256]], "device": "cpu"}, "x = 1\n", 3)
         assert "ncu_missing" in r["artifacts"]
-    stages = []
-
-    def fake(path, stage):
-        stages.append(stage)
-        return {"metrics": {"combined_score": 1.2, "correct": 1.0}, "artifacts": {"ncu": json.dumps(p)} if stage == 3
-                else {"timings": "[]"}}
-    r = cascade(fake, counters=True)("x = 1\n")
-    assert stages == [1, 2, 3] and "ncu" in r["artifacts"] and "timings" in r["artifacts"]
-    assert "ncu counters" in facts(Node("n", None, "", r["metrics"], r["artifacts"], 0))
+    program = Program("n", None, "x = 1\n", {}, {"timings": "[]"}, 0)
+    Evaluator(lambda code, stage: {"metrics": {}, "artifacts": {"ncu": json.dumps(p)}}, counters=True).profile(program)
+    assert "ncu counters" in context.facts(program) and "big" in context.facts(program)
 
 
 def test_the_ab_harness_runs_both_arms_and_gates_each_winner_on_held_out_shapes():
@@ -342,32 +250,6 @@ def test_the_openevolve_arm_gets_the_same_single_model_and_the_facts_only_prompt
         run.main = orig
     assert cfg["llm"]["models"] == [{"name": "claude-opus-5-5", "weight": 1.0}] and cfg["random_seed"] == 1
     assert Path(cfg["prompt"]["template_dir"]).is_dir() and seen["argv"][seen["argv"].index("--iterations") + 1] == "29"
-
-
-def test_every_arm_differs_from_kernels_search_in_one_flag():
-    from generate.kernels.search import ab
-    from generate.kernels.search import __main__ as cli
-    seen = []
-    orig = cli.main
-    cli.main = lambda argv: seen.append(argv) or print('{"ledger": null}')
-    try:
-        from types import SimpleNamespace
-        a = SimpleNamespace(task="t", shapes="s", evals=3, model="m", device="cpu", initial=None)
-        assert "search-beam" not in ab.ARMS                       # the beam was removed (2026-10-27)
-        for arm in ("kernels.search", "search-no-tools", "search-mcts", "search-untyped"):
-            ab.ARMS[arm](a, Path("/tmp/x"), 0)
-    finally:
-        cli.main = orig
-    base = seen[0]
-    extras = [argv[len(base):] for argv in seen[1:]]
-    assert extras == [["--no-judge-tools"], ["--mcts"], ["--no-types"]]
-    assert "--second-judge-model" in base            # every arm makes changes with the one model
-    assert all(argv[:len(base)] == base for argv in seen)
-    try:
-        ab.main(["--task", "t", "--shapes", "s", "--out", "/tmp/x", "--arms", "nope"])
-        raise AssertionError("an unknown arm ran")
-    except SystemExit:
-        pass
 
 
 def test_openevolve_calls_are_priced_into_a_usage_log():
@@ -483,19 +365,6 @@ def test_a_turn_whose_stream_dies_is_sent_again_and_a_real_error_is_not():
         llm._stream, time.sleep = orig, real_sleep
 
 
-def test_the_prompt_shows_other_branches_and_the_start_as_full_code():
-    from generate.kernels.search.loop import prompt
-    t = Tree()
-    ok = lambda sc: {"combined_score": sc, "correct": 1.0, "stage": 2}        # noqa: E731
-    t.add(Node("r", None, "a = 1\nb = 1\n", ok(1.0), {}, 0))
-    t.add(Node("x", "r", "a = 2\nb = 1\n", ok(1.5), {}, 1))
-    t.add(Node("y", "r", "a = 1\nb = 2\n", ok(1.3), {}, 1))
-    view = prompt(t, t.nodes["y"])
-    assert "## Program x (score 1.5000)\n```python\na = 2\nb = 1\n" in view          # full code, not a diff
-    assert "# The starting program r" in view and "# The starting program" not in prompt(t, t.nodes["r"])
-    assert "Hypotheses already measured" not in view
-
-
 def test_a_flagged_candidate_is_passed_over_at_promotion():
     from generate.kernels.evolve.run import retime
     from generate.kernels.search.detect import detector
@@ -599,47 +468,26 @@ def test_a_query_tool_that_cannot_run_answers_the_model_instead_of_crashing_the_
     assert out.startswith("query failed: ") and "Error" in out
 
 
-def test_the_cli_builds_its_funnel_with_every_task_in_the_memory(monkeypatch, tmp_path):
-    from types import SimpleNamespace
-
-    from generate.kernels import archive
+def test_the_cli_starts_the_search_from_every_competitor_port_of_its_task_with_the_model_mix(monkeypatch, tmp_path):
     from generate.kernels.search import __main__ as cli
-    monkeypatch.setattr(cli, "Claude", lambda *a, **k: (lambda s, u: ("", 0.0)))
-    path = archive.export([archive.Entry("i1", "toy", "t", {}), archive.Entry("i2", "other", "u", {})],
-                          tmp_path / "archive.jsonl")
-    a = SimpleNamespace(archive=str(path), second_judge_model="none", second_judge_share=4, effort="high",
-                        judge_tools=False, model="m", per_call=20, parallel=4, ncu=False, precheck=True,
-                        workers=8)
-    import data.knowledge.search
-    monkeypatch.setattr(data.knowledge.search, "FastEmbed", lambda cache: "EMBEDDER")
-    f = cli._funnel(a, SimpleNamespace(name="moe_gemm_fp8"), lambda s, u: ("", 0.0))
-    assert [e.id for e in f.library] == ["i1", "i2"] and f.embedder == "EMBEDDER"
-    assert f.task == "moe_gemm_fp8" and f.precheck and f.workers == 8 and f.parallel == 4
-
-
-def test_the_cli_starts_the_generations_from_every_competitor_port_of_its_task(monkeypatch, tmp_path):
-    from generate.kernels.search import __main__ as cli
-    from generate.kernels.search import generations
     program = tmp_path / "start.py"
     program.write_text("# EVOLVE-BLOCK-START\nimport torch\n\n\ndef silu_mul(x):\n    return x\n"
                        "# EVOLVE-BLOCK-END\n\nkernel = silu_mul\n")
-    config = tmp_path / "eval_config.json"
-    config.write_text("{}")
-    monkeypatch.setenv("KERNEL_EVAL_CONFIG", str(config))
     monkeypatch.setattr(cli, "_shapes", lambda task, a: {})
     monkeypatch.setattr(cli, "prepare", lambda *a, **k: ({}, program))
-    monkeypatch.setattr(cli, "setting", lambda *a, **k: "")
-    monkeypatch.setattr(cli, "Claude", lambda *a, **k: "JUDGE")
-    monkeypatch.setattr(cli, "_funnel", lambda *a, **k: "FUNNEL")
+    monkeypatch.setattr(cli, "setting", lambda *a, **k: "SETTING")
+    monkeypatch.setattr(cli, "Claude", lambda model, *a, **k: model)
+    monkeypatch.setattr(cli, "_embedder", lambda root: None)
     seen = {}
 
-    def evolve(initial, *a, starts=None, **k):
-        seen.update(starts=starts)
+    def search(start, seeds, setting, models, *a):
+        seen.update(seeds=seeds, setting=setting, models=models)
         raise SystemExit("judged")
-    monkeypatch.setattr(generations, "search", evolve)
+    monkeypatch.setattr(cli, "search", search)
     try:
         cli.main(["--task", "silu_mul", "--shapes", "s.json", "--out", str(tmp_path / "out"), "--device", "cpu"])
     except SystemExit as e:
         assert str(e) == "judged"
-    assert list(seen["starts"]) == ["vllm.silu_and_mul"] and "_silu_mul_engine = silu_mul" in seen["starts"][
+    assert list(seen["seeds"]) == ["vllm.silu_and_mul"] and "_silu_mul_engine = silu_mul" in seen["seeds"][
         "vllm.silu_and_mul"]
+    assert seen["models"] == ["claude-sonnet-5-5"] * 3 + ["claude-opus-5-5"] and "SETTING" in seen["setting"]
