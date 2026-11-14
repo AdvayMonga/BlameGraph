@@ -1,11 +1,14 @@
 """The search: each generation names its changes in one call, reviews them in a second, and has a writer make each.
 
-A generation picks its parents (diversity.pick). One naming call reflects on the last generation's ideas and names
-`ideas` changes (context.name). The ones whose text is close to another idea's are found (diversity.Similar) and one
-review call writes the final list, the same change merged and combinations added (context.review). A writer call
-makes each change (context.write). Programs that repeat one already written are dropped (diversity.Novelty), the rest
-are judged (evaluate.Evaluator), and every program that took the full exam joins the population. It runs every
-generation whatever they score.
+Before the first generation the start and the seeds are judged, and one call names public implementations to port
+as further starting programs (context.ports), each made by a writer call and judged beside them.
+
+A generation picks its parents (diversity.pick) and drops the ones that fail the full correctness check
+(evaluate.Evaluator.check). One naming call reflects on the last generation's ideas and names `ideas` changes
+(context.name). The ones whose text is close to another idea's are found (diversity.Similar) and one review call
+writes the final list, the same change merged and combinations added (context.review). A writer call makes each
+change (context.write). Programs that repeat one already written are dropped (diversity.Novelty), the rest are built
+and timed (evaluate.Evaluator.evaluate) and join the population. It runs every generation whatever they score.
 
 `<out>/trace.jsonl` holds every judged program, `<out>/hypotheses.jsonl` every generation's ideas and their fates,
 `<out>/ideas.jsonl` one row per idea (plan, prediction, program, outcome, reflection), and `<out>/calls.jsonl` with
@@ -61,6 +64,12 @@ def changes(answer: dict, parents: list[Program]) -> list[dict]:
     return [p for p in answer.get("ideas") or [] if isinstance(p, dict) and p.get("parent") in ids]
 
 
+def idea(plan: dict, generation: int, calls: dict) -> Idea:
+    """A named change as an idea: its parent and the named changes it is from, apart from the rest of its plan."""
+    return Idea(new_id(), plan["parent"], generation, {k: v for k, v in plan.items() if k not in ("parent", "from")},
+                plan["from"] if isinstance(plan.get("from"), list) else [], dict(calls))
+
+
 def reflected(ideas: list[Idea], answer: dict) -> None:
     """Each reflection of an answer onto the idea it names."""
     by = {i.id: i for i in ideas}
@@ -87,7 +96,8 @@ def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer
            novelty: diversity.Novelty, similar: diversity.Similar, out: Path,
            cfg: Config = Config()) -> tuple[list[Program], dict]:
     """The population (the start first) and the run's cost {usd, model_calls, evals, generations}. `seeds`: name ->
-    program, judged beside the start. `namer` names and reviews a generation's changes; `writer` makes each."""
+    program, judged beside the start. `namer` names the ports and names and reviews a generation's changes, and
+    writes the ports (it can read their sources); `writer` makes each change."""
     out.mkdir(parents=True, exist_ok=True)
     rng, population, ideas, ran, past = random.Random(cfg.seed), [], [], 0, similar.past
     calls = Calls(out)
@@ -100,35 +110,12 @@ def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer
             trace.flush()
             return p
 
-        first = [start, *seeds.values()]
-        for code in first:
-            novelty.add(code)
-        results = evaluator.evaluate(first)
-        root = keep(start, results[0], 0)
-        for name, code, r in zip(seeds, first[1:], results[1:]):
-            keep(code, r, 0, root.id, {"competitor": name}, "competitor")
-
-        for gen in range(1, cfg.generations + 1):
-            parents = diversity.pick(population, cfg.parents, rng)
-            if not parents:
-                break
-            for p in parents:
-                evaluator.profile(p)
-            by, spent = {p.id: p for p in population}, calls.usd
-            text, nid = calls(namer, "name", gen,
-                              *context.name(setting, parents, population, ideas, past, gen, cfg.ideas))
-            answer = context.read(text)
-            reflected(ideas, answer)
-            plans, final, rid = changes(answer, parents)[:cfg.ideas], [], None
-            if plans:
-                text, rid = calls(namer, "review", gen, *context.review(
-                    setting, parents, population, ideas, past, plans, similar.match(plans), cfg.merges))
-                final = changes(context.read(text), parents)[:cfg.ideas + cfg.merges] or plans   # unreadable: as named
-            new = [Idea(new_id(), p["parent"], gen, {k: v for k, v in p.items() if k not in ("parent", "from")},
-                        p["from"] if isinstance(p.get("from"), list) else [], {"name": nid, "review": rid})
-                   for p in final]
+        def make(gen: int, parents: list[Program], new: list[Idea], model: Model, spent: float, row: dict,
+                 kind: str = "") -> None:
+            """A generation's ideas written, the repeats refused, the rest judged; its row of hypotheses.jsonl."""
+            by = {p.id: p for p in population}
             with ThreadPoolExecutor(max_workers=cfg.workers) as ex:
-                list(ex.map(lambda i: write(calls, writer, setting, i, by), new))
+                list(ex.map(lambda i: write(calls, model, setting, i, by), new))
             for i in new:
                 why = novelty.refuse(i.code, by[i.parent]) if i.code else None
                 if why:
@@ -137,19 +124,58 @@ def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer
             for i, r in zip(written, evaluator.evaluate([i.code for i in written])):
                 i.fate = r.fate
                 if r.examined:
-                    i.child = keep(i.code, r, gen, i.parent, i.plan)
+                    i.child = keep(i.code, r, gen, i.parent, i.plan, kind)
             similar.add(new)
-            ideas, ran = ideas + new, gen
+            ideas.extend(new)
             kids = [i.child for i in new if i.child]
             log.write(json.dumps({
-                "iteration": gen, "parents": [{"id": p.id, "score": p.score} for p in parents], "named": len(plans),
-                "reviewed": len(new), "written": len(written), "examined": len(kids),
+                "iteration": gen, "parents": [{"id": p.id, "score": p.score} for p in parents], **row,
+                "written": len(written), "examined": len(kids),
                 "improved": sum(c.score > by[c.parent].score for c in kids), "usd": round(calls.usd - spent, 4),
-                "calls": {"name": nid, "review": rid}, "ideas": [idea_row(i, by[i.parent]) for i in new]},
-                default=str) + "\n")
+                "ideas": [idea_row(i, by[i.parent]) for i in new]}, default=str) + "\n")
             log.flush()
 
-        if any(i.generation == ran for i in ideas):  # the last generation's ideas have no naming call after them
+        first = [start, *seeds.values()]
+        for code in first:
+            novelty.add(code)
+        results = evaluator.evaluate(first)
+        root = keep(start, results[0], 0)
+        for name, code, r in zip(seeds, first[1:], results[1:]):
+            keep(code, r, 0, root.id, {"competitor": name}, "competitor")
+        if cfg.ports:
+            spent = calls.usd
+            text, nid = calls(namer, "ports", 0, *context.ports(setting, root, list(seeds), cfg.ports))
+            plans = changes(context.read(text), [root])[:cfg.ports]
+            make(0, [root], [idea(p, 0, {"name": nid}) for p in plans], namer, spent,
+                 {"named": len(plans), "calls": {"name": nid}}, "competitor")
+
+        for gen in range(1, cfg.generations + 1):
+            picked = diversity.pick(population, cfg.parents, rng)
+            if not picked:
+                break
+            spent, dropped = calls.usd, evaluator.check(picked)
+            for i in ideas:
+                if i.child and i.child.id in dropped:
+                    i.fate = f"failed the full check as a parent: {dropped[i.child.id]}"
+            parents = [p for p in picked if p.id not in dropped]
+            for p in parents:
+                evaluator.profile(p)
+            plans, final, nid, rid = [], [], None, None
+            if parents:
+                text, nid = calls(namer, "name", gen,
+                                  *context.name(setting, parents, population, ideas, past, gen, cfg.ideas))
+                answer = context.read(text)
+                reflected(ideas, answer)
+                plans = changes(answer, parents)[:cfg.ideas]
+            if plans:
+                text, rid = calls(namer, "review", gen, *context.review(
+                    setting, parents, population, ideas, past, plans, similar.match(plans), cfg.merges))
+                final = changes(context.read(text), parents)[:cfg.ideas + cfg.merges] or plans   # unreadable: as named
+            make(gen, parents, [idea(p, gen, {"name": nid, "review": rid}) for p in final], writer, spent,
+                 {"dropped": dropped, "named": len(plans), "reviewed": len(final), "calls": {"name": nid, "review": rid}})
+            ran = gen
+
+        if any(i.generation == ran > 0 for i in ideas):   # the last generation's ideas have no naming call after them
             text, _ = calls(namer, "reflect", ran + 1, *context.reflect(setting, population, ideas, past, ran + 1))
             reflected(ideas, context.read(text))
     score = {p.id: p.score for p in population}

@@ -1,8 +1,8 @@
 """Context: everything a model call reads, built in one place, and how its answer is read back. Facts only.
 
-Four calls: `name` (one a generation: the changes to make), `review` (one a generation: the final list, duplicates
-merged and combinations added), `write` (one a change: the program it makes) and `reflect` (once, after the last
-generation). `name` and `review` share their system prompt and the programs shown, so the second reads them cached."""
+Five calls: `ports` (once, before the first generation: the public implementations to port), `name` (one a
+generation: the changes to make), `review` (one a generation: the final list, duplicates merged and combinations
+added), `write` (one a change or port: the program it makes) and `reflect` (once, after the last generation). `name` and `review` share their system prompt and the programs shown, so the second reads them cached."""
 from __future__ import annotations
 
 import json
@@ -13,6 +13,8 @@ from generate.kernels.search.program import Idea, Program
 
 NAMER = ("You are directing a search for a faster GPU kernel program. You are shown the programs this generation "
          "builds on, each with its measurements, the starting program and every idea tried so far.")
+PORTER = ("You are choosing starting programs for a search for a faster GPU kernel program. You are shown the program "
+          "the search starts from and its measurements.")
 WRITER = ("You are making one change to a GPU kernel program in a search. You are shown the program, its measurements "
           "and the change to make.")
 FORMAT = """Answer with SEARCH/REPLACE blocks against the program shown. Each SEARCH section must match the program
@@ -37,6 +39,18 @@ TIMING_KEYS = ("shape", "candidate_ms", "baseline_ms", "speedup", "speedup_p25",
 HISTORY_MAX = 400            # rows of the run's ideas shown; the rest are counted
 EARLIER_MAX = 200            # rows of earlier runs' distinct ideas shown, the most tried first; the rest are counted
 TEXT = 240                   # characters of an idea's text shown
+
+
+def ports(setting: str, start: Program, ported: list[str], n: int) -> tuple[str, str]:
+    """(system, user) for the call before the first generation: the public implementations to port, `ported` aside."""
+    ask = (f"Name up to {n} public implementations of this operation to port as further starting programs of the "
+           "search: those shown above, or others you find. A port is this program with its kernel replaced by that "
+           "implementation's, computing the same result through the same entry point. Each is written, applied and "
+           "judged beside this program." + (f" Already ported and judged: {', '.join(ported)}." if ported else "")
+           + ' Answer with one JSON object and nothing else: {"ideas": [{"parent": "<this program\'s id>", "source": '
+           '"<the library, its kernel and where its source is>", "modification_plan": "<what replaces what, max 60 '
+           'words>"}]}')
+    return setting + CACHE_SPLIT + "\n\n" + PORTER, program(start) + CACHE_SPLIT + "\n\n" + ask
 
 
 def name(setting: str, parents: list[Program], population: list[Program], ideas: list[Idea], past: list,
@@ -102,8 +116,8 @@ def short(plan: dict) -> str:
 
 def outcome(i: Idea, score: dict) -> dict:
     """What was measured of an idea: its gain over its parent, or how far it got."""
-    return {"gain": round(i.child.score / score[i.parent], 4)} if i.child and score.get(i.parent) \
-        else {"furthest": i.fate[:120]}
+    measured = i.child and i.child.metrics.get("correct") == 1.0 and score.get(i.parent)
+    return {"gain": round(i.child.score / score[i.parent], 4)} if measured else {"furthest": i.fate[:120]}
 
 
 def tried(e) -> dict:
@@ -141,10 +155,10 @@ def history(ideas: list[Idea], population: list[Program]) -> str:
 
 
 def last(ideas: list[Idea], population: list[Program], generation: int) -> str:
-    """The generation before `generation`: each idea with its prediction and what was measured."""
+    """The generation before `generation`: each idea with its prediction and what was measured (ports have none)."""
     score = {p.id: p.score for p in population}
     rows = [json.dumps({"id": i.id, "idea": short(i.plan), "prediction": i.plan.get("prediction"), **outcome(i, score)})
-            for i in ideas if i.generation == generation - 1]
+            for i in ideas if i.generation == generation - 1 > 0]
     return "\n".join(["# The last generation's ideas, each with its prediction and what was measured", *rows]) \
         if rows else ""
 

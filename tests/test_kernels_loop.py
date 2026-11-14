@@ -23,14 +23,21 @@ START = "a = 1\n"
 
 class Namer:
     """Names the changes asked for over the programs shown (m0, m1, ...), reflects on every idea it is shown, and
-    reviews by keeping each named change (or as `review(named)` says; None: an answer that is no JSON)."""
+    reviews by keeping each named change (or as `review(named)` says; None: an answer that is no JSON). Asked for
+    ports it names two of the program shown, and writes each as a Writer does."""
 
     def __init__(self, tag="opus", review=None):
-        self.model, self.calls, self.review = tag, [], review
+        self.model, self.calls, self.review, self.pen = tag, [], review, Writer(tag)
 
     def __call__(self, system, user):
-        self.calls.append((system, user))
         ask = user.split(CACHE_SPLIT)[-1]
+        if "# The change to make" in ask:
+            return self.pen(system, user)
+        self.calls.append((system, user))
+        if "public implementations" in ask:
+            start = re.search(r"^# Program (\w+) \(score", user, re.M).group(1)
+            return json.dumps({"ideas": [{"parent": start, "source": f"lib.k{k}", "modification_plan": f"port {k}"}
+                                         for k in range(2)]}), 0.5
         reflections = [{"id": i, "reflection": f"r {i}"} for i in re.findall(r'\{"id": "(\w+)"', ask)]
         if "final list" in ask:
             named = [json.loads(x.split(": ", 1)[1]) for x in ask.splitlines() if re.match(r"n\d+: ", x)]
@@ -61,12 +68,17 @@ class Writer:
 
 
 def stage(code, n):
-    """Correct unless the program says `wrong`; the k-th change scores k/10, its parents' changes a little more."""
+    """Every program builds; one that says `wrong` is wrong in its timed run, one that says `shaky` only in the full
+    check; the k-th change scores k/10, its parents' changes a little more."""
     a = int(re.search(r"a = (\d+)", code).group(1))
-    if "wrong" in code and n != 5:
-        return {"metrics": {"correct": 0.0, "stage": n}, "artifacts": {"error": "mismatch"}}
-    if n != 2:
+    if n == 5:
         return {"metrics": {"correct": 1.0, "stage": n}, "artifacts": {}}
+    if n in (8, 9):
+        ok = "shaky" not in code
+        return {"metrics": {"correct": float(ok), "stage": n}, "artifacts": {"gates": json.dumps({
+            "correctness_seen": {"passed": ok, "reason": "seed 2 differs"}})}}
+    if "wrong" in code:
+        return {"metrics": {"correct": 0.0, "stage": n}, "artifacts": {"error": "mismatch"}}
     return {"metrics": {"correct": 1.0, "combined_score": (a % 100) / 10 + (a // 100) / 1000, "stage": 2}, "artifacts": {}}
 
 
@@ -79,7 +91,8 @@ def run(out, namer=None, writer=None, seeds=None, start=START, **cfg):
     namer, writer = namer or Namer(), writer or Writer()
     pop, cost = search(start, seeds or {}, "SETTING", namer, writer, Evaluator(stage), diversity.Novelty(),
                        diversity.Similar(), out,
-                       Config(**{"generations": 2, "ideas": 6, "merges": 2, "parents": 2, "workers": 2, **cfg}))
+                       Config(**{"generations": 2, "ideas": 6, "merges": 2, "ports": 0, "parents": 2, "workers": 2,
+                                 **cfg}))
     return pop, cost, lines(out / "hypotheses.jsonl"), namer, writer
 
 
@@ -139,7 +152,7 @@ def test_it_runs_every_generation_though_nothing_improves_and_stops_when_no_prog
     flat = lambda code, n: {"metrics": {"correct": 1.0, "combined_score": 1.0, "stage": n}, "artifacts": {}}  # noqa: E731
     Writer.made[0] = 0
     _, cost = search(START, {}, "S", Namer(), Writer(), Evaluator(flat), diversity.Novelty(), diversity.Similar(),
-                     tmp_path / "flat", Config(generations=3, ideas=2, parents=1, workers=2))
+                     tmp_path / "flat", Config(generations=3, ideas=2, ports=0, parents=1, workers=2))
     assert cost["generations"] == 3 and cost["model_calls"] == 3 * 4 + 1
     pop, cost, rows, _, _ = run(tmp_path / "dead", start="a = 1  # wrong\n")
     assert len(pop) == 1 and rows == [] and cost["generations"] == 0 and cost["model_calls"] == 0
@@ -177,20 +190,65 @@ def test_a_naming_call_reflects_on_the_last_generation_and_one_call_reflects_on_
     assert all(i["idea_id"] in asks[2] for i in ideas[:6]) and all(i["idea_id"] in asks[4] for i in ideas[6:])
 
 
-def test_a_program_that_fails_a_check_is_never_timed_and_its_idea_keeps_why(tmp_path):
-    class Wrong(Writer):
-        def __call__(self, system, user):
-            text, usd = super().__call__(system, user)
-            return (text.replace("\n>>>>>>> REPLACE", "  # wrong\n>>>>>>> REPLACE") if len(self.calls) == 1 else text), usd
-    pop, cost, rows, _, _ = run(tmp_path, writer=Wrong(), generations=1, workers=1)
+class Marked(Writer):
+    """A Writer whose first program carries a mark (and, with `a`, that value)."""
+
+    def __init__(self, mark, a=None):
+        super().__init__()
+        self.mark, self.a = mark, a
+
+    def __call__(self, system, user):
+        text, usd = super().__call__(system, user)
+        if len(self.calls) > 1:
+            return text, usd
+        new = re.search(r"=======\n(a = \d+)", text).group(1)
+        return text.replace(new, f"{f'a = {self.a}' if self.a else new}  # {self.mark}"), usd
+
+
+def test_a_program_wrong_in_its_timed_run_never_joins_and_its_idea_keeps_why(tmp_path):
+    pop, cost, rows, _, _ = run(tmp_path, writer=Marked("wrong"), generations=1, workers=1)
     fates = [x["fate"] for x in rows[0]["ideas"]]
-    assert fates.count("failed correctness") == 1 and fates.count(EXAM) == 5 and len(pop) == 6 and cost["evals"] == 6
+    assert fates.count("failed correctness") == 1 and fates.count(EXAM) == 5 and len(pop) == 6 and cost["evals"] == 7
     assert "child_id" not in next(x for x in rows[0]["ideas"] if x["fate"] != EXAM)
     failed = next(i for i in lines(tmp_path / "ideas.jsonl") if i["fate"] != EXAM)
     assert failed["child_id"] is None and failed["gain"] is None and failed["program"]   # its program is kept
 
 
-def test_checks_run_before_any_timing_and_the_compilers_report_stays_with_the_program():
+def test_a_picked_parent_that_fails_the_full_check_is_dropped_and_never_picked_again(tmp_path):
+    checked = []
+
+    def st(code, n):
+        checked.extend([code] if n == 8 else [])
+        return stage(code, n)
+    Writer.made[0] = 0
+    pop, _ = search(START, {}, "S", Namer(), Marked("shaky", a=190), Evaluator(st), diversity.Novelty(),
+                    diversity.Similar(), tmp_path, Config(generations=3, ideas=6, ports=0, parents=2, workers=1))
+    rows, shaky = lines(tmp_path / "hypotheses.jsonl"), next(p for p in pop if "shaky" in p.code)
+    assert shaky.score == max(p.score for p in pop if p.generation == 1) and rows[0]["dropped"] == {}
+    assert rows[1]["dropped"] == {shaky.id: "correctness_seen: seed 2 differs"}
+    assert [len(r["parents"]) for r in rows] == [1, 1, 2] and all(shaky.id != p["id"] for r in rows for p in r["parents"])
+    assert not shaky.usable and rows[2]["dropped"] == {} and len(checked) == len(set(checked))   # each program once
+    idea = next(i for i in lines(tmp_path / "ideas.jsonl") if i["child_id"] == shaky.id)
+    assert idea["fate"] == "failed the full check as a parent: correctness_seen: seed 2 differs"
+    assert idea["gain"] is None and idea["child_score"] == shaky.score
+
+
+def test_public_implementations_are_ported_before_the_first_generation_and_judged_beside_the_start(tmp_path):
+    pop, cost, rows, namer, _ = run(tmp_path, seeds={"vllm": "a = 7\n"}, generations=1, ports=2)
+    assert rows[0]["iteration"] == 0 and rows[0]["named"] == 2 and rows[0]["examined"] == 2
+    assert [p.kind for p in pop[:4]] == ["", "competitor", "competitor", "competitor"]
+    assert pop[2].parent == pop[0].id and pop[2].plan == {"source": "lib.k0", "modification_plan": "port 0"}
+    calls = lines(tmp_path / "calls.jsonl")
+    assert [(c["role"], c["model"]) for c in calls[:3]] == [("ports", "opus"), ("write", "opus"), ("write", "opus")]
+    ask = namer.calls[0][1].split(CACHE_SPLIT)[-1]
+    assert "Name up to 2 public implementations" in ask and "Already ported and judged: vllm." in ask
+    assert namer.calls[0][0] == "SETTING" + CACHE_SPLIT + "\n\n" + context.PORTER
+    assert "last generation" not in namer.calls[1][1]                             # ports carry no prediction
+    ports = [i for i in lines(tmp_path / "ideas.jsonl") if i["generation"] == 0]
+    assert len(ports) == 2 and ports[0]["calls"].keys() == {"name", "write"} and ports[0]["reflection"] == ""
+
+
+def test_builds_run_before_any_timing_and_the_compilers_report_stays_with_the_program():
     order = []
 
     def st(code, n):
@@ -200,9 +258,12 @@ def test_checks_run_before_any_timing_and_the_compilers_report_stays_with_the_pr
         return stage(code, n)
     ev = Evaluator(st)
     ok, wrong, nobuild = ev.evaluate(["a = 3\n", "a = 4  # wrong\n", "a = 5  # nobuild\n"])
-    assert max(i for i, n in enumerate(order) if n != 2) < order.index(2) and order.count(2) == 1 and ev.evals == 1
+    assert order == [5, 5, 5, 2, 2] and ev.evals == 2                             # no correctness run before timing
     assert ok.examined and ok.artifacts["compile_report"] == "R" and ok.metrics["combined_score"] == 0.3
     assert wrong.fate == "failed correctness" and nobuild.fate == "precheck: ld" and not nobuild.examined
+    assert ev.fails("a = 3\n") is None and ev.fails("a = 3  # shaky\n", 9) == "correctness_seen: seed 2 differs"
+    assert Evaluator(lambda code, n: {"metrics": {"correct": 0.0}, "artifacts": {"error": "load failed"}}).fails("x") \
+        == "load failed"
 
 
 def test_counters_are_taken_once_per_program_and_never_again_after_the_host_refuses():

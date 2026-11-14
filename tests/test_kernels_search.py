@@ -117,10 +117,14 @@ def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_program():
         os.environ["KERNEL_EVAL_CONFIG"] = str(cfg)
         out = Path(d) / "run"
         pop, cost = search(SEED.read_text(), {}, system_message(t), namer, writer, Evaluator(), Novelty(), Similar(),
-                           out, Config(generations=2, ideas=3, parents=1, workers=1))
+                           out, Config(generations=2, ideas=3, ports=0, parents=1, workers=1))
         root, best = pop[0], max(pop, key=lambda p: p.score)             # the naive seed is ~0.1x the baseline
         assert "rsqrt" in best.code and best.metrics["correct"] == 1.0 and best.score > 3 * root.score
-        assert cost == {"usd": 2.75, "model_calls": 11, "evals": 2, "generations": 2} and len(pop) == 2
+        assert cost == {"usd": 2.75, "model_calls": 11, "evals": 3, "generations": 2} and len(pop) == 2
+        assert root.artifacts["parent_check"] == best.artifacts["parent_check"] == "passed"   # the real full check
+        from generate.kernels.search.evaluate import WINNER
+        wrong = SEED.read_text().replace("    out = torch.empty_like(x)", "    return x.clone()\n    out = torch.empty_like(x)")
+        assert Evaluator().fails(best.code, WINNER) is None and "correctness" in Evaluator().fails(wrong, WINNER)
         fates = [x["fate"] for line in (out / "hypotheses.jsonl").read_text().splitlines()
                  for x in json.loads(line)["ideas"]]
         assert fates[0] == "failed correctness" and "no SEARCH/REPLACE" in fates[1] and fates[2] == "full exam"

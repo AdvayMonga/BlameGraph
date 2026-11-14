@@ -3,8 +3,8 @@
                           [--facts FILE] [--device cuda] [--seed N] [--ledger ROOT]
 
 The kernel search on one task and one set of shapes (generate/kernels/search/loop.py), judged by the jailed
-evaluator. After it, the top programs are re-timed, the winner is read for gaming, and the run goes to the ledger as
-one `kernels` record with its ideas and model calls as blobs."""
+evaluator. After it, the top programs take the full check on 20 seeds, are read for gaming and are re-timed; the
+winner and the run go to the ledger as one `kernels` record with its ideas and model calls as blobs."""
 from __future__ import annotations
 
 import argparse
@@ -20,7 +20,7 @@ from generate.kernels.library import block as other_implementations
 from generate.kernels.library import competitors
 from generate.kernels.search import detect
 from generate.kernels.search.diversity import Novelty, Similar
-from generate.kernels.search.evaluate import Evaluator
+from generate.kernels.search.evaluate import WINNER, Evaluator
 from generate.kernels.search.llm import Claude
 from generate.kernels.search.loop import search
 from generate.kernels.search.program import Config
@@ -31,6 +31,18 @@ DETECTOR = "claude-opus-5-5"
 EFFORT = "high"
 TIMING_SHAPES = 8
 RETIME = 4                   # top programs re-judged 3x; the highest median is promoted
+JUDGED = ("In this search stage 1 is not run. Every program is built and timed, and its timed run checks one seed of "
+          "every seen shape and every timed output. The rest of stage 2's checks are taken by a program picked to be "
+          "built on (one that fails is not built on) and, on 20 seeds, by the programs that may be promoted.")
+
+
+def _exclude(evaluator: Evaluator, gaming):
+    """`exclude` for retime: why a program is passed over at promotion (it fails the full check on 20 seeds, or the
+    detector flags it), or None."""
+    def check(code: str, row: dict) -> str | None:
+        why = evaluator.fails(code, WINNER)
+        return f"failed the winner's check: {why}" if why else gaming(code, row) if gaming else None
+    return check
 
 
 def _stations(task, sets: dict) -> list[str] | None:
@@ -86,23 +98,22 @@ def main(argv: list[str] | None = None, namer: str = NAMER, writer: str = WRITER
     tol = tolerances(_target_tolerances(task))
     sets, program = prepare(task, _shapes(task, a), out, a.device, tol, TIMING_SHAPES, a.initial, region_args(a))
     start = program.read_text()
-    facts = [system_message(task), setting(task, sets, a.device, tol), Path(a.facts).read_text().strip() if a.facts else "",
+    facts = [system_message(task), JUDGED, setting(task, sets, a.device, tol), Path(a.facts).read_text().strip() if a.facts else "",
              other_implementations(task.name, stations=_stations(task, sets))]
     root = Path(a.ledger) if a.ledger else ledger.ROOT
     embedder, cfg = _embedder(ledger.ROOT), Config(seed=a.seed)
+    evaluator = Evaluator(counters=a.device.startswith("cuda"))
     population, cost = search(start, competitors.starts(task.name, start), "\n\n".join(f for f in facts if f),
-                              Claude(namer, EFFORT, tools=True), Claude(writer, EFFORT),
-                              Evaluator(counters=a.device.startswith("cuda")), Novelty(embedder),
+                              Claude(namer, EFFORT, tools=True), Claude(writer, EFFORT), evaluator, Novelty(embedder),
                               Similar(embedder, _past(root, task.name, embedder)), out, cfg)
     spent: list = []
-    exclude = detect.detector(Claude(detector, EFFORT), spent) if detector else None
+    exclude = _exclude(evaluator, detect.detector(Claude(detector, EFFORT), spent) if detector else None)
     code, metrics, retimed = retime(out / "trace.jsonl", retime_k, exclude=exclude)
     cost["usd"] = round(cost["usd"] + sum(spent), 4)
     cost["model_calls"] += len(spent)
     cost["eval_s"] = jail.seconds(out / "eval_seconds.log")
     best = max(population, key=lambda p: (p.score, -p.generation))
-    if code is None and (any("excluded" in r for r in retimed) or (exclude and exclude(best.code, {
-            "child_metrics": best.metrics}))):
+    if code is None and (any("excluded" in r for r in retimed) or exclude(best.code, {"child_metrics": best.metrics})):
         best = population[0]                     # every candidate flagged: nothing is promoted over the start
     (out / "best_program.py").write_text(code or best.code)
     (out / "best_metrics.json").write_text(json.dumps(metrics or best.metrics, indent=1))

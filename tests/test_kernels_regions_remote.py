@@ -180,12 +180,14 @@ class Claude:
         pass
 
     def __call__(self, system, user):
-        if "making changes" not in system:                               # the gaming detector
+        if system.startswith("You audit"):                               # the gaming detector
             return json.dumps({{"gaming": False, "evidence": ""}}), 0.01
-        head = json.dumps({{"bottleneck": "b", "optimisation_method": "m", "modification_plan": "p", "mechanism": []}})
-        if "_K = 1" in user:                                             # the one change exists: nothing new to write
-            return head, 0.01
-        return head + "\\n<<<<<<< SEARCH\\n_CONST = {{}}\\n=======\\n_CONST = {{}}\\n_K = 1\\n>>>>>>> REPLACE", 0.01
+        if "# The change to make" in user:                               # a writer
+            return "<<<<<<< SEARCH\\n_CONST = {{}}\\n=======\\n_CONST = {{}}\\n_K = 1\\n>>>>>>> REPLACE", 0.01
+        if "Name " not in user or "public implementations" in user or "_K = 1" in user:
+            return "{{}}", 0.01                                            # no ports, no review; the one change exists
+        parent = user.split("# Program ")[1].split(" ")[0]
+        return json.dumps({{"ideas": [{{"parent": parent, "optimisation_method": "m", "modification_plan": "p"}}]}}), 0.01
 
 if llm is not None:
     llm.Claude = Claude

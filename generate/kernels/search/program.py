@@ -9,6 +9,7 @@ class Config:
     generations: int = 6
     ideas: int = 24          # changes the naming call names per generation
     merges: int = 4          # combined changes the review call may add to them
+    ports: int = 4           # public implementations ported as starting programs before the first generation
     parents: int = 8
     workers: int = 8         # writer calls at once
     seed: int = 0
@@ -16,7 +17,7 @@ class Config:
 
 @dataclass
 class Program:
-    """A program that took the full exam."""
+    """A program that was built and timed."""
     id: str
     parent: str | None
     code: str
@@ -24,7 +25,7 @@ class Program:
     artifacts: dict
     generation: int
     plan: dict = field(default_factory=dict)     # the idea it was written from (empty for the start and the seeds)
-    kind: str = ""                               # "competitor": a seed judged beside the start
+    kind: str = ""                               # "competitor": a seed or a port, judged beside the start
 
     @property
     def score(self) -> float:
