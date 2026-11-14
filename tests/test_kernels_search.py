@@ -61,8 +61,8 @@ def test_the_search_arm_gets_the_one_model_and_openevolves_promotion():
                                   Path("/tmp/x"), 0)
     finally:
         cli.main = orig
-    assert seen[0][1] == {"models": ("m",), "retime_k": 3, "detector": None} and set(ab.ARMS) == {"openevolve",
-                                                                                                 "kernels.search"}
+    assert seen[0][1] == {"namer": "m", "writer": "m", "retime_k": 3, "detector": None}
+    assert set(ab.ARMS) == {"openevolve", "kernels.search"}
     try:
         ab.main(["--task", "t", "--shapes", "s", "--out", "/tmp/x", "--arms", "nope"])
         raise AssertionError("an unknown arm ran")
@@ -88,20 +88,27 @@ def test_share_with_gates_ranks_only_the_gated_tasks():
 
 def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_program():
     from generate.kernels.evolve.run import record, retime, system_message
-    from generate.kernels.search.diversity import Novelty
+    from generate.kernels.search.diversity import Novelty, Similar
     from generate.kernels.search.evaluate import Evaluator
     from generate.kernels.search.loop import search
     from generate.kernels.search.program import Config
     from generate.kernels.tasks import load
     from data.knowledge import ledger
     t = load("toy_rmsnorm")
-    naive = iter([WRONG, "no diff here", FAST])                         # answers when shown the naive seed
+    naive = iter([WRONG, "no diff here", FAST])                         # the writers' answers when shown the naive seed
     comment = "<<<<<<< SEARCH\n    xf = x.float()\n=======\n    # same\n    xf = x.float()\n>>>>>>> REPLACE"
-    prompts = []
+    named, written = [], []
 
-    def scripted(system, user):                     # a comment-only edit is a duplicate
-        prompts.append((system, user))
-        return (next(naive, FAST) if "for i in range" in user.split("# The starting program")[0] else comment), 0.25
+    def namer(system, user):                        # three changes to the one program shown; the review keeps them
+        named.append((system, user))
+        if "Name " not in user:
+            return "{}", 0.25
+        parent = user.split("# Program ")[1].split(" ")[0]
+        return json.dumps({"ideas": [{"parent": parent, "optimisation_method": f"m{k}"} for k in range(3)]}), 0.25
+
+    def writer(system, user):                       # a comment-only edit is a duplicate
+        written.append((system, user))
+        return (next(naive, FAST) if "for i in range" in user else comment), 0.25
 
     with tempfile.TemporaryDirectory() as d:
         cfg = Path(d) / "eval.json"
@@ -109,19 +116,20 @@ def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_program():
                                    "iters": 3}))
         os.environ["KERNEL_EVAL_CONFIG"] = str(cfg)
         out = Path(d) / "run"
-        pop, cost = search(SEED.read_text(), {}, system_message(t), [scripted], Evaluator(), Novelty(), out,
-                           Config(generations=2, ideas=3, parents=1, workers=1))
+        pop, cost = search(SEED.read_text(), {}, system_message(t), namer, writer, Evaluator(), Novelty(), Similar(),
+                           out, Config(generations=2, ideas=3, parents=1, workers=1))
         root, best = pop[0], max(pop, key=lambda p: p.score)             # the naive seed is ~0.1x the baseline
         assert "rsqrt" in best.code and best.metrics["correct"] == 1.0 and best.score > 3 * root.score
-        assert cost == {"usd": 1.5, "model_calls": 6, "evals": 2, "generations": 2} and len(pop) == 2
+        assert cost == {"usd": 2.75, "model_calls": 11, "evals": 2, "generations": 2} and len(pop) == 2
         fates = [x["fate"] for line in (out / "hypotheses.jsonl").read_text().splitlines()
                  for x in json.loads(line)["ideas"]]
         assert fates[0] == "failed correctness" and "no SEARCH/REPLACE" in fates[1] and fates[2] == "full exam"
         assert all("identical to a program" in f for f in fates[3:])
-        system, first = prompts[0]
+        system, first = written[0]
         assert "How a program is judged" in system and "SEARCH/REPLACE" in system
         assert "# Its measurements" in first and "timings (per seen shape" in first and "consider" not in first.lower()
-        assert "# The starting program" in prompts[3][1] and f"-> {best.id}" in prompts[3][1]
+        assert "How a program is judged" in named[0][0] and "consider" not in named[0][1].lower()
+        assert "# The starting program" in named[2][1] and f"-> {best.id}" in named[2][1]
         rows = [json.loads(x) for x in (out / "trace.jsonl").read_text().splitlines()]
         assert len(rows) == len(pop) and rows[0]["parent_id"] is None
         code, metrics, retimed = retime(out / "trace.jsonl", 2)
@@ -468,7 +476,7 @@ def test_a_query_tool_that_cannot_run_answers_the_model_instead_of_crashing_the_
     assert out.startswith("query failed: ") and "Error" in out
 
 
-def test_the_cli_starts_the_search_from_every_competitor_port_of_its_task_with_the_model_mix(monkeypatch, tmp_path):
+def test_the_cli_starts_the_search_from_every_competitor_port_with_its_namer_writer_and_earlier_ideas(monkeypatch, tmp_path):
     from generate.kernels.search import __main__ as cli
     program = tmp_path / "start.py"
     program.write_text("# EVOLVE-BLOCK-START\nimport torch\n\n\ndef silu_mul(x):\n    return x\n"
@@ -478,10 +486,11 @@ def test_the_cli_starts_the_search_from_every_competitor_port_of_its_task_with_t
     monkeypatch.setattr(cli, "setting", lambda *a, **k: "SETTING")
     monkeypatch.setattr(cli, "Claude", lambda model, *a, **k: model)
     monkeypatch.setattr(cli, "_embedder", lambda root: None)
+    monkeypatch.setattr(cli, "_past", lambda root, task, embedder: [task])
     seen = {}
 
-    def search(start, seeds, setting, models, *a):
-        seen.update(seeds=seeds, setting=setting, models=models)
+    def search(start, seeds, setting, namer, writer, evaluator, novelty, similar, *a):
+        seen.update(seeds=seeds, setting=setting, models=(namer, writer), past=similar.past)
         raise SystemExit("judged")
     monkeypatch.setattr(cli, "search", search)
     try:
@@ -490,4 +499,5 @@ def test_the_cli_starts_the_search_from_every_competitor_port_of_its_task_with_t
         assert str(e) == "judged"
     assert list(seen["seeds"]) == ["vllm.silu_and_mul"] and "_silu_mul_engine = silu_mul" in seen["seeds"][
         "vllm.silu_and_mul"]
-    assert seen["models"] == ["claude-sonnet-5-5"] * 3 + ["claude-opus-5-5"] and "SETTING" in seen["setting"]
+    assert seen["models"] == ("claude-opus-5-5", "claude-sonnet-5-5") and "SETTING" in seen["setting"]
+    assert seen["past"] == ["silu_mul"]

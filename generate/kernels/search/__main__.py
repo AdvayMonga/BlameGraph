@@ -4,7 +4,7 @@
 
 The kernel search on one task and one set of shapes (generate/kernels/search/loop.py), judged by the jailed
 evaluator. After it, the top programs are re-timed, the winner is read for gaming, and the run goes to the ledger as
-one `kernels` record."""
+one `kernels` record with its ideas and model calls as blobs."""
 from __future__ import annotations
 
 import argparse
@@ -19,13 +19,14 @@ from generate.kernels.evolve.run import _shapes, _target_tolerances, load_task, 
 from generate.kernels.library import block as other_implementations
 from generate.kernels.library import competitors
 from generate.kernels.search import detect
-from generate.kernels.search.diversity import Novelty
+from generate.kernels.search.diversity import Novelty, Similar
 from generate.kernels.search.evaluate import Evaluator
 from generate.kernels.search.llm import Claude
 from generate.kernels.search.loop import search
 from generate.kernels.search.program import Config
 
-MODELS = ("claude-sonnet-5-5", "claude-sonnet-5-5", "claude-sonnet-5-5", "claude-opus-5-5")   # a generation's calls cycle
+NAMER = "claude-opus-5-5"    # names and reviews a generation's changes
+WRITER = "claude-sonnet-5-5"  # makes each change
 DETECTOR = "claude-opus-5-5"
 EFFORT = "high"
 TIMING_SHAPES = 8
@@ -55,11 +56,18 @@ def _embedder(root: Path):
         from data.knowledge.search import FastEmbed
         return FastEmbed(root / "index" / "models")
     except Exception:                            # noqa: BLE001  without fastembed only identical programs are refused
-        print("no embedder (fastembed): near-duplicate programs are not refused", file=sys.stderr)
+        print("no embedder (fastembed): near-duplicate programs are not refused, close ideas not matched",
+              file=sys.stderr)
         return None
 
 
-def main(argv: list[str] | None = None, models: tuple[str, ...] = MODELS, retime_k: int = RETIME,
+def _past(root: Path, task: str, embedder) -> list:
+    """The task's distinct ideas from earlier runs on the ledger at `root` (the idea archive)."""
+    from generate.kernels import archive
+    return [e for e in archive.build(root, embedder) if e.task == task]
+
+
+def main(argv: list[str] | None = None, namer: str = NAMER, writer: str = WRITER, retime_k: int = RETIME,
          detector: str | None = DETECTOR) -> int:
     from data.knowledge import ledger
     ap = argparse.ArgumentParser(prog="lab kernels search")
@@ -80,11 +88,12 @@ def main(argv: list[str] | None = None, models: tuple[str, ...] = MODELS, retime
     start = program.read_text()
     facts = [system_message(task), setting(task, sets, a.device, tol), Path(a.facts).read_text().strip() if a.facts else "",
              other_implementations(task.name, stations=_stations(task, sets))]
-    clients = {m: Claude(m, EFFORT, tools=True) for m in set(models)}
-    cfg = Config(seed=a.seed)
+    root = Path(a.ledger) if a.ledger else ledger.ROOT
+    embedder, cfg = _embedder(ledger.ROOT), Config(seed=a.seed)
     population, cost = search(start, competitors.starts(task.name, start), "\n\n".join(f for f in facts if f),
-                              [clients[m] for m in models], Evaluator(counters=a.device.startswith("cuda")),
-                              Novelty(_embedder(ledger.ROOT)), out, cfg)
+                              Claude(namer, EFFORT, tools=True), Claude(writer, EFFORT),
+                              Evaluator(counters=a.device.startswith("cuda")), Novelty(embedder),
+                              Similar(embedder, _past(root, task.name, embedder)), out, cfg)
     spent: list = []
     exclude = detect.detector(Claude(detector, EFFORT), spent) if detector else None
     code, metrics, retimed = retime(out / "trace.jsonl", retime_k, exclude=exclude)
@@ -97,13 +106,12 @@ def main(argv: list[str] | None = None, models: tuple[str, ...] = MODELS, retime
         best = population[0]                     # every candidate flagged: nothing is promoted over the start
     (out / "best_program.py").write_text(code or best.code)
     (out / "best_metrics.json").write_text(json.dumps(metrics or best.metrics, indent=1))
-    hyp = out / "hypotheses.jsonl"
-    root = Path(a.ledger) if a.ledger else None
-    rec = record(task, sets, [{"name": m, "role": "judge", "effort": EFFORT, "share": f"{models.count(m)}/{len(models)}"}
-                              for m in dict.fromkeys(models)], cfg.generations, a.device, out / "trace.jsonl",
-                 out / "best_program.py", metrics or best.metrics, retimed=retimed, tool="kernels.search", cost=cost,
-                 root=root, extra={"hypotheses": ledger.put_blob(hyp, root or ledger.ROOT, ".jsonl")
-                                   if hyp.stat().st_size else None})
+    blobs = {k: ledger.put_blob(out / f"{k}.jsonl", root, ".jsonl") if (out / f"{k}.jsonl").stat().st_size else None
+             for k in ("hypotheses", "ideas", "calls", "texts")}
+    rec = record(task, sets, [{"name": namer, "role": "namer", "effort": EFFORT},
+                              {"name": writer, "role": "writer", "effort": EFFORT}], cfg.generations, a.device,
+                 out / "trace.jsonl", out / "best_program.py", metrics or best.metrics, retimed=retimed,
+                 tool="kernels.search", cost=cost, root=root, extra=blobs)
     print(json.dumps({"best": metrics or best.metrics, "cost": cost, "nodes": len(population), "out": str(out),
                       "ledger": rec["id"]}))
     return 0

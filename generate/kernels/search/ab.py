@@ -50,7 +50,7 @@ def _search(a, out: Path, seed: int) -> dict:
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         main(["--task", a.task, "--shapes", a.shapes, "--out", str(out), "--device", a.device, "--seed", str(seed),
-              *(["--initial", a.initial] if a.initial else [])], models=(a.model,), retime_k=3, detector=None)
+              *(["--initial", a.initial] if a.initial else [])], namer=a.model, writer=a.model, retime_k=3, detector=None)
     return _last_json(buf.getvalue())
 
 

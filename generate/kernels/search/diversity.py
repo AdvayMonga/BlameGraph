@@ -1,4 +1,5 @@
-"""Diversity: which programs a generation builds on, and which new programs repeat one already written."""
+"""Diversity: which programs a generation builds on, which named changes are close to an idea already had, and
+which new programs repeat one already written."""
 from __future__ import annotations
 
 import difflib
@@ -8,11 +9,12 @@ import random
 import re
 import tokenize
 
-from generate.kernels.search.program import Program
+from generate.kernels.search.program import Idea, Program
 
 POOL = 32                    # the best usable programs parents are drawn from
 FLOOR = 0.05                 # added to each draw weight, so the weakest of the pool can still be picked
 NEAR = 0.95                  # cosine of two siblings' changes at which the later one is a near-duplicate
+CLOSE = 0.92                 # cosine of two ideas' texts at which they are close (the idea archive's DISTINCT)
 
 
 def pick(population: list[Program], n: int, rng: random.Random) -> list[Program]:
@@ -65,3 +67,35 @@ class Novelty:
             self.changes.setdefault(parent.id, []).append(v)
         self.add(code)
         return None
+
+
+class Similar:
+    """The named changes whose text is close to another idea's: in the same list, earlier in this search, or in an
+    earlier run (`past`: the task's entries of the idea archive, embedded)."""
+
+    def __init__(self, embedder=None, past=()):
+        self.embedder, self.past = embedder, list(past)   # data.knowledge.search's; None: nothing is matched
+        self.run: list[tuple[list, Idea]] = []            # this search's ideas, embedded
+
+    def _vectors(self, plans: list[dict]) -> list:
+        from generate.kernels.archive import text
+        return self.embedder.passages([text(p) for p in plans])
+
+    def match(self, named: list[dict]) -> list[dict]:
+        """One row per close pair: {named: its index, like: an index of `named`, an Idea or an archive entry, where,
+        cosine}."""
+        from data.knowledge.search import _cosine
+        if self.embedder is None or not named:
+            return []
+        vs, out = self._vectors(named), []
+        for k, v in enumerate(vs):
+            others = [("this list", j, w) for j, w in enumerate(vs[:k])] + [("this search", i, w) for w, i in self.run] \
+                + [("an earlier run", e, e.vector) for e in self.past if e.vector is not None]
+            out += [{"named": k, "like": x, "where": where, "cosine": round(c, 3)}
+                    for where, x, w in others if (c := _cosine(v, w)) >= CLOSE]
+        return out
+
+    def add(self, ideas: list[Idea]) -> None:
+        """A generation's ideas, to be matched against from now on."""
+        if self.embedder is not None and ideas:
+            self.run += zip(self._vectors([i.plan for i in ideas]), ideas)

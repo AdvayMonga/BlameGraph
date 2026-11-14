@@ -1,10 +1,15 @@
-"""The search: generations of model calls from the best programs so far, every new program judged.
+"""The search: each generation names its changes in one call, reviews them in a second, and has a writer make each.
 
-Each generation picks its parents (diversity.pick), makes `ideas` model calls spread over them (context.build), drops
-the programs that repeat one already written (diversity.Novelty), judges the rest (evaluate.Evaluator) and adds every
-program that took the full exam to the population. It runs every generation whatever they score.
+A generation picks its parents (diversity.pick). One naming call reflects on the last generation's ideas and names
+`ideas` changes (context.name). The ones whose text is close to another idea's are found (diversity.Similar) and one
+review call writes the final list, the same change merged and combinations added (context.review). A writer call
+makes each change (context.write). Programs that repeat one already written are dropped (diversity.Novelty), the rest
+are judged (evaluate.Evaluator), and every program that took the full exam joins the population. It runs every
+generation whatever they score.
 
-`<out>/trace.jsonl` holds every judged program, `<out>/hypotheses.jsonl` every generation's ideas and their fates."""
+`<out>/trace.jsonl` holds every judged program, `<out>/hypotheses.jsonl` every generation's ideas and their fates,
+`<out>/ideas.jsonl` one row per idea (plan, prediction, program, outcome, reflection), and `<out>/calls.jsonl` with
+`<out>/texts.jsonl` every model call whole (calls.py)."""
 from __future__ import annotations
 
 import difflib
@@ -13,13 +18,11 @@ import random
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Callable, Sequence
 
 from generate.kernels.search import context, diff, diversity
+from generate.kernels.search.calls import Calls, Model
 from generate.kernels.search.evaluate import Evaluator, Result
 from generate.kernels.search.program import Config, Idea, Program
-
-Model = Callable[[str, str], tuple[str, float]]  # (system, user) -> (text, $)
 
 
 def new_id() -> str:
@@ -33,6 +36,7 @@ def trace_row(p: Program) -> dict:
 
 
 def idea_row(i: Idea, parent: Program) -> dict:
+    """An idea in its generation's row of hypotheses.jsonl (what the idea archive reads)."""
     row = {"idea": {**i.plan, "model": i.model, "parent_id": i.parent, "idea_id": i.id}, "fate": i.fate}
     if i.child:
         row |= {"child_id": i.child.id, "child_score": i.child.score, "improved": i.child.score > parent.score}
@@ -41,21 +45,52 @@ def idea_row(i: Idea, parent: Program) -> dict:
     return row
 
 
-def propose(model: Model, setting: str, parent: Program, population: list[Program], ideas: list[Idea],
-            proposed: list[dict], generation: int) -> Idea:
-    """One model call: the idea it names and the program its change makes of `parent`."""
-    text, usd = model(*context.build(setting, parent, population, ideas, proposed))
-    code, why = diff.apply(parent.code, text) if text else (None, "the model returned no text")
-    return Idea(new_id(), parent.id, generation, context.read(text), getattr(model, "model", None), usd, code,
-                "" if code else f"not applied: {why}")
+def table_row(i: Idea, score: dict) -> dict:
+    """An idea's row of ideas.jsonl: everything about it, its texts by their keys in texts.jsonl."""
+    kid = i.child
+    return {"idea_id": i.id, "generation": i.generation, "parent_id": i.parent, "parent_score": score.get(i.parent),
+            "plan": i.plan, "merged_from": i.merged, "writer": i.model, "calls": i.calls, "program": i.program,
+            "fate": i.fate, "child_id": kid.id if kid else None, "child_score": kid.score if kid else None,
+            "gain": context.outcome(i, score).get("gain"), "metrics": kid.metrics if kid else None,
+            "reflection": i.reflection}
 
 
-def search(start: str, seeds: dict[str, str], setting: str, models: Sequence[Model], evaluator: Evaluator,
-           novelty: diversity.Novelty, out: Path, cfg: Config = Config()) -> tuple[list[Program], dict]:
+def changes(answer: dict, parents: list[Program]) -> list[dict]:
+    """An answer's ideas that change one of `parents`."""
+    ids = {p.id for p in parents}
+    return [p for p in answer.get("ideas") or [] if isinstance(p, dict) and p.get("parent") in ids]
+
+
+def reflected(ideas: list[Idea], answer: dict) -> None:
+    """Each reflection of an answer onto the idea it names."""
+    by = {i.id: i for i in ideas}
+    for r in answer.get("reflections") or []:
+        if isinstance(r, dict) and r.get("id") in by:
+            by[r["id"]].reflection = str(r.get("reflection") or "")
+
+
+def write(calls: Calls, writer: Model, setting: str, idea: Idea, by: dict[str, Program]) -> None:
+    """One writer call: the program its change makes of the idea's parent, or why it could not be applied."""
+    parent = by[idea.parent]
+    borrowed = [by[b] for b in idea.plan.get("borrows") or [] if isinstance(b, str) and b in by and b != parent.id]
+    text, idea.calls["write"] = calls(writer, "write", idea.generation,
+                                      *context.write(setting, parent, idea.plan, borrowed))
+    idea.model = getattr(writer, "model", None)
+    idea.code, why = diff.apply(parent.code, text) if text else (None, "the model returned no text")
+    if idea.code:
+        idea.program = calls.put(idea.code)
+    else:
+        idea.fate = f"not applied: {why}"
+
+
+def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer: Model, evaluator: Evaluator,
+           novelty: diversity.Novelty, similar: diversity.Similar, out: Path,
+           cfg: Config = Config()) -> tuple[list[Program], dict]:
     """The population (the start first) and the run's cost {usd, model_calls, evals, generations}. `seeds`: name ->
-    program, judged beside the start. `models`: call k of a generation goes to models[k % len(models)]."""
+    program, judged beside the start. `namer` names and reviews a generation's changes; `writer` makes each."""
     out.mkdir(parents=True, exist_ok=True)
-    rng, population, ideas, ran = random.Random(cfg.seed), [], [], 0
+    rng, population, ideas, ran, past = random.Random(cfg.seed), [], [], 0, similar.past
+    calls = Calls(out)
     with open(out / "trace.jsonl", "w") as trace, open(out / "hypotheses.jsonl", "w") as log:
         def keep(code: str, r: Result, generation: int, parent: str | None = None, plan: dict | None = None,
                  kind: str = "") -> Program:
@@ -79,16 +114,21 @@ def search(start: str, seeds: dict[str, str], setting: str, models: Sequence[Mod
                 break
             for p in parents:
                 evaluator.profile(p)
-            by, new = {p.id: p for p in parents}, []
-            slots = list(enumerate(parents[k % len(parents)] for k in range(cfg.ideas)))
-
-            def call(slot: tuple[int, Program], seen: list[Idea]) -> Idea:
-                k, parent = slot
-                return propose(models[k % len(models)], setting, parent, population, ideas,
-                               [i.plan for i in seen if i.parent == parent.id], gen)
+            by, spent = {p.id: p for p in population}, calls.usd
+            text, nid = calls(namer, "name", gen,
+                              *context.name(setting, parents, population, ideas, past, gen, cfg.ideas))
+            answer = context.read(text)
+            reflected(ideas, answer)
+            plans, final, rid = changes(answer, parents)[:cfg.ideas], [], None
+            if plans:
+                text, rid = calls(namer, "review", gen, *context.review(
+                    setting, parents, population, ideas, past, plans, similar.match(plans), cfg.merges))
+                final = changes(context.read(text), parents)[:cfg.ideas + cfg.merges] or plans   # unreadable: as named
+            new = [Idea(new_id(), p["parent"], gen, {k: v for k, v in p.items() if k not in ("parent", "from")},
+                        p["from"] if isinstance(p.get("from"), list) else [], {"name": nid, "review": rid})
+                   for p in final]
             with ThreadPoolExecutor(max_workers=cfg.workers) as ex:
-                for w in range(0, len(slots), cfg.workers):   # a wave's calls see what the waves before it proposed
-                    new += ex.map(lambda slot, seen=list(new): call(slot, seen), slots[w:w + cfg.workers])
+                list(ex.map(lambda i: write(calls, writer, setting, i, by), new))
             for i in new:
                 why = novelty.refuse(i.code, by[i.parent]) if i.code else None
                 if why:
@@ -98,14 +138,22 @@ def search(start: str, seeds: dict[str, str], setting: str, models: Sequence[Mod
                 i.fate = r.fate
                 if r.examined:
                     i.child = keep(i.code, r, gen, i.parent, i.plan)
+            similar.add(new)
             ideas, ran = ideas + new, gen
             kids = [i.child for i in new if i.child]
             log.write(json.dumps({
-                "iteration": gen, "parents": [{"id": p.id, "score": p.score} for p in parents], "named": len(new),
-                "written": len(written), "examined": len(kids),
-                "improved": sum(c.score > by[c.parent].score for c in kids),
-                "usd": round(sum(i.usd for i in new), 4), "ideas": [idea_row(i, by[i.parent]) for i in new]},
+                "iteration": gen, "parents": [{"id": p.id, "score": p.score} for p in parents], "named": len(plans),
+                "reviewed": len(new), "written": len(written), "examined": len(kids),
+                "improved": sum(c.score > by[c.parent].score for c in kids), "usd": round(calls.usd - spent, 4),
+                "calls": {"name": nid, "review": rid}, "ideas": [idea_row(i, by[i.parent]) for i in new]},
                 default=str) + "\n")
             log.flush()
-    return population, {"usd": round(sum(i.usd for i in ideas), 4), "model_calls": len(ideas),
-                        "evals": evaluator.evals, "generations": ran}
+
+        if any(i.generation == ran for i in ideas):  # the last generation's ideas have no naming call after them
+            text, _ = calls(namer, "reflect", ran + 1, *context.reflect(setting, population, ideas, past, ran + 1))
+            reflected(ideas, context.read(text))
+    score = {p.id: p.score for p in population}
+    (out / "ideas.jsonl").write_text("".join(json.dumps(table_row(i, score), default=str) + "\n" for i in ideas))
+    calls.close()
+    return population, {"usd": round(calls.usd, 4), "model_calls": calls.n, "evals": evaluator.evals,
+                        "generations": ran}
