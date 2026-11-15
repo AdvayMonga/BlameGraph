@@ -454,8 +454,11 @@ def test_the_setting_states_seen_shapes_with_calls_weight_and_traffic_never_the_
     task = load("toy_rmsnorm")
     sets = {"seen": [(64, 1024), (8, 1024)], "heldout": [(4096, 1024)],
             "calls": {"[64, 1024]": 30, "[8, 1024]": 10, "[4096, 1024]": 99},
-            "sources": {"[64, 1024]": {"mixed_1": 20, "long_context": 10}}}
+            "sources": {"[64, 1024]": {"mixed_1": 20, "long_context": 10}},
+            "example_calls": {"[8, 1024]": {"args": [{"shape": [8, 1024], "dtype": "float8_e4m3fn"}], "kwargs": {}}}}
     text = setting(task, sets, "cpu", {"float32": [0.02, 0.02], "bfloat16": [1, 1]})
+    assert 'entry point at shape [8, 1024] (each tensor argument by shape and dtype): {"args": [{"shape": [8, 1024], ' \
+        '"dtype": "float8_e4m3fn"}], "kwargs": {}}' in text
     assert "[64, 1024]: 30 calls, 75.0% of the score (captured under: long_context 10, mixed_1 20)" in text
     assert "[8, 1024]: 10 calls, 25.0% of the score" in text and "4096" not in text
     assert 'per dtype: {"float32": [0.02, 0.02]}' in text and "Device: cpu" in text      # its dtypes only

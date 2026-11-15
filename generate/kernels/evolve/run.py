@@ -101,7 +101,7 @@ The goal is the highest score."""
 
 def setting(task, sets: dict, device: str, tol: dict) -> str:
     """The facts a program is judged under, the same for every generator: the seen shapes with their calls, their
-    share of the score and the traffic they were captured under; the GPU, its measured peaks and the toolchain; the
+    share of the score and the traffic they were captured under; one captured call's arguments; the GPU, its measured peaks and the toolchain; the
     engine's launch settings; the tolerances. Never the held-out shapes."""
     from evals.kernels.check import TOLERANCES
     calls, src = sets.get("calls") or {}, sets.get("sources") or {}
@@ -113,6 +113,10 @@ def setting(task, sets: dict, device: str, tol: dict) -> str:
         by = ", ".join(f"{c} {n}" for c, n in sorted((src.get(k) or {}).items()))
         out.append(f"- {k}: {calls.get(k, 1)} calls, {100 * calls.get(k, 1) / total:.1f}% of the score"
                    + (f" (captured under: {by})" if by else ""))
+    example = next(((k, c) for k in seen if (c := (sets.get("example_calls") or {}).get(k))), None)
+    if example:
+        out.append(f"A captured call of the engine's entry point at shape {example[0]} (each tensor argument by "
+                   f"shape and dtype): {json.dumps(example[1])}")
     out.append(_hardware(device))
     try:
         from targets import target
@@ -224,7 +228,8 @@ def _shapes(task, a) -> dict:
                          "Python: capture with the engine's graphs off, the target's [kernels] capture_env)")
     sets = shapes_mod.split(task, counts)
     return {**sets, "ints": shapes_mod.ints_from_captures(task, dirs),
-            "sources": shapes_mod.sources_from_captures(task, dirs)} if dirs else sets
+            "sources": shapes_mod.sources_from_captures(task, dirs),
+            "example_calls": shapes_mod.calls_from_captures(task, dirs, sets["seen"])} if dirs else sets
 
 
 def _ints(sets: dict, which: tuple[str, ...]) -> dict:
