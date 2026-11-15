@@ -12,7 +12,7 @@ from generate.kernels.search.program import Idea, Program
 
 POOL = 32                    # the best usable programs parents are drawn from
 FLOOR = 0.05                 # added to each draw weight, so the weakest of the pool can still be picked
-CLOSE = 0.92                 # cosine of two ideas' texts at which they are close (the idea archive's DISTINCT)
+CLOSE = 0.88                 # cosine of two ideas' texts at which they are close
 
 
 def pick(population: list[Program], n: int, rng: random.Random) -> list[Program]:

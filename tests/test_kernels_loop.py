@@ -323,10 +323,9 @@ def test_the_naming_and_review_calls_read_the_setting_every_idea_and_the_parents
     pop = [root, mid, other]
     ideas = [Idea("i1", "p0", 1, {"optimisation_method": "fuse", "prediction": {"speedup": 1.3}}, fate=EXAM, child=mid),
              Idea("i2", "p0", 1, {"optimisation_method": "unroll"}, fate="not applied: no block")]
-    system, user = context.name("SETTING", [mid, other], pop, ideas, [past], 2, 5)
+    system, user = context.name("SETTING", [mid, other], pop, ideas, 2, 5)
     stable, rest = system.split(CACHE_SPLIT)
-    assert stable.startswith("SETTING\n\n# Ideas tried on this task in earlier runs")
-    assert '{"idea": "fuse loops", "tried": 1, "best_gain": 1.2}' in stable
+    assert stable == "SETTING"
     assert '"idea": "fuse", "gain": 1.5' in rest and '"furthest": "not applied: no block"' in rest
     assert rest.endswith(context.NAMER)
     shown, asked = user.split(CACHE_SPLIT)
@@ -336,7 +335,7 @@ def test_the_naming_and_review_calls_read_the_setting_every_idea_and_the_parents
     assert "no ncu" in shown and "secret" not in shown
     assert '{"id": "i1", "idea": "fuse", "prediction": {"speedup": 1.3}, "gain": 1.5}' in asked
     assert "Name 5 changes" in asked and '"reflections"' in asked
-    first = context.name("S", [root], [root], [], [], 1, 5)
+    first = context.name("S", [root], [root], [], 1, 5)
     assert first[0] == "S" + CACHE_SPLIT + "\n\n" + context.NAMER
     assert not any(t in first[1] for t in ("# The starting program", "reflections", "last generation"))
 
@@ -344,13 +343,13 @@ def test_the_naming_and_review_calls_read_the_setting_every_idea_and_the_parents
     matches = [{"named": 1, "like": 0, "where": "this list", "cosine": 0.95},
                {"named": 0, "like": ideas[0], "where": "this search", "cosine": 0.93},
                {"named": 0, "like": past, "where": "an earlier run", "cosine": 0.94}]
-    again, user = context.review("SETTING", [mid, other], pop, ideas, [past], named, matches, 4)
+    again, user = context.review("SETTING", [mid, other], pop, ideas, named, matches, 4)
     assert again == system and user.split(CACHE_SPLIT)[0] == shown               # read from the naming call's cache
     asked = user.split(CACHE_SPLIT)[1]
     assert 'n1: {"parent": "p1", "optimisation_method": "a"}' in asked and "Add up to 4 changes" in asked
     assert '{"named": "n2", "where": "this list", "cosine": 0.95, "like": "n1"}' in asked
     assert '"like": "fuse", "gain": 1.5}' in asked and '"like": "fuse loops", "tried": 1, "best_gain": 1.2}' in asked
-    assert "close to another" not in context.review("S", [mid], pop, [], [], named, [], 4)[1]
+    assert "close to another" not in context.review("S", [mid], pop, [], named, [], 4)[1]
 
 
 def test_a_writer_call_reads_the_program_its_facts_the_change_and_the_programs_it_takes_from():
@@ -363,17 +362,11 @@ def test_a_writer_call_reads_the_program_its_facts_the_change_and_the_programs_i
     assert '# The change to make\n{"optimisation_method": "a", "borrows": ["p3"]}' in asked and asked.endswith(context.WRITE)
 
 
-def test_earlier_runs_ideas_are_shown_the_most_tried_first_and_counted_past_the_cap():
-    never = archive.Entry("idea-2", "toy", "t", {"optimisation_method": "tile"}, None,
-                          [archive.Outcome("r", "p", 1.0, None, error="not applied: no block")] * 2)
-    block = context.earlier([entry(), never])
-    assert block.splitlines()[1] == '{"idea": "tile", "tried": 2, "furthest": "not applied: no block"}'
-    assert context.earlier([]) == "" and "(5 more ideas not shown)" in context.earlier([entry()] * (context.EARLIER_MAX + 5))
-
-
 def test_an_answers_json_is_read_best_effort():
     assert context.read('```json\n{"ideas": [{"parent": "p"}]}\n```') == {"ideas": [{"parent": "p"}]}
     assert context.read("just words") == {} and context.read("") == {} and context.read("[1]") == {}
+    cut = '{"reflections": [{"id": "a"}], "ideas": [{"parent": "p", "x": [1]}, {"parent": "q"}, {"parent": "r", "bott'
+    assert context.read(cut) == {"reflections": [{"id": "a"}], "ideas": [{"parent": "p", "x": [1]}, {"parent": "q"}]}
 
 
 if __name__ == "__main__":

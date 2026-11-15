@@ -1,6 +1,6 @@
 """Every model call of a search, kept whole: its prompt parts and its answer, each distinct text stored once.
 
-`<out>/calls.jsonl`: one row per call {id, role, generation, model, system, user, answer, usd}; `system`, `user` and
+`<out>/calls.jsonl`: one row per call {id, role, generation, model, system, user, answer, usd, stop}; `system`, `user` and
 `answer` are keys into `<out>/texts.jsonl` ({key, text} rows), which also holds every program a writer made."""
 from __future__ import annotations
 
@@ -38,7 +38,8 @@ class Calls:
         with self.lock:
             self.n, self.usd = self.n + 1, self.usd + usd
             row = {"id": f"c{self.n}", "role": role, "generation": generation, "model": getattr(model, "model", None),
-                   **parts, "answer": answer, "usd": usd}
+                   **parts, "answer": answer, "usd": usd,
+                   "stop": getattr(getattr(model, "last", None), "stop", None)}
             self.calls.write(json.dumps(row) + "\n")
             self.calls.flush()
         return text, row["id"]

@@ -37,7 +37,6 @@ WRITE = ("Make this change to the program. Answer with SEARCH/REPLACE blocks aga
 TIMING_KEYS = ("shape", "candidate_ms", "baseline_ms", "speedup", "speedup_p25", "speedup_p75", "beyond_noise",
                "pct_of_roofline", "bound", "pct_of_peak_bandwidth", "pct_of_peak_flops")
 HISTORY_MAX = 400            # rows of the run's ideas shown; the rest are counted
-EARLIER_MAX = 200            # rows of earlier runs' distinct ideas shown, the most tried first; the rest are counted
 TEXT = 240                   # characters of an idea's text shown
 
 
@@ -53,8 +52,8 @@ def ports(setting: str, start: Program, ported: list[str], n: int) -> tuple[str,
     return setting + CACHE_SPLIT + "\n\n" + PORTER, program(start) + CACHE_SPLIT + "\n\n" + ask
 
 
-def name(setting: str, parents: list[Program], population: list[Program], ideas: list[Idea], past: list,
-         generation: int, n: int) -> tuple[str, str]:
+def name(setting: str, parents: list[Program], population: list[Program], ideas: list[Idea], generation: int,
+         n: int) -> tuple[str, str]:
     """(system, user) for a generation's naming call: reflections on the last generation's ideas, then `n` changes."""
     done = last(ideas, population, generation)
     ask = (f"Name {n} changes for a writer to make, each to one of the programs shown. Each must differ from the "
@@ -63,11 +62,11 @@ def name(setting: str, parents: list[Program], population: list[Program], ideas:
            + (" Before them, reflect on each of the last generation's ideas." if done else "")
            + " Answer with one JSON object and nothing else: {" + (REFLECTIONS + ", " if done else "")
            + '"ideas": [{' + CHANGE + "}]}")
-    return _system(setting, ideas, population, past), programs(parents, population) + CACHE_SPLIT + "".join(
+    return _system(setting, ideas, population), programs(parents, population) + CACHE_SPLIT + "".join(
         f"\n\n{t}" for t in (done, ask) if t)
 
 
-def review(setting: str, parents: list[Program], population: list[Program], ideas: list[Idea], past: list,
+def review(setting: str, parents: list[Program], population: list[Program], ideas: list[Idea],
            named: list[dict], matches: list[dict], merges: int) -> tuple[str, str]:
     """(system, user) for a generation's review call: the named changes, and those whose text is close to another
     idea's, to be written as the final list."""
@@ -78,7 +77,7 @@ def review(setting: str, parents: list[Program], population: list[Program], idea
            f"write it once. Add up to {merges} changes that each combine named changes which can be made to one "
            'program together. Give every change the named changes it keeps or combines in "from". Answer with one '
            'JSON object and nothing else: {"ideas": [{"from": ["n1"], ' + CHANGE + "}]}")
-    return _system(setting, ideas, population, past), programs(parents, population) + CACHE_SPLIT + "".join(
+    return _system(setting, ideas, population), programs(parents, population) + CACHE_SPLIT + "".join(
         f"\n\n{t}" for t in (f"# The changes named for this generation\n{rows}",
                              "# Named changes whose text is close to another idea's (cosine of their embeddings)\n"
                              + near if near else "", ask) if t)
@@ -92,21 +91,34 @@ def write(setting: str, parent: Program, plan: dict, borrowed: list[Program]) ->
             program(parent) + CACHE_SPLIT + others + f"\n\n# The change to make\n{json.dumps(plan)}\n\n{WRITE}")
 
 
-def reflect(setting: str, population: list[Program], ideas: list[Idea], past: list, generation: int) -> tuple[str, str]:
+def reflect(setting: str, population: list[Program], ideas: list[Idea], generation: int) -> tuple[str, str]:
     """(system, user) for the call after the last generation: reflections on its ideas, and one on the run."""
-    return _system(setting, ideas, population, past), last(ideas, population, generation) + (
+    return _system(setting, ideas, population), last(ideas, population, generation) + (
         "\n\nReflect on each of these ideas, and on the run. Answer with one JSON object and nothing else: {"
         + REFLECTIONS + ', "run": "<what the run gained and what limited it, max 60 words>"}')
 
 
 def read(text: str) -> dict:
-    """The answer's JSON object, or {} when it holds none."""
+    """The answer's JSON object; of one cut off, the reflections and ideas that are whole; {} when it holds none."""
     m = re.search(r"\{.*\}", text or "", re.S)
     try:
         v = json.loads(m.group(0)) if m else None
     except json.JSONDecodeError:
-        v = None
+        v = {k: items for k in ("reflections", "ideas") if (items := _whole(text, k))}
     return v if isinstance(v, dict) else {}
+
+
+def _whole(text: str, key: str) -> list:
+    """The complete items of the answer's list `key`."""
+    m, items = re.search(rf'"{key}"\s*:\s*\[', text), []
+    at = m.end() if m else 0
+    while m:
+        try:
+            v, at = json.JSONDecoder().raw_decode(text, at + re.match(r"[\s,]*", text[at:]).end())
+        except json.JSONDecodeError:
+            break
+        items.append(v)
+    return items
 
 
 def short(plan: dict) -> str:
@@ -129,19 +141,10 @@ def tried(e) -> dict:
                                                            "not measured")[:120]})}
 
 
-def _system(setting: str, ideas: list[Idea], population: list[Program], past: list) -> str:
-    """The setting and the earlier runs' ideas (stable for the run), then this run's ideas and the role."""
+def _system(setting: str, ideas: list[Idea], population: list[Program]) -> str:
+    """The setting (stable for the run), then this run's ideas and the role."""
     past_run = history(ideas, population)
-    return "\n\n".join(t for t in (setting, earlier(past)) if t) + CACHE_SPLIT + "\n\n" + (
-        f"{past_run}\n\n" if past_run else "") + NAMER
-
-
-def earlier(past: list) -> str:
-    """Every distinct idea tried on this task in earlier runs, with what was measured then."""
-    rows = [json.dumps({"idea": short(e.idea), **tried(e)}) for e in sorted(past, key=lambda e: -len(e.outcomes))]
-    more = [f"({len(rows) - EARLIER_MAX} more ideas not shown)"] if len(rows) > EARLIER_MAX else []
-    return "\n".join(["# Ideas tried on this task in earlier runs, one row per distinct idea (gain = child score / "
-                      "parent score in that run)", *rows[:EARLIER_MAX], *more]) if rows else ""
+    return setting + CACHE_SPLIT + "\n\n" + (f"{past_run}\n\n" if past_run else "") + NAMER
 
 
 def history(ideas: list[Idea], population: list[Program]) -> str:

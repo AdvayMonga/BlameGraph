@@ -100,7 +100,7 @@ def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer
     program, judged beside the start. `namer` names the ports and names and reviews a generation's changes, and
     writes the ports (it can read their sources); `writer` makes each change."""
     out.mkdir(parents=True, exist_ok=True)
-    rng, population, ideas, ran, past = random.Random(cfg.seed), [], [], 0, similar.past
+    rng, population, ideas, ran = random.Random(cfg.seed), [], [], 0
     calls = Calls(out)
     with open(out / "trace.jsonl", "w") as trace, open(out / "hypotheses.jsonl", "w") as log:
         def keep(code: str, r: Result, generation: int, parent: str | None = None, plan: dict | None = None,
@@ -170,20 +170,20 @@ def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer
             plans, final, nid, rid = [], [], None, None
             if parents:
                 text, nid = calls(namer, "name", gen,
-                                  *context.name(setting, parents, population, ideas, past, gen, cfg.ideas))
+                                  *context.name(setting, parents, population, ideas, gen, cfg.ideas))
                 answer = context.read(text)
                 reflected(ideas, answer)
                 plans = changes(answer, parents)[:cfg.ideas]
             if plans:
                 text, rid = calls(namer, "review", gen, *context.review(
-                    setting, parents, population, ideas, past, plans, similar.match(plans), cfg.merges))
+                    setting, parents, population, ideas, plans, similar.match(plans), cfg.merges))
                 final = changes(context.read(text), parents)[:cfg.ideas + cfg.merges] or plans   # unreadable: as named
             make(gen, parents, [idea(p, gen, {"name": nid, "review": rid}) for p in final], writer, spent,
                  {"dropped": dropped, "named": len(plans), "reviewed": len(final), "calls": {"name": nid, "review": rid}})
             ran = gen
 
         if ran:                                  # the last generation's ideas have no naming call after them
-            text, _ = calls(namer, "reflect", ran + 1, *context.reflect(setting, population, ideas, past, ran + 1))
+            text, _ = calls(namer, "reflect", ran + 1, *context.reflect(setting, population, ideas, ran + 1))
             answer = context.read(text)
             reflected(ideas, answer)
             (out / "reflection.txt").write_text(str(answer.get("run") or ""))
