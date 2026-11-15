@@ -203,7 +203,7 @@ def push(vm: VM, record: Record) -> None:
     except the held-out traces, which submit needs and git no longer holds."""
     # .venv is named explicitly: a gitignore-only exclusion did not protect it from --delete on the VM.
     for local, remote, keep in ((engine.repo(), vm.remote_dir, []),
-                                (engine.ENV_ROOT, vm.env_dir, ["--include=data/corpus/*/heldout.jsonl"])):
+                                (engine.ENV_ROOT, vm.env_dir, ["--include=evals/regimes/*/heldout.jsonl"])):
         # local/runs is named explicitly too: it holds the worker's cache and the agent's live workspaces there.
         _rsync(vm, "--delete", "--exclude=.git", "--exclude=.venv", "--exclude=__pycache__", "--exclude=/local/runs",
                *keep, "--filter=:- .gitignore",

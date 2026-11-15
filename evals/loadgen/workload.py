@@ -1,5 +1,5 @@
-"""Workloads: the corpus (`data/corpus/`, real BurstGPT timing + WildChat text; built by data/corpus/build_corpus.py) and seeded
-schedules built from it. Trace format (data/corpus/README.md): one request per line with `arrival_s`, `session_id`,
+"""Workloads: the corpus (`evals/regimes/`, real BurstGPT timing + WildChat text; built by evals/regimes/build_corpus.py) and seeded
+schedules built from it. Trace format (evals/regimes/README.md): one request per line with `arrival_s`, `session_id`,
 `turn_index`, `prompt`, `max_tokens`, `build_prompt_tokens`, `messages` on multi-turn requests, and
 `expected_output_tokens` (the reference's answer length) once measured.
 """
@@ -20,7 +20,7 @@ WORDS = ("river stone lantern harbor meadow copper signal winter garden orbit le
 def corpus(root: str | Path, cls: str, split: str = "seen") -> list[dict]:
     """Records of one (class, split) through the verified loader (every trace hash is checked against the
     manifest; a changed trace refuses), each with a stable `id` (`<class>-<split>-<line>`)."""
-    from data.corpus import load_trace
+    from evals.regimes import load_trace
     _, reqs = load_trace(cls, split, Path(root))
     out = []
     for k, r in enumerate(reqs):
@@ -38,14 +38,14 @@ def workload_file(path: str | Path) -> list[dict]:
 
 
 def corpus_classes(root: str | Path) -> list[str]:
-    from data.corpus import load_manifest
+    from evals.regimes import load_manifest
     return list(load_manifest(Path(root)).classes)
 
 
 def corpus_version(root: str | Path | None) -> str | None:
     if root is None:
         return None
-    from data.corpus import load_manifest
+    from evals.regimes import load_manifest
     return load_manifest(Path(root)).corpus_version
 
 
@@ -178,7 +178,7 @@ def conversations(pool: list[dict], max_turns: int = 6) -> list[list[dict]]:
 
 def realistic(pool: list[dict], rate: float, duration_s: float, seed, model, system: str | None = None,
               **req_kw) -> list[Request]:
-    """Real conversation traffic (measure/loadgen/arrivals.py): sittings at `rate` per second from `model.schedule`, each a
+    """Real conversation traffic (evals/loadgen/arrivals.py): sittings at `rate` per second from `model.schedule`, each a
     conversation drawn from the pool with turns enough for its turn indices (else one of the longest, and the turns
     past its end are not sent); turn j resends the history up to the j-th user message at the reference's length for
     it. Every sitting is salted after `system`, so no two share a prefix; the turns of one do, as a conversation's."""

@@ -12,7 +12,7 @@ from targets.engine import ENV_ROOT
 from data.knowledge import index, sync
 from data.knowledge.remote import open_remote
 
-RUNS, CORPUS = ENV_ROOT / "local" / "runs", ENV_ROOT / "data" / "corpus"
+RUNS, CORPUS = ENV_ROOT / "local" / "runs", ENV_ROOT / "evals" / "regimes"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -23,7 +23,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("push", help="ledger, blobs, held-out passive data and held-out traces")
     pl = sub.add_parser("pull", help="the ledger")
     pl.add_argument("--blobs", action="store_true", help="also every blob missing locally")
-    pl.add_argument("--corpus", action="store_true", help="also the held-out traces of the corpus in data/corpus/")
+    pl.add_argument("--corpus", action="store_true", help="also the held-out traces of the corpus in evals/regimes/")
     sub.add_parser("index", help="rebuild the researcher's index, held-out rows included (index/all.duckdb)")
     sq = sub.add_parser("sql", help="query an index")
     sq.add_argument("sql")

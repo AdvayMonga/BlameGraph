@@ -2,7 +2,7 @@
 
   single_stream             one user at a time: p99 time per output token (interactive limits)
   saturated                 closed-loop concurrency sweep: goodput in req/s, and the throughput vs speed-per-user curve
-  realistic                 the corpus mix as real conversation traffic (measure/loadgen/arrivals.py), users added until it breaks: goodput in req/s
+  realistic                 the corpus mix as real conversation traffic (evals/loadgen/arrivals.py), users added until it breaks: goodput in req/s
   bursty                    the corpus burst trace at a multiple of its request rate until it breaks: goodput as that multiple
   long_prompt_short_output  long-context prompts, 64-token answers, real conversation timing: goodput in req/s
   short_prompt_long_output  short prompts, answers up to 1024 tokens, Poisson arrivals: goodput in req/s
@@ -14,7 +14,7 @@
 Everything except single_stream, offline and cold_start is checked against the conversational limits (TTFT 2 s, TPOT
 100 ms at p99); goodput is the highest load at which >= 99% of requests meet both. Loads are found with short probes,
 then confirmed for the tier's full duration. With measured reference lengths in the corpus every answer has a fixed
-length (`measure.loadgen.workload.to_request`). Every request is salted so no two share a prefix, except the turns of one
+length (`evals.loadgen.workload.to_request`). Every request is salted so no two share a prefix, except the turns of one
 conversation and a shared system prompt.
 """
 from __future__ import annotations
@@ -51,10 +51,10 @@ def arrivals() -> Model:
 class Ctx:
     url: str
     model: str
-    corpus: str | None = None          # a data/corpus/ dir; None = synthetic prompts (tests, smoke runs)
-    workload: str | None = None        # a data/workloads/ JSONL file instead of the corpus: every regime draws from all of it
+    corpus: str | None = None          # a evals/regimes/ dir; None = synthetic prompts (tests, smoke runs)
+    workload: str | None = None        # a evals/public/ JSONL file instead of the corpus: every regime draws from all of it
     split: str = "seen"
-    synthetic: bool = False            # every pool generated fresh from the corpus's seen split (measure/loadgen/synth.py)
+    synthetic: bool = False            # every pool generated fresh from the corpus's seen split (evals/loadgen/synth.py)
     tier: str = "short"
     seed: int = 0
     timeout: float = 600.0
@@ -300,7 +300,7 @@ def _curve(levels: list[dict]) -> list[dict]:
 
 
 def realistic(ctx: Ctx) -> dict:
-    """The corpus mix as real conversation traffic: sittings at a searched rate (measure/loadgen/arrivals.py), each turn's
+    """The corpus mix as real conversation traffic: sittings at a searched rate (evals/loadgen/arrivals.py), each turn's
     gap drawn from the real ones, users mid-conversation from t=0. Headline: good requests/s at the highest sitting
     rate whose requests meet the limits (`sittings_per_s` beside it)."""
     pool = ctx.pool(None)
@@ -471,7 +471,7 @@ def _launch_once(url, model, cmd, env, expect, timeout_s, poll_s, log_dir, label
 
 
 # What each regime sends and what it reports, in the words the agent's objective uses (lab/prompts/objective.md).
-REAL_TRAFFIC = ("real conversation traffic (measure/loadgen/arrivals.json, fitted from BurstGPT's conversation log): sittings "
+REAL_TRAFFIC = ("real conversation traffic (evals/loadgen/arrivals.json, fitted from BurstGPT's conversation log): sittings "
                 "start as a Poisson process at the load's rate, each a run of turns of one conversation (a resumed one "
                 "carries its history) with the gap to the next turn drawn from the real gaps by turn, users "
                 "mid-conversation from t=0; load rises by raising the sitting rate")

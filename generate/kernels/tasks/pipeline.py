@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable
 
 # The capture traffic (evals/kernels/validate_gpu.sh's CAPTURE_SPECS): corpus classes at real concurrencies, for a
-# run without a task; with one, each scored regime's traffic from REGIME_CAPTURE (its corpus class, measure/loadgen/suite.py,
+# run without a task; with one, each scored regime's traffic from REGIME_CAPTURE (its corpus class, evals/loadgen/suite.py,
 # at a concurrency like the regime's load: the profile job sends that many requests at once).
 CAPTURE_SPECS = (("mixed_1", 256), ("mixed_3", 64), ("long_context", 60))
 REGIME_CAPTURE = {"single_stream": ("steady_interactive", 1), "saturated": ("mixed_1", 256), "bursty": ("mixed_3", 64),
@@ -34,7 +34,7 @@ def steady(cls: str, n: int) -> tuple[int, int]:
     """(requests, in flight) for a capture of corpus class `cls` at load `n`: closed loop at `n` in flight over 3x as
     many requests, so most of the window is the regime's steady state; a class with fewer seen requests runs them all
     at a third as many in flight."""
-    from data import corpus
+    from evals import regimes as corpus
     have = len(corpus.load_trace(cls, "seen")[1])
     total = min(3 * n, have)
     return total, max(1, min(n, total // 3))

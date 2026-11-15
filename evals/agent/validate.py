@@ -49,7 +49,7 @@ def band_pct(values: list[float], floor: float = 0.0) -> float | None:
 def write_noise(regime: str, values: list[float], t: target.Target, extra: dict | None = None,
                 root: Path = ledger.ROOT, floor: float = 0.0) -> dict:
     """One regime's band as a `noise` ledger record; returns its fields."""
-    from measure.loadgen.workload import corpus_version
+    from evals.loadgen.workload import corpus_version
     d = {"regime": regime, "band_pct": band_pct(values, floor), "values": values, "runs": len(values), "model": t.model,
          "target": t.name, "server": "engine", "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,
          "measured_at": time.strftime("%Y-%m-%dT%H:%M:%S"), **(extra or {})}
@@ -62,7 +62,7 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
              reference_regimes: bool = True, root: Path = ledger.ROOT) -> dict:
     from evals.agent.correctness import client, run as crun, tasks
     from evals.agent.correctness.gate import Thresholds
-    from measure.loadgen import suite
+    from evals.loadgen import suite
     out = out or (target.ENV_ROOT / "local" / "validate" / t.name)
     out.mkdir(parents=True, exist_ok=True)
     log_dir = log_dir or out

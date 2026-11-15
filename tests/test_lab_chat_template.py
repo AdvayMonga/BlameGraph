@@ -10,7 +10,7 @@ import hashlib
 
 import pytest
 
-from data.corpus import chat_template as CT
+from evals.regimes import chat_template as CT
 
 MODEL = "fake/instruct-model"
 OVERHEAD = 7

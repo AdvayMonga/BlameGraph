@@ -98,7 +98,7 @@ def system_prompt(t: target.Target, spec: agent.AgentSpec) -> str:
     is scored and what it costs, nothing advised. Task-specific facts go in each session's brief."""
     from lab.evaltools import HOLDOUT_BUDGET
     from measure.sandbox.surfaces import ALWAYS_DENY
-    from measure.loadgen import suite
+    from evals.loadgen import suite
 
     def globs(g):
         return ", ".join(f"`{x}`" for x in g) or "nothing"

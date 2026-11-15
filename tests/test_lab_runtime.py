@@ -260,7 +260,7 @@ def test_system_prompt_is_generated_from_the_target_and_tools_and_advises_nothin
     assert "{" not in system.replace(t.engine.launch, "").replace(json.dumps(t.engine.env), "")   # all filled
     assert not ADVICE.search(system), ADVICE.search(system)
     assert system.startswith("You are an expert in LLM inference performance engineering.")
-    from measure.loadgen import suite
+    from evals.loadgen import suite
     for name in suite.FACTS:
         assert f"- `{name}`:" in system                                    # every regime's definition
     assert "  - kernels:" in system and "  - runtime:" in system           # the layer map

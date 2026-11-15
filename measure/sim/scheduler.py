@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from measure.loadgen.client import Row
+from evals.loadgen.client import Row
 
 EOS = -1
 
@@ -293,7 +293,7 @@ def simulate(records: list[dict], settings: Settings | None = None, cost: CostMo
              horizon_s: float | None = None) -> Result:
     """Run `records` (corpus-shaped: arrival_s, build_prompt_tokens, max_tokens, session_id, turn_index, id;
     `expected_output_tokens` when known) through the engine's scheduler on the fake clock. Returns a regimes-shaped
-    row per request, so `measure.loadgen.runner.summarize` judges a simulation like a bench."""
+    row per request, so `evals.loadgen.runner.summarize` judges a simulation like a bench."""
     from inference_server.scheduler import QueueFullError, RequestTooLargeError, ScheduledRequest
     settings, cost = settings or Settings(), cost or CostModel()
     rng = random.Random(seed)

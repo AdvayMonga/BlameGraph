@@ -15,7 +15,7 @@ from lab.budget import Budget
 from lab.session import Session
 from lab.tools import Toolbox
 from lab.workspace import Workspace
-from measure.loadgen import suite
+from evals.loadgen import suite
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lab_fixtures import make_repo  # noqa: E402
@@ -106,7 +106,7 @@ def lab(tmp_path, monkeypatch):
     tb = Toolbox(s)
     tb.serve_jailed = False
     tb.bench_default_regimes = ("single_stream",)
-    from measure.loadgen import runner
+    from evals.loadgen import runner
     saved, think, lag = dict(suite.TIERS["min"]), suite.ARRIVALS, runner.MAX_CLIENT_LAG_S
     runner.MAX_CLIENT_LAG_S = 0.05      # wiring tests on a shared laptop; client precision has its own test
     suite.TIERS["min"].update(probe_s=1.0, final_s=1.5)
@@ -285,8 +285,8 @@ def test_submit_reports_no_heldout_delta_without_a_seen_delta(lab, monkeypatch, 
     # but only on the corpus version it was measured on: fixed answer lengths are a new version
     import dataclasses
 
-    from data.corpus import CORPUS_DIR
-    from measure.loadgen.workload import corpus_version
+    from evals.regimes import CORPUS_DIR
+    from evals.loadgen.workload import corpus_version
     t = dataclasses.replace(target.load(), corpus_dir=CORPUS_DIR)
     ledger.append({"kind": "noise", "result": {**band, "target": t.name, "corpus_version": "old", "band_pct": 3.0}}, root)
     assert evaltools.noise_band_pct("single_stream", t, root) == 2.0

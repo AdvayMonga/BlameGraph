@@ -62,7 +62,7 @@ serving = ["src/inference_server/server.py", "src/inference_server/openai_shim.p
            "src/inference_server/config.py", "src/inference_server/profiles.*"]
 
 [corpus]
-dir = "data/corpus"
+dir = "evals/regimes"
 
 [validation]                                 # lab validate: known-good must PASS, known-bad must FAIL
 good = { fp8 = "vllm serve Qwen/Qwen3-30B-A3B-FP8 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}", int8 = "vllm serve nytopop/Qwen3-30B-A3B.w8a8 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}" }

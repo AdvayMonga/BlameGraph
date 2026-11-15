@@ -60,7 +60,7 @@ def perf_reference(t: target.Target) -> target.Server | None:
 
 # -- fingerprint --------------------------------------------------------------------------
 def fingerprint(t: target.Target, gpu: dict | None, tier: str, split: str, seed: int | None = None) -> dict:
-    from measure.loadgen.workload import corpus_version
+    from evals.loadgen.workload import corpus_version
     w, kv = dtypes(t)
     return {"model": t.model, "w_dtype": w, "kv_dtype": kv, "max_model_len": t.max_model_len, "tier": tier,
             "split": split, "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,
