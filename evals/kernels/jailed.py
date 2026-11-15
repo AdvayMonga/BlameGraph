@@ -1,6 +1,6 @@
 """python -m evals.kernels.jailed CONFIG.json PROGRAM|- STAGE (1, 2, 3: ncu counters, 4: quick, 5: precheck, 6: sanitizer, 7: freeze)  (or `- - STAGE`: {config, source} as JSON on stdin)  ->  evals.kernels.core's JSON, judged in the jail.
 
-The candidate runs as agent code (measure/sandbox/grader.jailed: a container with no network on Linux, srt elsewhere;
+The candidate runs as agent code (lab/infra/sandbox/grader.jailed: a container with no network on Linux, srt elsewhere;
 LAB_NO_JAIL=1 waives it). The jail sees a fresh tree holding only the candidate and its config, a read-only copy of
 the harness core needs (evals/kernels/, generate/kernels/, measure.context.peaks, targets.target, the measured peaks), and the engine's source read-only
 when the task's baseline lives there; never this repo, which holds the held-out shapes, the ledger and .env."""
@@ -23,7 +23,7 @@ from evals.kernels.evaluator import tail
 from evals.kernels.verify import verify
 from generate.kernels.tasks import load
 from targets import engine
-from measure.sandbox import container, grader
+from lab.infra.sandbox import container, grader
 
 ROOT = Path(__file__).resolve().parents[2]
 HARNESS = {"evals": ("__init__.py",), "evals/kernels": None, "generate": ("__init__.py",),

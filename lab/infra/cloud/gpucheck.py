@@ -22,7 +22,7 @@ from pathlib import Path
 from targets import engine
 from measure.profile import gpu
 from measure.runner import serve, worker
-from measure.sandbox import container, grader
+from lab.infra.sandbox import container, grader
 
 HOLD = "import torch, time; x = torch.empty(2**30, dtype=torch.uint8, device='cuda'); print('holding', flush=True); time.sleep(600)"
 MEASURE = {"names": ["single_stream"], "split": "seen", "tier": "short", "seed": 0, "jailed": True, "passive": False}
@@ -157,7 +157,7 @@ def hostprof(tmp: Path) -> str:
 @check("build")
 def build_step(tmp: Path) -> str:
     """A dependency change is built from scratch (index-only network) and the built venv runs torch on the GPU."""
-    from measure.sandbox import build
+    from lab.infra.sandbox import build
     tree = tmp / "base"
     shutil.copytree(engine.repo(), tree, ignore=shutil.ignore_patterns(".venv", ".git", "__pycache__", "*.pyc"))
     grader._commit(tree, "base", init=True)

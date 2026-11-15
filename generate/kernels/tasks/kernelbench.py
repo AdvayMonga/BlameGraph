@@ -274,7 +274,7 @@ def score(name: str, program: Path, work: Path) -> dict:
     """The benchmark's own verdict on `program`'s ModelNew, run jailed on this host's GPU, with the speedups."""
     from evals.kernels import jailed
     from targets import engine
-    from measure.sandbox import grader
+    from lab.infra.sandbox import grader
     work = Path(work).resolve()
     tree = work / "tree"
     tree.mkdir(parents=True, exist_ok=True)

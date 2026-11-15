@@ -39,7 +39,7 @@ from pathlib import Path
 from targets import engine, target
 from evals.researcher import live
 from measure.runner import serve
-from measure.sandbox import container
+from lab.infra.sandbox import container
 
 RESULT = "_result.json"
 ENGINE_LOG = "engine.log"          # the served engine's log, in every job's out dir
@@ -65,8 +65,8 @@ def tree_sha(root: Path) -> str:
 # -- jobs (run where the GPU is) ---------------------------------------------------------------------------------
 
 def job_test(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
-    from measure.sandbox import build
-    from measure.sandbox import grader
+    from lab.infra.sandbox import build
+    from lab.infra.sandbox import grader
     tree = inputs["tree"]
     try:
         py = build.python_for(tree)
@@ -87,7 +87,7 @@ def job_measure(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     its regimes invalid with the reason and the measurement goes on; the general launch failing, a busy GPU or a
     contaminated measurement still fail it whole."""
     from measure.runner import artifacts, profiles
-    from measure.sandbox import build
+    from lab.infra.sandbox import build
     from lab.evaltools import _why, run_regimes
     t = target.load()
     rows = [] if args["passive"] else None
@@ -131,9 +131,9 @@ def job_measure(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
 def job_equiv(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     """`args`: tier, concurrency, jailed, profile (None = general). The gate's outputs land in `out` as equiv.json and
     equiv.outputs.jsonl; answers already in `prior`'s equiv.outputs.jsonl are reused, not asked again."""
-    from evals.agent.correctness import client, run as crun
-    from evals.agent.correctness.gate import Thresholds
-    from measure.sandbox import build
+    from lab.gate.correctness import client, run as crun
+    from lab.gate.correctness.gate import Thresholds
+    from lab.infra.sandbox import build
     from measure.runner import profiles
     t = target.load()
     if (inputs["prior"] / "equiv.outputs.jsonl").exists():
@@ -153,7 +153,7 @@ def job_equiv(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
 
 def job_profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     """`args`: kind (profile | trace | kernel | hostprof), the tool's args, workbench. Files go to `out/files`."""
-    from measure.sandbox import build
+    from lab.infra.sandbox import build
     try:
         py = build.python_for(inputs["tree"])
     except build.BuildFailed as e:              # a failed profile run, recorded like any other
@@ -361,13 +361,13 @@ class Remote:
 
 
 def load(**hooks):
-    """`LAB_WORKER`: local (default) or ssh, the VM `measure.cloud.vm` names (started and set up beforehand)."""
+    """`LAB_WORKER`: local (default) or ssh, the VM `lab.infra.cloud.vm` names (started and set up beforehand)."""
     kind = os.environ.get("LAB_WORKER", "local")
     if kind == "local":
         return Local(**hooks)
     if kind != "ssh":
         raise ValueError(f"LAB_WORKER is local or ssh, not {kind!r}")
-    from measure.cloud import vm
+    from lab.infra.cloud import vm
     v = vm.VM()
     record = v.provider.get(v.name)
     if record is None or record.state != "running":

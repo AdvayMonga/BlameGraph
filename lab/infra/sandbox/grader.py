@@ -16,8 +16,8 @@ from pathlib import Path
 
 from targets import engine, target
 from measure.profile import gpu
-from measure.sandbox import container, jail
-from measure.sandbox.surfaces import ALWAYS_DENY, HIDDEN, deps_only, may_write
+from lab.infra.sandbox import container, jail
+from lab.infra.sandbox.surfaces import ALWAYS_DENY, HIDDEN, deps_only, may_write
 
 IGNORED = ("*/__pycache__/*", "__pycache__/*", "*.pyc", ".pytest_cache/*", "*/.pytest_cache/*",
            ".ruff_cache/*", "*/.ruff_cache/*", "*.egg-info/*", ".DS_Store", "*/.DS_Store",

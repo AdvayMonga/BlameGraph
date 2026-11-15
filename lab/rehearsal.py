@@ -103,7 +103,7 @@ def items(n: int) -> list[dict]:
 
 
 def make_reference(script: Path, out: Path, n: int, encoder) -> dict:
-    from evals.agent.correctness import run as crun
+    from lab.gate.correctness import run as crun
     proc, url = _serve(script)
     try:
         return crun.reference(url, MODEL, out, items(n), encoder, top_k=5, div_n=min(n, 60), concurrency=8)
@@ -162,7 +162,7 @@ regimes = ["single_stream"]
 
 
 def setup(d: Path, python: str = sys.executable, n_dev: int = 200, n_full: int = 400, encoder=None) -> dict:
-    from evals.agent.correctness import run as crun
+    from lab.gate.correctness import run as crun
     d = d.resolve()
     if (d / "engine").exists():
         raise SystemExit(f"{d / 'engine'} exists: set up a fresh directory")

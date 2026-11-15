@@ -7,7 +7,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 
-from measure.cloud.providers import ProviderError, Record, env_field
+from lab.infra.cloud.providers import ProviderError, Record, env_field
 
 
 @dataclass(frozen=True)

@@ -17,7 +17,7 @@ from measure.runner import serve
 from data.knowledge import ledger
 from lab import tools as labtools
 from lab.budget import Budget, BudgetExceeded
-from measure.sandbox import container, jail
+from lab.infra.sandbox import container, jail
 from lab.session import Session
 from lab.tools import GPU_TOOLS, Toolbox
 from lab.workspace import Workspace

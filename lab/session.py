@@ -19,7 +19,7 @@ from data.knowledge import ledger
 from targets import engine, target
 from lab.budget import Budget, BudgetExceeded
 from lab.evaltools import BENCH_TIER
-from measure.sandbox import grader
+from lab.infra.sandbox import grader
 from lab.task import Task
 from lab.tools import Toolbox, clean_pristine
 from lab.workspace import Workspace
@@ -97,7 +97,7 @@ def system_prompt(t: target.Target, spec: agent.AgentSpec) -> str:
     """The agent's objective from the target spec, the regimes' definitions and the tool specs: what is there, how it
     is scored and what it costs, nothing advised. Task-specific facts go in each session's brief."""
     from lab.evaltools import HOLDOUT_BUDGET
-    from measure.sandbox.surfaces import ALWAYS_DENY
+    from lab.infra.sandbox.surfaces import ALWAYS_DENY
     from evals.loadgen import suite
 
     def globs(g):

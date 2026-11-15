@@ -25,8 +25,8 @@ def main():
     v = sub.add_parser("verdict"); v.add_argument("results", nargs="+")
     a = ap.parse_args()
     t = target.load(a.target)
-    from evals.agent.correctness import client, run, tasks
-    from evals.agent.correctness.gate import Thresholds
+    from lab.gate.correctness import client, run, tasks
+    from lab.gate.correctness.gate import Thresholds
     th = Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio)
     enc = lambda: run.HFEncoder(t.model, t.chat_kwargs)
     if a.step == "reference":

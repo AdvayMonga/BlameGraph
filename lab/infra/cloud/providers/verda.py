@@ -14,7 +14,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from measure.cloud.providers import ProviderError, Record, as_list, env_field
+from lab.infra.cloud.providers import ProviderError, Record, as_list, env_field
 
 API = "https://api.datacrunch.io/v1"
 RUNNING, STOPPED = "running", "stopped"

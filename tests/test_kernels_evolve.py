@@ -849,7 +849,7 @@ def test_outputs_are_verified_again_outside_the_candidates_process():
 
 def test_the_jail_sees_a_fresh_tree_and_a_copied_harness_never_this_repo():
     from evals.kernels import jailed
-    from measure.sandbox import container, grader, jail
+    from lab.infra.sandbox import container, grader, jail
     with tempfile.TemporaryDirectory() as d:
         h = jailed.stage_harness(Path(d) / "h")
         names = {p.relative_to(h).as_posix() for p in h.rglob("*") if p.is_file()}

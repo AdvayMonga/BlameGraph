@@ -7,8 +7,8 @@ import subprocess
 
 import pytest
 
-from measure.sandbox import container, grader, jail
-from measure.sandbox.surfaces import may_write
+from lab.infra.sandbox import container, grader, jail
+from lab.infra.sandbox.surfaces import may_write
 from tests.lab_fixtures import make_repo
 
 
@@ -167,7 +167,7 @@ addopts = "-q"
 
 
 def test_a_pyproject_may_change_its_dependencies_and_nothing_else(tmp_path):
-    from measure.sandbox.surfaces import deps_only
+    from lab.infra.sandbox.surfaces import deps_only
     assert deps_only(PYPROJECT, PYPROJECT.replace('["a"]', '["a", "b>=2"]'))
     assert deps_only(PYPROJECT, PYPROJECT + '\n[tool.uv.sources]\nb = { index = "x" }\n')
     assert not deps_only(PYPROJECT, PYPROJECT.replace('"-q"', '"-q -k nothing"'))   # test config is the evaluator's
@@ -204,7 +204,7 @@ def test_a_venv_in_scratch_is_left_out_but_a_link_in_the_surface_is_a_violation(
 
 
 def test_srt_never_reads_the_jailed_command_as_its_own_options(tmp_path, monkeypatch):
-    from measure.sandbox import jail
+    from lab.infra.sandbox import jail
     monkeypatch.setattr(jail.shutil, "which", lambda name: "/bin/srt" if name == "srt" else None)
     argv = jail.wrap({"network": {}, "filesystem": {}}, tmp_path / "srt.json", ["python", "-c", "print(1)"])
     assert argv == ["/bin/srt", "--settings", str(tmp_path / "srt.json"), "--", "python", "-c", "print(1)"]

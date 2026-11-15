@@ -17,7 +17,7 @@ from lab.agent import ToolSpec
 from lab.budget import Budget, BudgetExceeded, gpu_rate
 from lab.evaltools import BENCH_TIER, EvalTools
 from lab.proftools import ProfTools
-from measure.sandbox import grader
+from lab.infra.sandbox import grader
 
 # Tools that occupy the GPU: their wall time is charged at the venue's rate. The rest cost $0.
 QUERY_MAX_BYTES = 64_000           # a query's reply: whole rows up to this, so one call cannot flood the context

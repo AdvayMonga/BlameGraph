@@ -1,4 +1,4 @@
-"""measure.cloud.providers.verda against an in-memory fake of Verda's REST API."""
+"""lab.infra.cloud.providers.verda against an in-memory fake of Verda's REST API."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ import os
 
 import pytest
 
-from measure.cloud import vm as labvm
-from measure.cloud.providers import ProviderError, verda
+from lab.infra.cloud import vm as labvm
+from lab.infra.cloud.providers import ProviderError, verda
 
 
 class FakeApi:

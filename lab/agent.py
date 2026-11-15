@@ -15,8 +15,8 @@ from urllib.parse import urlsplit
 from lab import apiproxy
 from evals.researcher import live
 from targets import engine
-from measure.sandbox import container, jail
-from measure.sandbox.grader import HF_HUB
+from lab.infra.sandbox import container, jail
+from lab.infra.sandbox.grader import HF_HUB
 from lab.hooks import WRITE_TOOLS, write_guard
 
 BUILTIN_TOOLS = ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "WebSearch", "WebFetch"]

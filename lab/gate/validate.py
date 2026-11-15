@@ -60,8 +60,8 @@ def write_noise(regime: str, values: list[float], t: target.Target, extra: dict 
 def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: list[str] | None = None,
              out: Path | None = None, encoder=None, log_dir: Path | None = None,
              reference_regimes: bool = True, root: Path = ledger.ROOT) -> dict:
-    from evals.agent.correctness import client, run as crun, tasks
-    from evals.agent.correctness.gate import Thresholds
+    from lab.gate.correctness import client, run as crun, tasks
+    from lab.gate.correctness.gate import Thresholds
     from evals.loadgen import suite
     out = out or (target.ENV_ROOT / "local" / "validate" / t.name)
     out.mkdir(parents=True, exist_ok=True)

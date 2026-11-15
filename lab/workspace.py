@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from data.knowledge import ledger
-from measure.sandbox import grader
-from measure.sandbox.grader import Audit
+from lab.infra.sandbox import grader
+from lab.infra.sandbox.grader import Audit
 
 
 @dataclass
