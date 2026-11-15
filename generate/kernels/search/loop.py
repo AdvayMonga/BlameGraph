@@ -11,7 +11,8 @@ change (context.write). Programs that repeat one already written are dropped (di
 and timed (evaluate.Evaluator.evaluate) and join the population. It runs every generation whatever they score.
 
 `<out>/trace.jsonl` holds every judged program, `<out>/hypotheses.jsonl` every generation's ideas and their fates,
-`<out>/ideas.jsonl` one row per idea (plan, prediction, program, outcome, reflection), and `<out>/calls.jsonl` with
+`<out>/ideas.jsonl` one row per idea (plan, prediction, program, outcome, reflection), rewritten after every
+generation, `<out>/reflection.txt` the model's closing reflection on the run, and `<out>/calls.jsonl` with
 `<out>/texts.jsonl` every model call whole (calls.py)."""
 from __future__ import annotations
 
@@ -117,7 +118,7 @@ def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer
             with ThreadPoolExecutor(max_workers=cfg.workers) as ex:
                 list(ex.map(lambda i: write(calls, model, setting, i, by), new))
             for i in new:
-                why = novelty.refuse(i.code, by[i.parent]) if i.code else None
+                why = novelty.refuse(i.code) if i.code else None
                 if why:
                     i.code, i.fate = None, f"not applied: {why}"
             written = [i for i in new if i.code]
@@ -134,6 +135,12 @@ def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer
                 "improved": sum(c.score > by[c.parent].score for c in kids), "usd": round(calls.usd - spent, 4),
                 "ideas": [idea_row(i, by[i.parent]) for i in new]}, default=str) + "\n")
             log.flush()
+            table()
+
+        def table() -> None:
+            score = {p.id: p.score for p in population}
+            (out / "ideas.jsonl").write_text(
+                "".join(json.dumps(table_row(i, score), default=str) + "\n" for i in ideas))
 
         first = [start, *seeds.values()]
         for code in first:
@@ -175,11 +182,12 @@ def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer
                  {"dropped": dropped, "named": len(plans), "reviewed": len(final), "calls": {"name": nid, "review": rid}})
             ran = gen
 
-        if any(i.generation == ran > 0 for i in ideas):   # the last generation's ideas have no naming call after them
+        if ran:                                  # the last generation's ideas have no naming call after them
             text, _ = calls(namer, "reflect", ran + 1, *context.reflect(setting, population, ideas, past, ran + 1))
-            reflected(ideas, context.read(text))
-    score = {p.id: p.score for p in population}
-    (out / "ideas.jsonl").write_text("".join(json.dumps(table_row(i, score), default=str) + "\n" for i in ideas))
+            answer = context.read(text)
+            reflected(ideas, answer)
+            (out / "reflection.txt").write_text(str(answer.get("run") or ""))
+        table()
     calls.close()
     return population, {"usd": round(calls.usd, 4), "model_calls": calls.n, "evals": evaluator.evals,
                         "generations": ran}

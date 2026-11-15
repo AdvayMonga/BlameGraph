@@ -67,9 +67,8 @@ def _embedder(root: Path):
     try:
         from data.knowledge.search import FastEmbed
         return FastEmbed(root / "index" / "models")
-    except Exception:                            # noqa: BLE001  without fastembed only identical programs are refused
-        print("no embedder (fastembed): near-duplicate programs are not refused, close ideas not matched",
-              file=sys.stderr)
+    except Exception:                            # noqa: BLE001
+        print("no embedder (fastembed): close ideas are not matched", file=sys.stderr)
         return None
 
 
@@ -104,7 +103,7 @@ def main(argv: list[str] | None = None, namer: str = NAMER, writer: str = WRITER
     embedder, cfg = _embedder(ledger.ROOT), Config(seed=a.seed)
     evaluator = Evaluator(counters=a.device.startswith("cuda"))
     population, cost = search(start, competitors.starts(task.name, start), "\n\n".join(f for f in facts if f),
-                              Claude(namer, EFFORT, tools=True), Claude(writer, EFFORT), evaluator, Novelty(embedder),
+                              Claude(namer, EFFORT, tools=True), Claude(writer, EFFORT), evaluator, Novelty(),
                               Similar(embedder, _past(root, task.name, embedder)), out, cfg)
     spent: list = []
     exclude = _exclude(evaluator, detect.detector(Claude(detector, EFFORT), spent) if detector else None)
@@ -119,10 +118,12 @@ def main(argv: list[str] | None = None, namer: str = NAMER, writer: str = WRITER
     (out / "best_metrics.json").write_text(json.dumps(metrics or best.metrics, indent=1))
     blobs = {k: ledger.put_blob(out / f"{k}.jsonl", root, ".jsonl") if (out / f"{k}.jsonl").stat().st_size else None
              for k in ("hypotheses", "ideas", "calls", "texts")}
+    reflection = out / "reflection.txt"
     rec = record(task, sets, [{"name": namer, "role": "namer", "effort": EFFORT},
                               {"name": writer, "role": "writer", "effort": EFFORT}], cfg.generations, a.device,
                  out / "trace.jsonl", out / "best_program.py", metrics or best.metrics, retimed=retimed,
-                 tool="kernels.search", cost=cost, root=root, extra=blobs)
+                 tool="kernels.search", cost=cost, root=root,
+                 extra={**blobs, "reflection": reflection.read_text() if reflection.exists() else ""})
     print(json.dumps({"best": metrics or best.metrics, "cost": cost, "nodes": len(population), "out": str(out),
                       "ledger": rec["id"]}))
     return 0

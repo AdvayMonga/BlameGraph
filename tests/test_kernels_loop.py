@@ -44,7 +44,7 @@ class Namer:
             ideas = self.review(named) if self.review else [{**p, "from": [f"n{k}"]} for k, p in enumerate(named, 1)]
             return ("not json" if ideas is None else json.dumps({"ideas": ideas})), 0.5
         if "Name " not in ask:
-            return json.dumps({"reflections": reflections}), 0.5
+            return json.dumps({"reflections": reflections, "run": "the run"}), 0.5
         n, ids = int(re.search(r"Name (\d+) changes", ask).group(1)), re.findall(r"^# Program (\w+) \(score", user, re.M)
         return json.dumps({"reflections": reflections, "ideas": [
             {"parent": ids[k % len(ids)], "borrows": [], "optimisation_method": f"m{k}", "modification_plan": f"k {k}",
@@ -188,6 +188,7 @@ def test_a_naming_call_reflects_on_the_last_generation_and_one_call_reflects_on_
     assert asks[4].startswith("# The last generation's ideas") and "Reflect on each of these ideas" in asks[4]
     ideas = lines(tmp_path / "ideas.jsonl")
     assert all(i["idea_id"] in asks[2] for i in ideas[:6]) and all(i["idea_id"] in asks[4] for i in ideas[6:])
+    assert (tmp_path / "reflection.txt").read_text() == "the run"
 
 
 class Marked(Writer):
@@ -290,16 +291,11 @@ def test_parents_are_the_best_then_a_weighted_draw_without_replacement_of_usable
     assert diversity.pick([pop[6]], 3, random.Random(0)) == [] and len(diversity.pick(pop[:2], 8, random.Random(0))) == 2
 
 
-def test_a_repeat_is_refused_identical_anywhere_and_near_duplicate_only_among_siblings():
-    class Embedder:
-        def passages(self, texts):
-            return [[1.0, 0.0] if "x" in t else [0.0, 1.0] for t in texts]
-    n, p, q = diversity.Novelty(Embedder()), program(1, 1.0), program(2, 1.0)
-    n.add(p.code)
-    assert "identical" in n.refuse("a = 1  # a comment\n", q)
-    assert n.refuse("a = 1\nx = 1\n", p) is None and "near-duplicate" in n.refuse("a = 1\nx = 2\n", p)
-    assert n.refuse("a = 2\nx = 3\n", q) is None and n.refuse("a = 1\ny = 1\n", p) is None
-    assert diversity.Novelty().refuse("a = 1\nx = 2\n", p) is None                # no embedder: identical programs only
+def test_only_an_identical_program_is_refused():
+    n = diversity.Novelty()
+    n.add(program(1, 1.0).code)
+    assert "identical" in n.refuse("a = 1  # a comment\n")
+    assert n.refuse("a = 1\nx = 1\n") is None and n.refuse("a = 1\nx = 2\n") is None
     c = 'C = """\n#define B 64\n"""\n'                                           # a string is kept whole
     assert diversity.fingerprint(c) != diversity.fingerprint(c.replace("64", "128"))
 

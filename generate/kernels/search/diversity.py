@@ -2,7 +2,6 @@
 which new programs repeat one already written."""
 from __future__ import annotations
 
-import difflib
 import hashlib
 import io
 import random
@@ -13,7 +12,6 @@ from generate.kernels.search.program import Idea, Program
 
 POOL = 32                    # the best usable programs parents are drawn from
 FLOOR = 0.05                 # added to each draw weight, so the weakest of the pool can still be picked
-NEAR = 0.95                  # cosine of two siblings' changes at which the later one is a near-duplicate
 CLOSE = 0.92                 # cosine of two ideas' texts at which they are close (the idea archive's DISTINCT)
 
 
@@ -37,34 +35,19 @@ def fingerprint(code: str) -> str:
     return hashlib.sha256(re.sub(r"\s+", "", body).encode()).hexdigest()[:16]
 
 
-def change(base: str, code: str) -> str:
-    """The lines `code` adds to or removes from `base`."""
-    return "".join(x for x in difflib.unified_diff(base.splitlines(True), code.splitlines(True), n=0)
-                   if x[:1] in "+-" and not x.startswith(("+++", "---")))
-
-
 class Novelty:
     """Every program written this run; `refuse` says why a new one repeats one of them."""
 
-    def __init__(self, embedder=None):
-        self.embedder = embedder                 # data.knowledge.search's; None: identical programs only
+    def __init__(self):
         self.seen: set[str] = set()
-        self.changes: dict[str, list] = {}       # parent id -> the vectors of its children's changes
 
     def add(self, code: str) -> None:
         self.seen.add(fingerprint(code))
 
-    def refuse(self, code: str, parent: Program) -> str | None:
+    def refuse(self, code: str) -> str | None:
         """Why `code` repeats a program already written, else None (and it is remembered)."""
-        from data.knowledge.search import _cosine
         if fingerprint(code) in self.seen:
             return "identical to a program already written (comments and whitespace aside)"
-        if self.embedder is not None:
-            v = self.embedder.passages([change(parent.code, code)])[0]
-            near = max((_cosine(v, w) for w in self.changes.get(parent.id, [])), default=0.0)
-            if near >= NEAR:
-                return f"a near-duplicate of another change to the same parent (cosine {near:.3f})"
-            self.changes.setdefault(parent.id, []).append(v)
         self.add(code)
         return None
 

@@ -93,9 +93,10 @@ def write(setting: str, parent: Program, plan: dict, borrowed: list[Program]) ->
 
 
 def reflect(setting: str, population: list[Program], ideas: list[Idea], past: list, generation: int) -> tuple[str, str]:
-    """(system, user) for the call after the last generation: reflections on its ideas."""
+    """(system, user) for the call after the last generation: reflections on its ideas, and one on the run."""
     return _system(setting, ideas, population, past), last(ideas, population, generation) + (
-        "\n\nReflect on each of these ideas. Answer with one JSON object and nothing else: {" + REFLECTIONS + "}")
+        "\n\nReflect on each of these ideas, and on the run. Answer with one JSON object and nothing else: {"
+        + REFLECTIONS + ', "run": "<what the run gained and what limited it, max 60 words>"}')
 
 
 def read(text: str) -> dict:
