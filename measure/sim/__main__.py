@@ -1,5 +1,5 @@
 """lab sim run CLASS [--synthetic] [--seed N] [--env JSON] [--cost FILE] [--horizon S] [--out FILE]
-Simulate one corpus class's traffic (the target's corpus; `--synthetic` generates it fresh, measure/loadgen/synth.py)
+Simulate one corpus class's traffic (the target's corpus; `--synthetic` generates it fresh, evals/loadgen/synth.py)
 through the engine's scheduler under `--env` (the engine's scheduler env vars, e.g. a profile's) and `--cost`
 (a CostModel JSON; defaults are unfitted stand-ins). Prints the regimes summary under the conversational limits.
 Run with the engine's python."""
@@ -26,13 +26,13 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--horizon", type=float, help="stop after this many simulated seconds")
     r.add_argument("--out", help="write rows and the summary here")
     a = ap.parse_args(argv)
-    from measure.loadgen import workload
-    from measure.loadgen.runner import CONVERSATIONAL, summarize
+    from evals.loadgen import workload
+    from evals.loadgen.runner import CONVERSATIONAL, summarize
     from measure.sim.scheduler import CostModel, Settings, simulate
     t = target.load(a.target) if getattr(a, "target", None) else target.load()
     corpus = str(t.corpus_dir)
     if a.synthetic:
-        from measure.loadgen import synth
+        from evals.loadgen import synth
         records = synth.records(corpus, a.cls, a.seed, a.split)
     else:
         records = workload.corpus(corpus, a.cls, a.split)

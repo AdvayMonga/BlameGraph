@@ -20,7 +20,7 @@ import threading
 import time
 from pathlib import Path
 
-from evals.benches.compare import run as R
+from evals.baselines import run as R
 
 WARM_S, WINDOW_S = 30.0, 10.0
 NSYS_TRACE = "--trace=cuda,nvtx --cuda-graph-trace=node"          # at launch; sampling is chosen at start
@@ -35,7 +35,7 @@ POINTS = {
 
 
 def _pool(ctx, cls: str | None, length: int | None) -> list[dict]:
-    from measure.loadgen import suite
+    from evals.loadgen import suite
     if cls == "short":
         allp = ctx.pool(None)
         pool = [r for r in allp if (r.get("build_prompt_tokens") or 0) <= suite.SHORT_PROMPT_TOKENS and not r.get("messages")]
@@ -46,7 +46,7 @@ def _pool(ctx, cls: str | None, length: int | None) -> list[dict]:
 
 
 def _drive(ctx, point, duration_s: float, rows: list):
-    from measure.loadgen import workload as W
+    from evals.loadgen import workload as W
     loop, cls, load, length = POINTS[point]
     pool = _pool(ctx, cls, length)
     if loop == "closed":
@@ -71,8 +71,8 @@ def _server_pid(engine: str, srv) -> int:
 
 def profile(out: Path, engines: list[str], precision: str, points: list[str], plain: bool = False) -> None:
     from targets import target
-    from measure.loadgen import runner, suite
-    from measure.loadgen.__main__ import _cpus
+    from evals.loadgen import runner, suite
+    from evals.loadgen.__main__ import _cpus
     spec, t = R.load(), target.load()
     c = spec["common"]
     exe, root = _nsys()

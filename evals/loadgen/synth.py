@@ -23,7 +23,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-from data.corpus import CORPUS_DIR, TraceRequest, load_manifest, load_trace
+from evals.regimes import CORPUS_DIR, TraceRequest, load_manifest, load_trace
 
 JITTER = 0.1                # each gap scaled by exp(N(0, JITTER)): the same pattern, never the same instants
 MIN_REQUESTS = 2000         # a generated pool holds at least this many, so a full-tier run rarely cycles it
@@ -116,7 +116,7 @@ def trace(cls: str, seed: int, split: str = "seen", corpus_dir: Path = CORPUS_DI
 
 def records(corpus_dir: Path, cls: str | None, seed: int, split: str = "seen",
             min_requests: int = MIN_REQUESTS) -> list[dict]:
-    """`trace` as the record dicts `measure.loadgen.workload.corpus` returns (one class, or every class for None)."""
+    """`trace` as the record dicts `evals.loadgen.workload.corpus` returns (one class, or every class for None)."""
     classes = [cls] if cls else list(load_manifest(Path(corpus_dir)).classes)
     out = []
     for c in classes:

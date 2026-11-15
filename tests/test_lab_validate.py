@@ -11,7 +11,7 @@ import pytest
 from data.knowledge import ledger
 from evals.agent import validate
 from targets import target
-from measure.loadgen import suite
+from evals.loadgen import suite
 
 FAKE = Path(__file__).resolve().parent / "fake_engine.py"
 

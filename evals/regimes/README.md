@@ -1,4 +1,4 @@
-# data/corpus/ — frozen workload traces
+# evals/regimes/ — frozen workload traces
 
 The corpus defines the landscape the lab measures. Anything not in it is invisible.
 
@@ -118,8 +118,8 @@ policy tuned on this corpus should be re-checked against a smoother, longer-cont
 
 ```bash
 uv sync --extra dev --extra corpus                          # pyarrow, for the WildChat shards
-.venv/bin/python data/corpus/fetch_traces.py              # ~1.8 GB into ~/.cache/inference-server/traces
-.venv/bin/python data/corpus/build_corpus.py               # the secret seed in data/corpus/.seed
+.venv/bin/python evals/regimes/fetch_traces.py              # ~1.8 GB into ~/.cache/inference-server/traces
+.venv/bin/python evals/regimes/build_corpus.py               # the secret seed in evals/regimes/.seed
 ```
 
 Since 2026-10-09 the held-out traces and the seed are not in git: the build is deterministic in the seed, so a

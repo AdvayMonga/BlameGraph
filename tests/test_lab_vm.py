@@ -146,7 +146,7 @@ def test_run_in_the_environment_dir(fake, monkeypatch):
     cmd = [c for c in log if c[0] == "ssh" and c[-1].startswith("cd ")][-1][-1]
     assert cmd.startswith("cd ~/env && ") and 'PATH="$HOME/env/bin:$HOME/repo/.venv/bin:$PATH" timeout --signal=TERM --kill-after=60 180m lab regimes' in cmd
     rsyncs = [c for c in log if c[0] == "rsync"]
-    assert "--include=data/corpus/*/heldout.jsonl" in rsyncs[1]                     # held-out traces travel, not via git
+    assert "--include=evals/regimes/*/heldout.jsonl" in rsyncs[1]                     # held-out traces travel, not via git
     assert [r[-2] for r in rsyncs[-3:]] == ["u@10.0.0.7:~/env/out/", "u@10.0.0.7:~/env/local/ledger/",
                                             "u@10.0.0.7:~/env/local/runs/"]      # a lab run is always brought home
     assert "--exclude=workspace/" in rsyncs[-1]

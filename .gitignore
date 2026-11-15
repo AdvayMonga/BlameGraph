@@ -12,6 +12,6 @@ venv/
 .idea/
 .vibe-wise/
 # held-out traces and the corpus seed live in the store (python -m data.knowledge pull --corpus), never in git
-data/corpus/*/heldout.jsonl
-data/corpus/.seed
+evals/regimes/*/heldout.jsonl
+evals/regimes/.seed
 *.egg-info/

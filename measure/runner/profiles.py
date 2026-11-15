@@ -33,7 +33,7 @@ def launches(tree: Path, t: target.Target, names: list[str]) -> list[tuple[str |
 def refusal(tree: Path, t: target.Target, profile: str | None) -> str | None:
     """Why `profile` cannot be served from `tree`, or None (no profile is the general launch). Never raises: a file
     that does not parse is a reason too, so the refusal is recorded like any other."""
-    from measure.loadgen import suite
+    from evals.loadgen import suite
     if not profile:
         return None
     if not t.profiles:

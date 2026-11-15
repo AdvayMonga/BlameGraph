@@ -36,7 +36,7 @@ def main():
     r.add_argument("--corpus", help="corpus dir (default: the target's; synthetic prompts if it does not exist)")
     r.add_argument("--workload", help="a local/workloads/*.jsonl file (lab workloads) instead of the corpus")
     r.add_argument("--synthetic", action="store_true",
-                   help="traffic generated fresh from the corpus's seen split (measure/loadgen/synth.py), by --seed; nothing kept")
+                   help="traffic generated fresh from the corpus's seen split (evals/loadgen/synth.py), by --seed; nothing kept")
     r.add_argument("--split", choices=("seen", "heldout"), default="seen")
     r.add_argument("--tier", choices=tuple(suite.TIERS), default="short")
     r.add_argument("--seed", type=int, default=0); r.add_argument("--timeout", type=float, default=600.0)

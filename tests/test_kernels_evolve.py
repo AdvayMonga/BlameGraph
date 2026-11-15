@@ -854,7 +854,7 @@ def test_the_jail_sees_a_fresh_tree_and_a_copied_harness_never_this_repo():
         h = jailed.stage_harness(Path(d) / "h")
         names = {p.relative_to(h).as_posix() for p in h.rglob("*") if p.is_file()}
         assert "evals/kernels/core.py" in names and "targets/target.py" in names and "measure/context/peaks.py" in names
-        assert not any(n.startswith(("local", "data/corpus", "data/knowledge", "data/workloads")) or n.endswith(".env") for n in names)
+        assert not any(n.startswith(("local", "evals/regimes", "data/knowledge", "evals/public")) or n.endswith(".env") for n in names)
     seen, saved = {}, (jail.backend, container.available, container._docker, grader.subprocess.run)
 
     def fake_run(argv, **kw):                       # stands in for docker: `run` answers, cleanup is a no-op

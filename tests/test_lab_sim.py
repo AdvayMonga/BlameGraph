@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("inference_server.scheduler", reason="needs the engine and its deps", exc_type=ImportError)
 
-from measure.loadgen.runner import CONVERSATIONAL, summarize  # noqa: E402
+from evals.loadgen.runner import CONVERSATIONAL, summarize  # noqa: E402
 from measure.sim.scheduler import Clock, CostModel, Settings, installed, simulate  # noqa: E402
 
 

@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from data import corpus
+from evals import regimes as corpus
 from lab import experiments
 from data.knowledge import ledger
 from targets import engine, target
@@ -373,7 +373,7 @@ class Toolbox(EvalTools, ProfTools):
 
     def specs(self) -> list[ToolSpec]:
         """What each tool does, returns and costs; never when or how to use it."""
-        from measure.loadgen import suite
+        from evals.loadgen import suite
         from lab.evaltools import HOLDOUT_BUDGET
         obj = {"type": "object", "properties": {}}
         rate, known = gpu_rate()

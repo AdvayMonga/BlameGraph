@@ -50,7 +50,7 @@ def test_a_worker_host_gets_the_evaluators_ssh_mode_quoted_as_the_worker_quotes(
 
 
 def test_every_capture_regime_is_a_real_regime():
-    from measure.loadgen import suite
+    from evals.loadgen import suite
     assert set(pipeline.REGIME_CAPTURE) <= set(suite.REGIMES)
 
 

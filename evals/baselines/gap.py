@@ -1,4 +1,4 @@
-"""The gap register's facts from a evals/benches/compare/profile.py dir: per load point, every engine's client numbers, GPU busy share of
+"""The gap register's facts from a evals/baselines/profile.py dir: per load point, every engine's client numbers, GPU busy share of
 the nsys window, kernel time, launches, the top kernels by time, and the top Python frames by samples per process.
 
     lab compare gap DIR [--top 12] [--out gap.md]

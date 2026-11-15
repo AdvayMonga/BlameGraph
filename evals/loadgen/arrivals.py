@@ -7,7 +7,7 @@ sitting). Load rises by raising the sitting rate: the data says busy hours have 
 (the fit report records turns and gaps by hour of day). `schedule` starts with users already mid-conversation, so a
 short run is at steady state from its first second.
 
-  lab arrivals fit [--cache DIR] [--out measure/loadgen/arrivals.json]     fit on the seen weeks
+  lab arrivals fit [--cache DIR] [--out evals/loadgen/arrivals.json]     fit on the seen weeks
   lab arrivals compare [--model F] [--cache DIR]                    the model against the held-out weeks
 
 Both are measurements: the fitted file carries its source's hash and the comparison reports statistics, no verdict.
@@ -29,7 +29,7 @@ from pathlib import Path
 DEFAULT_MODEL = Path(__file__).with_name("arrivals.json")
 DEFAULT_CACHE = Path.home() / ".cache" / "inference-server" / "traces"
 BURSTGPT_CSV = "burstgpt/BurstGPT_3.csv"
-WEEK_S = 7 * 86400          # even trace weeks are `seen`, odd weeks `heldout` (data/corpus/build_corpus.py's rule)
+WEEK_S = 7 * 86400          # even trace weeks are `seen`, odd weeks `heldout` (evals/regimes/build_corpus.py's rule)
 BREAK_S = 1800.0            # a gap this long ends a sitting
 INDEX_BUCKETS = (0, 1, 2, 3, 4, 5, 10, 20, 40)   # gaps are kept by transition index, pooled within these buckets
 HORIZON_DRAWS = 100000      # sittings drawn from the fit to find how long its own sittings run

@@ -1,4 +1,4 @@
-"""The comparison's tables from a evals/benches/compare/run.py output dir: per regime and precision every engine's number (median over
+"""The comparison's tables from a evals/baselines/run.py output dir: per regime and precision every engine's number (median over
 repeats, its run-to-run spread, where its search failed), the winner, and whether the win is clear: beyond every
 contender's spread and, for a load search, at a load the runner-up failed. Then the saturated curve (each concurrency's
 output tokens/s per GPU against TPOT, with $ per million output tokens when an hourly price is given), equiv's verdicts,

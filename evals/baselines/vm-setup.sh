@@ -5,7 +5,7 @@
 #   lab vm setup                                  # engine venv + docker (measure/cloud/vm-setup.sh)
 #   rsync local/equiv/ref to ~/BlameGraph/data/equiv/ref       # equiv's reference outputs (gitignored)
 #   ssh: bash ~/BlameGraph/compare/vm-setup.sh
-#   ssh: cd ~/BlameGraph && ulimit -n 65536 && setsid nohup ~/inference-server/.venv/bin/python -m evals.benches.compare.run \
+#   ssh: cd ~/BlameGraph && ulimit -n 65536 && setsid nohup ~/inference-server/.venv/bin/python -m evals.baselines.run \
 #        --out ~/compare > ~/compare.log 2>&1 < /dev/null &
 #   fetch ~/compare, then: lab compare report DIR --gpu-usd-per-hour <price>
 set -euo pipefail
@@ -28,7 +28,7 @@ for ck in $checkpoints; do
 done
 
 echo "== reference outputs for equiv"
-[ -f "$here/../../../local/equiv/ref/outputs.jsonl" ] && echo ok || { echo "missing local/equiv/ref: rsync it from the laptop"; exit 1; }
+[ -f "$here/../../local/equiv/ref/outputs.jsonl" ] && echo ok || { echo "missing local/equiv/ref: rsync it from the laptop"; exit 1; }
 
 echo "== facts"
 nvidia-smi --query-gpu=name,driver_version,clocks.max.sm,clocks.max.mem,power.limit --format=csv,noheader

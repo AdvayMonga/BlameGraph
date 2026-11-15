@@ -35,7 +35,7 @@ BENCH_TIER = "min"            # bench's default tier, which submit compares agai
 
 
 def _regimes(args: dict, default: tuple[str, ...]) -> list[str]:
-    from measure.loadgen import suite
+    from evals.loadgen import suite
     want = args.get("regimes") or list(default)
     if want == "all" or want == ["all"]:
         want = list(suite.REGIMES)
@@ -49,7 +49,7 @@ def run_regimes(url: str, t: target.Target, names: list[str], split: str, tier: 
                 rows: list | None = None, hints: dict | None = None, bands: dict | None = None) -> list[dict]:
     """Each regime's result; with `rows`, every measured client row is appended to it, tagged with its regime.
     `hints` / `bands`: where the base's searches ended and each regime's noise band (`suite.Ctx`)."""
-    from measure.loadgen import suite
+    from evals.loadgen import suite
     watch = split == "seen"             # the dashboard gets the seen split's progress, never the held-out's
     ctx = suite.Ctx.from_target(t, url, split=split, tier=tier, seed=seed, rows=rows, hints=hints or {},
                                 bands=bands or {}, on_rows=_progress if watch else None)
@@ -66,7 +66,7 @@ def run_regimes(url: str, t: target.Target, names: list[str], split: str, tier: 
 
 def _progress(rows) -> None:
     """One load call's raw numbers for the dashboard (`evals.researcher.live`), computed after the call: never during it."""
-    from measure.loadgen.runner import _q
+    from evals.loadgen.runner import _q
     ok = [r for r in rows if r.status == "ok"]
     ttft, tpot = [r.ttft_s for r in ok if r.ttft_s is not None], [r.tpot_s for r in ok if r.tpot_s is not None]
     live.emit("probe", n=len(rows), ok=len(ok), ttft_p50_s=_q(ttft, 0.5), ttft_p99_s=_q(ttft, 0.99),
@@ -92,7 +92,7 @@ def noise_band_pct(regime: str, t: target.Target | None = None, root: Path = led
     """The latest run-to-run band for a regime from the ledger's `noise` records, only if it was measured on this
     target's engine (at any engine commit: the calibration is once per user) and on its current corpus version (a
     record without one counts); a band from another target or corpus version is ignored."""
-    from measure.loadgen.workload import corpus_version
+    from evals.loadgen.workload import corpus_version
     version = corpus_version(t.corpus_dir) if t is not None and t.corpus_dir.is_dir() else None
     d = None
     for r in ledger.records(root, kind="noise"):
@@ -159,8 +159,8 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
     """What the referee measures against: the parameters the agent cannot read off its ledger. Facts, not advice."""
     from evals.agent import validate                        # validate imports this module
 
-    from measure.loadgen import suite
-    from measure.loadgen.workload import corpus_version
+    from evals.loadgen import suite
+    from evals.loadgen.workload import corpus_version
     facts = {
         "model": t.model, "reference": t.reference.launch if t.reference else None,
         "latency_limits": {"interactive": t.interactive.__dict__, "conversational": t.conversational.__dict__},
@@ -195,7 +195,7 @@ def holdout_guard(t: target.Target) -> HoldoutGuard:
         remote = open_remote()
     except NoRemote as e:
         raise Refused(f"no shared held-out budget on this host ({e})") from None
-    from data.corpus import load_manifest
+    from evals.regimes import load_manifest
     version = load_manifest(t.corpus_dir).budget_key if t.corpus_dir.is_dir() else "no-corpus"   # synthetic workloads
     return HoldoutGuard(remote, f"heldout/guard/{version}", HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT)
 
@@ -487,7 +487,7 @@ class EvalTools:
 
     def _base_cache(self, split: str, tier: str) -> Path:
         """The base's cached measurement, one per corpus version: a base from another corpus is never compared."""
-        from measure.loadgen.workload import corpus_version
+        from evals.loadgen.workload import corpus_version
         t = target.load()
         v = corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None
         return self.s.run_dir / (f"base-{split}-{tier}-{v[:12]}.json" if v else f"base-{split}-{tier}.json")

@@ -2,7 +2,7 @@
 max_tokens, the target's chat kwargs), and for a multi-turn record `expected_turn_output_tokens`, the same for each
 user-turn prefix of its messages (the shared-prefix regime's turns). Measured once on a served reference and written
 into every trace of both splits; regimes then send each request at that length with ignore_eos
-(`measure.loadgen.workload.to_request`), so a base and a candidate generate the same tokens' worth of work. Every trace
+(`evals.loadgen.workload.to_request`), so a base and a candidate generate the same tokens' worth of work. Every trace
 changes, so the manifest is rebuilt: a new corpus version, whose `prompts_version` keeps the held-out budget's key.
 Held-out traces must be present (`lab store pull --corpus`) and pushed again afterwards. Each answer is
 appended to a log as it arrives (default `local/corpus-lengths-<version>.jsonl`), so a rerun resumes.
@@ -18,9 +18,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from data.corpus import CORPUS_DIR, REPO_ROOT, SPLITS, CorpusError, Manifest, TraceRequest, build_manifest, load_manifest, read_trace, write_trace
+from evals.regimes import CORPUS_DIR, REPO_ROOT, SPLITS, CorpusError, Manifest, TraceRequest, build_manifest, load_manifest, read_trace, write_trace
 
-NOTE = " expected_output_tokens: the reference's answer length per record (data/corpus/lengths.py)."
+NOTE = " expected_output_tokens: the reference's answer length per record (evals/regimes/lengths.py)."
 # per trace, per record: (answer length, per-turn lengths for a multi-turn record else None)
 Lengths = dict[str, list[tuple[int | None, list[int] | None]]]
 
@@ -76,7 +76,7 @@ def measure(url: str, model: str, chat_kwargs: dict, corpus_dir: Path = CORPUS_D
             attempts: int = 3, log: Path | None = None) -> Lengths:
     """The served reference's completion tokens for every record and turn prefix, resuming from `log`. Raises after
     every request was tried when any failed `attempts` times (with backoff); the answers so far stay in the log."""
-    from measure.loadgen.client import Request, send
+    from evals.loadgen.client import Request, send
     m = load_manifest(corpus_dir)
     traces = _traces(corpus_dir, m)
     log = log or REPO_ROOT / "local" / f"corpus-lengths-{m.corpus_version[:12]}.jsonl"
