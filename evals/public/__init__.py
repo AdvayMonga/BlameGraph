@@ -18,7 +18,7 @@ from types import ModuleType
 
 DATA = Path(__file__).resolve().parents[2] / "local" / "workloads"
 MLPERF_STORAGE = "https://inference.mlcommons-storage.org"
-MLPERF_COMMIT = "3fbc329939999c13d0a7b5e67fb2092287e06047"       # mlcommons/inference master, 2026-09-02
+MLPERF_COMMIT = "3fbc329939999c13d0a7b5e67fb2092287e06047"       # mlcommons/inference master
 BENCHES = ("mlperf_llama3_1_8b", "mlperf_llama2_70b", "mlperf_mixtral_8x7b", "mlperf_deepseek_r1",
            "mlperf_gpt_oss_120b", "sharegpt")
 

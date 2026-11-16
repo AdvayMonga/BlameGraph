@@ -1,4 +1,4 @@
-"""A program's Triton autotune frozen into a table before it is gated and shipped (decided 2026-11-04).
+"""A program's Triton autotune frozen into a table before it is gated and shipped.
 
 `triton.autotune` tunes at run time for every key it has not seen, so a kernel keyed on a size that changes every step
 (the batch's rows) tunes again in the middle of serving. The freeze stage (core.FREEZE_STAGE, jailed) runs the program

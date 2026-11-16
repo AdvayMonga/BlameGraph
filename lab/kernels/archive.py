@@ -1,5 +1,5 @@
-"""The idea archive (decided 2026-10-22): every distinct kernel idea with what became of it, built from the `kernels`
-ledger records' hypothesis logs and traces. Measurements only (the no-beliefs rule, 2026-10-09): an idea's text is the
+"""The idea archive: every distinct kernel idea with what became of it, built from the `kernels`
+ledger records' hypothesis logs and traces. Measurements only (the no-beliefs rule): an idea's text is the
 judge's, its outcomes are the evaluator's.
 
 One entry per distinct idea: an idea whose embedding is within `DISTINCT` cosine of an earlier one on the same task is

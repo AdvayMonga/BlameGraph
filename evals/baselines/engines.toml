@@ -1,8 +1,7 @@
 # The engine comparison (evals/baselines/run.py): every engine on one H200, the same corpus, client, tokenizer recount and
 # correctness reference; each at each precision; each with its own documented serving settings, nothing tuned by us.
 # {model} {port} {cfg} are filled by the driver; {cache} is the cold start's fresh cache dir (empty on a cold launch).
-# Versions: each project's newest release as of 2026-10-27 (TensorRT-LLM's newest stable, 1.2.1, is from April; its
-# release candidates are what NVIDIA publishes on NGC's release channel since).
+# Versions are pinned per engine below.
 
 [common]
 served_name = "Qwen/Qwen3-30B-A3B"           # what the client sends as `model`
@@ -12,7 +11,7 @@ max_seqs = 1024                              # the most rows any engine decodes 
 gpu_mem = 0.90                               # share of HBM for weights + KV where an engine asks for it
 engine_cpus = "0-7"                          # server cores; the client runs on 8-15 (16 vCPU VM)
 client_cpus = "8-15"
-prefix_cache = "on"                          # each engine's default; reused corpus records are salted (DECISIONS 2026-10-27)
+prefix_cache = "on"                          # each engine's default; reused corpus records are salted
 
 [precision.bf16]                             # bf16 weights, bf16 activations, bf16 KV cache
 checkpoint = "Qwen/Qwen3-30B-A3B"

@@ -19,7 +19,7 @@ def _ours(task: Task, call: dict) -> bool:
 
 def from_captures(task: Task, dirs: list[Path], equal: bool = False) -> Counter:
     """{shape: calls} over every capture dir, for calls to the task's entry point. `equal`: each dir's calls are
-    scaled to the same total, so each capture's traffic (a scored regime) weighs the same (decided 2026-10-23)."""
+    scaled to the same total, so each capture's traffic (a scored regime) weighs the same."""
     per = []
     for d in dirs:
         c: Counter = Counter()

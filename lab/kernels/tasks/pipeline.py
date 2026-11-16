@@ -1,4 +1,4 @@
-"""The kernel layer as one call (the central agent's `kernel_search` tool, decided 2026-10-22): capture the task's
+"""The kernel layer as one call (the central agent's `kernel_search` tool): capture the task's
 calls under real traffic, split them seen / held-out, search, gate the winner on the held-out shapes, and hand the
 engine module back as a patch the agent applies itself. It runs on the controller: the search's model calls stay
 here, and its evaluator runs where the GPU is (`remote_env` for a worker host, lab/kernels/eval/evaluator.py's ssh mode).

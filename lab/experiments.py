@@ -1,4 +1,4 @@
-"""Experiment records (decided 2026-10-11): no measured number without the agent's reasoning beside it, and no
+"""Experiment records: no measured number without the agent's reasoning beside it, and no
 reasoning without the number. A measurement names an open `hypothesis` record (the bottleneck and proposed change,
 its rationale, optionally what result would end it) and carries an `expect`: the metric, the predicted value and
 why. The lab computes the gap between expected and measured. Before the next measurement the agent files a

@@ -23,7 +23,7 @@ def feedback(path: str | Path, run_id: str | None = None) -> dict:
 
 
 def lab_feedback(recs: list[dict], run_id: str | None, source: str, harness: dict | None = None) -> dict:
-    """The split for a lab ledger (decided 2026-10-06, "option c"): the agent gets the integrity verdict with its
+    """The split for a lab ledger ("option c"): the agent gets the integrity verdict with its
     evidence, the raw ledger (it already has it, through the `ledger` tool) and only facts it cannot derive from
     that ledger: `harness`, the parameters the referee measured against. Everything derivable from the records
     (activity counts, best measured, claims vs evidence) is the researcher's."""

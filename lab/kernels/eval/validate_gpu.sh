@@ -25,7 +25,7 @@ echo "== 1. capture"
 # Real traffic only, at several concurrencies (CLASS:REQUESTS fired together, so decode batches run REQUESTS..1):
 # mixed_* cross regimes (post-idle burst, spike, steady) with ~600-1200 seen requests each; long_context is 60
 # requests of >= 3000 tokens. Synthetic prompts give every row of a batch the same length, which real traffic never
-# does (the 2026-10-19 paged_decode kernel: 1.40x on real, mixed-length batches, 0.98x on synthetic, uniform ones).
+# does.
 for spec in ${CAPTURE_SPECS:-mixed_1:256 mixed_3:64 long_context:60}; do
   cls=${spec%%:*}; n=${spec##*:}
   ls -d "$OUT/profile-$cls"/*/captures >/dev/null 2>&1 && continue      # already captured

@@ -200,7 +200,7 @@ def _rsync(vm: VM, *args: str) -> None:
 
 def push(vm: VM, record: Record) -> None:
     """Both working trees, minus .git and everything .gitignore excludes (secrets, weights, venvs, ledger, runs),
-    except the held-out traces, which submit needs and git no longer holds."""
+    except the held-out traces, which submit needs and git does not hold."""
     # .venv is named explicitly: a gitignore-only exclusion did not protect it from --delete on the VM.
     for local, remote, keep in ((engine.repo(), vm.remote_dir, []),
                                 (engine.ENV_ROOT, vm.env_dir, ["--include=evals/regimes/*/heldout.jsonl"])):

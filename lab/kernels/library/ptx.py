@@ -1,4 +1,4 @@
-"""The PTX comparison (decided 2026-10-22, after Standard Kernel's method): several implementations of one operation
+"""The PTX comparison (after Standard Kernel's method): several implementations of one operation
 lowered to PTX and condensed into comparable feature cards, so the judge can see what the fastest does that ours
 does not. The cards are counted from the PTX itself (instruction classes, memory spaces, vector widths, shared memory,
 the Hopper features in use), not written by a model: facts, not a reading of them. A card may carry its measured time

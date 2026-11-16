@@ -40,7 +40,7 @@ import torch
 from lab.kernels.tasks import Task
 
 REPO = "ScalingIntelligence/KernelBench"
-COMMIT = "423217d9fda91e0c2d67e4a43bf62f96f6d104f1"       # main, 2026-03-05 (0.2.0.dev0)
+COMMIT = "423217d9fda91e0c2d67e4a43bf62f96f6d104f1"       # main (0.2.0.dev0)
 SOURCE = f"https://codeload.github.com/{REPO}/tar.gz/{COMMIT}"
 DATA = Path(__file__).resolve().parents[3] / "local" / "kernelbench"
 WEIGHT_SEED = 0

@@ -12,7 +12,7 @@ from lab.kernels.tasks._fused import EXPERTS, START_EDITS, TOP_K
 
 def reference(logits):
     """Ties to the lowest expert index, as the engine's kernel breaks them (bf16 logits tie often; torch.topk's order
-    among equal values is unspecified, which made the engine's own kernel fail this task on the H200, 2026-10-24)."""
+    among equal values is unspecified)."""
     p = F.softmax(logits, dim=-1, dtype=torch.float)
     w, ids = torch.sort(p, dim=-1, descending=True, stable=True)
     w, ids = w[..., :TOP_K], ids[..., :TOP_K]
