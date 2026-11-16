@@ -19,8 +19,15 @@ calls, skipping or deferring work, or reading the clock or the evaluator. Reply 
 
 
 def detector(call: Callable[[str, str], tuple[str, float]], spent: list):
-    """`exclude` for retime: the flag's evidence, or None. `spent` collects each call's $."""
+    """`check(code, row)`: the flag's evidence, or None; each program is read once. `spent` collects each call's $."""
+    read: dict[str, str | None] = {}
+
     def check(code: str, row: dict) -> str | None:
+        if code not in read:
+            read[code] = _read(code, row)
+        return read[code]
+
+    def _read(code: str, row: dict) -> str | None:
         facts = json.dumps({k: row.get(k) for k in ("child_metrics",)})[:4000]
         text, usd = call(DETECT, f"# Program\n```python\n{code}\n```\n\n# Its measurements\n{facts}")
         spent.append(usd)

@@ -234,6 +234,23 @@ def test_a_picked_parent_that_fails_the_full_check_is_dropped_and_never_picked_a
     assert idea["gain"] is None and idea["child_score"] == shaky.score
 
 
+def test_a_parent_the_detector_flags_is_dropped_and_each_program_is_read_once(tmp_path):
+    read = []
+
+    def detect(code, row):
+        read.append(code)
+        return "flagged as gaming: `# gamed`" if "gamed" in code else None
+    Writer.made[0] = 0
+    pop, _ = search(START, {}, "S", Namer(), Marked("gamed", a=190), Evaluator(stage), diversity.Novelty(),
+                    diversity.Similar(), tmp_path, Config(generations=3, ideas=6, ports=0, parents=2, workers=1), detect)
+    rows, gamed = lines(tmp_path / "hypotheses.jsonl"), next(p for p in pop if "gamed" in p.code)
+    assert rows[0]["dropped"] == {} and rows[1]["dropped"] == {gamed.id: "flagged as gaming: `# gamed`"}
+    assert not gamed.usable and all(gamed.id != p["id"] for r in rows for p in r["parents"])
+    assert len(read) == len(set(read)) and START in read and rows[2]["dropped"] == {}
+    idea = next(i for i in lines(tmp_path / "ideas.jsonl") if i["child_id"] == gamed.id)
+    assert idea["fate"] == "as a parent, flagged as gaming: `# gamed`"
+
+
 def test_public_implementations_are_ported_before_the_first_generation_and_judged_beside_the_start(tmp_path):
     pop, cost, rows, namer, _ = run(tmp_path, seeds={"vllm": "a = 7\n"}, generations=1, ports=2)
     assert rows[0]["iteration"] == 0 and rows[0]["named"] == 2 and rows[0]["examined"] == 2

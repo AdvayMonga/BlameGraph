@@ -67,7 +67,11 @@ def test_the_screen_refuses_exploit_routes_and_passes_real_kernels():
     assert screen(SEED.read_text()) == [] and screen(ev.read_text()) == []
     assert screen("x = os.environ.get('A', '0')\n") == []
     assert screen("import torch\nclass A:\n    def f(self, x):\n        self.a = 1\n        x.b = 2\n") == []
-    assert screen("import torch\nx = torch.empty(3)\nx.tag = 1\n")             # bound to a call: refused
+    assert screen("import torch\nx = torch.empty(3)\nx.tag = 1\nd = make()\nd.block_shape = [1, 2]\n") == []   # its own objects
+    assert screen('"""Stream-K."""\nimport torch\n# Stream-K, import time\ndef k(x):\n    """An Event."""\n    return x\n') == []
+    assert screen("import torch\ns = torch.cuda.Stream()\n") and screen('SRC = "cudaStreamCreate(&s);"\n')   # code and C++ text
+    assert screen("def k(h):\n    return getattr(h, 'shared', 0)\n") == []
+    assert screen("import torch\nc = getattr(torch, 'cuda')\n") and screen("import torch as T\nm = T.cuda\nsetattr(m, 'x', 1)\n")
     assert screen("import torch\nm = torch.cuda\nm.synchronize = None\n") and screen("def k(x):\n    type(x).f = 1\n")
     assert screen("def k(x):\n    T = type(x)\n    T.zero_ = None\n") and screen("from torch.cuda import Stream\n")
     t = load("toy_rmsnorm")
