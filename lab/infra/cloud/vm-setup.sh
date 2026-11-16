@@ -96,8 +96,7 @@ $SUDO docker run --rm lab-jail python3 -c "import socket; socket.create_connecti
 echo "== counters: open GPU performance counters to non-admin users (the jails run as one)"
 # ncu needs NVreg_RestrictProfilingToAdminUsers=0 or root; the jails are neither. A single-use VM may open them:
 # the option is set for the driver, which is reloaded when nothing holds the GPU, else at reboot.
-# The driver lists the option as RmProfilingAdminOnly (every setup before 2026-10-27 grepped the module option's name,
-# found nothing, and left the counters closed).
+# The driver lists the option as RmProfilingAdminOnly, not under the module option's name.
 restrict() { grep -oE '(RmProfilingAdminOnly|RestrictProfilingToAdminUsers): [0-9]' /proc/driver/nvidia/params 2>/dev/null \
   | grep -o '[0-9]$'; }
 if [ "$(restrict)" = "1" ]; then

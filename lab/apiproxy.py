@@ -3,7 +3,7 @@ forwards to the Anthropic API, prices each response's usage, and refuses once th
 
 Only /v1/messages, /v1/messages/count_tokens and /v1/models[/id] are forwarded (not batches, files or anything else); a request naming a model
 without a price here, or asking for fast mode, is refused (fail closed: anything unpriced could spend unmetered).
-Prices are first-party per-million-token rates (claude-api reference, cached 2026-09-25)."""
+Prices are first-party per-million-token rates (claude-api reference)."""
 
 from __future__ import annotations
 

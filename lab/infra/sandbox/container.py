@@ -21,8 +21,7 @@ from pathlib import Path
 
 IMAGE = os.environ.get("LAB_JAIL_IMAGE", "lab-jail")
 DOCKERFILE = Path(__file__).parent / "jail.Dockerfile"
-# socat's own listen backlog is 5: a load probe opening 256 connections at once lost 17-21 of them as resets
-# (2026-10-27, a bench starting at the base's concurrency); the kernel caps it at net.core.somaxconn.
+# socat's own listen backlog is 5, which resets connections opened together; the kernel caps it at net.core.somaxconn.
 BACKLOG = 4096
 JAIL_UID = 10001             # the jail's user when the lab runs as root; otherwise the lab's own uid
 CLIENT_CORES = 4             # kept out of every jail's cpuset so the measurement clients cannot be starved
@@ -95,8 +94,8 @@ def mounts(writable: list[Path], readonly: list[Path], python: str) -> list[str]
         args += ["--mount", f"type=bind,src={p},dst={p},readonly"]
     if CUDA.exists() and CUDA.resolve() != CUDA:
         # also at /usr/local/cuda, where torch's cpp_extension and flashinfer look by default: mounted only at its
-        # resolved path (/usr/local/cuda-13.0), the engine's megakernel did not build and every flashinfer JIT raised
-        # "Could not find nvcc" inside the serve jail (a bench of 488 requests, 477 errors, 2026-10-25)
+        # resolved path (/usr/local/cuda-13.0), the engine's megakernel does not build and every flashinfer JIT raises
+        # "Could not find nvcc" inside the serve jail
         args += ["--mount", f"type=bind,src={CUDA.resolve()},dst={CUDA},readonly"]
     return args
 

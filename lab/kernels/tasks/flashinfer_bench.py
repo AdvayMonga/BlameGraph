@@ -41,9 +41,9 @@ import torch
 from lab.kernels.tasks import Task
 
 DATASET = "flashinfer-ai/flashinfer-trace"
-REVISION = "da915083d4c7c5e61aa3005e3d17ae488e0fc71c"         # main, 2026-06-09
+REVISION = "da915083d4c7c5e61aa3005e3d17ae488e0fc71c"         # main
 EVALUATOR = "flashinfer-ai/flashinfer-bench"
-EVALUATOR_COMMIT = "15618a67e8d7b7f49ca61b5ba3b9f26a876d0bee"  # main, 2026-09-25
+EVALUATOR_COMMIT = "15618a67e8d7b7f49ca61b5ba3b9f26a876d0bee"  # main
 TREE = f"https://huggingface.co/api/datasets/{DATASET}/tree/{REVISION}"
 RAW = f"https://huggingface.co/datasets/{DATASET}/resolve/{REVISION}"
 DATA = Path(__file__).resolve().parents[3] / "local" / "flashinfer_bench"

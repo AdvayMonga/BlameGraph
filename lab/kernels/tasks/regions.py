@@ -1,4 +1,4 @@
-"""Regions (decided 2026-10-22/23): a run of consecutive decode stations of the engine, from one kernel up to the whole
+"""Regions: a run of consecutive decode stations of the engine, from one kernel up to the whole
 step, as a kernel task whose harness is generated rather than hand-written.
 
 The engine declares its stations, in order (name, what each reads and writes, and a function computing its writes;
@@ -152,7 +152,7 @@ def task(name: str, stations: tuple[Station, ...], first: str, last: str,
 
     def cost(shape, dtype, inputs=None):
         inputs = inputs or make_inputs(shape, dtype, "cpu", torch.Generator().manual_seed(0))
-        ctx = {**(constants or {}), **dict(zip(ins, inputs))}      # the stations read `cfg` too (KeyError, 2026-10-27)
+        ctx = {**(constants or {}), **dict(zip(ins, inputs))}      # the stations read `cfg` too
         return 0.0, bytes_moved(stations, first, last, ctx, live)["fused_bytes"]
     watched = tuple(sorted({*watch, __name__, *(s.fn.__module__ for s in span(stations, first, last))}))
     return Task(name=name, entry=kw.pop("entry", None), reference=ref, make_inputs=make_inputs, shape_of=shape_of,

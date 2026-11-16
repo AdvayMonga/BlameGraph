@@ -24,7 +24,7 @@ profiles = "src/inference_server/profiles.toml"   # launch profiles in the engin
 profile_env = "ENGINE_PROFILE"                    # names a launch's profile
 # Installs a changed `deps` into $UV_PROJECT_ENVIRONMENT (lab/infra/sandbox/build.py), and the VM's venv (lab/infra/cloud/vm-setup.sh): the lock
 # with the CUDA torch wheel at the locked version (the lock pins the CPU index on Linux) and the flashinfer extra
-# (the paged prefill attention; without it prefill fell back to the SDPA gather: bursty 256x -> 80x, 2026-10-24).
+# (the paged prefill attention; without it prefill falls back to the SDPA gather).
 build = '''uv sync --locked --extra dev --extra flashinfer --no-install-project && uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" --reinstall "torch==$(awk '/^name = "torch"$/{getline; sub(/version = "/,""); sub(/"/,""); print; exit}' uv.lock)" --index-url https://download.pytorch.org/whl/cu130'''
 
 [engine.telemetry]                           # optional: engine-native files serve collects after teardown
@@ -48,7 +48,7 @@ conversational = { ttft_s = 2.0, tpot_s = 0.100 }
 tasks = ["mmlu_pro", "math", "code", "needle"]
 min_score_ratio = 0.99                       # MLPerf: >= 99% of the reference's pooled task score
 min_length_ratio = 0.90
-submit_tier = "dev"                          # full is ~8-17 h on this engine (DECISIONS.md 2026-10-15); back to full once it is fast
+submit_tier = "dev"                          # full is ~8-17 h on this engine
 
 [layers]                                     # which engine files make up each layer: the agent's map (lab/prompts/objective.md)
 kernels = ["src/inference_server/models/*kernel*.py", "src/inference_server/models/megakernel/*",

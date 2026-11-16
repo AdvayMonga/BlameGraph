@@ -87,7 +87,7 @@ def test_a_bundle_without_a_window_is_none(tmp_path):
     assert layers.from_bundle(tmp_path / "nowhere") is None
 
 
-@pytest.mark.skipif(not REAL.exists(), reason="the 2026-10-17 H200 bundle is local only")
+@pytest.mark.skipif(not REAL.exists(), reason="the H200 bundle is local only")
 def test_the_real_h200_bundle():
     b = next(REAL.iterdir())
     out = layers.from_bundle(b)

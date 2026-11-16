@@ -11,8 +11,7 @@ from lab.kernels.tasks._fused import EPS, HEAD_DIM, ROPE_THETA, START_EDITS, rms
 
 def reference(x, w, cos, sin):
     """In fp32 throughout, the truth the error budget is measured against: the engine's fused kernel rounds where its
-    eager path does not, and rope's cancellation near zero turned one rounding into 0.03 (5 of 552 seen cases on the
-    H200, 2026-10-24); a candidate may be at most 2x as wrong as the engine's kernel, element by element."""
+    eager path does not, and rope's cancellation near zero amplifies one rounding; a candidate may be at most 2x as wrong as the engine's kernel, element by element."""
     n = rms(x, w).float()
     half = n.shape[-1] // 2
     rot = torch.cat((-n[..., half:], n[..., :half]), dim=-1)

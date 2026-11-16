@@ -149,8 +149,7 @@ WARM_CONCURRENCY = 256
 
 def _warmup(ctx: Ctx, pool: list[dict], n: int = 8):
     """Once per Ctx (one engine launch): the corpus mix closed loop at WARM_CONCURRENCY for a probe's length, at the
-    records' own lengths, so the engine's first measured load is not its first load at that size (the first
-    saturated level after a launch read up to 40% low, 2026-10-28). Then `n` of this regime's records."""
+    records' own lengths, so the engine's first measured load is not its first load at that size. Then `n` of this regime's records."""
     if not ctx._warm:
         ctx._warm = True
         order = random.Random(f"{ctx.seed}:warmup").sample(ctx.pool(None), len(ctx.pool(None)))   # not a regime's order

@@ -65,7 +65,7 @@ def test_the_screen_refuses_exploit_routes_and_passes_real_kernels():
                 "import lab.kernels.tasks\n",
                 "os.system('id')\n", "open('/etc/passwd')\n", "import ctypes\n", "inspect.stack()\n"):
         assert screen(src), src
-    ev = ROOT / "tests" / "fixtures" / "paged_decode_evolved.py"     # the best program of the 2026-10-14 run
+    ev = ROOT / "tests" / "fixtures" / "paged_decode_evolved.py"     # a program an earlier run evolved
     assert screen(SEED.read_text()) == [] and screen(ev.read_text()) == []
     assert screen("x = os.environ.get('A', '0')\n") == []
     assert screen("import torch\nclass A:\n    def f(self, x):\n        self.a = 1\n        x.b = 2\n") == []
@@ -434,7 +434,7 @@ def test_split_holds_out_a_region_even_when_calls_pile_up_at_the_largest_value()
     assert s["cut_by"] == "distinct" and s["heldout"] and (512, 64, 96, 8, 512, 1) in s["seen"]   # the top stays seen
     h = [x[0] for x in s["heldout"]]
     assert not any(min(h) < x[0] < max(h) for x in s["seen"]) and max(h) < 512                   # a band below the top
-    two = Counter({(n, 32, 4, 128, 16, L): (900 if (n, L) == (33, 8032) else 10)                  # 2026-10-19 regate
+    two = Counter({(n, 32, 4, 128, 16, L): (900 if (n, L) == (33, 8032) else 10)
                    for n in range(1, 257, 8) for L in (650, 8032)})
     two.update({(n, 32, 4, 128, 16, 8032): 300 for n in range(200, 257, 8)})
     s2 = shapes.split(load("paged_decode"), two)

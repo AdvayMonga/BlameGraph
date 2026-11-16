@@ -1,4 +1,4 @@
-"""Shared read-only weights (decided 2026-10-23): a region as large as a whole decode step reads the whole model
+"""Shared read-only weights: a region as large as a whole decode step reads the whole model
 (~30 GB), and each candidate is judged in a fresh process, so reloading per judgment would take minutes. A holder
 process keeps the weights on the device and writes handles to a file; each candidate's process attaches to the same
 memory without copying (CUDA IPC through torch's tensor sharing; on the CPU, shared memory). CUDA cannot map shared
@@ -9,8 +9,8 @@ it outside the jail); before and after each judgment the evaluator compares ever
 jail attaching over CUDA IPC needs the holder's IPC namespace (docker --ipc) and the holder's IPC semaphore pool:
 CUDA keeps it in /dev/shm as `cuda.shm.<uid>.<pid>.<n>` (both in hex) and an importer looks for it under its own uid,
 so a holder run as root for a jail of another user (`jail_uid`) links its pools under that uid's name, open to that
-user's group (found on the H200, 2026-10-27: "Failed to open/find remote IPC semaphore pool", CUDA_ERROR_MAP_FAILED
-from cuIpcOpenEventHandle, until then; the jail's own uid, caps and namespaces were not the cause). A jail can then
+user's group (without it the attach fails: "Failed to open/find remote IPC semaphore pool", CUDA_ERROR_MAP_FAILED
+from cuIpcOpenEventHandle). A jail can then
 write the pool's semaphores, which can break the holder's IPC events but not its weights. `python -m
 lab.kernels.tasks.shared_weights` reports a plain and a jailed attach. When the attach is refused, `attach(copy_ok=True)` (the evaluator's task
 inside the jail) copies the pristine weights to the device instead (a layer's weights are ~0.6 GB, so a single-layer
@@ -70,7 +70,7 @@ class Holder:
         """`constants`: small picklable values shared beside the weights (a region's layer config and `layer`);
         `jail_uid`: the user a jail attaches as, when it is not this process's (a root lab's jail)."""
         torch.multiprocessing.set_sharing_strategy("file_system")
-        # a model's Parameters, detached: attached ones requiring grad refused the checker's in-place refill (2026-10-27)
+        # a model's Parameters, detached: attached ones requiring grad refuse the checker's in-place refill
         tensors = {k: (v.detach() if v is not None else None) for k, v in tensors.items()}
         self.tensors = {k: (v if v.is_cuda else v.share_memory_()) for k, v in tensors.items() if v is not None}
         self.path = Path(path)
@@ -115,7 +115,7 @@ def attach(path: Path, copy_ok: bool = False) -> dict[str, torch.Tensor]:
     own = _HELD.get(Path(path).resolve())        # the holder's own process: CUDA IPC cannot reopen its own handles
     try:
         held = dict(own) if own is not None else _rebuild(raw)
-    except RuntimeError as e:                    # CUDA IPC refused (a jail, 2026-10-25)
+    except RuntimeError as e:                    # CUDA IPC refused (a jail)
         if "cuda" not in str(e).lower():
             raise
         if not copy_ok:

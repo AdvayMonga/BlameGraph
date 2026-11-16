@@ -2,7 +2,7 @@
 
 The corpus defines the landscape the lab measures. Anything not in it is invisible.
 
-Since 2026-10-01 it is built from **real public traces**: real arrival times and sessions from
+It is built from **real public traces**: real arrival times and sessions from
 BurstGPT, real conversation text (with the real assistant replies) from WildChat-1M. The
 previous synthetic corpus (Poisson arrivals over `scripts/bench/prompt_bank.py`, multi-turn by
 prompt concatenation, corpus_version `659ea3b6…`) remains in git history. **Every panel
@@ -122,7 +122,7 @@ uv sync --extra dev --extra corpus                          # pyarrow, for the W
 .venv/bin/python evals/regimes/build_corpus.py               # the secret seed in evals/regimes/.seed
 ```
 
-Since 2026-10-09 the held-out traces and the seed are not in git: the build is deterministic in the seed, so a
+The held-out traces and the seed are not in git: the build is deterministic in the seed, so a
 public seed would publish the held-out split. Both live in the store (`lab store push` / `pull --corpus`);
 the manifest keeps their hashes, so the loader still refuses a changed file.
 

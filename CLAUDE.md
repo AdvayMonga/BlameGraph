@@ -21,8 +21,10 @@ optimization is a separate repo, github.com/AdvayMonga/inference-server, found v
   --run manual-<date> --commit SHA DIR...`), then `lab store push`. There is no status file: the code, merged PRs and
   `lab store sql` are the state.
 - `README.md` stays a few one-line feature bullets.
-- **History lives only in git.** No changelog in comments or docstrings: no dates, no "removed", "was", "since" or
-  "before". A comment says what the code does now.
+- **Comments say what the code does now, and nothing else.** Short and plain. No dates, no decisions or the reasons
+  for them, no history ("removed", "was", "since", "before"), no measurements from past runs, no PR or run
+  references, no notes on how the work went. History lives in git; decisions, their reasons and every development
+  note live in `DECISIONS.md` (see Decisions below).
 - **One way to do each thing.** An experiment is built on a branch; it merges only when it wins a measured
   comparison, and replaces what it beat. No flag, arm or mode for the loser stays in main.
 - **Stable interfaces.** Each part is entered through one typed function (plain functions and small dataclasses) and
