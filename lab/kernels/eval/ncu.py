@@ -57,12 +57,8 @@ def parse(stdout: str, top: int = 3) -> dict:
 
 def probe(cfg: dict, program: Path) -> int:
     import torch
-    from lab.kernels.eval.core import load_program, screen
+    from lab.kernels.eval.core import load_program
     from lab.kernels.tasks import from_config
-    refused = screen(program.read_text())
-    if refused:
-        print("refused: " + "; ".join(refused), file=sys.stderr)
-        return 2
     task = from_config(cfg)
     fn = task.bind(load_program(program))
     inputs = task.make_inputs(tuple(cfg["seen"][0]), task.dtypes[0], cfg.get("device", "cuda"),

@@ -120,7 +120,6 @@ def test_a_region_of_the_engines_stations_is_judged_end_to_end(tmp_path, monkeyp
     start = tmp_path / "start.py"
     start.write_text(regions.start_program("norm", "add", shared_weights=str(h.path)))
     assert "_INPUTS = ['h', 'w.mm']" in start.read_text() and "_CONST['w.mm_scale'] = None" in start.read_text()
-    assert core.screen(start.read_text()) == []
     r = core.judge(t, start, [(4, 64), (16, 64)], [], None, "cpu", None, 2, iters=3)
     assert r["metrics"]["correct"] == 1.0, r["artifacts"]
     assert r["metrics"]["combined_score"] > 0, r["artifacts"]          # timed: the roofline's bytes read `cfg` too

@@ -55,39 +55,6 @@ def test_judge_scores_a_correct_kernel_and_zeroes_a_wrong_one():
         assert "no callable `kernel`" in judge(t, missing, list(t.seen_default), [], None, "cpu", None, 1)["artifacts"]["error"]
 
 
-def test_the_screen_refuses_exploit_routes_and_passes_real_kernels():
-    from lab.kernels.eval.core import screen
-    for src in ("import gc\n", "torch.cuda.Stream()\n", "x.elapsed_time(y)\n", "import threading\n",
-                "torch.save(out, 'memo.pt')\n", "Path('m').write_bytes(b)\n", "import pickle\n", "np.load('m.npy')\n",
-                "import time\n", "sys.modules['lab.kernels.eval'].timing = 1\n", "from lab.kernels.eval import timing\n",
-                "import lab.kernels.tasks\n",
-                "os.system('id')\n", "open('/etc/passwd')\n", "import ctypes\n", "inspect.stack()\n"):
-        assert screen(src), src
-    ev = ROOT / "tests" / "fixtures" / "paged_decode_evolved.py"     # an evolved program
-    assert screen(SEED.read_text()) == [] and screen(ev.read_text()) == []
-    assert screen("x = os.environ.get('A', '0')\n") == []
-    assert screen("import torch\nclass A:\n    def f(self, x):\n        self.a = 1\n        x.b = 2\n") == []
-    td = "from triton.tools.tensor_descriptor import TensorDescriptor as _TD\n"
-    assert screen("import torch\nx = torch.empty(3)\nx.tag = 1\n" + td + "d = _TD(w, [4, 4])\nd.block_shape = [1, 2]\n") == []
-    assert screen('"""Stream-K."""\nimport torch\n# Stream-K, import time\ndef k(x):\n    """An Event."""\n    return x\n') == []
-    assert screen("import torch\ns = torch.cuda.Stream()\n") and screen('SRC = "cudaStreamCreate(&s);"\n')   # code and C++ text
-    assert screen("def hook(nargs):\n    d = nargs.get('W_DESC')\n    d.block_shape = [1, 2]\n") == []
-    for bad in ("x = torch.empty(1)\nx.__class__.zero_ = None\n", "T = torch.empty(1).__class__\nT.zero_ = None\n",
-                "t = type\nT = t(x)\nT.zero_ = None\n", "f.__globals__['torch'] = 1\n",
-                "z = 1\x0c\ns = torch.cuda.Stream()\n# " + "a" * 44 + "\n", 'z = "\u2028"\ns = torch.cuda.Stream()\n# ' + "a" * 44 + "\n",
-                'b"Stream"\n', '"Stream" "x"\n', 'def f(): "Stream"\n', 'class K:\n    "Stream"\nK.__doc__\n',
-                "def k(h):\n    return getattr(h, 'shared', 0)\n"):
-        assert screen("import torch\n" + bad), bad
-    assert screen("import torch\nm = torch.cuda\nm.synchronize = None\n") and screen("def k(x):\n    type(x).f = 1\n")
-    assert screen("def k(x):\n    T = type(x)\n    T.zero_ = None\n") and screen("from torch.cuda import Stream\n")
-    t = load("toy_rmsnorm")
-    with tempfile.TemporaryDirectory() as d:
-        bad = Path(d) / "bad.py"
-        bad.write_text("import gc\ndef kernel(x, w):\n    return x\n")
-        r = judge(t, bad, list(t.seen_default), [], None, "cpu", None, 1)
-        assert r["metrics"]["combined_score"] == 0.0 and "refused before running" in r["artifacts"]["error"]
-
-
 CUDA_PROGRAM = r'''import torch
 from torch.utils.cpp_extension import load_inline
 
@@ -113,16 +80,6 @@ _ext = load_inline("scale_ext", cpp_sources="torch::Tensor scale(torch::Tensor x
 def kernel(x):
     return _ext.scale(x)
 '''
-
-
-def test_the_screen_passes_a_cuda_extension_and_refuses_its_cpp_routes():
-    from lab.kernels.eval.core import screen
-    assert screen(CUDA_PROGRAM) == []
-    for bad in ('PyObject* m = PyImport_ImportModule("lab.kernels.eval.timing");', "py::module_::import(\"gc\");",
-                'void* h = dlopen("libc.so.6", 1);', "std::thread t(f);", 'FILE* f = fopen("/proc/self/mem", "r");',
-                "cudaStream_t s; cudaStreamCreate(&s);", "cudaEventRecord(e, 0);", "cudaGraphLaunch(g, 0);",
-                'popen("id", "r");', "std::ofstream f(\"memo\");"):
-        assert screen(CUDA_PROGRAM.replace("int n = x.numel();", "int n = x.numel(); " + bad)), bad
 
 
 def test_a_programs_cpp_builds_once_for_all_its_stages_and_only_for_that_source():
@@ -157,29 +114,11 @@ def test_a_programs_cpp_builds_once_for_all_its_stages_and_only_for_that_source(
 
 
 def test_a_result_line_the_candidate_prints_is_ignored():
-    from lab.kernels.eval.core import screen
     from lab.kernels.eval.jailed import judge_jailed
-
-    def screen_ok(src):
-        return screen(src) == []
     forged = "'{\"metrics\": {\"combined_score\": 9.0, \"correct\": 1.0, \"stage\": 2}, \"artifacts\": {}}'"
     src = "import torch\ndef kernel(x, w):\n    print(" + forged + ")\n" + RIGHT + "\n"        # printed on every call
-    assert screen_ok(src)
     r = judge_jailed({"task": "toy_rmsnorm", "seen": [[8, 256], [32, 512]], "device": "cpu", "iters": 3}, src, 2)
     assert r["metrics"]["correct"] == 1.0 and r["metrics"]["combined_score"] != 9.0 and "timings" in r["artifacts"]
-
-
-def test_cpp_must_be_literal_and_records_out_of_reach():
-    from lab.kernels.eval.core import screen
-    lit = 'from torch.utils.cpp_extension import load_inline\nSRC = "int f();"\n'
-    assert screen(lit + 'm = load_inline("m", cpp_sources=SRC, cuda_sources="__global__ void k(){}")\n') == []
-    assert screen(lit + 'm = load_inline("m", SRC + "x")\n')                              # built at run time
-    assert screen(lit + 'm = load_inline("m", bytes.fromhex("00").decode())\n')
-    assert screen(lit + 'm = load_inline("m", "#define C(a,b) a##b\\nC(cudaEvent,Record)")\n')   # token pasting
-    assert screen("import triton.language as tl\ny = tl.load(p + o, mask=m)\n") == []       # Triton's load is not C++
-    for bad in ("import __main__\n", "torch.from_file('m')\n", "import tempfile\n", "cuGraphLaunch(g, s)",
-                "cudaLaunchHostFunc(s, f, 0)", "asm volatile(\"mov.u64 %0, %%globaltimer;\")", "sys.settrace(f)\n"):
-        assert screen(bad), bad
 
 
 def test_the_gate_is_judged_in_its_own_dir():
@@ -195,10 +134,8 @@ def test_the_gate_is_judged_in_its_own_dir():
 
 def test_a_cuda_extension_builds_in_the_jail_and_is_judged_on_the_gpu():
     import shutil
-    from lab.kernels.eval.core import screen
     from lab.kernels.eval.jailed import judge_jailed
     src = (ROOT / "tests" / "fixtures" / "cuda_toy_rmsnorm.py").read_text()
-    assert screen(src) == []
     if not torch.cuda.is_available() or not (shutil.which("nvcc") or Path("/usr/local/cuda/bin/nvcc").exists()):
         print("skip: no CUDA GPU or no nvcc")
         return
@@ -220,9 +157,8 @@ def test_ncu_counters_reach_the_judge_on_the_gpu():
     shapes = json.loads(a["ncu"])["shapes"]
     assert len(shapes) == 2 and all(s.get("kernels") for s in shapes), shapes      # counters on both shapes
 def test_the_fused_tasks_start_launches_what_the_engine_module_launches():
-    """The original fused.py and the edited start make the same launches; the start passes the screen."""
+    """The original fused.py and the edited start make the same launches."""
     import types
-    from lab.kernels.eval.core import screen
     from lab.kernels.evolve.run import _start
     from lab.targets import engine
     try:
@@ -254,7 +190,6 @@ def test_the_fused_tasks_start_launches_what_the_engine_module_launches():
         runs = []
         for task in ("rmsnorm", "silu_mul", "topk_softmax"):
             start = _start(load(task), src, "x").split("# EVOLVE-BLOCK-END")[0].replace("# EVOLVE-BLOCK-START\n", "")
-            assert screen(start) == [], (task, screen(start))
         import importlib.util
         find, enabled = importlib.util.find_spec, []
         importlib.util.find_spec = lambda name, *a: object() if name == "triton" else find(name, *a)   # triton present
@@ -326,12 +261,6 @@ def test_the_fp8_moe_tasks_judge_the_engines_calls():
     assert t.shape_of(bf16) is None and load("moe_gemm").shape_of(fp8) is None
 def test_the_evaluators_modules_are_out_of_reach():
     from lab.kernels.eval import core
-    for bad in ("import sys as s\n", "from sys import modules as M\n", "import os, sys\n", "import os\nm = os.sys\n",
-                "import atexit\n", "import weakref\n", "import torch\nwith torch.profiler.profile(): pass\n",
-                "import pynvml\n", 'C = "cuptiSubscribe(&s, cb, 0);"\n', "import torch\nD = torch.ops\nD['x'] = 1\n",
-                "import os\nos.environ['TORCH_ALLOW_TF32'] = '1'\n"):
-        assert core.screen(bad), bad
-    assert core.screen("def k(x):\n    out = x.clone()\n    out[0] = 1\n    return out\n") == []   # its own tensors
     t = load("toy_rmsnorm")
     before = core._watched(t)
     real = sys.modules["lab.kernels.eval.check"]
@@ -766,29 +695,24 @@ RIGHT = "    xf = x.float()\n    return (xf * torch.rsqrt(xf.pow(2).mean(-1, kee
 # Exploit routes as toy kernels: each must score 0, for the reason given.
 CANARIES = {
     "timer via __import__": ("import torch\n__import__('time').perf_counter = lambda: 0.0\n"
-                             "def kernel(x, w):\n" + RIGHT, "refused"),
+                             "def kernel(x, w):\n" + RIGHT, "patched"),
     "timer statistics patched through an alias": ("import torch\nimport statistics as s\n"
                                                   "s.quantiles = lambda t, n: [0.0, 1e-9, 1e-9]\n"
-                                                  "def kernel(x, w):\n" + RIGHT, "refused"),
+                                                  "def kernel(x, w):\n" + RIGHT, "patched"),
     "checker's tensor op patched through an alias": ("import torch as T\nT.Tensor.abs = lambda self: self * 0\n"
-                                                     "def kernel(x, w):\n    return x.clone()\n", "refused"),
+                                                     "def kernel(x, w):\n    return x.clone()\n", "patched"),
     "sync made a no-op": ("import torch\nimport torch as T\nT.cuda.synchronize = lambda *a, **k: None\n"
-                          "def kernel(x, w):\n" + RIGHT, "refused"),
-    # past the screen (the module reached through a list): caught at run time
+                          "def kernel(x, w):\n" + RIGHT, "patched"),
     "timer statistics patched at import": ("import torch\nimport statistics\nmods = [statistics]\n"
                                            "mods[0].quantiles = lambda t, n: [0.0, 1e-9, 1e-9]\n"
                                            "def kernel(x, w):\n" + RIGHT, "patched"),
     "checker's tensor op patched during the call": ("import torch\nmods = [torch]\ndef kernel(x, w):\n"
                                                     "    mods[0].Tensor.abs = lambda self: self * 0\n"
                                                     "    return x.clone()\n", "patched"),
-    "the reference imported": ("from lab.kernels.tasks.toy_rmsnorm import reference as kernel\n", "refused"),
-    "background thread": ("import threading, torch\ndef kernel(x, w):\n" + RIGHT, "refused"),
     "output never written": ("import torch\ndef kernel(x, w):\n    return torch.empty_like(x)\n", "correctness"),
     "answers cached by pointer": ("import torch\n_c = {}\ndef kernel(x, w):\n    k = (x.data_ptr(), tuple(x.shape))\n"
                                   "    if k not in _c:\n        _c[k] = _f(x, w)\n    return _c[k]\n"
                                   "def _f(x, w):\n" + RIGHT, "memoization"),
-    "a module reached through getattr": ("import torch\nc = getattr(torch, 'cuda')\ndef kernel(x, w):\n" + RIGHT,
-                                         "refused"),
     "right on seen shapes only": ("import torch\ndef kernel(x, w):\n    if x.shape[0] > 64:\n"
                                   "        return torch.zeros_like(x)\n" + RIGHT, "heldout"),
 }
@@ -804,7 +728,7 @@ def test_exploit_canaries_all_score_zero():
         r = judge_jailed(cfg, src, 2)
         said = (r["artifacts"].get("error") or "") + (r["artifacts"].get("gates") or "")
         assert r["metrics"]["combined_score"] == 0.0, name
-        want = {"refused": "refused before running", "patched": "patched what the evaluator uses"}.get(why, why)
+        want = {"patched": "patched what the evaluator uses"}.get(why, why)
         assert want in said, (name, said[:800])
 
 

@@ -69,14 +69,14 @@ def system_message(task) -> str:
     cases = ", ".join(["three seeds"] + ([] if none else ["edge shapes"])
                       + (["NaN/Inf inputs"] if task.nonfinite else [])
                       + ([f"inputs scaled by {', '.join(f'{k:g}' for k in scales)}"] if scales else []))
-    refused = "; ".join(dict.fromkeys(core.FORBIDDEN.values()))
+    not_allowed = "; ".join(core.NOT_ALLOWED)
     graphs = (", both captured in CUDA graphs and timed as graph replays, as the engine runs them (a kernel that "
               "cannot be captured scores 0)") if task.graphs else ""
     from lab.kernels.eval.jailed import TIMEOUT_S
     cuda = ("\n- A program may build CUDA C++ when it is imported, with `torch.utils.cpp_extension.load_inline` (the "
             "evaluation host's CUDA toolkit at $CUDA_HOME, ninja on PATH, the GPU's own architecture unless the program "
             f"passes flags). The build is not timed; it counts against each stage's {TIMEOUT_S:.0f} s limit and is kept "
-            "per program source across its stages and re-timings. Its C++ is screened like the Python.") \
+            "per program source across its stages and re-timings.") \
         if task.entry or task.start_program else ""
     return f"""The program defines `kernel`, a replacement for {base}. It must compute what the task's reference \
 computes, on the same inputs, within dtype tolerance ({', '.join(str(d).removeprefix('torch.') for d in task.dtypes)}).
@@ -88,7 +88,7 @@ baseline's + {core.MEMORY_SLACK // 2**20} MiB; then timing against {base}{graphs
 - Score: the call-weighted geometric mean of the speedup over the seen shapes, the program and the baseline timed \
 in pairs on the same inputs; a shape where the middle half of the paired ratios includes 1 counts as 1.0. A failed gate scores 0; so does a time at which the kernel would run at \
 over {core.PHYSICS_MARGIN_PCT}% of its roofline bound. Nothing before a shape's timed window is timed: the correctness checks and warm-up calls run first, so tuning a program does at run time (e.g. `triton.autotune`) is done by then. Held-out shapes are judged separately and are not part of the score.
-- Refused before running: source that uses {refused}, or writes into anything it imports. Scores 0: anything the \
+- Not allowed: {not_allowed}. A program read doing any of them is not built on and not promoted. Scores 0: anything the \
 evaluator uses found patched.
 - Lower precision inside the kernel is allowed while the output stays within tolerance; each result reports its \
 error against the reference beside the baseline's.{cuda}

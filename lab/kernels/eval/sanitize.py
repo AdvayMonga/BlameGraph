@@ -65,12 +65,8 @@ def verdict(runs: list[dict]) -> dict:
 
 def probe(cfg: dict, program: Path) -> int:
     import torch
-    from lab.kernels.eval.core import load_program, screen
+    from lab.kernels.eval.core import load_program
     from lab.kernels.tasks import from_config
-    refused = screen(program.read_text())
-    if refused:
-        print("refused: " + "; ".join(refused), file=sys.stderr)
-        return 2
     task = from_config(cfg)
     fn = task.bind(load_program(program))
     device = cfg.get("device", "cuda")

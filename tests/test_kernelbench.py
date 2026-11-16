@@ -14,7 +14,7 @@ os.environ.setdefault("LAB_TARGET", str(ROOT / "lab" / "targets" / "inference-se
 import torch  # noqa: E402
 
 from lab.kernels.tasks import kernelbench as kb  # noqa: E402
-from lab.kernels.eval.core import judge, screen  # noqa: E402
+from lab.kernels.eval.core import judge  # noqa: E402
 from lab.kernels.evolve.run import _target_tolerances, initial_program, system_message  # noqa: E402
 from lab.kernels.tasks import from_config, load  # noqa: E402
 
@@ -93,9 +93,9 @@ def _ns(src):
     return ns
 
 
-def test_the_starting_program_is_the_baseline_and_passes_the_screen():
+def test_the_starting_program_is_the_baseline():
     src = initial_program(task())
-    assert "class ModelNew(Model)" in src and "def kernel(" in src and "signal" not in src and not screen(src)
+    assert "class ModelNew(Model)" in src and "def kernel(" in src and "signal" not in src
     with tempfile.TemporaryDirectory() as d:
         r = judge(task(), program(d, None), [(1,)], [(2,)], None, "cpu", _target_tolerances(task()), 2, iters=3)
         assert r["metrics"]["correct"] == 1.0, r
