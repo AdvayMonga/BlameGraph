@@ -7,7 +7,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from data.knowledge import ledger
+from lab.records import ledger
 from lab.infra.sandbox import grader
 from lab.infra.sandbox.grader import Audit
 

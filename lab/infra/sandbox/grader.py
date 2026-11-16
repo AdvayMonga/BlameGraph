@@ -14,8 +14,8 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
 
-from targets import engine, target
-from measure.profile import gpu
+from lab.targets import engine, target
+from lab.profile import gpu
 from lab.infra.sandbox import container, jail
 from lab.infra.sandbox.surfaces import ALWAYS_DENY, HIDDEN, deps_only, may_write
 
@@ -270,7 +270,7 @@ def jailed(tree: Path, argv: list[str], *, timeout_s: float, env_extra: dict | N
         if on_start is None:
             return subprocess.run(wrapped, cwd=tree, env=env, capture_output=True, text=True, timeout=timeout_s)
         proc = subprocess.Popen(wrapped, cwd=tree, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        from measure.profile.gpu import descendants         # the `gpu` argument shadows the module here
+        from lab.profile.gpu import descendants         # the `gpu` argument shadows the module here
         on_start((lambda: container.pids(name)) if name else (lambda: descendants(proc.pid)))
         try:
             out, err = proc.communicate(timeout=timeout_s)

@@ -1,4 +1,4 @@
-"""The three tools that can make a change count: bench, equiv and submit. Each has the worker (measure/runner/worker.py) serve
+"""The three tools that can make a change count: bench, equiv and submit. Each has the worker (lab/infra/runner/worker.py) serve
 the agent's pristine tree outside the jail and measure it with the environment's own instruments; the policy and the
 ledger stay here.
 
@@ -9,7 +9,7 @@ ledger stay here.
            way, and records one aggregate per metric through the Thresholdout guard (the held-out numbers
            themselves never reach the ledger). Verdict per metric: improved | regressed | within_band | unknown_band.
 
-Each also keeps the run's passive data (measure/runner/artifacts.py): bench and equiv as ledger blobs under `result.artifacts`,
+Each also keeps the run's passive data (lab/infra/runner/artifacts.py): bench and equiv as ledger blobs under `result.artifacts`,
 submit only under `<run>/heldout-private/`, outside the ledger and the jail.
 `baseline` is not a tool: the run measures its base commit under bench's defaults once, before the first session,
 in the same cache submit compares against.
@@ -23,11 +23,11 @@ import tempfile
 import time
 from pathlib import Path
 
-from measure.runner import artifacts, profiles, serve, worker
-from measure.context import calibrate
-from evals.researcher import live
-from data.knowledge import ledger
-from targets import target
+from lab.infra.runner import artifacts, profiles, serve, worker
+from lab.infra.context import calibrate
+from evals.agent import live
+from lab.records import ledger
+from lab.targets import target
 from lab.gate.holdout import HoldoutGuard, Refused
 
 HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT = 100, 2.0, 0.5
@@ -65,7 +65,7 @@ def run_regimes(url: str, t: target.Target, names: list[str], split: str, tier: 
 
 
 def _progress(rows) -> None:
-    """One load call's raw numbers for the dashboard (`evals.researcher.live`), computed after the call: never during it."""
+    """One load call's raw numbers for the dashboard (`evals.agent.live`), computed after the call: never during it."""
     from evals.loadgen.runner import _q
     ok = [r for r in rows if r.status == "ok"]
     ttft, tpot = [r.ttft_s for r in ok if r.ttft_s is not None], [r.tpot_s for r in ok if r.tpot_s is not None]
@@ -145,7 +145,7 @@ def heldout_context(seen_cal: dict, base: dict, delta: float | None, better: str
     """A held-out aggregate's context: the ceiling computed from the base commit's seen-split request shape (nothing
     about the held-out requests goes into it), as % for the base and the new value. The reference is measured on the
     seen split at the short tier, so it is not comparable to a held-out full-tier number."""
-    from measure.context.ceiling import pct_of
+    from lab.infra.context.ceiling import pct_of
     c = seen_cal.get("ceiling")
     b = base.get("value")
     new = b * (1 + delta / 100) if b is not None and delta is not None else None
@@ -190,7 +190,7 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
 def holdout_guard(t: target.Target) -> HoldoutGuard:
     """The one Thresholdout guard of the target's corpus prompts (`Manifest.budget_key`), shared by every run and machine through the store
     (LAB_STORE). Refused where there is no store: a local budget would start over on every machine."""
-    from data.knowledge.remote import NoRemote, open_remote
+    from lab.records.remote import NoRemote, open_remote
     try:
         remote = open_remote()
     except NoRemote as e:
@@ -212,7 +212,7 @@ def _ceiling_facts(t: target.Target, ledger_root: Path | None) -> dict:
 
 
 def _layer_facts(ledger_root: Path | None, key: str = "layers") -> dict:
-    """The latest profile's per-layer shares and distances (measure/context/layers.py), or with `key="kernel_tasks"` each kernel
+    """The latest profile's per-layer shares and distances (lab/infra/context/layers.py), or with `key="kernel_tasks"` each kernel
     task's share of its window, with the record they come from: a `profile` record or a bench's or baseline's
     after-measurement profile (`profiled`)."""
     if not ledger_root or not (Path(ledger_root) / "ledger.jsonl").exists():

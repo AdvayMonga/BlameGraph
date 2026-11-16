@@ -121,7 +121,7 @@ def argv(name: str, workdir: Path, command: list[str], env: dict[str, str], writ
            "--label", "lab.jail=1"]
     if gpus() if gpu is None else gpu:
         out += ["--gpus", "all"]
-    if ipc_host:                                 # CUDA IPC from a holder on the host (generate/kernels/tasks/shared_weights.py)
+    if ipc_host:                                 # CUDA IPC from a holder on the host (lab/kernels/tasks/shared_weights.py)
         out += ["--ipc", "host"]
     if (cpus := cpuset()):
         out += ["--cpuset-cpus", cpus]
@@ -169,7 +169,7 @@ def running(name: str) -> bool:
 
 
 def _kill_gpu_holders(name: str) -> list[dict]:
-    from measure.profile import gpu
+    from lab.profile import gpu
     mine = pids(name)
     hit = [a for a in (gpu.compute_apps() or []) if a["pid"] in mine]
     for a in hit:
@@ -213,7 +213,7 @@ def quiet(name: str | None):
     if not name or _docker() is None or not running(name):
         yield []
         return
-    from measure.profile import gpu
+    from lab.profile import gpu
     killed = _kill_gpu_holders(name)
     with paused(name):
         killed += _kill_gpu_holders(name)            # anything that took the GPU before the pause landed

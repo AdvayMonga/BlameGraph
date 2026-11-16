@@ -27,11 +27,11 @@ import sys
 import time
 from pathlib import Path
 
-from measure.context import calibrate
-from measure.profile import gpu
-from measure.runner import serve
-from data.knowledge import ledger
-from targets import engine, target
+from lab.infra.context import calibrate
+from lab.profile import gpu
+from lab.infra.runner import serve
+from lab.records import ledger
+from lab.targets import engine, target
 from lab.evaltools import BENCH_TIER
 
 

@@ -13,26 +13,26 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # command -> the module it runs; a dict is a group: `lab kernels search ...`
 COMMANDS = {
-    "session": "lab.session", "rehearsal": "lab.rehearsal", "dashboard": "evals.researcher.dashboard",
-    "validate": "lab.gate.validate", "feedback": "evals.researcher.feedback",
-    "store": "data.knowledge", "records": "data.knowledge.ledger", "import-runs": "data.knowledge.import_runs",
+    "session": "lab.session", "rehearsal": "lab.rehearsal", "dashboard": "evals.agent.dashboard",
+    "validate": "lab.gate.validate", "feedback": "evals.agent.feedback",
+    "store": "lab.records", "records": "lab.records.ledger", "import-runs": "lab.records.import_runs",
     "workloads": "evals.public",
     "corpus": {"build": "evals.regimes.build_corpus", "fetch": "evals.regimes.fetch_traces", "lengths": "evals.regimes.lengths"},
     "regimes": "evals.loadgen", "clientcheck": "evals.loadgen.clientcheck", "synth": "evals.loadgen.synth",
-    "arrivals": "evals.loadgen.arrivals", "sim": "measure.sim", "crossover": "measure.profile.crossover",
+    "arrivals": "evals.loadgen.arrivals", "sim": "evals.sim", "crossover": "lab.profile.crossover",
     "vm": "lab.infra.cloud.vm", "gpucheck": "lab.infra.cloud.gpucheck", "jail": "lab.infra.sandbox.container",
-    "peaks": "measure.context.peaks", "layers": "measure.context.layers",
-    "trace-contract": "measure.runner.trace_contract",
+    "peaks": "lab.infra.context.peaks", "layers": "lab.infra.context.layers",
+    "trace-contract": "lab.infra.runner.trace_contract",
     "correctness": "lab.gate.correctness", "repeat-audit": "lab.gate.repeat_audit",
-    "cheat-proxy": "evals.researcher.canaries", "canary": "evals.researcher.canaries.canary",
+    "cheat-proxy": "evals.agent.canaries", "canary": "evals.agent.canaries.canary",
     "compare": {"run": "evals.baselines.run", "report": "evals.baselines.report",
                 "profile": "evals.baselines.profile", "gap": "evals.baselines.gap"},
-    "kernels": {"search": "generate.kernels.search", "ab": "generate.kernels.search.ab",
-                "evolve": "generate.kernels.evolve", "library": "generate.kernels.library",
-                "archive": "generate.kernels.archive", "ptx": "generate.kernels.library.ptx",
-                "competitors": "generate.kernels.library.competitors",
-                "kernelbench": "generate.kernels.tasks.kernelbench",
-                "flashinfer-bench": "generate.kernels.tasks.flashinfer_bench"},
+    "kernels": {"search": "lab.kernels.search", "ab": "lab.kernels.search.ab",
+                "evolve": "lab.kernels.evolve", "library": "lab.kernels.library",
+                "archive": "lab.kernels.archive", "ptx": "lab.kernels.library.ptx",
+                "competitors": "lab.kernels.library.competitors",
+                "kernelbench": "lab.kernels.tasks.kernelbench",
+                "flashinfer-bench": "lab.kernels.tasks.flashinfer_bench"},
 }
 RUN_HELP = "a researcher run (lab start)"
 
@@ -86,9 +86,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def experiment_command(cmd: str, argv: list[str]) -> str:
-    from data.knowledge import ledger
+    from lab.records import ledger
     from lab import experiment
-    from targets import engine
+    from lab.targets import engine
     if cmd == "start":
         ap = argparse.ArgumentParser(prog="lab start", description="a run whose workspace is BASE plus the files "
                                      "CHANGE touched inside the write surface; prints the run id")

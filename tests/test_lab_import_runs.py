@@ -2,7 +2,7 @@
 
 import json
 
-from data.knowledge import import_runs, ledger
+from lab.records import import_runs, ledger
 
 
 def test_import_dir_writes_bench_and_equiv_records(tmp_path):

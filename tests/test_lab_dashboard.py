@@ -6,10 +6,10 @@ import json
 
 import pytest
 
-from evals.researcher import dashboard, live
+from evals.agent import dashboard, live
 from lab import evaltools, session
-from data.knowledge import ledger
-from targets import target
+from lab.records import ledger
+from lab.targets import target
 from lab.agent import AgentReply
 from evals.loadgen import suite
 from evals.loadgen.client import Row

@@ -22,7 +22,7 @@ from tests.lab_fixtures import make_repo
     ("pyproject.toml", False, True),                 # a dependency file: its dependency tables only (the audit)
     ("uv.lock", False, True),
     ("sub/pyproject.toml", False, False),
-    ("data/knowledge/ledger.py", False, False),
+    ("lab/records/ledger.py", False, False),
     ("evals/regimes/a/heldout.jsonl", True, False),
     ("CORPUS/A/HELDOUT.JSONL", True, False),
 ])
@@ -99,7 +99,7 @@ def test_jailed_timeout_is_a_failed_run(tmp_path, monkeypatch):
 
 def test_jailed_names_its_processes_to_a_watcher(tmp_path, monkeypatch):
     import sys
-    from measure.profile import gpu
+    from lab.profile import gpu
     monkeypatch.setenv("LAB_NO_JAIL", "1")
     repo = make_repo(tmp_path)
     tree = tmp_path / "t"

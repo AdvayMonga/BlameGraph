@@ -11,8 +11,8 @@ from typing import Any
 
 from evals import regimes as corpus
 from lab import experiments
-from data.knowledge import ledger
-from targets import engine, target
+from lab.records import ledger
+from lab.targets import engine, target
 from lab.agent import ToolSpec
 from lab.budget import Budget, BudgetExceeded, gpu_rate
 from lab.evaltools import BENCH_TIER, EvalTools
@@ -44,7 +44,7 @@ class Toolbox(EvalTools, ProfTools):
     """Bound to one session: knows the workspace, the budget, the ledger root and the run."""
 
     def __init__(self, session: Any):
-        from measure.runner import worker
+        from lab.infra.runner import worker
         self.s = session
         self.violation: str | None = None
         self.worker = getattr(session, "worker", None) or worker.load(
@@ -169,14 +169,14 @@ class Toolbox(EvalTools, ProfTools):
 
 
     def kernel_search(self, args: dict) -> str:
-        """The kernel layer in one blocking call (generate/kernels/tasks/pipeline.py): capture the task's calls under real traffic,
+        """The kernel layer in one blocking call (lab/kernels/tasks/pipeline.py): capture the task's calls under real traffic,
         search, gate the winner on the held-out shapes; the winner comes back as a patch of the engine module (a
         region's: its override module), saved in the workspace (left out of your change) for you to apply."""
         import argparse
         import contextlib
-        from generate.kernels.tasks import pipeline
-        from generate.kernels.evolve.run import task_name
-        from generate.kernels.tasks import TASKS, load
+        from lab.kernels.tasks import pipeline
+        from lab.kernels.evolve.run import task_name
+        from lab.kernels.tasks import TASKS, load
         try:
             task_name(str(args.get("task")))
         except argparse.ArgumentTypeError:
@@ -208,7 +208,7 @@ class Toolbox(EvalTools, ProfTools):
             if r["verdict"] in ("refused", "contaminated"):
                 raise RuntimeError(f"a capture was {r['verdict']}: {r['reason']}")
             return self.s.ledger_root / r["bundle"] if r["verdict"] == "ok" else None
-        from measure.runner import worker
+        from lab.infra.runner import worker
         w = self.worker
         remote = isinstance(w, worker.Remote)
         env = pipeline.remote_env(w.prefix, w.env_dir, w.python, w.env, w.sudo) if remote else {}
@@ -237,7 +237,7 @@ class Toolbox(EvalTools, ProfTools):
             result = {"verdict": "error", "reason": f"{type(e).__name__}: {e}"[-2000:], "model_usd": model_cost}
             self._record("kernels", "kernel_search", args, result, snap)
             return f"kernel_search failed: {result['reason']}"
-        from evals.kernels.ship import gate_passed
+        from lab.kernels.eval.ship import gate_passed
         passed = gate_passed(g)
         rel, refused = None, None
         try:
@@ -279,7 +279,7 @@ class Toolbox(EvalTools, ProfTools):
         return "\n".join(json.dumps(r) for r in rows[-last:]) or "(no records)"
 
     def query(self, args: dict) -> str:
-        from data.knowledge import index
+        from lab.records import index
         try:
             out = index.query(index.agent_db(self.s.ledger_root), args["sql"])
         except Exception as e:                      # a bad query is the agent's to read, never a crash
@@ -292,7 +292,7 @@ class Toolbox(EvalTools, ProfTools):
         return text
 
     def search(self, args: dict) -> str:
-        from data.knowledge import search
+        from lab.records import search
         if not hasattr(self, "_embedder"):         # loaded once per toolbox; a missing model is a fact in each reply
             try:
                 self._embedder, self._no_embedder = search.FastEmbed(self.s.ledger_root / "index" / "models"), None
@@ -483,7 +483,7 @@ class Toolbox(EvalTools, ProfTools):
             ToolSpec("kernel_search", "Search for a faster version of one engine kernel: `task` (one of the kernel "
                      "tasks, the engine entry point it replaces), `budget` (USD: model calls plus GPU time, charged to "
                      "the run). Captures the task's calls under real seen-split traffic at several concurrencies, splits "
-                     "the shapes seen / held-out, searches from your workspace's version of the kernel (generate.kernels.search), "
+                     "the shapes seen / held-out, searches from your workspace's version of the kernel (lab.kernels.search), "
                      "and gates the winner on the held-out shapes. Returns the winner's seen-shape speedup, the gate's "
                      "verdict and held-out speedup, the `kernels` ledger record of the search, and, if the gate passed, "
                      "the path of a patch of the engine module in your workspace (not applied). Blocks until done. "
@@ -520,24 +520,24 @@ def _names(names) -> str:
     return ", ".join(f"`{n}`" for n in names)
 
 
-HARNESS = ("__init__.py", "profile.py", "bundle.py", "gpu.py", "capture.py")     # all measure.profile.profile imports from the environment
+HARNESS = ("__init__.py", "profile.py", "bundle.py", "gpu.py", "capture.py")     # all lab.profile.profile imports from the environment
 HARNESS_DIR = "_harness"
 DEFAULT_CORPUS_CLASS = "steady_interactive"   # targets name no corpus class of their own
 
 
 def stage_harness(tree: Path) -> Path:
     """Copy just the profiling harness into the pristine tree: the jail must not open the environment repo (it holds
-    the ledger and .env), and the agent's own tree has no `measure` package."""
-    dest = tree / HARNESS_DIR / "measure" / "profile"
+    the ledger and .env), and the agent's own tree has no `lab` package."""
+    dest = tree / HARNESS_DIR / "lab" / "profile"
     dest.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(engine.ENV_ROOT / "measure" / "__init__.py", dest.parent / "__init__.py")
+    shutil.copyfile(engine.ENV_ROOT / "lab" / "__init__.py", dest.parent / "__init__.py")
     for name in HARNESS:
-        shutil.copyfile(engine.ENV_ROOT / "measure" / "profile" / name, dest / name)
+        shutil.copyfile(engine.ENV_ROOT / "lab" / "profile" / name, dest / name)
     return dest.parents[1]
 
 
 def workload_flags(args: dict, harness: Path, n: int) -> list[str]:
-    """measure.profile.profile's workload source: synthetic ids if asked, else `n` seen-split corpus requests sampled out here
+    """lab.profile.profile's workload source: synthetic ids if asked, else `n` seen-split corpus requests sampled out here
     (the jail holds no corpus, and the verified loader needs the held-out split too) and staged in the harness."""
     if args.get("synthetic"):
         return ["--synthetic", "--prompt-len", str(args.get("prompt_len", 64))]
@@ -549,10 +549,10 @@ def workload_flags(args: dict, harness: Path, n: int) -> list[str]:
 
 def task_shares(bundle: Path) -> dict:
     """Each kernel task's share of the profiled window, the kernels it launches and the speedup bound if they took no
-    time (generate/kernels/tasks/share.py), plus the kernels no task covers; or why there is none."""
+    time (lab/kernels/tasks/share.py), plus the kernels no task covers; or why there is none."""
     try:
-        from generate.kernels.tasks import share
-        from generate.kernels.tasks import TASKS, load
+        from lab.kernels.tasks import share
+        from lab.kernels.tasks import TASKS, load
         tasks = [load(n) for n in TASKS]
     except ImportError as e:                    # the kernel tasks import torch, which the controller may lack
         return {"missing": f"the kernel tasks do not import here: {e}"}
@@ -568,7 +568,7 @@ def task_shares(bundle: Path) -> dict:
 
 def default_profile_runner(tree: Path, argv: list[str], read: list[Path] = (), env: dict | None = None,
                            timeout_s: int = 3600, on_start=None):
-    """measure.profile.profile in the pristine tree as agent code: jailed, with the target's engine env (and `env`: a launch
+    """lab.profile.profile in the pristine tree as agent code: jailed, with the target's engine env (and `env`: a launch
     profile's), weights and `read` read-only, harness first on the path; `on_start` as `grader.jailed`'s."""
     path = os.pathsep.join([str(tree / HARNESS_DIR), str(tree / "src"), str(tree)])
     return grader.jailed(tree, argv, timeout_s=timeout_s,

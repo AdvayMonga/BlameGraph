@@ -3,7 +3,7 @@ worker runs (`sudo`), with the engine's venv first on PATH. Each check prints PA
 status is the number of failures. `--only NAME,...` runs a subset; `--skip-build` leaves out the dependency build.
 
     sudo -n env HOME="$HOME" PATH="$HOME/inference-server/.venv/bin:$PATH" LAB_ENGINE_REPO="$HOME/inference-server" \\
-        LAB_TARGET=targets/inference-server.toml lab gpucheck
+        LAB_TARGET=lab/targets/inference-server.toml lab gpucheck
 """
 
 from __future__ import annotations
@@ -19,9 +19,9 @@ import time
 import traceback
 from pathlib import Path
 
-from targets import engine
-from measure.profile import gpu
-from measure.runner import serve, worker
+from lab.targets import engine
+from lab.profile import gpu
+from lab.infra.runner import serve, worker
 from lab.infra.sandbox import container, grader
 
 HOLD = "import torch, time; x = torch.empty(2**30, dtype=torch.uint8, device='cuda'); print('holding', flush=True); time.sleep(600)"
@@ -135,7 +135,7 @@ def ncu(tmp: Path) -> str:
 @check("sanitizer")
 def sanitizer(tmp: Path) -> str:
     """compute-sanitizer around a jailed kernel call: the held-out gate's stage 6, every tool clean on a plain program."""
-    from evals.kernels import jailed
+    from lab.kernels.eval import jailed
     assert jailed.sanitizer(), "compute-sanitizer not found (CUDA toolkit bin/ or PATH)"
     src = "import torch\ndef kernel(x, w, eps=1e-6):\n    return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * w\n"
     a = jailed.judge_jailed({"task": "toy_rmsnorm", "seen": [[8, 256]], "heldout": [], "device": "cuda"}, src,
