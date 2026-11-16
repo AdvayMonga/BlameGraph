@@ -1,10 +1,5 @@
-"""Competitors' kernels as source for the starting programs in lab/kernels/library/competitors.py (`starts`), so a search can start
-from them with no competitor library installed: vLLM v0.32.0's Triton kernels vendored verbatim (fused_moe_kernel, the
-decode attention's grouped stage 1 and stage 2) with its tuned fused_moe table for the H200, and its CUDA C++ norm and
-activation kernels made self-contained for `torch.utils.cpp_extension.load_inline` (each string's header says what was
-kept, dropped and changed). Each wrapper is appended to the engine module and routes the engine's entry point to the
-competitor's kernel for the dtypes and layouts it supports, to the engine's own kernel otherwise. Apache-2.0 notices
-are kept in every string."""
+"""Competitors' kernels as source for the starting programs of lab/kernels/library/competitors.py (`starts`).
+vLLM v0.32.0's Triton kernels verbatim and its CUDA C++ kernels made self-contained; every string keeps its notice."""
 
 VERSION = "0.32.0"            # github.com/vllm-project/vllm tag every source here is taken from
 

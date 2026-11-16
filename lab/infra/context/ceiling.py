@@ -1,11 +1,5 @@
-"""Physical ceilings for an LLM engine, from the model's HF config and the GPU's measured peaks (lab/infra/context/peaks.py).
-No GPU, no weights. Everything here is a bound, not a target: a step cannot be faster than streaming the weights
-and KV it needs, or than the tensor cores can multiply.
-
-Per decode step the engine must read every weight a token touches (attention, router, lm_head, and the experts
-the batch routes to), read each sequence's KV cache, and do 2 FLOP per active parameter per token. Prefill of P
-tokens reads the weights once and does 2·P FLOP per active parameter plus the attention FLOPs.
-step floor = max(bytes / bandwidth, FLOPs / peak). The gap from a floor to a measurement is overhead."""
+"""Physical ceilings for an LLM engine, computed from the model's HF config and the GPU's peaks; needs no GPU.
+step floor = max(bytes read / bandwidth, FLOPs / peak FLOP/s)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -37,12 +31,12 @@ class ModelSpec:
     n_experts: int = 0
     top_k: int = 0
     moe_intermediate: int = 0
-    shared_intermediate: int = 0      # always-on shared expert width (DeepSeek-style), 0 if none
+    shared_intermediate: int = 0      # always-on shared expert width, 0 if none
     tie_embeddings: bool = False
 
     @classmethod
     def from_hf_config(cls, cfg: dict, name: str = "") -> "ModelSpec":
-        """Llama-style dense and Qwen3/Mixtral/DeepSeek-style MoE configs."""
+        """A spec from a Llama-style dense or Qwen3/Mixtral/DeepSeek-style MoE HF config."""
         heads = cfg["num_attention_heads"]
         n_exp = cfg.get("num_experts") or cfg.get("num_local_experts") or cfg.get("n_routed_experts") or 0
         return cls(name or cfg.get("_name_or_path", ""), cfg["num_hidden_layers"], cfg["hidden_size"], heads,
@@ -77,7 +71,7 @@ class ModelSpec:
 
     @property
     def always_on(self) -> int:
-        """Parameters every token reads regardless of routing (the embedding table is gathered, not streamed)."""
+        """Parameters every token reads regardless of routing; the embedding table is not counted."""
         return self.n_layers * (self.attn_per_layer + self.dense_mlp_per_layer + self.router_per_layer) + self.lm_head
 
     @property
@@ -92,8 +86,7 @@ class ModelSpec:
         return 2 * self.n_layers * self.n_kv_heads * self.head_dim * DTYPE_BYTES[kv_dtype]
 
     def experts_touched(self, tokens: int) -> float:
-        """Expected distinct experts a layer reads for `tokens` routed tokens, uniform routing (the engine can do no
-        better than reading each touched expert once)."""
+        """Expected distinct experts a layer reads for `tokens` routed tokens under uniform routing."""
         if not self.n_experts:
             return 0.0
         return self.n_experts * (1 - (1 - self.top_k / self.n_experts) ** tokens)
@@ -126,8 +119,7 @@ def prefill_floor(m: ModelSpec, hw: Peaks, prompt_tokens: int, w_dtype: str = "b
 
 
 def capacity_batch(m: ModelSpec, hw: Peaks, context: float, w_dtype: str = "bf16", kv_dtype: str = "bf16") -> int:
-    """Sequences of `context` tokens whose KV fits in HBM beside all the weights (no activations or fragmentation:
-    an upper bound)."""
+    """Upper bound on the sequences of `context` tokens whose KV fits in HBM beside all the weights."""
     free = hw.mem_bytes - m.total_params * DTYPE_BYTES[w_dtype]
     return max(0, int(free // (context * m.kv_bytes_per_token(kv_dtype)))) if context > 0 else 1 << 16
 
@@ -155,12 +147,12 @@ def tokens_per_s_ceiling(m: ModelSpec, hw: Peaks, tpot_limit_s: float, context: 
 # -- regime ceilings ------------------------------------------------------------------------
 @dataclass(frozen=True)
 class Shape:
-    """What a regime's requests looked like: the ceiling depends on them."""
+    """The shape of a regime's requests."""
     prompt_tokens_mean: float
     prompt_tokens_p99: float
     output_tokens_mean: float
     concurrency: float = 1.0          # mean sequences in flight
-    uncached_prompt_tokens_mean: float | None = None   # what the server reported it had to prefill; None = unknown
+    uncached_prompt_tokens_mean: float | None = None   # prompt tokens the server reported prefilling; None = unknown
 
 
 def regime_ceiling(objective: str, m: ModelSpec, hw: Peaks, shape: Shape, limits: dict,
@@ -177,10 +169,8 @@ def regime_ceiling(objective: str, m: ModelSpec, hw: Peaks, shape: Shape, limits
         return {"ceiling": f["floor_s"], "better": "lower", "bound": f["bound"],
                 "basis": f"prefill floor at the p99 prompt, {shape.prompt_tokens_p99:.0f} tokens, {w_dtype} weights"}
     if objective in ("goodput_req_per_s", "good_req_per_s"):
-        # each request costs its prefill FLOPs at peak (weights amortised over the batch) plus its output tokens at
-        # the decode ceiling; one GPU-second holds at most 1 / (that) requests
-        # a prefix cache can skip any prompt token, so only what the server reports as uncached counts; when it
-        # reports nothing, prefill is left out and the bound is decode alone (still a true bound, a looser one)
+        # per request: prefill compute of its uncached prompt tokens (0 when unreported) + its output tokens at the
+        # decode ceiling
         tps = tokens_per_s_ceiling(m, hw, limits["tpot_s"], ctx, w_dtype, kv_dtype)
         uncached = shape.uncached_prompt_tokens_mean or 0.0
         prefill_s = prefill_floor(m, hw, int(uncached), w_dtype, kv_dtype)["t_compute_s"] if uncached >= 1 else 0.0

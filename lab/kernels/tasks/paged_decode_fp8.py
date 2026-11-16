@@ -1,6 +1,5 @@
-"""Paged decode attention on fp8 KV pools: the example engine's `paged_decode_attention` with KV_CACHE_DTYPE=fp8, its
-pools float8_e4m3fn at a unit scale (no dequantization factor), q bf16; the kernel widens K/V per element today. Shapes,
-block tables and sequence lengths as `paged_decode`; its calls are captured with KV_CACHE_DTYPE=fp8."""
+"""Paged decode attention on fp8 KV pools: `paged_decode` with k_pool / v_pool float8_e4m3fn at a unit scale, q bf16.
+Its calls are captured with KV_CACHE_DTYPE=fp8."""
 from __future__ import annotations
 
 import torch

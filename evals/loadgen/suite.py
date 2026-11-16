@@ -37,7 +37,7 @@ from .runner import CONVERSATIONAL, INTERACTIVE, Limits, find_goodput, run_close
 TIERS = {"min": {"probe_s": 15.0, "final_s": 30.0}, "short": {"probe_s": 30.0, "final_s": 60.0},
          "full": {"probe_s": 60.0, "final_s": 600.0}}
 MAX_STRETCH = 4.0
-ARRIVALS: Model | None = None       # the fitted timing model, loaded on first use (tests set a small one)
+ARRIVALS: Model | None = None       # the fitted timing model, loaded on first use
 
 
 def arrivals() -> Model:
@@ -51,25 +51,25 @@ def arrivals() -> Model:
 class Ctx:
     url: str
     model: str
-    corpus: str | None = None          # a evals/regimes/ dir; None = synthetic prompts (tests, smoke runs)
-    workload: str | None = None        # a evals/public/ JSONL file instead of the corpus: every regime draws from all of it
+    corpus: str | None = None          # an evals/regimes/ dir; None = synthetic prompts
+    workload: str | None = None        # an evals/public/ JSONL file instead of the corpus
     split: str = "seen"
-    synthetic: bool = False            # every pool generated fresh from the corpus's seen split (evals/loadgen/synth.py)
+    synthetic: bool = False            # every pool generated fresh from the corpus's seen split
     tier: str = "short"
     seed: int = 0
     timeout: float = 600.0
     count_tokens: object = None        # reference tokenizer's encode, to re-count output tokens; None = server usage
     chat_kwargs: dict = field(default_factory=dict)   # the target's chat_template_kwargs
-    min_requests: int = 100            # a probe runs until it holds this many: 99% of fewer means little
-    interactive: Limits = INTERACTIVE  # MLPerf limits; probes must last well beyond the TTFT limit to see overload
+    min_requests: int = 100            # a probe runs until it holds this many
+    interactive: Limits = INTERACTIVE  # MLPerf limits
     conversational: Limits = CONVERSATIONAL
     rows: list | None = None           # when a list, every measured row lands here (no text), tagged with its call
     hints: dict = field(default_factory=dict)   # {regime: {"load" | "concurrency": x}}: where the base's search ended
-    bands: dict = field(default_factory=dict)   # {regime: run-to-run band %}: the search resolves to it, not finer
+    bands: dict = field(default_factory=dict)   # {regime: run-to-run band %}: the search's resolution
     tol: float | None = None                    # the search's relative resolution for every regime, over the bands
     client_procs: int | None = None             # client processes (default: 4 open loop, 1 closed loop)
     client_cpus: list | None = None             # cores the client runs on (Linux), apart from the server's
-    on_rows: object = None             # called with each run_open/run_closed call's rows (evals.agent.live progress)
+    on_rows: object = None             # called with each run_open/run_closed call's rows
     _pools: dict = field(default_factory=dict)
     _calls: int = 0
     _warm: bool = False
@@ -100,8 +100,7 @@ class Ctx:
         return self._pools[cls]
 
     def duration(self, rate: float, final: bool) -> float:
-        """Tier length, stretched to hold `min_requests` at `rate` but never past `MAX_STRETCH` x (a server that
-        needs longer than that is not worth measuring at that load)."""
+        """Tier length, stretched to hold `min_requests` at `rate` but never past `MAX_STRETCH` x."""
         base = self.final_s if final else self.probe_s
         return min(max(base, self.min_requests / rate), base * MAX_STRETCH)
 
@@ -127,8 +126,7 @@ class Ctx:
         return rows
 
     def search(self, regime: str, start: float) -> dict:
-        """find_goodput's start, growth and tolerance for a regime: from the base's result when hinted (steps of two
-        bands), resolved to the regime's noise band when one is known (else 10%)."""
+        """find_goodput's start, growth and tolerance for a regime, from its hint and noise band when known."""
         tol = self.tol or (self.bands.get(regime) or 10.0) / 100
         hint = (self.hints.get(regime) or {}).get("load")
         if not hint:
@@ -148,11 +146,10 @@ WARM_CONCURRENCY = 256
 
 
 def _warmup(ctx: Ctx, pool: list[dict], n: int = 8):
-    """Once per Ctx (one engine launch): the corpus mix closed loop at WARM_CONCURRENCY for a probe's length, at the
-    records' own lengths, so the engine's first measured load is not its first load at that size. Then `n` of this regime's records."""
+    """Once per Ctx, the corpus mix closed loop at WARM_CONCURRENCY for a probe's length; then `n` regime records."""
     if not ctx._warm:
         ctx._warm = True
-        order = random.Random(f"{ctx.seed}:warmup").sample(ctx.pool(None), len(ctx.pool(None)))   # not a regime's order
+        order = random.Random(f"{ctx.seed}:warmup").sample(ctx.pool(None), len(ctx.pool(None)))
         run_closed(ctx.url, ctx.model, W.Cycle(order, "w"), WARM_CONCURRENCY, ctx.probe_s, ctx.timeout,
                    chat_kwargs=ctx.chat_kwargs, procs=ctx.client_procs or 4, cpus=ctx.client_cpus)
     run_closed(ctx.url, ctx.model, [W.to_request(r, max_tokens=32) for r in pool[:n]], 4, None, ctx.timeout,
@@ -166,9 +163,8 @@ def _result(name, objective, value, direction, summary, **extra) -> dict:
 
 
 def _search_and_confirm(measure, search_args: dict) -> tuple[float | None, dict | None, dict]:
-    """find_goodput with measure(load, final=False), then confirm with measure(load, final=True), backing off by the
-    search's resolution up to 5 times; a load that fails its confirmation is a failing load. Returns (confirmed load or
-    None, final summary, the search's bracket and probes)."""
+    """find_goodput with measure(load, final=False), then confirm with measure(load, final=True), backing off on a miss.
+    Returns (confirmed load or None, final summary, the search's bracket and probes)."""
     search = find_goodput(lambda x: measure(x, False), **search_args)
     load, final, step = search["goodput"], None, 1 - search_args.get("rel_tol", 0.1)
     for _ in range(6):
@@ -198,11 +194,8 @@ def _settle_s(reqs: list, limits: Limits) -> float:
 
 def _goodput_regime(ctx: Ctx, name: str, objective: str, build, limits: Limits, per_unit: float = 1.0,
                     ramp_s: float = 0.0) -> dict:
-    """Open-loop goodput: `build(load, duration)` makes the schedule; `per_unit` = requests per unit of load (turns
-    per session for sessions/s). Probes last ctx.probe_s, or longer when needed to hold ctx.min_requests; the search
-    starts at the load that fills one probe. Only requests scheduled in the probe's window are scored, and arrivals
-    run for `ramp_s` + one request's time at the limits (`_settle_s`) before it and that time after it, so every scored
-    request runs under steady load (a 1,024-token answer outlasts a 30 s probe)."""
+    """Open-loop goodput: `build(load, duration)` makes the schedule; `per_unit` = requests per unit of load.
+    Only requests scheduled in the probe's window are scored; arrivals also run before and after it."""
     start = ctx.min_requests / (ctx.probe_s * per_unit)
     settle = _settle_s(build(start, ctx.probe_s), limits)
     lead = ramp_s + settle
@@ -219,17 +212,15 @@ def single_stream(ctx: Ctx) -> dict:
     pool = ctx.pool("steady_interactive")
     _warmup(ctx, pool)
     order = random.Random(ctx.seed).sample(pool, len(pool))
-    rows, elapsed = ctx.run_closed(W.Cycle(order), 1, ctx.final_s, min_requests=ctx.min_requests,   # a p99 of 14 is the slowest of 14
+    rows, elapsed = ctx.run_closed(W.Cycle(order), 1, ctx.final_s, min_requests=ctx.min_requests,
                                    max_s=ctx.final_s * MAX_STRETCH)
     s = summarize(rows, ctx.interactive, elapsed)
     return _result("single_stream", "tpot_p99_s", s["tpot_p99_s"], "lower", s, ttft_p99_s=s["ttft_p99_s"])
 
 
 def saturated(ctx: Ctx, max_concurrency: int = 4096) -> dict:
-    """Doubling concurrency, then bisecting between the last level that meets the limits and the lowest that does not,
-    to the regime's noise band (else 10%); goodput = good req/s at the best level whose requests meet the limits. With
-    a hint the sweep starts at the base's concurrency, halving first while that level fails. `stopped` says why the
-    sweep ended (two failing levels, an invalid level, or `max_concurrency` reached while still passing)."""
+    """Double concurrency, then bisect between the last passing and the lowest failing level; goodput = good req/s at
+    the best passing level. `stopped` says why the sweep ended."""
     pool = ctx.pool(None)
     _warmup(ctx, pool)
     order = random.Random(ctx.seed).sample(pool, len(pool))
@@ -243,14 +234,14 @@ def saturated(ctx: Ctx, max_concurrency: int = 4096) -> dict:
     s = probe(c)
     down = False
     while s["valid"] and not s["meets_limits"] and c > 1 and ctx.hints.get("saturated"):
-        c, down = c // 2, True                     # the base's level fails: halve until one meets the limits
+        c, down = c // 2, True                     # halve until a level meets the limits
         s = probe(c)
     if s["valid"] and s["meets_limits"]:
         best = s
     else:
         misses = 1
 
-    def double(c):                                 # the last step lands on the cap, whatever the start
+    def double(c):                                 # the last step lands on the cap
         return c * 2 if c * 2 <= max_concurrency or c >= max_concurrency else max_concurrency
 
     c = double(c)
@@ -277,7 +268,7 @@ def saturated(ctx: Ctx, max_concurrency: int = 4096) -> dict:
         stopped = "invalid"
     final, best = None, None
     passing = sorted((lv for lv in levels if lv["meets_limits"]), key=lambda lv: -lv["good_req_per_s"])
-    for cand in passing[:3]:                       # confirm at full length; a short probe can flatter a level
+    for cand in passing[:3]:                       # confirm at full length
         rows, elapsed = ctx.run_closed(W.Cycle(order, f"f{cand['concurrency']}"), cand["concurrency"], ctx.final_s)
         final = summarize(rows, ctx.conversational, elapsed)
         if final["meets_limits"] or not final["valid"]:
@@ -290,8 +281,7 @@ def saturated(ctx: Ctx, max_concurrency: int = 4096) -> dict:
 
 
 def _curve(levels: list[dict]) -> list[dict]:
-    """Each probed concurrency's throughput beside its speed per user (1 / median TPOT), as the frontier benchmarks
-    plot it; a level that fails the limits is on it too."""
+    """Each probed concurrency's throughput beside its speed per user (1 / median TPOT)."""
     return [{"concurrency": lv["concurrency"], "output_tok_per_s": lv.get("output_tok_per_s"),
              "tok_per_s_per_user": 1 / lv["tpot_p50_s"] if lv.get("tpot_p50_s") else None,
              "ttft_p50_s": lv.get("ttft_p50_s"), "meets_limits": lv["meets_limits"]}
@@ -299,9 +289,8 @@ def _curve(levels: list[dict]) -> list[dict]:
 
 
 def realistic(ctx: Ctx) -> dict:
-    """The corpus mix as real conversation traffic: sittings at a searched rate (evals/loadgen/arrivals.py), each turn's
-    gap drawn from the real ones, users mid-conversation from t=0. Headline: good requests/s at the highest sitting
-    rate whose requests meet the limits (`sittings_per_s` beside it)."""
+    """The corpus mix as real conversation traffic at a searched sitting rate; headline: good requests/s at the highest
+    rate whose requests meet the limits."""
     pool = ctx.pool(None)
     _warmup(ctx, pool)
     m = arrivals()
@@ -311,21 +300,19 @@ def realistic(ctx: Ctx) -> dict:
 
 
 def offline(ctx: Ctx) -> dict:
-    """Every record of the pool at once, closed loop with as many clients as records (MLPerf's Offline): output
-    tokens/s from the start to the last completion, no latency limit."""
+    """Every record of the pool at once, closed loop with one client per record: output tokens/s, no latency limit."""
     pool = ctx.pool(None)
     _warmup(ctx, pool)
     order = random.Random(ctx.seed).sample(pool, len(pool))
     rows, elapsed = ctx.run_closed(W.Once(order), len(order), None, procs=ctx.client_procs or 4)
     s = summarize(rows, ctx.conversational, elapsed)
-    if s["valid"] and s["error"]:                  # every record is answered, or there is no offline number
+    if s["valid"] and s["error"]:                  # a rejected record invalidates the run
         s = {**s, "valid": False, "invalid_reasons": [f"{s['error']} requests rejected"]}
     return _result("offline", "output_tok_per_s", s["output_tok_per_s"] if s["valid"] else None, "higher", s)
 
 
 def bursty(ctx: Ctx) -> dict:
-    """The spike trace at `speed` x its real request rate over its own span (burst shape kept, `W.scaled`); below full,
-    cropped to the peak window."""
+    """The spike trace at `speed` x its real request rate over its own span; below full, cropped to the peak window."""
     if ctx.workload is not None:
         return {**_result("bursty", "speedup", None, "higher", None),
                 "invalid_reasons": ["a --workload file has no arrival times to replay"]}
@@ -333,7 +320,7 @@ def bursty(ctx: Ctx) -> dict:
     _warmup(ctx, trace)
     window = W.peak_window(trace) if ctx.tier != "full" else None
 
-    def measure(speed, _final):                     # the trace is its own duration; confirming is a rerun
+    def measure(speed, _final):                     # the trace is its own duration
         return summarize(ctx.run_open(W.scaled(trace, speed, window, ctx.seed)), ctx.conversational)
     speed, final, found = _search_and_confirm(measure, ctx.search("bursty", 1.0))
     return _result("bursty", "speedup", speed, "higher", final, **found,
@@ -363,8 +350,7 @@ def short_prompt_long_output(ctx: Ctx) -> dict:
 
 
 def shared_prefix_multi_turn(ctx: Ctx) -> dict:
-    """The pool's conversations as real conversation traffic under one shared system prompt: every turn resends the
-    history so far, so prefixes are shared within a conversation and the system prompt across all."""
+    """The pool's conversations as real traffic under one shared system prompt; every turn resends its history."""
     pool = ctx.pool(None)
     system = W.shared_system_prompt(seed=ctx.seed)
     _warmup(ctx, pool)
@@ -382,9 +368,8 @@ def shared_prefix_multi_turn(ctx: Ctx) -> dict:
 
 
 def overload(ctx: Ctx, factor: float = 2.0, rate: float | None = None) -> dict:
-    """Real conversation traffic (as `realistic`) at `factor` x the sitting rate of its goodput (searched here unless
-    `rate` is given). Valid only if every request either completes or is explicitly rejected: silent drops, truncated
-    streams and no-response are invalid."""
+    """Real conversation traffic at `factor` x the sitting rate of its goodput (searched here unless `rate` is given).
+    Valid only if every request either completes or is explicitly rejected."""
     pool = ctx.pool(None)
     _warmup(ctx, pool)
     m = arrivals()
@@ -413,10 +398,8 @@ PROBE = [{"role": "user", "content": "What is 17 + 25? Reply with the number onl
 
 def cold_start(url: str, model: str, cmd: str, expect: str = "42", timeout_s: float = 1800.0, poll_s: float = 0.25,
                warm: bool = True, log_dir: str | None = None) -> dict:
-    """Launch `cmd` with empty compile caches (fresh VLLM_CACHE_ROOT / TORCHINDUCTOR_CACHE_DIR / TRITON_CACHE_DIR /
-    TORCH_EXTENSIONS_DIR / CUDA_CACHE_PATH; a containerized cmd mounts their parent dir as its own cache),
-    poll until a reply contains `expect`, and report seconds from launch to that first correct token. With `warm`,
-    relaunch on the now-filled caches and report that too. Weights may already be on disk."""
+    """Launch `cmd` with empty compile caches, poll until a reply contains `expect`, report seconds from launch to it.
+    With `warm`, relaunch on the now-filled caches and report that too."""
     cache = tempfile.mkdtemp(prefix="bg-coldstart-")
     env = {**os.environ, "VLLM_CACHE_ROOT": f"{cache}/vllm", "TORCHINDUCTOR_CACHE_DIR": f"{cache}/inductor",
            "TRITON_CACHE_DIR": f"{cache}/triton", "TORCH_EXTENSIONS_DIR": f"{cache}/torch_extensions",
@@ -469,7 +452,7 @@ def _launch_once(url, model, cmd, env, expect, timeout_s, poll_s, log_dir, label
     return res
 
 
-# What each regime sends and what it reports, in the words the agent's objective uses (lab/prompts/objective.md).
+# What each regime sends and reports, in the objective's words.
 REAL_TRAFFIC = ("real conversation traffic (evals/loadgen/arrivals.json, fitted from BurstGPT's conversation log): sittings "
                 "start as a Poisson process at the load's rate, each a run of turns of one conversation (a resumed one "
                 "carries its history) with the gap to the next turn drawn from the real gaps by turn, users "

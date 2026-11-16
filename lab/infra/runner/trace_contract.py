@@ -14,8 +14,8 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 TERMINAL_STATES = frozenset({"ok", "rejected_429", "rejected_400", "expired", "preempted", "error",
                              "cancelled", "aborted"})
-EPOCH_MIN = 946_684_800.0           # 2000-01-01: anything smaller is a monotonic reading, not epoch seconds
-MAX_DURATION_S = 86_400.0           # a request longer than a day is a unit error (ms or ns)
+EPOCH_MIN = 946_684_800.0           # 2000-01-01 in epoch seconds; the least valid arrival_ts
+MAX_DURATION_S = 86_400.0           # one day; the longest valid duration
 TPOT_RTOL = 1e-3
 
 REQUIRED = {"schema_version": int, "trace_id": str, "arrival_ts": float, "terminal_state": str,

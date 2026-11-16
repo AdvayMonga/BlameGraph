@@ -1,7 +1,6 @@
-"""Every measured number with its context: % of the physical ceiling (lab/infra/context/ceiling.py on measured peaks), % of
-the reference engine measured the same way, and for parts of a step their share of the whole and the Amdahl gain.
-A ceiling or a reference is only shown when its config fingerprint matches the measurement's; otherwise the field
-says why it is missing. Facts for the agent, never a judgement."""
+"""A measured number with its context: % of the physical ceiling, % of the reference engine, and for parts of a step
+their share of the whole. A ceiling or reference appears only under a matching config fingerprint; else the field says
+why it is missing."""
 from __future__ import annotations
 
 import csv
@@ -40,16 +39,14 @@ def model_spec(t: target.Target) -> ModelSpec | None:
 
 
 def dtypes(t: target.Target) -> tuple[str, str]:
-    """The weight and KV dtypes the target declares (`[model] dtype`, `kv_dtype`; bf16 when unset). The lab cannot see
-    what the agent's engine actually runs, so a quantized engine is measured against these declared ceilings."""
+    """The weight and KV dtypes the target declares (`[model] dtype`, `kv_dtype`; bf16 when unset)."""
     m = t.raw.get("model") or {}
     w = ceiling.dtype(m.get("dtype", "bf16"))
     return w, ceiling.dtype(m.get("kv_dtype", w))
 
 
 def perf_reference(t: target.Target) -> target.Server | None:
-    """The reference server as a performance comparison: the correctness reference without its determinism switches
-    (batch-invariant vLLM, deterministic SGLang), which are slower by design."""
+    """The reference server without its determinism switches; None when the target has no reference."""
     import dataclasses
     if t.reference is None:
         return None
@@ -69,8 +66,7 @@ def fingerprint(t: target.Target, gpu: dict | None, tier: str, split: str, seed:
 
 
 def same_config(a: dict, b: dict) -> list[str]:
-    """The fingerprint keys that differ (empty = comparable). Driver, clocks and seed are reported, not required:
-    the seed picks a sample of the same split, it does not change what is measured."""
+    """The fingerprint keys that differ (empty = comparable); driver, clocks and seed are not compared."""
     return [k for k in FINGERPRINT_KEYS if a.get(k) != b.get(k)]
 
 
@@ -99,7 +95,7 @@ def reference_path(t: target.Target, regime: str) -> Path:
 
 
 def write_reference(t: target.Target, regime: str, result: dict, fp: dict, rows: list[dict] | None = None) -> Path:
-    """One regime of the reference server, measured by the same clients, stored with its fingerprint."""
+    """Store one regime's reference result with its fingerprint; returns the file."""
     p = reference_path(t, regime)
     p.parent.mkdir(parents=True, exist_ok=True)
     srv = perf_reference(t)
@@ -129,8 +125,8 @@ def reference_for(t: target.Target, regime: str, fp: dict) -> tuple[float | None
 # -- regime results ----------------------------------------------------------------------------
 def calibrate_results(results: list[dict], rows: list[dict], t: target.Target, gpu: dict | None, tier: str,
                       split: str, seed: int | None = None) -> dict:
-    """{regime: {value, ceiling, pct_of_ceiling, reference, pct_of_reference, ...}} for a bench's results. Never
-    raises: a calibration that fails says why instead of costing the measurement it describes."""
+    """{regime: {value, ceiling, pct_of_ceiling, reference, pct_of_reference, ...}} for a bench's results.
+    Never raises: a failure is returned as {"error": ...}."""
     try:
         return _calibrate_results(results, rows, t, gpu, tier, split, seed)
     except Exception as e:                       # noqa: BLE001
@@ -177,7 +173,7 @@ def _calibrate_results(results, rows, t, gpu, tier, split, seed):
 
 # -- kernels and steps from a profile bundle -----------------------------------------------------
 def calibrate_kernels(bundle: Path, gpu: dict | None, top: int = 30) -> dict | None:
-    """From a torch-profiler bundle: each kernel's share of the profiled window (the Amdahl denominator)."""
+    """From a torch-profiler bundle: each kernel's share of the profiled window."""
     kj, meta = bundle / "kernels.json", bundle / "meta.json"
     if not kj.exists() or not meta.exists():
         return None
@@ -236,7 +232,7 @@ def _nsys_rows(path: Path, name: str, top: int) -> tuple[float, int, list[dict]]
 
 def calibrate_nsys(out: Path, ranged: bool, top: int = 15) -> dict | None:
     """From a `trace` output dir (`nsys stats` CSVs): GPU kernel time, launches and memory-copy time, each kernel's
-    and CUDA API call's total, and their share of lab.profile.profile's window when the trace covered only that window."""
+    and CUDA API call's total, and their share of the profiled window when the trace covered only that window."""
     kern = out / "stats_cuda_gpu_kern_sum.csv"
     if not kern.exists():
         return None
@@ -301,7 +297,7 @@ def _num(s) -> float | None:
 
 
 def facts(t: target.Target, gpu: dict | None) -> dict:
-    """The ceiling machinery's inputs, for the brief: peaks, the model's streamed bytes, and the single-stream floors."""
+    """The ceilings' inputs for the brief: peaks, the model's streamed bytes, and the single-stream floors."""
     spec, (w, kv) = model_spec(t), dtypes(t)
     hw = peaks.load(gpu["name"], gpu.get("driver_version")) if gpu and gpu.get("name") else None
     out: dict = {"peaks": hw.__dict__ if hw else None, "model": None}

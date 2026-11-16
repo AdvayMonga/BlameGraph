@@ -1,11 +1,7 @@
 """python -m lab.kernels.tasks.hold --task region:FIRST:LAST --samples DIR --out HOLDER.pkl
 
-A region's GPU-host side, for a search whose controller cannot load it (lab/kernels/tasks/pipeline.py): loads the engine as it
-serves (its target's env, a token K/V pool, no CUDA graphs), shares the region's weights from this process
-(kernels/shared_weights.Holder: the layers of `regions.LAYERS`, each as "L<i>.w.*", for a stretch of stations; every layer's and the head's
-for the decode step), then loads the task from its samples (a packed capture dir, kernels/pipeline.pack) and the
-holder, and prints one JSON line: the holder file, its shapes split seen / held-out with the held-out axes, the
-starting program and the engine's station names. It keeps the weights shared until its stdin closes."""
+A region's GPU-host side: loads the engine, shares the region's weights, prints one JSON line describing the task,
+and keeps the weights shared until its stdin closes."""
 from __future__ import annotations
 
 import argparse
@@ -32,8 +28,7 @@ def held(name: str, model) -> tuple[dict, dict]:
 
 
 def describe(name: str, samples: Path, holder: Path) -> dict:
-    """The region as the controller needs it: shapes from every traffic's calls in `samples` (each weighing the same),
-    split seen / held-out, with the held-out axes and the captured ints; the starting program; the station names."""
+    """The region as the controller needs it: {holder, samples, start, shapes, stations}."""
     from lab.kernels.tasks import regions, shapes
     from lab.kernels.evolve.run import initial_program
     from lab.kernels.tasks import load
@@ -48,7 +43,7 @@ def describe(name: str, samples: Path, holder: Path) -> dict:
                                       *name.split(":")[1:3])]
     sets = {**shapes.split(task, counts), "ints": shapes.ints_from_captures(task, caps),
             "sources": shapes.sources_from_captures(task, caps), "heldout_axes": list(task.heldout_axes),
-            "stations": names}                   # the controller's prompt shows the libraries implementing them
+            "stations": names}
     return {"holder": str(holder), "samples": str(samples), "start": initial_program(task),
             "shapes": {k: [list(s) for s in v] if k in ("seen", "heldout") else v for k, v in sets.items()},
             "stations": names}
@@ -75,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     h = Holder(tensors, out, consts, jail_uid=container.user()[0])
     sys.stdout.write(json.dumps(describe(a.task, Path(a.samples), h.path)) + "\n")
     sys.stdout.flush()
-    sys.stdin.read()                             # shared until the controller closes our stdin
+    sys.stdin.read()                             # hold until stdin closes
     return 0
 
 

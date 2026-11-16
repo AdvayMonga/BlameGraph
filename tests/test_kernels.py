@@ -1,5 +1,4 @@
-"""Kernel equivalence on RMSNorm: a correct candidate passes; each kind of broken or cheating kernel is caught.
-Run: python tests/test_kernels.py  (CPU always; correctness tests also on MPS when available)"""
+"""Kernel equivalence on RMSNorm: a correct candidate passes; each broken or cheating kernel is caught."""
 from __future__ import annotations
 
 import sys
@@ -151,7 +150,7 @@ def test_content_memoization_flagged_by_timing():
 def test_a_call_that_writes_an_input_after_computing_fails_the_timing():
     from lab.kernels.eval import time_pair
 
-    def bumps(x, w):                             # right answer, then an input changed to slow the other call down
+    def bumps(x, w):                             # right answer, then an input changed
         out = reference(x, w)
         w.add_(1)
         return out
@@ -181,7 +180,7 @@ if __name__ == "__main__":
 
 def test_poison_marks_a_non_contiguous_input():
     from lab.kernels.eval.check import _poison
-    q = torch.zeros(2, 3, 4).transpose(1, 2)          # a transposed q, as the prefill stations pass it
+    q = torch.zeros(2, 3, 4).transpose(1, 2)          # a transposed q
     _poison([q])
     flat = q.contiguous().view(-1)
     assert torch.isnan(flat[0]) and torch.isposinf(flat[12]) and torch.isneginf(flat[-1])

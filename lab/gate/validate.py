@@ -1,21 +1,9 @@
-"""Does the harness mean anything on *this* target? Run once per model + hardware, before trusting a verdict.
+"""Validate the harness on one target: reference outputs, gate separation on known-good and -bad launches, noise bands.
 
   lab validate --target T [--tier dev] [--noise-runs 3] [--regimes a,b] [--out DIR]
 
-1. Serves the target's reference and writes the reference outputs (`correctness reference`) to reference.dir.
-2. Serves each launch in the target's [validation] good and bad tables, judges it (`correctness candidate`), and
-   checks the gate separates them: every good must PASS, every bad must FAIL (inconclusive counts as neither).
-3. Serves the target's *engine* (the base commit, from its repo) and runs the chosen regimes `noise_runs` times on
-   the seen split at bench's tier, its load searches resolved to RESOLUTION_PCT (a searched regime's band is never
-   below it), to measure each regime's run-to-run band on the thing submit will judge; writes
-   a `noise` ledger record per regime (tagged with the target, `server: engine` and the engine commit, None when its
-   tree had uncommitted changes), which `submit` reads for runs on that base commit only.
-Exit status 0 only if the gate separated and every band was measured. Nothing here is jailed: these are the
-operator's own launches, not the agent's.
-
-    [validation]
-    good = { fp8 = "vllm serve Qwen/Qwen3-30B-A3B-FP8 --served-model-name Qwen/Qwen3-30B-A3B --port {port}" }
-    bad  = { int4 = "vllm serve Qwen/Qwen3-30B-A3B-GPTQ-Int4 --served-model-name Qwen/Qwen3-30B-A3B --port {port}" }
+The launches come from the target's [validation] `good` and `bad` tables; exit status 0 only if the gate separated
+them and every band was measured.
 """
 
 from __future__ import annotations
@@ -35,7 +23,7 @@ from lab.targets import engine, target
 from lab.evaltools import BENCH_TIER
 
 
-RESOLUTION_PCT = 5.0    # the noise runs' load searches resolve to this; a searched regime's band is never below it
+RESOLUTION_PCT = 5.0    # percent the noise runs' load searches resolve to; the floor of a searched regime's band
 
 
 def band_pct(values: list[float], floor: float = 0.0) -> float | None:
@@ -72,7 +60,7 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
     if t.reference is None or t.reference_dir is None:
         raise SystemExit("the target has no [reference] launch and dir")
     ref_dir = t.reference_dir_for(tier)
-    # 1. reference (meta.json is written last: its absence means an interrupted run, redone from the cached answers)
+    # 1. reference
     if not target.reference_complete(ref_dir):
         with serve.Served(target.ENV_ROOT, t.reference, log=log_dir / "serve-reference.log", jailed=False) as srv:
             api = client.Api.from_target(t.reference, t)
@@ -92,7 +80,7 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
     bads = [c for c in report["candidates"].values() if c["kind"] == "bad"]
     report["gate_separates"] = (bool(goods) and bool(bads) and all(c["verdict"] == "pass" for c in goods)
                                 and all(c["verdict"] == "fail" for c in bads))
-    # 3. noise bands from repeated unchanged runs of the engine itself (what submit compares against)
+    # 3. noise bands from repeated runs of the engine
     names = regimes or list(suite.REGIMES)
     if noise_runs > 0 and names:
         with serve.Served(t.engine_repo, t.engine, log=log_dir / "serve-noise.log", jailed=False) as srv:
@@ -105,13 +93,13 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
                     values[n].append(r["value"] if r["valid"] else None)
                     if r.get("probes") or r.get("levels"):
                         searched.add(n)
-            srv.exclusive()                     # a band from a shared GPU would skew every submit
+            srv.exclusive()
         for n in names:
             report["noise"][n] = write_noise(n, values[n], t, {"tier": BENCH_TIER, "split": "seen",
                                                                 "engine_commit": engine.commit(t.engine_repo, clean=True)}, root,
                                              RESOLUTION_PCT if n in searched else 0.0)
     report["bands_measured"] = all(d["band_pct"] is not None for d in report["noise"].values()) if names and noise_runs else None
-    # 4. the reference engine under the same regimes, once, without its determinism switches: what every bench is shown next to
+    # 4. the reference engine under the same regimes, once
     if reference_regimes and names:
         with serve.Served(target.ENV_ROOT, calibrate.perf_reference(t), log=log_dir / "serve-reference-regimes.log",
                           jailed=False) as srv:

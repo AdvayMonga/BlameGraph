@@ -21,7 +21,7 @@ from lab.infra.sandbox.surfaces import ALWAYS_DENY, HIDDEN, deps_only, may_write
 
 IGNORED = ("*/__pycache__/*", "__pycache__/*", "*.pyc", ".pytest_cache/*", "*/.pytest_cache/*",
            ".ruff_cache/*", "*/.ruff_cache/*", "*.egg-info/*", ".DS_Store", "*/.DS_Store",
-           "lab/runs/*")          # profile bundles the tool copies in for the agent to read; often > MAX_FILE_BYTES
+           "lab/runs/*")          # profile bundles copied in for the agent to read
 MAX_FILE_BYTES = 5_000_000
 HF_HUB = Path.home() / ".cache" / "huggingface" / "hub"   # weights only; the token beside it stays unreadable
 
@@ -84,11 +84,8 @@ def base_files(repo: Path, base: str) -> frozenset[str]:
 
 def audit(repo: Path, base: str, workspace: Path) -> Audit:
     """Every difference between `workspace` and `base`, and which ones the agent may not make.
-
-    Integrity failures are violations: symlinks, hidden files, evaluator config, and any change or
-    deletion of a protected file. A new file outside the surface is scratch: it never reaches the
-    pristine tree, and running the engine in the workspace is allowed to leave it behind.
-    """
+    Violations: symlinks, hidden files, evaluator config, a changed or deleted protected file. A new file outside the
+    surface is scratch."""
     blobs = _base_blobs(repo, base)
     a, seen = Audit(), set()
     for root, dirs, files in os.walk(workspace):
@@ -99,7 +96,7 @@ def audit(repo: Path, base: str, workspace: Path) -> Audit:
                 continue
             if _scratch(rel, blobs) and (p.is_symlink() or not (p.is_dir() or p.is_file())
                                          or (p.is_file() and p.stat().st_size > MAX_FILE_BYTES)):
-                a.scratch.append(rel)               # never reaches the pristine tree: a venv's links, big wheels
+                a.scratch.append(rel)               # left out of the pristine tree
                 continue
             if p.is_symlink():
                 a.violations.append(f"symlink: {rel}")
@@ -141,7 +138,7 @@ def audit(repo: Path, base: str, workspace: Path) -> Audit:
 
 
 def _scratch(rel: str, blobs: dict) -> bool:
-    """Outside what the agent may write and not a base file: left out of every tree, whatever it is."""
+    """Whether `rel` is outside what the agent may write and not a base file."""
     return (rel not in blobs and not may_write(rel, new_file=True)
             and not any(fnmatch(rel.lower(), p.lower()) for p in ALWAYS_DENY + HIDDEN))
 
@@ -201,7 +198,7 @@ def _engine_path() -> str:
 
 
 def run_lint(tree: Path) -> Run:
-    """The target's lint command, with the engine's python first on PATH; static, so it needs no jail."""
+    """Run the target's lint command, unjailed, with the engine's python first on PATH."""
     proc = subprocess.run(_argv(target.load().lint), cwd=tree, capture_output=True, text=True,
                           env={**os.environ, "PATH": _engine_path()})
     return Run(proc.returncode == 0, proc.returncode, (proc.stdout + proc.stderr)[-5000:])
@@ -236,13 +233,13 @@ def _jail_argv(tree: Path, argv: list[str], env_extra: dict | None, domains, loc
         return wrapped, cli_env, tmp, name
     config = jail.settings([tree.resolve(), tmp], engine.venv(), list(domains), readonly=readonly,
                            python=engine.python(), local_binding=local_binding)
-    # srt sets TMPDIR to a dir that does not exist inside bwrap (nsys and ncu then refuse to start): restate ours.
+    # restate TMPDIR: srt overrides it
     return jail.wrap(config, tree.with_suffix(f"{tag}.srt.json"), ["env", f"TMPDIR={tmp}", *argv]), env, tmp, None
 
 
 def jailed_popen(tree: Path, argv: list[str], *, env_extra: dict | None = None, stdout=None, stderr=None,
                  local_binding: bool = True, port: int | None = None):
-    """A long-running jailed process (a served engine) in its own session, reachable on the host's 127.0.0.1:`port`.
+    """A long-running jailed process in its own session, reachable on the host's 127.0.0.1:`port`.
     Returns (proc, tmp dir to remove, stop, pids): `stop` removes what lives outside proc's process group; `pids()`
     is every host pid the jail runs."""
     wrapped, env, tmp, name = _jail_argv(tree, argv, env_extra, (), local_binding, tag=".serve", port=port)
@@ -262,8 +259,8 @@ def jailed(tree: Path, argv: list[str], *, timeout_s: float, env_extra: dict | N
            domains: list[str] = (), read: list[Path] = (), memory: str | None = None,
            gpu: bool | None = None, ipc_host: bool = False, on_start=None) -> subprocess.CompletedProcess:
     """Run `argv` in `tree` as agent code: wiped env, jail around the tree and a private tmp, weights and `read`
-    read-only; `memory` caps the container jail's host RAM (docker's syntax, e.g. "32g"); `gpu=False` attaches no
-    GPU to the container jail; `on_start(pids)` is called once it runs, `pids()` = every host pid of the jail."""
+    read-only. `memory` caps the container's host RAM (e.g. "32g"); `gpu=False` attaches no GPU; `on_start(pids)` is
+    called once it runs, `pids()` = every host pid of the jail."""
     wrapped, env, tmp, name = _jail_argv(tree, argv, env_extra, domains, read=read, memory=memory, gpu=gpu,
                                          ipc_host=ipc_host)
     try:
@@ -275,11 +272,11 @@ def jailed(tree: Path, argv: list[str], *, timeout_s: float, env_extra: dict | N
         try:
             out, err = proc.communicate(timeout=timeout_s)
         except subprocess.TimeoutExpired:
-            proc.kill()                         # wait, not communicate: a left-behind child may hold the pipes
+            proc.kill()                         # wait, not communicate: a child may hold the pipes
             proc.wait()
             raise
         return subprocess.CompletedProcess(wrapped, proc.returncode, out, err)
-    except subprocess.TimeoutExpired as e:     # a hung suite is a failed run, recorded like any other
+    except subprocess.TimeoutExpired as e:     # a timeout is returned as a failed run
         out = (e.stdout or b"")
         return subprocess.CompletedProcess(argv, -9, out.decode(errors="replace") if isinstance(out, bytes) else out,
                                            f"timed out after {timeout_s:.0f}s")
@@ -290,6 +287,6 @@ def jailed(tree: Path, argv: list[str], *, timeout_s: float, env_extra: dict | N
 
 
 def run_tests(tree: Path, timeout_s: float = 1800) -> Run:
-    """The fast suite on a pristine tree, inside the jail: its code is the agent's."""
+    """Run the target's test command on a pristine tree, inside the jail."""
     proc = jailed(tree, _argv(target.load().test), timeout_s=timeout_s)
     return Run(proc.returncode == 0, proc.returncode, (proc.stdout + proc.stderr)[-5000:])

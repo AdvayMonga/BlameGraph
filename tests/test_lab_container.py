@@ -48,7 +48,7 @@ def test_bridge_wraps_the_command_and_keeps_it_last(docker_named, tmp_path):
     a = container.argv("n", tmp_path, ["python", "-m", "srv"], {}, [tmp_path / "t"], [], sys.executable,
                        bridge_port=8123)
     assert a[-3:] == ["python", "-m", "srv"] and "TCP:127.0.0.1:8123" in a[a.index(container.IMAGE) + 3]
-    assert f"backlog={container.BACKLOG}" in a[a.index(container.IMAGE) + 3]      # socat's default 5 reset a burst
+    assert f"backlog={container.BACKLOG}" in a[a.index(container.IMAGE) + 3]      # socat's backlog
 
 
 def test_the_host_side_of_the_bridge_queues_a_burst_of_connections(tmp_path, monkeypatch):
@@ -244,7 +244,7 @@ def test_the_host_ipc_namespace_only_when_asked_and_only_for_a_root_lab(docker_n
 def test_every_shm_entry_of_the_jails_user_is_removed_by_a_root_lab_only(tmp_path, monkeypatch):
     (tmp_path / "torch_123_answers").write_text("cached outputs")
     (tmp_path / "dir").mkdir()
-    container.clear_shm(tmp_path)                            # not root: the jail would share the lab's uid
+    container.clear_shm(tmp_path)                            # not root
     assert len(list(tmp_path.iterdir())) == 2
     monkeypatch.setattr(container.os, "getuid", lambda: 0)
     monkeypatch.setattr(container, "JAIL_UID", os.getuid() + 1)
@@ -256,8 +256,7 @@ def test_every_shm_entry_of_the_jails_user_is_removed_by_a_root_lab_only(tmp_pat
 
 
 def test_the_toolkit_is_also_mounted_at_usr_local_cuda_and_cuda_home_is_set(tmp_path, monkeypatch):
-    """A toolkit that /usr/local/cuda links to is mounted at both paths, and jails get CUDA_HOME, so JIT builds
-    (the engine's megakernel, flashinfer) find nvcc inside."""
+    """A toolkit that /usr/local/cuda links to is mounted at both paths, and jails get CUDA_HOME."""
     real = tmp_path / "cuda-13.0"
     (real / "bin").mkdir(parents=True)
     link = tmp_path / "cuda"

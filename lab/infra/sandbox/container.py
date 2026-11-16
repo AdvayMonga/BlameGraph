@@ -1,11 +1,7 @@
-"""The Linux jails. A measurement room: one container per jailed command (NVIDIA runtime for the
-GPU), no network at all, read-only root, non-root user, no capabilities; a served engine's port reaches the host
-through a socket bridge. The agent's workbench: one container per session with the GPU, the internet and root
-inside it (writable system dirs, Docker's default capabilities), paused by `quiet` while anything is measured.
-`ipc_host` (a judgment attaching shared weights) gives the jail the host's IPC namespace: its /dev/shm and SysV shared
-memory, semaphores and queues. Only a root lab may grant it (the jail then runs as JAIL_UID), and `clear_shm` removes
-every /dev/shm entry the jail's user owns, so nothing carries over to a later judgment (SysV objects are not
-covered)."""
+"""The Linux jails. A measurement room: one container per jailed command, no network, read-only root, non-root user,
+no capabilities; a served engine's port reaches the host through a socket bridge. The agent's workbench: one container
+per session with the GPU, the internet and root inside, paused by `quiet` while anything is measured.
+`ipc_host` gives a jail the host's IPC namespace (root lab only); `clear_shm` removes its user's /dev/shm entries."""
 
 from __future__ import annotations
 
@@ -21,11 +17,10 @@ from pathlib import Path
 
 IMAGE = os.environ.get("LAB_JAIL_IMAGE", "lab-jail")
 DOCKERFILE = Path(__file__).parent / "jail.Dockerfile"
-# socat's own listen backlog is 5, which resets connections opened together; the kernel caps it at net.core.somaxconn.
-BACKLOG = 4096
+BACKLOG = 4096               # socat's listen backlog
 JAIL_UID = 10001             # the jail's user when the lab runs as root; otherwise the lab's own uid
-CLIENT_CORES = 4             # kept out of every jail's cpuset so the measurement clients cannot be starved
-SYSTEM_PREFIXES = {Path("/"), Path("/usr"), Path("/usr/local")}   # the image has its own; never mounted over it
+CLIENT_CORES = 4             # cores kept out of every jail's cpuset, for the measurement clients
+SYSTEM_PREFIXES = {Path("/"), Path("/usr"), Path("/usr/local")}   # never mounted into a jail
 BRIDGE = "bridge.sock"
 SHM = Path("/dev/shm")
 
@@ -53,7 +48,7 @@ def user() -> tuple[int, int]:
 
 
 def give(paths: list[Path]) -> None:
-    """Running as root, hand the writable paths to the jail's user so nothing in the jail runs as root."""
+    """Running as root, chown the writable paths to the jail's user."""
     if os.getuid() != 0:
         return
     for root in paths:
@@ -62,7 +57,7 @@ def give(paths: list[Path]) -> None:
 
 
 def clear_shm(shm: Path = SHM) -> None:
-    """After a jail run with `ipc_host`: remove every entry in `shm` owned by the jail's user (root lab only)."""
+    """Remove every entry in `shm` owned by the jail's user (root lab only)."""
     if os.getuid() != 0 or not shm.is_dir():
         return
     for f in shm.iterdir():
@@ -82,7 +77,7 @@ CUDA = Path("/usr/local/cuda")
 
 
 def mounts(writable: list[Path], readonly: list[Path], python: str) -> list[str]:
-    """Bind mounts at the same absolute paths, so argv and env mean the same inside; interpreter dirs read-only."""
+    """Bind mounts at the same absolute paths inside; interpreter dirs read-only."""
     interpreter = {Path(sys.base_prefix).resolve(), Path(python).resolve().parent.parent}
     ro = [p for p in [*readonly, *sorted(interpreter)] if p.exists() and p.resolve() not in SYSTEM_PREFIXES]
     if CUDA.exists():
@@ -93,15 +88,13 @@ def mounts(writable: list[Path], readonly: list[Path], python: str) -> list[str]
     for p in dict.fromkeys(q.resolve() for q in ro):
         args += ["--mount", f"type=bind,src={p},dst={p},readonly"]
     if CUDA.exists() and CUDA.resolve() != CUDA:
-        # also at /usr/local/cuda, where torch's cpp_extension and flashinfer look by default: mounted only at its
-        # resolved path (/usr/local/cuda-13.0), the engine's megakernel does not build and every flashinfer JIT raises
-        # "Could not find nvcc" inside the serve jail
+        # also at /usr/local/cuda, the default nvcc lookup path
         args += ["--mount", f"type=bind,src={CUDA.resolve()},dst={CUDA},readonly"]
     return args
 
 
 def cuda_env() -> dict[str, str]:
-    """CUDA_HOME for JIT builds inside a jail (torch extensions, flashinfer), when the host has the toolkit."""
+    """CUDA_HOME for JIT builds inside a jail, when the host has the toolkit."""
     return {"CUDA_HOME": str(CUDA)} if CUDA.exists() else {}
 
 
@@ -120,11 +113,11 @@ def argv(name: str, workdir: Path, command: list[str], env: dict[str, str], writ
            "--label", "lab.jail=1"]
     if gpus() if gpu is None else gpu:
         out += ["--gpus", "all"]
-    if ipc_host:                                 # CUDA IPC from a holder on the host (lab/kernels/tasks/shared_weights.py)
+    if ipc_host:                                 # the host's IPC namespace
         out += ["--ipc", "host"]
     if (cpus := cpuset()):
         out += ["--cpuset-cpus", cpus]
-    if memory:                                   # host RAM for the container, swap included (its /tmp and shm too)
+    if memory:                                   # host RAM cap, swap included
         out += ["--memory", memory, "--memory-swap", memory]
     for k, v in {**cuda_env(), **env}.items():
         out += ["--env", f"{k}={v}"]
@@ -140,8 +133,8 @@ def argv(name: str, workdir: Path, command: list[str], env: dict[str, str], writ
 
 def workbench_argv(name: str, workdir: Path, command: list[str], env: dict[str, str], writable: list[Path],
                    readonly: list[Path], python: str) -> list[str]:
-    """`docker run -i` for the agent's CLI: stdio stays the SDK's, the default bridge network gives the internet,
-    root inside when the lab runs as root (otherwise the lab's uid, so the workspace stays the lab's)."""
+    """`docker run -i` for the agent's CLI on the default bridge network; root inside when the lab runs as root,
+    else the lab's uid."""
     uid, gid = (0, 0) if os.getuid() == 0 else (os.getuid(), os.getgid())
     out = [_docker(), "run", "-i", "--rm", "--init", "--name", name, "--security-opt", "no-new-privileges",
            "--pids-limit", "16384", "--shm-size", "16g", "--user", f"{uid}:{gid}", "--workdir", str(workdir.resolve()),
@@ -156,7 +149,7 @@ def workbench_argv(name: str, workdir: Path, command: list[str], env: dict[str, 
 
 
 def bridge_gateway() -> str:
-    """The host's address on Docker's default bridge: what a workbench reaches the host at, and nothing outside."""
+    """The host's address on Docker's default bridge."""
     out = subprocess.run([_docker(), "network", "inspect", "bridge", "-f", "{{(index .IPAM.Config 0).Gateway}}"],
                          capture_output=True, text=True, check=True)
     return out.stdout.strip()
@@ -207,15 +200,15 @@ def paused(name: str | None):
 
 @contextmanager
 def quiet(name: str | None):
-    """The workbench paused for a measurement: processes in it holding the GPU are killed (and listed), the rest
-    frozen; thawed after. A no-op when there is no such running container."""
+    """Pause the workbench for the block: its processes holding the GPU are killed (and yielded), the rest frozen,
+    then thawed. A no-op when there is no such running container."""
     if not name or _docker() is None or not running(name):
         yield []
         return
     from lab.profile import gpu
     killed = _kill_gpu_holders(name)
     with paused(name):
-        killed += _kill_gpu_holders(name)            # anything that took the GPU before the pause landed
+        killed += _kill_gpu_holders(name)            # holders that appeared before the pause
         deadline = time.monotonic() + 15
         while killed and time.monotonic() < deadline and any(
                 a["pid"] in {k["pid"] for k in killed} for a in gpu.compute_apps() or []):
@@ -239,7 +232,7 @@ def remove(name: str) -> None:
 
 
 class Bridge:
-    """Host side: 127.0.0.1:port on the host forwarded to the jail's socket. Only host processes can reach it."""
+    """Host side: the host's 127.0.0.1:port forwarded to the jail's socket."""
 
     def __init__(self, port: int, sock: Path):
         self.proc = subprocess.Popen(["socat", f"TCP-LISTEN:{port},bind=127.0.0.1,reuseaddr,fork,backlog={BACKLOG}",

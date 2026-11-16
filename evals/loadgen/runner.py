@@ -1,9 +1,5 @@
-"""Drive a server with a workload and summarize it against latency limits.
-
-open loop    every request fires at its scheduled time whatever the server is doing (queues can grow)
-closed loop  a fixed number of clients, each sending its next request when the last one finishes
-goodput      the highest load at which >= 99% of requests meet both the TTFT and the TPOT limit
-"""
+"""Drive a server with a workload, open loop (requests fire on schedule) or closed loop (a fixed number of clients),
+and summarize it against latency limits; goodput is the highest load at which ATTAINMENT of requests meet both."""
 from __future__ import annotations
 
 import asyncio
@@ -19,8 +15,8 @@ from typing import Callable
 
 from .client import Request, Row, asend, recount, send
 
-MAX_CLIENT_LAG_S = 0.010     # p99 send lag above this means the client, not the server, was the bottleneck
-MAX_CLIENT_CPU = 0.8         # a closed-loop client process busier than this (CPU / wall) may have read streams late
+MAX_CLIENT_LAG_S = 0.010     # p99 send lag limit, seconds
+MAX_CLIENT_CPU = 0.8         # CPU / wall limit of a closed-loop client process
 ATTAINMENT = 0.99            # goodput: share of requests that must meet both limits
 
 
@@ -30,16 +26,14 @@ class Limits:
     tpot_s: float
 
 
-INTERACTIVE = Limits(0.5, 0.030)      # MLPerf Llama-3.1-8B interactive, checked at p99
-CONVERSATIONAL = Limits(2.0, 0.100)   # MLPerf Llama-3.1-8B conversational, checked at p99
+INTERACTIVE = Limits(0.5, 0.030)      # MLPerf interactive limits, checked at p99
+CONVERSATIONAL = Limits(2.0, 0.100)   # MLPerf conversational limits, checked at p99
 
 
 def run_open(url: str, model: str, requests: list[Request], timeout: float = 600, count_tokens=None,
              procs: int = 4, chat_kwargs: dict | None = None, cpus: list[int] | None = None) -> list[Row]:
-    """Fire each request at its `at_s`; returns one row per request in input order. The schedule is dealt
-    round-robin to `procs` client processes on one shared start time, so parsing many concurrent streams can't
-    starve the sender of interpreter time (the per-request lag check would void the run). `cpus`: the cores the
-    client processes run on (Linux), apart from the server's."""
+    """Fire each request at its `at_s` from `procs` client processes on one shared start; rows are in input order.
+    `cpus`: the cores the client processes run on (Linux)."""
     order = sorted(range(len(requests)), key=lambda i: requests[i].at_s)
     procs = max(1, min(procs, len(requests)))
     if procs == 1:
@@ -60,8 +54,7 @@ def _pin(cpus: list[int] | None):
 
 
 def _spawn(jobs: list[tuple], cpus: list[int] | None) -> list[list[Row]]:
-    """Each (fn, args, kw) in its own client process, all started together: fn(*args, t0, **kw) on one shared
-    perf_counter start t0 (CLOCK_MONOTONIC is system-wide, so processes agree on it). Returns each job's rows."""
+    """Each (fn, args, kw) in its own process as fn(*args, t0, **kw) on one shared start t0; returns each job's rows."""
     ctx = mp.get_context("spawn")
     ready, results, go, t0 = ctx.Queue(), ctx.Queue(), ctx.Event(), ctx.Value("d", 0.0)
     workers = [ctx.Process(target=_worker, args=(k, job, cpus, ready, go, t0, results), daemon=True)
@@ -99,14 +92,13 @@ def _worker(k, job, cpus, ready, go, t0, results):
 
 
 def _fire_all(url, model, reqs: list[Request], timeout: float, t0: float, chat_kwargs: dict | None = None) -> list[Row]:
-    """reqs sent at their `at_s` from one event loop (`client.asend`). t0 is the shared perf_counter start
-    (CLOCK_MONOTONIC is system-wide, so processes agree on it)."""
+    """Send reqs at their `at_s` from one event loop; t0 is the shared perf_counter start."""
     clock = lambda: time.perf_counter() - t0
 
     async def one(req):
         try:
             return await asend(url, model, req, clock, timeout, chat_kwargs=chat_kwargs)
-        except Exception as e:                    # the client itself failed: still one row, never a lost request
+        except Exception as e:                    # the client itself failed: still one row
             return Row(req.id, "crash", req.at_s, 0.0, detail=f"client {type(e).__name__}: {e}"[:200])
 
     async def every():
@@ -117,12 +109,8 @@ def _fire_all(url, model, reqs: list[Request], timeout: float, t0: float, chat_k
 def run_closed(url: str, model: str, requests, concurrency: int, duration_s: float | None = None,
                timeout: float = 600, count_tokens=None, chat_kwargs: dict | None = None, procs: int = 1,
                cpus: list[int] | None = None, min_requests: int = 0, max_s: float | None = None) -> tuple[list[Row], float]:
-    """`concurrency` clients take requests in order from `requests` (any iterable, consumed lazily) until it runs
-    out, or `duration_s` has passed and at least `min_requests` were started (`max_s` passed: no client starts
-    another, whatever the count). Returns (rows, elapsed seconds). A
-    request's scheduled time is when its client became free. With `procs` > 1 and a `requests` that splits
-    (`part(k, n)`, e.g. `workload.Cycle`), the clients are dealt to that many processes on one shared start, so
-    parsing many streams can't starve one interpreter; `cpus` as in run_open."""
+    """Closed loop: `concurrency` clients take requests in order until `requests` runs out or the time limits pass.
+    Returns (rows, elapsed seconds). Stops at `duration_s` once `min_requests` were started, or at `max_s`."""
     procs = min(procs, concurrency) if hasattr(requests, "part") else 1
     if procs == 1:
         _pin(cpus)
@@ -139,7 +127,7 @@ def run_closed(url: str, model: str, requests, concurrency: int, duration_s: flo
 
 
 def _nofile(n: int):
-    """Raise this process's open-file soft limit to `n` (offline opens a connection per record at once)."""
+    """Raise this process's open-file soft limit to `n`."""
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     if soft < n:
         resource.setrlimit(resource.RLIMIT_NOFILE, (min(n, hard) if hard != resource.RLIM_INFINITY else n, hard))
@@ -147,9 +135,7 @@ def _nofile(n: int):
 
 def _closed_all(url, model, requests, concurrency: int, duration_s: float | None, timeout: float, t0: float,
                 chat_kwargs: dict | None = None, min_requests: int = 0, max_s: float | None = None) -> list[Row]:
-    """One process's closed-loop clients on the shared start t0; every client stops once `duration_s` has passed
-    and `min_requests` were started, or `max_s` has passed. Each row carries the process's CPU share over the call: closed loop has no
-    send schedule to lag behind, so a busy client process is the sign that it read its streams late."""
+    """One process's closed-loop clients on the shared start t0; each row carries the process's CPU share."""
     _nofile(concurrency + 64)
     clock, c0, w0 = (lambda: time.perf_counter() - t0), time.process_time(), time.perf_counter()
     lock, it, rows, started = threading.Lock(), iter(requests), [], 0
@@ -226,11 +212,8 @@ def summarize(rows: list[Row], limits: Limits, elapsed_s: float | None = None) -
 
 def find_goodput(probe: Callable[[float], dict], start: float, max_probes: int = 40, rel_tol: float = 0.1,
                  min_load: float | None = None, growth: float = 2.0) -> dict:
-    """Highest load x with probe(x)["meets_limits"]: grow by `growth` from `start` until a probe fails (or shrink by
-    it until one passes), the step squaring on each move up to 2x, then bisect until the bracket is within `rel_tol`.
-    An invalid probe (client bottleneck, silent drops, crashes) stops the search, as does going below `min_load`
-    (default start/16: a server that fails there has no goodput worth finding). Returns {goodput, fails_at (the lowest
-    failing load, None if none failed), stopped (resolved | invalid | below_min | probe_budget), probes}."""
+    """Highest load x with probe(x)["meets_limits"]: grow or shrink geometrically from `start`, then bisect.
+    Returns {goodput, fails_at (lowest failing load), stopped: resolved|invalid|below_min|probe_budget, probes}."""
     min_load = start / 16 if min_load is None else min_load
     probes, lo, hi, x, step, stopped = [], 0.0, None, start, growth, "probe_budget"
     for _ in range(max_probes):

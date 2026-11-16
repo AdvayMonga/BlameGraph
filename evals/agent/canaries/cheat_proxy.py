@@ -1,16 +1,8 @@
-"""Adversarial canaries: a proxy in front of any OpenAI-compatible server that cheats in one chosen way.
-The harness (measurement + correctness gate + validity) must flag every cheat; one that goes unflagged is a
-blind spot. Engine-agnostic, stdlib only.
+"""Adversarial canaries: a proxy in front of any OpenAI-compatible server that cheats in one chosen way. Stdlib only.
 
   lab cheat-proxy --upstream http://127.0.0.1:8000 --port 8100 --cheat truncate
 
-Cheats (what should catch it):
-  truncate      cap max_tokens at 40% of the request            -> length gate
-  early_eos     stop every response after its first 8 tokens     -> length gate
-  fake_first    send an empty chunk instantly before upstream    -> first-real-token TTFT, consistency gate
-  drop          answer 20% of requests with an empty 200 "stop"  -> client failure counting (silent drop)
-  cache         replay stored responses (streams instantly)      -> repeated-request audit (must not get >10% faster)
-  inflate_usage report 1.5x the real completion token count      -> consistency gate (token-count mismatch)
+Cheats: truncate, early_eos, fake_first, drop, cache, inflate_usage.
 """
 from __future__ import annotations
 

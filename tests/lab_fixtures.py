@@ -1,4 +1,4 @@
-"""A tiny engine-shaped git repo for lab tests: fast, and shaped like the real one where the referee cares."""
+"""A tiny engine-shaped git repo for lab tests."""
 
 from __future__ import annotations
 

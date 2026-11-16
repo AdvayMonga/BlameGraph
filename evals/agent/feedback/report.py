@@ -1,8 +1,5 @@
-"""Feedback for one finished session of an inference-server lab ledger (see lab_verdict).
-Output has two halves:
-  for_agent       integrity verdict + the harness facts. Facts only, no advice.
-  for_researcher  activity facts and process evals (never fed to the agent).
-"""
+"""Feedback for one finished session of a lab ledger: `for_agent` (integrity verdict + harness facts) and
+`for_researcher` (activity facts and process evals)."""
 from __future__ import annotations
 
 import json
@@ -23,14 +20,11 @@ def feedback(path: str | Path, run_id: str | None = None) -> dict:
 
 
 def lab_feedback(recs: list[dict], run_id: str | None, source: str, harness: dict | None = None) -> dict:
-    """The split for a lab ledger ("option c"): the agent gets the integrity verdict with its
-    evidence, the raw ledger (it already has it, through the `ledger` tool) and only facts it cannot derive from
-    that ledger: `harness`, the parameters the referee measured against. Everything derivable from the records
-    (activity counts, best measured, claims vs evidence) is the researcher's."""
+    """The feedback split: the agent gets the integrity verdict and `harness`; derived facts are the researcher's."""
     integrity = lab_verdict.integrity(recs)
     activity = lab_verdict.facts(recs)
-    activity["claims"] = claim_facts(recs)   # facts only: claims never decide the verdict
-    try:                                     # researcher-only: never stops the session start that also calls this
+    activity["claims"] = claim_facts(recs)   # facts only
+    try:
         proc = process(recs)
     except Exception as e:                   # noqa: BLE001
         proc = {"error": f"{type(e).__name__}: {e}"}
@@ -40,7 +34,7 @@ def lab_feedback(recs: list[dict], run_id: str | None, source: str, harness: dic
 
 
 def render_for_agent(fb: dict) -> str:
-    """Plain-text rendering of the agent-facing half. Same facts, nothing added."""
+    """Plain-text rendering of the agent-facing half."""
     a = fb["for_agent"]; i = a["integrity"]; f = a["facts"]
     lines = [f"integrity: {'valid' if i['valid'] else 'INVALID'}"]
     ev = {e["rule"]: e for e in i.get("evidence", [])}

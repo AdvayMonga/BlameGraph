@@ -1,14 +1,5 @@
-"""Collect what the gate needs from an OpenAI-compatible server (stdlib only).
-
-  generate()        greedy chat completion -> text, completion token count (for flips and length)
-  generate_stream() the same, streamed -> first real token text, full text (for consistency)
-  score_tokens()    teacher-forced scoring of a token sequence -> one Position per scored token
-                    (the token's own logprob and the top-k alternatives), through the engine's `Api`:
-    vllm    POST /v1/completions {prompt: [ids], max_tokens: 1, prompt_logprobs: k}; vLLM and engines that copy it
-    sglang  POST /generate {input_ids, return_logprob, logprob_start_len, top_logprobs_num}
-    none    the engine exposes no logprobs: score_tokens raises NoLogprobs and divergence is reported as not run
-`Api.chat_kwargs` (e.g. {"enable_thinking": false}) rides along as chat_template_kwargs on every chat request.
-"""
+"""Collect what the gate needs from an OpenAI-compatible server: greedy generation, streaming, teacher-forced scoring.
+Scoring goes through the engine's `Api`: vllm (/v1/completions), sglang (/generate) or none (raises NoLogprobs)."""
 from __future__ import annotations
 
 import json
@@ -29,7 +20,7 @@ class Api:
 
 
 class NoLogprobs(RuntimeError):
-    """The engine's API exposes no teacher-forced logprobs; the divergence check cannot run against it."""
+    """The engine's API exposes no teacher-forced logprobs."""
 
 
 DEFAULT = Api()
@@ -51,7 +42,7 @@ def _chat_body(api: Api, model: str, messages: list[dict], max_tokens: int) -> d
 
 def generate(base_url: str, model: str, messages: list[dict], max_tokens: int = 2048, api: Api = DEFAULT,
              trace_id: str | None = None) -> dict:
-    """Greedy. Returns {"text", "completion_tokens", "finish_reason"}. `trace_id` rides as X-Trace-Id."""
+    """Greedy chat completion: {"text", "completion_tokens", "finish_reason"}; `trace_id` is sent as X-Trace-Id."""
     out = _post(f"{base_url.rstrip('/')}/v1/chat/completions", _chat_body(api, model, messages, max_tokens),
                 trace_id=trace_id)
     ch = out["choices"][0]
@@ -61,7 +52,7 @@ def generate(base_url: str, model: str, messages: list[dict], max_tokens: int = 
 
 def generate_stream(base_url: str, model: str, messages: list[dict], max_tokens: int = 2048,
                     api: Api = DEFAULT) -> dict:
-    """Same request, streamed. Returns {"first_token_text": first non-role chunk's text, "text": full text}."""
+    """The same request, streamed. Returns {"first_token_text", "text"}."""
     body = {**_chat_body(api, model, messages, max_tokens), "stream": True}
     req = urllib.request.Request(f"{base_url.rstrip('/')}/v1/chat/completions", data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
@@ -73,17 +64,16 @@ def generate_stream(base_url: str, model: str, messages: list[dict], max_tokens:
                 continue
             delta = (json.loads(line[6:]).get("choices") or [{}])[0].get("delta") or {}
             if "content" not in delta or ("role" in delta and not delta["content"]):
-                continue                          # role chunk (vLLM sends it with content ""): not a token
+                continue                          # role chunk, not a token
             if first is None:
-                first = delta["content"] or ""    # an empty first content chunk is recorded as such (fake first token)
+                first = delta["content"] or ""
             parts.append(delta["content"] or "")
     return {"first_token_text": first, "text": "".join(parts)}
 
 
 def score_tokens(base_url: str, model: str, token_ids: list[int], start: int, top_k: int = 20,
                  api: Api = DEFAULT) -> list[Position]:
-    """Teacher-forced scoring of token_ids[start:] given everything before it (start >= 1).
-    Returns one Position per scored token: the token's own logprob and the top-k alternatives."""
+    """Teacher-forced scoring of token_ids[start:] (start >= 1): one Position per token, with its top-k alternatives."""
     if api.name == "none":
         raise NoLogprobs("the engine's API exposes no teacher-forced logprobs")
     if api.name == "sglang":
@@ -107,8 +97,7 @@ def score_tokens(base_url: str, model: str, token_ids: list[int], start: int, to
 
 
 def _score_sglang(base_url: str, token_ids: list[int], start: int, top_k: int) -> list[Position]:
-    """SGLang's native /generate: input_token_logprobs[i] = [logprob, token_id, text] for prompt position i
-    (from logprob_start_len), input_top_logprobs[i] = the top-k [logprob, token_id, text] at that position."""
+    """Score through SGLang's /generate; its logprob rows are [logprob, token_id, text]."""
     out = _post(f"{base_url.rstrip('/')}/generate", {
         "input_ids": token_ids, "sampling_params": {"max_new_tokens": 1, "temperature": 0.0},
         "return_logprob": True, "logprob_start_len": start, "top_logprobs_num": top_k})

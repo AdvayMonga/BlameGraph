@@ -1,5 +1,4 @@
-"""Calibrated results: ceilings and reference only under a matching fingerprint, kernel shares, and the baseline
-record carrying its context. No GPU."""
+"""Calibrated results: ceilings and reference only under a matching fingerprint, kernel shares, baseline context."""
 from __future__ import annotations
 
 import json
@@ -26,7 +25,7 @@ def results(regime="single_stream", objective="tpot_p99_s", value=0.02, better="
 @pytest.fixture
 def t(monkeypatch, tmp_path):
     monkeypatch.setattr(calibrate, "model_config", lambda model: QWEN3_30B_A3B)
-    monkeypatch.setattr(calibrate, "REFERENCE_DIR", tmp_path / "no-reference")      # the committed ones are real
+    monkeypatch.setattr(calibrate, "REFERENCE_DIR", tmp_path / "no-reference")      # no committed references
     return target.load()
 
 

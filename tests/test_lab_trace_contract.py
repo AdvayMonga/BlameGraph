@@ -1,4 +1,4 @@
-"""lab.infra.runner.trace_contract: conforming trace dirs pass (JSONL, SQLite, the engine's own writer); bad clocks, ids and units fail."""
+"""lab.infra.runner.trace_contract: conforming trace dirs pass; bad clocks, ids and units fail."""
 
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ def test_conforming_sqlite_in_the_engine_layout_passes(tmp_path):
     (_row(ttft_s=200.0), "ttft_s 200.0 > total_s"),                   # ttft in ms, total in s
     (_row(queue_wait_s=50.0), "queue_wait_s + prefill_s"),            # one span in ms
     (_row(total_s=-0.5), "outside [0"),                               # wall minus monotonic
-    (_row(total_s=1_000_000.0, ttft_s=200.0, tpot_s=199_950.0), "outside [0"),   # everything in ms... and a day long
+    (_row(total_s=1_000_000.0, ttft_s=200.0, tpot_s=199_950.0), "outside [0"),   # everything in ms, a day long
     (_row(tpot_s=0.05), "tpot_s 0.05 != (total_s - ttft_s)"),         # a different TPOT definition
     (_row(tokens_out=3, ttft_s=None, tpot_s=None), "ttft_s must be set exactly"),
     (_row(tokens_out=0, tpot_s=None), "ttft_s must be set exactly"),
@@ -102,7 +102,7 @@ def test_meta_missing_a_count_or_disagreeing_with_the_rows_fails(tmp_path):
 
 
 def test_open_file_may_lag_its_count(tmp_path):
-    """closed=0: the engine was killed before final counts; the row count is not held against it."""
+    """closed=0: the row count is not held against the file's count."""
     assert tc.validate(_jsonl(tmp_path, [_row()], meta=_meta(0, closed=0)), now=NOW).valid
 
 
@@ -114,7 +114,7 @@ def test_empty_dir_fails_and_cli_exit_codes(tmp_path, capsys):
 
 
 def test_inference_server_rows_conform(tmp_path):
-    """The engine's own writer, through its own scheduler-facing API, produces a conforming dir."""
+    """The engine's own writer produces a conforming dir."""
     telemetry = pytest.importorskip("inference_server.telemetry", reason="needs the engine", exc_type=ImportError)
     if not hasattr(telemetry, "SCHEMA_VERSION"):
         pytest.skip("engine predates the trace contract (inference-server#102)")

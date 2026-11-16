@@ -31,7 +31,7 @@ def test_the_wrapper_holds_no_credential_and_points_at_the_proxy(tmp_path, monke
     assert "ANTHROPIC_BASE_URL=http://172.17.0.1:4321" in script and f"ANTHROPIC_API_KEY={agent.apiproxy.PLACEHOLDER}" in script
     if containerized:
         assert "docker run -i" in script and "--name lab-workbench-r1-s1" in script
-        assert "--env CLAUDE_CODE_ENTRYPOINT" in script            # the SDK's value, passed through by name
+        assert "--env CLAUDE_CODE_ENTRYPOINT" in script            # passed through by name
     else:
         assert script.splitlines()[1].startswith("exec env -i")
 
@@ -65,7 +65,7 @@ def test_a_remote_workbench_is_launched_over_ssh_with_the_proxy_tunnelled_and_ar
     out = subprocess.run(["bash", str(script), "--output-format", "stream-json", "it's \"quoted\" $HOME"],
                          capture_output=True, text=True, env={"PATH": f"{fake.parent}:/usr/bin:/bin"})
     first, launch = out.stdout.splitlines()
-    assert first == "rm -f /tmp/lab-proxy-scratch/proxy.sock"           # a stale socket from an earlier launch goes
+    assert first == "rm -f /tmp/lab-proxy-scratch/proxy.sock"           # the stale socket is removed
     remote_argv = shlex.split(launch)
     assert remote_argv == ["docker", "run", "-i", "--name", "lab-workbench-r1-s1", "lab-jail", "sh", "-c",
                            'exec "$0" "$@"', "/c/claude", "--output-format", "stream-json", "it's \"quoted\" $HOME"]

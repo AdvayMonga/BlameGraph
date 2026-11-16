@@ -1,11 +1,5 @@
-"""Frontier benchmark workloads: the request data public inference benchmarks are scored on, one module per benchmark,
-fetched from their public sources into local/workloads/ (gitignored) as trace-shaped JSONL the regimes consume.
-
-Record: {"id", "prompt" | "messages", "max_tokens", "build_prompt_tokens", "subset"}. Prompts are the benchmark's raw
-text with its model-specific chat template stripped, so any chat server can serve them; `build_prompt_tokens` is the
-source benchmark's own tokenizer count unless re-counted with `--tokenizer`. The manifest records source URL, checksum,
-item count, output limit and the benchmark's latency limits, so comparisons can refuse mismatched corpora.
-"""
+"""Frontier benchmark workloads: one module per public inference benchmark, fetched into local/workloads/ as JSONL.
+Record: {"id", "prompt" | "messages", "max_tokens", "build_prompt_tokens", "subset"}."""
 from __future__ import annotations
 
 import gzip
@@ -24,7 +18,7 @@ BENCHES = ("mlperf_llama3_1_8b", "mlperf_llama2_70b", "mlperf_mixtral_8x7b", "ml
 
 
 def download(url: str, md5: str | None = None) -> Path:
-    """Fetch `url` into local/workloads/raw/ once; verify md5 when the source publishes one. Returns the local path."""
+    """Fetch `url` into local/workloads/raw/ once, verifying md5 when given; returns the local path."""
     dest = DATA / "raw" / url.rsplit("/", 1)[1]
     if not dest.exists():
         dest.parent.mkdir(parents=True, exist_ok=True)

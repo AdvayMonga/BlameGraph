@@ -1,5 +1,4 @@
-"""Converters on synthetic copies of each source's shape (no network): record shape, template stripping, few-shot
-turns, manifest. Run: python tests/test_workloads.py"""
+"""Converters on synthetic copies of each source's shape: record shape, template stripping, few-shot turns, manifest."""
 from __future__ import annotations
 
 import json
@@ -23,7 +22,7 @@ def fake_download(url, md5=None):
 
 
 for _mod in (mlperf_deepseek_r1, mlperf_gpt_oss_120b, mlperf_llama2_70b, mlperf_llama3_1_8b, mlperf_mixtral_8x7b):
-    _mod.download = fake_download           # each module bound the name at import; no test touches the network
+    _mod.download = fake_download           # no test touches the network
 
 
 def put(name, writer):

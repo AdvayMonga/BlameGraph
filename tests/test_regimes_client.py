@@ -1,5 +1,4 @@
-"""Fixed-length requests: a record with a measured reference length is sent at that length with ignore_eos, and an
-answer that ends before it is truncated. Run: python tests/test_regimes_client.py"""
+"""Fixed-length requests: sent at the reference length with ignore_eos; an answer that ends before it is truncated."""
 
 from __future__ import annotations
 
@@ -31,7 +30,7 @@ def test_a_fixed_length_answer_runs_to_max_tokens_and_an_early_stop_is_truncated
         row = send(url, "m", Request("a", [{"role": "user", "content": "hi"}], 12, ignore_eos=True), clock(), clock)
         assert (row.status, row.n_tokens, row.finish_reason) == ("ok", 12, "length")
         row = send(url, "m", Request("b", [{"role": "user", "content": "hi"}], 12), clock(), clock)
-        assert (row.status, row.n_tokens) == ("ok", 5)                       # natural stop: today's behaviour
+        assert (row.status, row.n_tokens) == ("ok", 5)                       # natural stop
         row = send(f"http://127.0.0.1:{plain.server_port}", "m",
                    Request("c", [{"role": "user", "content": "hi"}], 12, ignore_eos=True), clock(), clock)
         assert row.status == "truncated" and "before max_tokens" in row.detail   # the server ignored ignore_eos

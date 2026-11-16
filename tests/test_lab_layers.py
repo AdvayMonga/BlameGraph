@@ -1,6 +1,4 @@
-"""Per-layer facts from a profile bundle: shares of the window from the timeline and the kernel table, the decode step
-against its floor, and a missing ceiling that says why. A bundle is written by hand; a real H200 one is used when
-it is on this disk."""
+"""Per-layer facts from a profile bundle: shares of the window, the decode step against its floor, a missing ceiling."""
 from __future__ import annotations
 
 import json
@@ -14,8 +12,7 @@ REAL = Path(__file__).resolve().parents[1] / "local" / "engine-h200-20261017" / 
 
 
 def bundle(tmp_path: Path, kernel_s: float = 0.4, with_steps: bool = True) -> Path:
-    """A 2 s window: 10 decode steps of 0.15 s (batch 4), admit 0.02 s, evict 0.01 s, a prefill of 0.2 s; the rest
-    (0.27 s) outside steps. One warmup step before the window, which must not count."""
+    """A 2 s window: 10 decode steps of 0.15 s, admit 0.02 s, evict 0.01 s, a 0.2 s prefill; one warmup step before."""
     b = tmp_path / "b"
     b.mkdir(parents=True)
     t0 = 1000.0
@@ -66,7 +63,7 @@ def test_the_decode_floor_needs_a_target_and_peaks_and_says_so(tmp_path, monkeyp
     assert out["model_execution"]["pct_of_ceiling"] is None and "no target" in out["model_execution"]["ceiling_missing"]
     out = layers.from_bundle(b, target.load())
     me = out["model_execution"]
-    if me["pct_of_ceiling"] is None:                      # no peaks file for the H200 in this checkout, or no HF config
+    if me["pct_of_ceiling"] is None:                      # no peaks file or no HF config
         assert me["ceiling_missing"]
     else:
         assert 0 < me["pct_of_ceiling"] <= 100 and "batch 4" in me["ceiling_basis"] and "context 532" in me["ceiling_basis"]

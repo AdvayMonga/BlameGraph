@@ -1,11 +1,4 @@
-"""Each corpus record's `expected_output_tokens`: the reference's own answer length (greedy, the record's messages and
-max_tokens, the target's chat kwargs), and for a multi-turn record `expected_turn_output_tokens`, the same for each
-user-turn prefix of its messages (the shared-prefix regime's turns). Measured once on a served reference and written
-into every trace of both splits; regimes then send each request at that length with ignore_eos
-(`evals.loadgen.workload.to_request`), so a base and a candidate generate the same tokens' worth of work. Every trace
-changes, so the manifest is rebuilt: a new corpus version, whose `prompts_version` keeps the held-out budget's key.
-Held-out traces must be present (`lab store pull --corpus`) and pushed again afterwards. Each answer is
-appended to a log as it arrives (default `local/corpus-lengths-<version>.jsonl`), so a rerun resumes.
+"""Measure each corpus record's `expected_output_tokens` (the reference's answer length) and write it into every trace.
 
     lab corpus lengths --url URL [--target T] [--concurrency 64]
 """
@@ -30,7 +23,7 @@ def _files(m: Manifest) -> list[str]:
 
 
 def _turns(r: TraceRequest) -> list[list[dict]]:
-    """A multi-turn record's user-turn prefixes before its last (the last is the record itself)."""
+    """A multi-turn record's user-turn prefixes before its last."""
     msgs = r.messages or []
     users = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
     return [msgs[:i + 1] for i in users[:-1]] if len(users) >= 2 else []
@@ -74,8 +67,8 @@ def apply(corpus_dir: Path, lengths: Lengths) -> Manifest:
 
 def measure(url: str, model: str, chat_kwargs: dict, corpus_dir: Path = CORPUS_DIR, concurrency: int = 64,
             attempts: int = 3, log: Path | None = None) -> Lengths:
-    """The served reference's completion tokens for every record and turn prefix, resuming from `log`. Raises after
-    every request was tried when any failed `attempts` times (with backoff); the answers so far stay in the log."""
+    """The served reference's completion tokens for every record and turn prefix, resuming from `log`.
+    Raises after every request was tried when any failed `attempts` times."""
     from evals.loadgen.client import Request, send
     m = load_manifest(corpus_dir)
     traces = _traces(corpus_dir, m)

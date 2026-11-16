@@ -1,7 +1,6 @@
 """lab correctness reference --url URL --out DIR [--tier dev|full] [--tasks a,b] [--target T]
 lab correctness candidate --url URL --out FILE.json [--ref DIR] [--api vllm|sglang|none] [--target T]
-lab correctness verdict A.json [B.json ...] [--target T]   (re-judge saved results, no server)
-The model, chat kwargs, tasks, reference dir, logprobs API and policy come from the target spec ($LAB_TARGET)."""
+lab correctness verdict A.json [B.json ...] [--target T]   (re-judge saved results, no server)"""
 from __future__ import annotations
 
 import argparse

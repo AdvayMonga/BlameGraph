@@ -1,5 +1,4 @@
-"""The idea archive (lab/kernels/archive.py): ideas and outcomes from `kernels` records, near-duplicates folded, similarity
-lookup, the retry list, export and load. A fake embedder: no model download."""
+"""The idea archive: ideas and outcomes from `kernels` records, duplicates folded, lookup, retry list, export, load."""
 from __future__ import annotations
 
 import sys

@@ -1,7 +1,5 @@
-"""MLPerf Inference DeepSeek-R1: 4,388 reasoning prompts from MMLU-Pro (2,410), AIME 1983-2024 (932), MATH-500 (499),
-LiveCodeBench code_generation_lite (349) and GPQA (198); inputs <= 3,136 tokens, output up to 20,000 (long thinking).
-Server limits TTFT 2000 ms / TPOT 80 ms; interactive 1500 ms / 15 ms (p99). Accuracy there: exact match / pass rate
->= 99% of the FP8 reference.
+"""MLPerf Inference DeepSeek-R1: 4,388 reasoning prompts (MMLU-Pro, AIME, MATH-500, LiveCodeBench, GPQA).
+Inputs <= 3,136 tokens, output up to 20,000. Server limits TTFT 2000 ms / TPOT 80 ms; interactive 1500 ms / 15 ms (p99).
 """
 from __future__ import annotations
 

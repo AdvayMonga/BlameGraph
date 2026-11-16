@@ -62,7 +62,7 @@ def test_a_session_uses_the_tools_and_finishes(spec):
          call("Bash", {"command": "cat src/inference_server/engine.py"}, 4),
          call("Grep", {"pattern": "BATCH", "glob": "src/*"}, 5),
          call("ping", {"x": "a"}, 6)],
-        {"role": "assistant", "content": "done"},                        # no tool call: told how a session ends
+        {"role": "assistant", "content": "done"},                        # no tool call
         [call("finish", {"status": "stop", "note": "batch 16"}, 7)],
     ])
     reply = provider(api).run(spec)

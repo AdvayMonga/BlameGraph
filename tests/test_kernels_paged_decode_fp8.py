@@ -1,5 +1,4 @@
-"""The fp8-KV paged decode task (lab/kernels/tasks/paged_decode_fp8.py): fp8 pools at a unit scale, its reference against
-the bf16 task's on the same values, each task reading only its own captured calls, and the capture env it asks for."""
+"""The fp8-KV paged decode task: fp8 pools at a unit scale, its reference, its own captured calls, its capture env."""
 from __future__ import annotations
 
 import sys

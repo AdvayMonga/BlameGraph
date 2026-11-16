@@ -1,11 +1,8 @@
-"""Where the GPU work runs. A job takes input trees and JSON arguments, writes files into an output
-dir and returns JSON; the tools keep the policy, the ledger and the budget. `Local` runs a job in this process.
-`Remote` ships each input by content hash, runs `python -m lab.infra.runner.worker run JOB` on the worker host over SSH and brings
-the output dir back; the worker re-hashes every tree right before using it and refuses one that does not match, so
-what is measured is what the controller audited. GpuBusy, Contaminated, NotReady and ValueError cross intact. measure, equiv and profile take `workbench`, the agent's
-container: it is paused for the job, and processes in it holding the GPU are killed and listed under `killed`.
-Every job runs the tree with the interpreter `build.python_for` gives it: the engine's, or a venv built from the
-tree's own dependency files.
+"""Where the GPU work runs. A job takes input trees and JSON arguments, writes files into an output dir and returns
+JSON. `Local` runs a job in this process; `Remote` ships each input by content hash, runs the job on the worker host
+over SSH and brings the output dir back. The worker re-hashes every tree before use and refuses a mismatch. GpuBusy,
+Contaminated, NotReady and ValueError are re-raised on the controller. measure, equiv and profile pause `workbench`
+(the agent's container) for the job; its processes holding the GPU are killed and listed under `killed`.
 
   test     lint + the engine's suite on `tree`                      -> {lint, tests}
   measure  serve `tree`, run regimes; passive data into out          -> {results, ready_s}
@@ -14,10 +11,6 @@ tree's own dependency files.
 
     python -m lab.infra.runner.worker has SHA...  |  put SHA < tar  |  run JOB < json > tar      (the worker host's side)
     python -m lab.infra.runner.worker root  |  mkdir PATH  |  workbench < json > json  |  rm NAME    (the agent's side)
-
-When the agent runs on the worker host too (Remote), its workspace lives there: `push` and `pull` mirror it with
-rsync (pulled files are untrusted: links stay links and the audit refuses them), and `workbench` builds that host's
-`docker run` for the CLI, with the Linux CLI of the controller's Agent SDK version.
 """
 
 from __future__ import annotations
@@ -70,7 +63,7 @@ def job_test(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     tree = inputs["tree"]
     try:
         py = build.python_for(tree)
-    except build.BuildFailed as e:              # a failed test run, recorded like any other
+    except build.BuildFailed as e:              # returned as a failed run
         skipped = grader.Run(False, -1, str(e))
         return {"lint": dataclasses.asdict(skipped), "tests": dataclasses.asdict(skipped)}
     with engine.using(py):
@@ -80,12 +73,10 @@ def job_test(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
 
 
 def job_measure(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
-    """`args`: names, split, tier, seed, jailed, passive (keep device/telemetry/client rows in `out`), hints and bands
-    (`run_regimes`). One engine
-    launch per profile (lab/infra/runner/profiles.py), general first; every result and row carries its `profile` (None = general),
-    and a profile's device/telemetry/serve log land in `out/profiles/<regime>/`. A profile launch that fails makes
-    its regimes invalid with the reason and the measurement goes on; the general launch failing, a busy GPU or a
-    contaminated measurement still fail it whole."""
+    """`args`: names, split, tier, seed, jailed, passive (keep device/telemetry/client rows in `out`), hints, bands.
+    One engine launch per profile, general first; every result and row carries its `profile` (None = general), and a
+    profile's passive data lands in `out/profiles/<regime>/`. A failed profile launch makes its regimes invalid; a
+    failed general launch, a busy GPU or a contaminated measurement raises."""
     from lab.infra.runner import artifacts, profiles
     from lab.infra.sandbox import build
     from lab.evaltools import _why, run_regimes
@@ -156,23 +147,23 @@ def job_profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     from lab.infra.sandbox import build
     try:
         py = build.python_for(inputs["tree"])
-    except build.BuildFailed as e:              # a failed profile run, recorded like any other
+    except build.BuildFailed as e:              # returned as a failed run
         return {"returncode": -1, "output": str(e)[-3000:], "instrument": None, "argv": [], "head": "", "killed": []}
     with engine.using(py), container.quiet(args.get("workbench")) as killed:
         return {**_profile(inputs, out, args, hooks), "killed": killed}
 
 
 def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
-    """Every instrument the same way: lab.profile.profile's workload inside the jail, wrapped by the instrument (none for
-    torch), watched like a served engine (`serve.Watch`: GpuBusy before, Contaminated after), then its report step."""
+    """Run lab.profile.profile's workload in the jail, wrapped by the instrument, under `serve.Watch` (GpuBusy before,
+    Contaminated after), then the instrument's report step."""
     from lab.profile import gpu
     from lab.infra.runner import profiles
     from lab import proftools, tools as T
     tree, kind, a = inputs["tree"], args["kind"], args["args"]
     prof = {"env": profiles.env(target.load(), a["profile"])} if a.get("profile") else {}
-    if a.get("capture"):                         # calls replayed from CUDA graphs never reach the capture's wrappers
+    if a.get("capture"):                         # the target's capture env
         prof["env"] = {**prof.get("env", {}), **((target.load().raw.get("kernels") or {}).get("capture_env") or {})}
-    if a.get("capture_task"):                    # what the task's calls need to occur at all (e.g. fp8 KV pools)
+    if a.get("capture_task"):                    # the task's capture env
         from lab.kernels.tasks import load as load_task
         prof["env"] = {**prof.get("env", {}), **dict(load_task(a["capture_task"]).capture_env)}
     if args.get("timeout_s"):
@@ -184,9 +175,9 @@ def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
         if not exe:
             return {"refused": f"{ins['binary']} is not on PATH on this host"}
         exe = str(Path(exe).resolve())
-        read = [Path(exe).parent, Path(exe).parent.parent]  # the install root: nsys's importer lives beside its binary dir
+        read = [Path(exe).parent, Path(exe).parent.parent]  # the binary's dir and its install root
         if Path("/opt/nvidia").is_dir():
-            read.append(Path("/opt/nvidia"))                # where launchers like CUDA's bin/ncu find the real install
+            read.append(Path("/opt/nvidia"))                # the install behind CUDA's launchers
     work = tree / proftools.OUT
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir()
@@ -214,7 +205,7 @@ def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
         proc = p if p.returncode else proc
         T._drop_links(work)
     keep = work
-    if ins["bundle_only"]:                       # the bundle itself is the record's blob (calibration reads it there)
+    if ins["bundle_only"]:                       # keep only the bundle
         bundles = sorted((work / "bundle").glob("*")) if (work / "bundle").is_dir() else []
         keep = bundles[-1] if bundles else None
     if keep and any(p.is_file() for p in keep.rglob("*")):
@@ -226,7 +217,7 @@ def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
 
 JOBS = {"test": job_test, "measure": job_measure, "equiv": job_equiv, "profile": job_profile}
 
-# Failures the tools turn into records; anything else is a WorkerError on the controller.
+# Errors re-raised as themselves on the controller; anything else is a WorkerError.
 _ERRORS = {"GpuBusy": lambda e: serve.GpuBusy(e["apps"]), "Contaminated": lambda e: serve.Contaminated(e["apps"]),
            "NotReady": lambda e: serve.NotReady(e["message"]), "ValueError": lambda e: ValueError(e["message"])}
 
@@ -245,7 +236,7 @@ def _raise(err: dict | None) -> None:
 
 class Local:
     """Jobs in this process, on the controller's own paths. `hooks`: in-process stand-ins (an encoder, a profile
-    runner) that tests and fakes provide; a remote worker has none."""
+    runner)."""
 
     def __init__(self, **hooks):
         self.hooks = {k: v for k, v in hooks.items() if v is not None}
@@ -274,12 +265,11 @@ def _untar(data: bytes, dest: Path) -> None:
 
 class Remote:
     """Jobs on another host. `prefix` is the argv that runs one shell command there (ssh ... user@host); empty runs
-    it here through sh, which the tests use. `env_dir` is this repo on that host, `python` its interpreter."""
+    it here through sh. `env_dir` is this repo on that host, `python` its interpreter."""
 
     def __init__(self, prefix: list[str], env_dir: str, python: str, env: dict[str, str], rsh: str | None = None,
                  sudo: bool = False):
-        """`sudo`: the login user is not root, so the worker's side runs as root (the workbench is root inside, the
-        measurement rooms drop to their own uid), keeping the login user's HOME (weights, venv, uv)."""
+        """`sudo`: run the worker's side as root, keeping the login user's HOME."""
         self.prefix, self.env_dir, self.python, self.env, self.rsh, self.sudo = prefix, env_dir, python, env, rsh, sudo
         self._root: str | None = None
 
@@ -287,7 +277,7 @@ class Remote:
         return f"{self.prefix[-1]}:{path}" if self.prefix else path
 
     def _rsync(self, src: str, dst: str) -> None:
-        """By content, not size and mtime: an edit within the same second must not be missed."""
+        """Mirror `src` to `dst` by checksum, deleting extras; WorkerError on failure."""
         p = subprocess.run(["rsync", "-a", "--checksum", "--delete", *(["-e", self.rsh] if self.rsh else []),
                             *(["--rsync-path", "sudo -n rsync"] if self.sudo else []), src, dst],
                            capture_output=True, text=True)
@@ -318,7 +308,7 @@ class Remote:
 
     @contextmanager
     def paused(self, name: str | None):
-        """The workbench on the worker host frozen for the block (as `container.paused` there)."""
+        """The workbench on the worker host frozen for the block."""
         did = bool(name) and self._run(f"pause {shlex.quote(name)}").decode().strip() == "paused"
         try:
             yield
@@ -361,7 +351,7 @@ class Remote:
 
 
 def load(**hooks):
-    """`LAB_WORKER`: local (default) or ssh, the VM `lab.infra.cloud.vm` names (started and set up beforehand)."""
+    """The worker `LAB_WORKER` names: local (default) or ssh, the running VM `lab.infra.cloud.vm` names."""
     kind = os.environ.get("LAB_WORKER", "local")
     if kind == "local":
         return Local(**hooks)
@@ -401,7 +391,7 @@ def _put(sha: str, data: bytes) -> None:
 
 
 def _run_job(job: str, request: dict) -> bytes:
-    """Fresh copies of the inputs (jobs write into them), each re-hashed right before use; out dir as a tar."""
+    """Run a job on fresh copies of its inputs, each re-hashed before use; returns the out dir as a tar."""
     work = Path(tempfile.mkdtemp(prefix=f"job-{job}-"))
     out = work / "out"
     out.mkdir()
@@ -417,7 +407,7 @@ def _run_job(job: str, request: dict) -> bytes:
                 if tree_sha(inputs[name]) != sha:
                     raise WorkerError(f"input {name} changed after it was put")
             reply = {"result": JOBS[job](inputs, out, request["args"], {})}
-        except Exception as e:                  # the controller re-raises it; the tar still carries what was written
+        except Exception as e:                  # returned in the reply; the controller re-raises it
             reply = {"error": _error(e)}
         (out / RESULT).write_text(json.dumps(reply, default=str))
         return _tar(out)

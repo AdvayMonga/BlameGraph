@@ -1,4 +1,4 @@
-"""Each cheat proxy behaves as specified and is caught by the matching check. Run: python tests/test_cheat_proxy.py"""
+"""Each cheat proxy behaves as specified and is caught by the matching check."""
 from __future__ import annotations
 
 import json
@@ -90,7 +90,7 @@ def test_cheats_are_caught():
     empties = sum(json.loads(_post(url, {**body, "prompt": f"p{i}"}))["choices"][0]["text"] == "" for i in range(40))
     assert empties > 0
     up.shutdown(); px.shutdown()
-    # cache -> repeating a request becomes much faster (repeated-request audit: must not get >10% faster)
+    # cache -> repeating a request becomes much faster
     up, px, url = _with("cache")
     t0 = time.perf_counter(); _post(url, body); first = time.perf_counter() - t0
     t0 = time.perf_counter(); _post(url, body); again = time.perf_counter() - t0

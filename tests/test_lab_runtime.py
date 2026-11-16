@@ -29,7 +29,7 @@ class ScriptedProvider:
         n = len(self.specs)
         reply = AgentReply({"status": "continue", "note": None}, 0.0, 0, None)
         for step in self.script(n, spec.workspace):
-            if step[0] == "call":                       # like the SDK adapter: a refusal is text, not a crash
+            if step[0] == "call":                       # a refusal is text, not a crash
                 try:
                     out = tools[step[1]](step[2] if len(step) > 2 else {})
                 except Exception as e:
@@ -46,7 +46,7 @@ def cfg(tmp_path, monkeypatch):
     repo = make_repo(tmp_path)
     return RunConfig(goal="make speed() faster", budget_usd=2.0, repo=repo, base="HEAD",
                      runs_dir=tmp_path / "runs", ledger_root=tmp_path / "ledger", max_sessions=5,
-                     baseline=False)      # the base is measured in tests/test_lab_evaltools.py, on the fake engine
+                     baseline=False)
 
 
 def test_a_session_edits_tests_notes_and_stops(cfg):
@@ -65,7 +65,7 @@ def test_a_session_edits_tests_notes_and_stops(cfg):
     assert out["sessions"] == 1 and out["stopped"] == "agent" and out["spent_usd"] == pytest.approx(0.75)
     kinds = [r["kind"] for r in ledger.records(cfg.ledger_root)]
     assert kinds == ["test", "note", "hypothesis", "submit", "session"]
-    sub = next(ledger.records(cfg.ledger_root, kind="submit"))     # refused (no equiv): nothing measured to reflect on
+    sub = next(ledger.records(cfg.ledger_root, kind="submit"))     # refused: no equiv
     assert sub["result"]["verdict"] == "refused" and "experiment" not in sub
     test_rec = next(ledger.records(cfg.ledger_root, kind="test"))
     assert test_rec["result"]["lint"] and test_rec["result"]["tests"]
@@ -115,7 +115,7 @@ def test_a_bash_only_violation_is_caught_at_session_end(cfg):
 def test_scratch_files_do_not_stop_the_run(cfg):
     def script(n, ws: Path):
         (ws / "lab/runs/x").mkdir(parents=True)
-        (ws / "lab/runs/x/trace.json").write_text("{" + " " * 6_000_000 + "}")   # a profile bundle: big, and not the agent's
+        (ws / "lab/runs/x/trace.json").write_text("{" + " " * 6_000_000 + "}")   # a big profile bundle
         (ws / "notes.txt").write_text("thinking")
         yield ("call", "test")
         yield ("reply", AgentReply({"status": "stop", "note": None}, 0.1, 1, None))

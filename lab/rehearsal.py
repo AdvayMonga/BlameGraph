@@ -1,21 +1,6 @@
-"""A rehearsal of the whole loop on a laptop, no GPU: a practice engine (a small OpenAI-compatible server the agent
-can edit and measure), a target spec for it, a task, and the reference answers equiv compares against.
+"""A rehearsal of the whole loop on a laptop, no GPU: a practice engine, its target spec, a task, reference answers.
 
-  lab rehearsal setup DIR
-    DIR/engine/       the practice engine: a git repo (src/inference_server/server.py, tests, ruff config), whose decoder
-                      refolds its state over the whole output every step (the reference keeps it): the same words,
-                      slower, so there is something to win
-    DIR/reference.py  an unmodified copy of its server: the reference, and validation's known-good/bad launches
-    DIR/ref, ref-full the reference's answers to a synthetic multiple-choice set (what equiv compares against)
-    DIR/target.toml, DIR/task.toml, DIR/store/ (a local store: the held-out guard, never the real one)
-
-Then, from this repo (the ledger and run dirs are this checkout's own):
-  export LAB_TARGET=DIR/target.toml LAB_STORE=DIR/store LAB_ENGINE_REPO=DIR/engine
-  lab validate --regimes single_stream --noise-runs 3 --tier dev      # noise bands, the gate on good/bad
-  lab session --task DIR/task.toml --budget 2                         # the loop, with the real model
-
-The model's tokenizer counts tokens on both sides of every check, so the server streams words that are one token
-each in it (checked at setup)."""
+  lab rehearsal setup DIR"""
 from __future__ import annotations
 
 import argparse
@@ -68,7 +53,7 @@ def make_engine(dest: Path) -> Path:
     """The practice engine as a one-commit git repo."""
     src = SERVER.read_text()
     a, b = src.index("# >>> decode\n"), src.index("# <<< decode\n") + len("# <<< decode\n")
-    slow = src[:a] + SLOW_DECODE + src[b:]          # the same words, the state refolded from scratch every step
+    slow = src[:a] + SLOW_DECODE + src[b:]          # the state refolded from scratch every step
     files = {"src/inference_server/__init__.py": "", "src/inference_server/server.py": slow,
              "tests/test_server.py": TESTS, "tests/conftest.py": "import sys\nsys.path.insert(0, 'src')\n",
              "pyproject.toml": "[tool.ruff]\nline-length = 120\n[tool.ruff.lint]\nselect = ['F']\n",
@@ -97,7 +82,7 @@ def _serve(script: Path, *extra: str):
 
 
 def items(n: int) -> list[dict]:
-    """A synthetic multiple-choice set the practice engine answers: gold C, scored like MMLU-Pro."""
+    """A synthetic multiple-choice set the practice engine answers; gold is C."""
     return [{"id": f"mc-{k}", "task": "mmlu_pro", "gold": "C", "max_tokens": 8,
              "messages": [{"role": "user", "content": f"question {k}: pick one of A, B, C or D"}]} for k in range(n)]
 

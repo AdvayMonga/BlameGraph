@@ -1,4 +1,4 @@
-"""Thresholdout held-out budget and sealed split. Run: python tests/test_holdout.py"""
+"""Thresholdout held-out budget and sealed split."""
 from __future__ import annotations
 
 import json
@@ -71,8 +71,7 @@ def test_deterministic_given_seed():
 
 
 def _hill_climb(seed, guard=None, n=500, d=100, steps=1500):
-    """Flip one sign of a linear model at a time, keep it if the reported score rises; labels are pure noise.
-    Returns the final model's true held-out accuracy minus chance (= how far the held-out set was overfit)."""
+    """Hill-climbs a linear model on noise labels; returns its true held-out accuracy minus chance."""
     r = random.Random(seed)
 
     def split():
@@ -141,7 +140,7 @@ def test_parallel_writers_share_one_budget_and_lose_nothing():
     import threading
     with tempfile.TemporaryDirectory() as d:
         _guard(d, budget=1000)
-        def worker():                        # a separate guard per thread: separate runs or machines on one store
+        def worker():                        # a separate guard per thread
             g = _guard(d, budget=1000)
             for _ in range(10):
                 g.query(0.9, 0.5)            # every query spends

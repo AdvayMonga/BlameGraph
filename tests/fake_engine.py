@@ -1,11 +1,4 @@
-"""A fake OpenAI-compatible streaming engine with a fixed number of decode slots, for the regime tests.
-
-Requests wait for a free slot (so queueing raises TTFT), then stream one token per `token_s`; with `ignore_eos` a
-streamed request runs to its max_tokens and finishes with "length". With `queue_limit`, a
-request arriving to a full queue gets an explicit 503. With $TELEMETRY_DIR set, each streamed request appends
-{trace_id, tokens_out} to `requests.jsonl` there, like an engine's own per-request rows. Run standalone:
-  python tests/fake_engine.py --port N [--delay S]
-"""
+"""A fake OpenAI-compatible streaming engine with a fixed number of decode slots, for the regime tests."""
 from __future__ import annotations
 
 import argparse
@@ -26,8 +19,7 @@ def fast_arrivals():
 
 def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, queue_limit: int | None = None,
                 port: int = 0, wrong_every: int = 0, ignore_eos: bool = True) -> ThreadingHTTPServer:
-    """`wrong_every` = N: every Nth multiple-choice answer is wrong (a known-bad candidate for the gate);
-    `ignore_eos` False: an engine that ignores the field."""
+    """`wrong_every` = N: every Nth multiple-choice answer is wrong; `ignore_eos` False: the field is ignored."""
     counter = [0]
     sem, lock, waiting = threading.Semaphore(slots), threading.Lock(), [0]
 
@@ -52,7 +44,7 @@ def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, qu
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            if self.path.endswith("/v1/completions"):        # teacher-forced scoring, vLLM-shaped: deterministic
+            if self.path.endswith("/v1/completions"):        # teacher-forced scoring, deterministic
                 ids = body["prompt"]
                 plp = [None] + [{str(t): {"logprob": -0.1 - (t % 7) / 100}, str(t + 1): {"logprob": -2.0}} for t in ids[1:]]
                 return self._json({"choices": [{"text": "", "prompt_logprobs": plp}]})
@@ -103,7 +95,7 @@ def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, qu
                 sem.release()
 
     class Srv(ThreadingHTTPServer):
-        request_queue_size = 4096                   # a real server's listen backlog: all of offline's connections at once
+        request_queue_size = 4096                   # the listen backlog
 
     srv = Srv(("127.0.0.1", port), H)
     srv.daemon_threads = True
@@ -112,7 +104,7 @@ def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, qu
 
 
 def spawn(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, queue_limit: int | None = None):
-    """The fake engine in its own process (so it can't steal the client's interpreter time); returns (proc, url)."""
+    """The fake engine in its own process; returns (proc, url)."""
     import socket
     import subprocess
     import sys
@@ -136,6 +128,6 @@ if __name__ == "__main__":
     ap.add_argument("--out-tokens", type=int, default=20); ap.add_argument("--queue-limit", type=int)
     ap.add_argument("--wrong-every", type=int, default=0)
     a = ap.parse_args()
-    time.sleep(a.delay)                      # stands in for loading weights and compiling
+    time.sleep(a.delay)                      # stands in for load time
     make_server(a.slots, a.token_s, a.out_tokens, a.queue_limit, a.port, a.wrong_every)
     threading.Event().wait()

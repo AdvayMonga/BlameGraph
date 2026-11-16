@@ -26,7 +26,7 @@ from lab.workspace import Workspace
 
 OBJECTIVE = (Path(__file__).parent / "prompts" / "objective.md").read_text()   # a template, filled by system_prompt
 MIN_SESSION_USD = 0.25
-CLOSING_USD = 0.50          # the reflection-only call after a session that left a measurement unreflected
+CLOSING_USD = 0.50          # cap of the reflection-only call after a session
 CLOSING_TURNS = 4
 CLOSING_TOOLS = ("reflect", "ledger")
 
@@ -66,8 +66,7 @@ class RunConfig:
 
 
 def referee(s: Session) -> dict:
-    """What the agent gets from the referee at the start of every session: the integrity verdict on this run so
-    far, with evidence, and the harness facts it cannot read off its ledger. Nothing judged, nothing advised."""
+    """What the agent gets from the referee each session: the integrity verdict on this run and the harness facts."""
     from evals.agent.feedback.report import lab_feedback
     from lab.evaltools import harness_facts
     recs = list(ledger.records(s.ledger_root, run=s.run_id))
@@ -79,8 +78,7 @@ def referee(s: Session) -> dict:
 
 
 def layer_map(t: target.Target, files) -> str:
-    """Each layer's files in the base tree (the target's `[layers]` globs), one bullet per layer; the rest of the write
-    surface last."""
+    """Each layer's files in the base tree (the target's `[layers]` globs), one bullet per layer; the rest last."""
     from fnmatch import fnmatch
     files, taken, lines = sorted(files), set(), []
     for name, globs in t.layers.items():
@@ -94,8 +92,7 @@ def layer_map(t: target.Target, files) -> str:
 
 
 def system_prompt(t: target.Target, spec: agent.AgentSpec) -> str:
-    """The agent's objective from the target spec, the regimes' definitions and the tool specs: what is there, how it
-    is scored and what it costs, nothing advised. Task-specific facts go in each session's brief."""
+    """The agent's objective from the target spec, the regimes' definitions and the tool specs."""
     from lab.evaltools import HOLDOUT_BUDGET
     from lab.infra.sandbox.surfaces import ALWAYS_DENY
     from evals.loadgen import suite
@@ -165,8 +162,8 @@ def closing_prompt(s: Session, recs: list[dict]) -> str:
 
 
 def closing(provider: agent.Provider, spec: agent.AgentSpec, tools: Toolbox, s: Session) -> dict | None:
-    """After a session that left measurements unreflected: one short call whose only tools are `reflect` and
-    `ledger`. Returns what the session record keeps under `closing`, or None when nothing was pending."""
+    """One short call with only `reflect` and `ledger`, after a session that left measurements unreflected.
+    Returns what the session record keeps under `closing`, or None when nothing was pending."""
     recs = experiments.unreflected(s.ledger_root, s.run_id)
     if not recs:
         return None
@@ -179,7 +176,7 @@ def closing(provider: agent.Provider, spec: agent.AgentSpec, tools: Toolbox, s: 
     c.system = system_prompt(target.load(), c)
     try:
         reply = provider.run(c)
-    except Exception as e:                      # charged at its cap, like a session whose provider raised
+    except Exception as e:                      # charged at its cap
         reply = agent.AgentReply(None, usd, 0, f"provider raised: {e}", True)
     return {"records": ids, "reflected": not experiments.unreflected(s.ledger_root, s.run_id),
             "usd": reply.cost_usd, "estimated": reply.cost_estimated, "tokens": reply.usage, "turns": reply.turns,
@@ -204,8 +201,8 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
     base_files = grader.base_files(cfg.repo, base)
     summary = {"run": run_id, "base": base, "sessions": 0, "stopped": None, "spent_usd": budget.spent_usd}
     wk = worker.load()
-    remote = wk if isinstance(wk, worker.Remote) else None      # then the agent works on that host, not here
-    if remote and not getattr(provider, "remote", False):       # its edits here would be overwritten by the mirror
+    remote = wk if isinstance(wk, worker.Remote) else None      # then the agent works on that host
+    if remote and not getattr(provider, "remote", False):       # the provider cannot work on a Remote host
         raise ValueError(f"provider {provider.name!r} works on this machine; it cannot run with LAB_WORKER=ssh")
     rws = remote.workspace_path(run_id) if remote else None
     live.path = run_dir / "live.jsonl"
@@ -228,7 +225,7 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
                                max_budget_usd=min(cfg.session_usd, budget.remaining_usd), workbench=s.workbench,
                                remote=remote, remote_workspace=rws)
         spec.system = system_prompt(target.load(), spec)
-        seen = run_dir / "sessions" / s.session_id           # exactly what the agent was given, for the researcher
+        seen = run_dir / "sessions" / s.session_id           # what the agent was given
         seen.mkdir(parents=True, exist_ok=True)
         (seen / "objective.md").write_text(spec.system)
         (seen / "brief.md").write_text(spec.prompt)
@@ -238,22 +235,22 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
             if remote:
                 remote.push(ws.path, rws)
             reply = provider.run(spec)
-        except Exception as e:                  # a provider that raises still gets charged and recorded
+        except Exception as e:                  # a provider that raises is still charged and recorded
             reply = agent.AgentReply(None, spec.max_budget_usd, 0, f"provider raised: {e}", True)
         if remote:
-            remote.pull(rws, ws.path)           # what the agent left on the worker is what is snapshotted
+            remote.pull(rws, ws.path)           # pull what the agent left on the worker
         clean_pristine(run_dir)
         try:
             budget.charge(reply.cost_usd, s.session_id)
             over = None
-        except BudgetExceeded as e:             # the provider overshot its cap; recorded, then the run ends
+        except BudgetExceeded as e:             # the provider overshot its cap: recorded, then the run ends
             budget.spent_usd += reply.cost_usd
             over = str(e)
         end = ws.snapshot()
         if end.violations and not tools.violation:      # a Bash write outside the surface, with no tool call after
             tools.violation = "; ".join(end.violations)
         close = None if tools.violation or over else closing(provider, spec, tools, s)
-        if close and "usd" in close:            # within the remaining budget by construction; a cap overshoot ends the run
+        if close and "usd" in close:            # a cap overshoot ends the run
             try:
                 budget.charge(close["usd"], f"{s.session_id} closing")
             except BudgetExceeded as e:

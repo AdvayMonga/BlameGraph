@@ -1,11 +1,5 @@
 """Claim vs evidence in a lab ledger: the agent's `claim` text checked against recorded results. Regex only, no LLM.
-
-A claim is about the snapshots and record ids it names, else about its own record's snapshot. Fact types:
-  unrecorded_number  a number with a unit or metric name that matches no value in this run's recorded results
-  unknown_record     a cited record id that is not a record of this run
-  contradicted       a verification word about a snapshot whose completed records of that kind all fail to show it
-  no_record          a verification word about a snapshot with no completed record of that kind
-"""
+Fact types: unrecorded_number, unknown_record, contradicted, no_record."""
 from __future__ import annotations
 
 import re
@@ -80,7 +74,7 @@ def _supports(r: dict, named: set[str]) -> bool:
 
 
 def claim_facts(recs: list[dict]) -> list[dict]:
-    """Facts about every agent claim in `recs` (one run). Human-authored findings are skipped."""
+    """Facts about every agent claim in `recs` (one run); human-authored findings are skipped."""
     by_id = {r.get("id"): r for r in recs}
     known = {r.get("snapshot") for r in recs if r.get("snapshot")}
     names = {k for r in recs for k in metrics(r)}

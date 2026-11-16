@@ -1,6 +1,5 @@
 """MLPerf Inference Llama-3.1-8B: CNN/DailyMail 3.0.0 validation, 13,368 news articles to summarize in 128 tokens.
-Short output, prompts up to 8k tokens. Server limits TTFT 2000 ms / TPOT 100 ms; interactive 500 ms / 30 ms (p99).
-Accuracy there: ROUGE >= 99% of BF16 reference, generated tokens >= 90%.
+Server limits TTFT 2000 ms / TPOT 100 ms; interactive 500 ms / 30 ms (p99).
 """
 from __future__ import annotations
 

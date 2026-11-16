@@ -1,6 +1,5 @@
-"""Head-wise RMSNorm then rotary, the example engine's `fused.rmsnorm_rope(x, weight, cos, sin, eps)`: x [B, S, H, D],
-weight [D], cos/sin [B, S, D] (HF layout: the two halves repeat). Called for queries (H = 32) and keys (H = 4).
-Shape: (B, S, H, D); cos/sin from random positions at Qwen3's rope theta (1e6)."""
+"""Head-wise RMSNorm then rotary, the example engine's `fused.rmsnorm_rope(x, weight, cos, sin, eps)`.
+Shape: (B, S, H, D). x [B, S, H, D], weight [D], cos/sin [B, S, D] (HF layout: the two halves repeat)."""
 from __future__ import annotations
 
 import torch
@@ -10,8 +9,7 @@ from lab.kernels.tasks._fused import EPS, HEAD_DIM, ROPE_THETA, START_EDITS, rms
 
 
 def reference(x, w, cos, sin):
-    """In fp32 throughout, the truth the error budget is measured against: the engine's fused kernel rounds where its
-    eager path does not, and rope's cancellation near zero amplifies one rounding; a candidate may be at most 2x as wrong as the engine's kernel, element by element."""
+    """In fp32 throughout."""
     n = rms(x, w).float()
     half = n.shape[-1] // 2
     rot = torch.cat((-n[..., half:], n[..., :half]), dim=-1)

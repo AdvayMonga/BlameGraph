@@ -1,5 +1,4 @@
-"""Process evals on lab ledgers (evals/agent/lab_process.py): prediction directions, the four cases, bundles never
-measured apart, reflections checked against recorded numbers."""
+"""Process evals on lab ledgers: prediction directions, the four cases, bundles, reflections against the records."""
 from __future__ import annotations
 
 from evals.agent.lab_process import process, record_facts

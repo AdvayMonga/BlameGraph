@@ -1,8 +1,4 @@
-"""The corpus contract: frozen, hashed, deterministic, split. A changed trace is a new version.
-
-Runs in the loop CI lane (pytest + ruff only): build_corpus.py imports only the stdlib at module
-level, and the tests that rebuild from raw traces skip when the trace cache is absent.
-"""
+"""The corpus contract: frozen, hashed, deterministic, split; a changed trace is a new version."""
 
 from __future__ import annotations
 
@@ -23,22 +19,22 @@ REGIMES = ("cold_start", "steady_interactive", "long_context", "spike")
 MIXED_CLASSES = ("mixed_1", "mixed_2", "mixed_3")
 CLASSES = REGIMES + MIXED_CLASSES
 RAW = bc.DEFAULT_CACHE
-# os.path.exists, not Path.exists: False rather than a raise when the jail denies the read
+# os.path.exists: False when the jail denies the read
 HAVE_RAW = all(os.path.exists(RAW / f)
                for f in (bc.BURSTGPT_CSV, *bc.BURSTGPT_EARLIER, bc.WILDCHAT_JSONL))
-# CI's corpus lane sets CORPUS_REQUIRE_RAW=1: there a missing cache must fail, never skip.
+# with CORPUS_REQUIRE_RAW=1 a missing cache fails instead of skipping
 REQUIRE_RAW = os.environ.get("CORPUS_REQUIRE_RAW") == "1"
 needs_raw = pytest.mark.skipif(not HAVE_RAW and not REQUIRE_RAW, reason=f"raw traces absent "
                                f"from {RAW}; run evals/regimes/fetch_traces.py")
-# held-out traces are not in git (`lab store pull --corpus`); tests that read them skip without them
+# tests that read held-out traces skip without them
 HAVE_HELDOUT = all(os.path.exists(CORPUS_DIR / name / "heldout.jsonl") for name in CLASSES)
 needs_heldout = pytest.mark.skipif(not HAVE_HELDOUT, reason="held-out traces absent; lab store pull --corpus")
 BUDGET_FLOOR = 1024
-CONTEXT = 32768             # Qwen3-30B-A3B native context: prompt + budget must fit
+CONTEXT = 32768             # prompt + budget must fit
 
 
 def _mini_corpus(d: Path):
-    """A tiny hand-made corpus with the real manifest machinery, for the tamper rules."""
+    """A tiny hand-made corpus with the real manifest machinery."""
     classes = {}
     for name in ("cold_start", "long_context"):
         classes[name] = WorkloadClass(name, "", 1000.0, None, 1.0, f"{name}/seen.jsonl",
@@ -75,9 +71,7 @@ def test_committed_corpus_verifies_and_every_class_is_non_empty():
 @needs_raw
 @pytest.mark.needs_host
 def test_committed_corpus_is_what_the_builder_produces(tmp_path):
-    """Provenance: the data on disk came from build_corpus.py at the secret seed (evals/regimes/.seed) from the
-    pinned raw inputs, byte for byte, plus the measured reference lengths (evals/regimes/lengths.py) when they are set.
-    A changed input or class table is a new version."""
+    """The data on disk is what build_corpus.py produces from the pinned raw inputs, plus the reference lengths."""
     if not (CORPUS_DIR / ".seed").exists():
         pytest.skip("no evals/regimes/.seed: pull it with `lab store pull --corpus`")
     rebuilt = bc.build_corpus(tmp_path, int((CORPUS_DIR / ".seed").read_text()))
@@ -117,7 +111,7 @@ def test_seen_and_heldout_are_disjoint():
 @pytest.mark.needs_host
 @needs_heldout
 def test_every_request_respects_the_floor_the_cap_and_the_context():
-    """Checked on the committed bytes alone: build_prompt_tokens is the build tokenizer's count."""
+    """Checked on the committed bytes alone."""
     for name in CLASSES:
         for r in _all(name):
             n = r.build_prompt_tokens
@@ -145,7 +139,6 @@ def test_every_trace_records_its_dilation():
 
 @pytest.mark.needs_host
 def test_no_committed_corpus_file_contains_a_credential():
-    """GitHub push protection caught a real key in a WildChat chat; never again."""
     hits = [(str(f.relative_to(CORPUS_DIR)), m.group()[:12])
             for f in sorted(CORPUS_DIR.rglob("*")) if f.is_file()
             for m in bc.SECRET_RE.finditer(f.read_text(errors="replace"))]
@@ -273,7 +266,7 @@ def test_tampered_trace_is_refused(tmp_path):
     with pytest.raises(CorpusError, match="new corpus version"):
         load_manifest(tmp_path)
     with pytest.raises(CorpusError):
-        load_trace("cold_start", "heldout", tmp_path)   # any bad file poisons the whole corpus
+        load_trace("cold_start", "heldout", tmp_path)   # any bad file fails the whole corpus
 
 
 def test_manifest_version_must_match_its_hashes(tmp_path):
@@ -287,8 +280,6 @@ def test_manifest_version_must_match_its_hashes(tmp_path):
 
 
 def test_changed_class_slo_is_a_new_version(tmp_path):
-    """The placeholder SLOs will be decided later; that decision must move the version, or
-    pre- and post-SLO panels would compare as equals."""
     m = _mini_corpus(tmp_path)
     mp = tmp_path / "manifest.json"
     d = json.loads(mp.read_text())
@@ -336,8 +327,6 @@ def test_trace_round_trip(tmp_path):
 
 
 def test_unset_expected_output_tokens_is_not_serialised(tmp_path):
-    """The field must be invisible until something measures it, or writing any trace would move
-    the corpus_version and orphan every panel already measured against it."""
     plain = TraceRequest(0.0, "s-0", 0, "hello", 16)
     assert "expected_output_tokens" not in plain.to_dict()
     assert "expected_output_hash" in plain.to_dict(), "the older field still writes its null"
@@ -455,8 +444,7 @@ def test_pick_window_stays_inside_one_week_of_its_split():
 
 
 def _mixed_trace(per_min=7, spike=50, tokens=None):
-    """Quiet, then 20 busy minutes from t=1200: post-idle requests, steady ones, a burst at
-    minute 35, and a late request so a window can start at 1200."""
+    """Quiet, then 20 busy minutes from t=1200: post-idle requests, steady ones, a burst at minute 35, a late one."""
     tokens = tokens or (lambda i: MIXED[i % 10])
     arr, i = [A(0.0, "", 100)], 0
     for m in range(20, 40):

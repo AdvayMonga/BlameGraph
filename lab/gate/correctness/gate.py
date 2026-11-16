@@ -1,15 +1,4 @@
-"""Combine the checks into one verdict under the MLPerf accuracy policy.
-
-Quantization is allowed (MLPerf rule: purely mathematical, original weights). A candidate passes if it keeps >= 99%
-of the reference's score, pooled over every task item, and its outputs are >= 90% of the reference's length. The
-candidate run checks nothing more; consistency and divergence are judged only when a caller supplies them.
-
-The verdict is three-valued. An engine that is not run-to-run deterministic churns answers both ways; at the dev
-tier that churn alone moves the pooled ratio by about a point. So a ratio under the line only FAILS when the net
-loss (lost minus gained) is significant (one-sided McNemar p < alpha); otherwise it is INCONCLUSIVE, which never
-counts as a pass and asks for the full tier. Unanswered items (the engine shed or errored after retries) also make
-the verdict inconclusive: they are neither right nor wrong. A 95% interval on the ratio is reported as a fact.
-"""
+"""Combine the checks into one pass/fail/inconclusive verdict under the MLPerf accuracy policy."""
 from __future__ import annotations
 
 import math
@@ -20,9 +9,9 @@ from .flips import _binom_tail_ge
 
 @dataclass
 class Thresholds:
-    min_score_ratio: float = 0.99    # MLPerf: >= 99% of the reference score (0.999 for its high-accuracy category)
-    min_length_ratio: float = 0.90   # MLPerf: output length >= 90% of reference
-    alpha: float = 0.01              # a ratio under the line fails only if the net loss is significant at this level
+    min_score_ratio: float = 0.99    # candidate score / reference score
+    min_length_ratio: float = 0.90   # candidate output length / reference
+    alpha: float = 0.01              # significance level a net loss must reach to fail
     policy: str = "MLPerf 99%"
 
 
@@ -32,7 +21,7 @@ def pooled_accuracy(flips: dict[str, dict]) -> dict:
     ref = sum(round(f["ref_accuracy"] * f["n"]) for f in flips.values())
     cand = sum(round(f["cand_accuracy"] * f["n"]) for f in flips.values())
     lost, gained = sum(f["lost"] for f in flips.values()), sum(f["gained"] for f in flips.values())
-    half = 1.96 * math.sqrt(lost + gained) / ref if ref else float("nan")   # the discordant pairs carry the noise
+    half = 1.96 * math.sqrt(lost + gained) / ref if ref else float("nan")
     ratio = cand / ref if ref else float("nan")
     return {"n": n, "ref_correct": ref, "cand_correct": cand, "score_ratio": ratio,
             "score_ratio_ci95": [ratio - half, ratio + half],
@@ -41,10 +30,9 @@ def pooled_accuracy(flips: dict[str, dict]) -> dict:
 
 def evaluate(divergence: dict | None = None, flips: dict[str, dict] | None = None, length: dict | None = None,
              consistency: dict | None = None, th: Thresholds | None = None, unanswered: int = 0) -> dict:
-    """Return {"verdict": pass|fail|inconclusive, "passed", "reasons", "gates": {name: {passed, reason, evidence}},
-    "metrics", "thresholds"}. Gates: accuracy, length (MLPerf's rule), and consistency only when given; a gate's
-    `passed` is True, False or None (not run / inconclusive). `passed` is True only when every gate passed. `metrics`
-    also carries per-task flips, and divergence when given, as facts."""
+    """Judge the gates (accuracy, length, consistency when given); `passed` is True only if every gate passed.
+    Returns {verdict: pass|fail|inconclusive, passed, reasons, gates: {name: {passed, reason, evidence}}, metrics,
+    thresholds}."""
     th = th or Thresholds()
     gates: dict[str, dict] = {}
 
@@ -94,6 +82,6 @@ def evaluate(divergence: dict | None = None, flips: dict[str, dict] | None = Non
 
 
 def to_ledger_record(result: dict, config: dict, base: str, change: str | None = None) -> dict:
-    """Shape a verdict as an `equiv` record for the loop's lab ledger (writer adds id/at/schema)."""
+    """Shape a verdict as an `equiv` ledger record (the writer adds id/at/schema)."""
     return {"kind": "equiv", "config": config, "base": base, "change": change, "metrics": result["metrics"],
             "gates": result["gates"], "raw": {"thresholds": result["thresholds"], "reasons": result["reasons"]}}

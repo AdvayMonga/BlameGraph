@@ -1,6 +1,4 @@
-"""KernelBench problems as kernel tasks, on CPU with a small made-up problem (no download): inputs and weights, the
-held-out size constant, the starting program, the judge on a correct rewrite and a wrong one, fast_p.
-Run: python tests/test_kernelbench.py"""
+"""KernelBench problems as kernel tasks, on CPU with a small made-up problem."""
 from __future__ import annotations
 
 import os
@@ -153,7 +151,7 @@ def test_the_benchmarks_own_evaluation_imports_without_its_llm_clients():
     kb._import_kernelbench(src)
     from kernelbench import eval as kbe
     from kernelbench import kernel_static_checker
-    assert kbe.get_tolerance_for_precision("fp32") == kb.TOLERANCE      # the pinned commit's, as the module states
+    assert kbe.get_tolerance_for_precision("fp32") == kb.TOLERANCE      # the pinned commit's tolerance
     valid, errors, _ = kernel_static_checker.validate_kernel_static(initial_program(task()), precision="fp32")
     assert not valid and errors                                         # the start is PyTorch, not a kernel
 

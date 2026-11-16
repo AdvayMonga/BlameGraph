@@ -1,7 +1,5 @@
 """A live view of lab runs for the researcher: `lab dashboard [--port 8080]`, then open the printed URL.
-
-Reads only the ledger and each run's `live.jsonl` (evals/agent/live.py), so it touches neither the engine, the GPU nor the
-agent's workspace, and nothing it shows reaches the agent. Served on 127.0.0.1 only."""
+Reads only the ledger and each run's `live.jsonl`; served on 127.0.0.1 only."""
 
 from __future__ import annotations
 
@@ -23,7 +21,7 @@ FEED = 60                                   # agent events shown, newest first
 
 
 def events(run_dir: Path) -> list[dict]:
-    """A run's progress lines; a torn last line (a write in flight) is skipped."""
+    """A run's progress lines; a torn last line is skipped."""
     p = run_dir / "live.jsonl"
     if not p.exists():
         return []

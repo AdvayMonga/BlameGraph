@@ -1,29 +1,6 @@
-"""FlashInfer-Bench (flashinfer-ai, MLSys 2026, Apache-2.0): LLM-serving kernels (GEMM, RMSNorm, paged and ragged
-GQA/MLA attention, GDN, MoE, sampling) as definitions, each a PyTorch reference `run` with fixed model axes, and
-workloads recorded from SGLang serving real prompts (Llama-3.1-8B, Qwen3-30B-A3B, DeepSeek-V3, ...): the variable
-axes, and the tensors that must be real (page tables, sequence offsets) as safetensors. A solution is source files
-plus an entry point; its leaderboard (bench.flashinfer.ai) scores a definition as the mean over its workloads of the
-FlashInfer baseline's latency over the solution's, 0 if any workload fails. Researcher-only: nothing in `lab/` reads it,
-and it is no agent tool.
+"""FlashInfer-Bench (flashinfer-ai, Apache-2.0): each definition as a kernel task `fib:NAME`, a shape being a workload.
 
-`lab kernels flashinfer-bench fetch [--definitions A,B]` downloads the dataset at REVISION (every definition,
-workload list and baseline solution; the named definitions' safetensors too) into local/flashinfer_bench/<revision>/,
-laid out as the benchmark's own TraceSet, with a manifest of every file's sha256; nothing is re-hosted. Each
-definition the default evaluator judges is a kernel task `fib:NAME` (`lab.kernels.tasks.load`): a shape is a workload,
-(its variable axes..., k) with k telling apart workloads with equal axes; recorded tensors from its safetensors, the rest
-drawn like the benchmark draws them (normal floats, fp8 clamped to +-2, ints in its ranges); scalars are each
-workload's own, carried as 0-d CPU tensors and handed to a program as Python numbers, as the benchmark hands them.
-Definitions the benchmark judges with another evaluator (sampling, low-bit MoE, DSA) or that have no workloads are
-refused. The reference and baseline are its `run`, the starting program too.
-The search's checker holds a program to half the benchmark's atol and rtol: |d| <= atol/2 + rtol/2 * |ref| implies
-the benchmark's rule (an element fails only when |d| > atol and |d| / |ref| > rtol). Contiguous inputs, no value
-scalings, NaN/Inf or edge shapes, no roofline (definitions state no work); the anti-gaming gates stay. Our addition is
-the held-out split: workloads in a band of the first variable axis (`lab.kernels.tasks.shapes.split`), never seen in selection.
-
-`score` runs the benchmark's own evaluator (`flashinfer_bench`, installed at EVALUATOR_COMMIT) jailed, on a TraceSet of
-the definition, all its workloads, the program as a solution and the FlashInfer baseline; `solution` writes the
-program as the benchmark's Solution JSON (what the leaderboard takes). `run` puts definitions through
-`lab.kernels.search.ab`'s arms (same shapes, start, evaluator, model, budget) and then `score`.
+  lab kernels flashinfer-bench fetch | list | solution | score | run
 """
 from __future__ import annotations
 
@@ -47,7 +24,7 @@ EVALUATOR_COMMIT = "15618a67e8d7b7f49ca61b5ba3b9f26a876d0bee"  # main
 TREE = f"https://huggingface.co/api/datasets/{DATASET}/tree/{REVISION}"
 RAW = f"https://huggingface.co/datasets/{DATASET}/resolve/{REVISION}"
 DATA = Path(__file__).resolve().parents[3] / "local" / "flashinfer_bench"
-ATOL = RTOL = 1e-2                # the default evaluator's at EVALUATOR_COMMIT (bench/config.py ResolvedEvalConfig)
+ATOL = RTOL = 1e-2                # the default evaluator's at EVALUATOR_COMMIT
 INT_RANGES = {torch.int8: (-128, 128), torch.int16: (-1024, 1024), torch.int32: (-1024, 1024),
               torch.int64: (-1024, 1024)}
 AUTHOR = "blamegraph"
@@ -75,8 +52,8 @@ def _tree(path: str) -> list[str]:
 
 
 def fetch(names: list[str] | None = None) -> Path:
-    """The dataset at REVISION: every definition, workload list and baseline solution, and the safetensors the named
-    definitions' workloads read, with sha256s. Adds to an earlier fetch."""
+    """The dataset at REVISION: definitions, workload lists, baseline solutions, the named definitions' safetensors.
+    Adds to an earlier fetch."""
     dest = DATA / REVISION[:12]
     man = json.loads((dest / "manifest.json").read_text()) if (dest / "manifest.json").exists() else \
         {"dataset": DATASET, "revision": REVISION, "files": {}}
@@ -168,7 +145,7 @@ def _dtype(s: str) -> torch.dtype:
 
 
 def _rand(shape, dt, device, g) -> torch.Tensor:
-    """A random input as the benchmark draws it (bench/utils.py _rand_tensor), from a generator seeded by `g`."""
+    """A random input as the benchmark draws it, from a generator seeded by `g`."""
     d = torch.Generator(device=device).manual_seed(int(torch.randint(0, 2**62, (1,), generator=g)))
     if dt in (torch.float32, torch.float16, torch.bfloat16):
         return torch.randn(shape, generator=d, device=device, dtype=dt)
@@ -215,7 +192,7 @@ def task(name: str, samples: str | None = None) -> Task:
         out = []
         for k in order:
             spec, dt = w["inputs"].get(k, {"type": "random"}), _dtype(defn["inputs"][k]["dtype"])
-            if spec["type"] == "scalar":                 # on the CPU: .item() costs no device sync when timed
+            if spec["type"] == "scalar":                 # on the CPU
                 v = spec["value"]
                 out.append(torch.tensor(v, dtype=torch.bool if isinstance(v, bool) else
                                         torch.int64 if isinstance(v, int) else torch.float64))
@@ -239,7 +216,7 @@ def task(name: str, samples: str | None = None) -> Task:
 
 
 def shape_sets(t: Task) -> dict:
-    """Seen and held-out workloads: every workload counted once, held out by `lab.kernels.tasks.shapes.split`'s band."""
+    """Seen and held-out workloads: every workload counted once, split by `lab.kernels.tasks.shapes.split`."""
     from lab.kernels.tasks import shapes as shapes_mod
     return shapes_mod.split(t, Counter({s: 1 for s in t.seen_default}))
 
@@ -258,8 +235,7 @@ def kernel(*args):
 
 
 def solution(name: str, program: str, author: str = AUTHOR) -> dict:
-    """The program as the benchmark's Solution (data/solution.py): one source file, entry `main.py::kernel`, outputs
-    returned (not destination-passing)."""
+    """The program as the benchmark's Solution: one source file, entry `main.py::kernel`, outputs returned."""
     bare = name.removeprefix("fib:")
     digest = hashlib.sha256(program.encode()).hexdigest()[:8]
     return {"name": f"{author}_{bare}_{digest}", "definition": bare, "author": author,
@@ -270,8 +246,8 @@ def solution(name: str, program: str, author: str = AUTHOR) -> dict:
 
 
 def _trace_set(name: str, program: str, dest: Path) -> list[str]:
-    """A TraceSet holding only `name`: its definition, its workloads with safetensors paths made absolute (into the
-    fetched dataset), the program's solution and the FlashInfer baselines. Returns the solutions' names."""
+    """A TraceSet holding only `name`: its definition, its workloads, the program's solution, the FlashInfer baselines.
+    Returns the solutions' names."""
     d, bare = root(), name.removeprefix("fib:")
     op = definition(bare)["op_type"]
     for kind, rel in (("definitions", _path(d, "definitions", bare)), ("workloads", _path(d, "workloads", bare))):
@@ -328,9 +304,8 @@ def _official(cfg_path: str) -> int:
 
 
 def leaderboard(rows: list[dict], ours: str, baseline: str | None) -> dict:
-    """The verdict from per-workload rows: correct on every workload; the leaderboard's score (mean of the baseline's
-    latency over ours, 0 if any workload fails: web/apps/web/lib/analytics.ts computeSolutionScore); the mean speedup
-    over the reference (the paper's)."""
+    """The verdict from per-workload rows: correct on every workload, the leaderboard's score, the mean speedup.
+    The score is the mean of the baseline's latency over ours, 0 if any workload fails."""
     mine = {r["workload"]: r for r in rows if r["solution"] == ours}
     base = {r["workload"]: r for r in rows if r["solution"] == baseline}
     correct = bool(mine) and all(r["status"] == "PASSED" for r in mine.values())
@@ -343,8 +318,7 @@ def leaderboard(rows: list[dict], ours: str, baseline: str | None) -> dict:
 
 
 def score(name: str, program: Path, work: Path) -> dict:
-    """The benchmark's own verdict on `program` over every workload of `name`, run jailed on this host's GPU, beside
-    the FlashInfer baseline's."""
+    """The benchmark's verdict on `program` over every workload of `name`, run jailed, beside the baseline's."""
     from lab.kernels.eval import jailed
     from lab.targets import engine
     from lab.infra.sandbox import grader
@@ -374,8 +348,7 @@ def score(name: str, program: Path, work: Path) -> dict:
 
 
 def summary(rows: list[dict]) -> dict:
-    """Over definitions: the leaderboard's author score (the plain mean of per-definition scores), the share correct,
-    and fast_p over the FlashInfer baseline."""
+    """Over definitions: the mean of per-definition scores, the share correct, fast_p over the FlashInfer baseline."""
     n = len(rows)
     vs = [r.get("vs_baseline") or 0.0 for r in rows]
     out = {"n": n, "correct": sum(bool(r.get("correct")) for r in rows), "score": round(sum(vs) / n, 4) if n else 0.0}
@@ -385,8 +358,8 @@ def summary(rows: list[dict]) -> dict:
 
 
 def run(names: list[str], arms: str, out: Path, extra: list[str]) -> dict:
-    """Each definition through lab.kernels.search.ab's arms (the same shapes, start, evaluator and budget for every arm),
-    then each arm's winner through `score`; writes <out>/flashinfer_bench.json."""
+    """Each definition through lab.kernels.search.ab's arms, then each arm's winner through `score`.
+    Writes <out>/flashinfer_bench.json."""
     from lab.kernels.tasks import shapes as shapes_mod
     from lab.kernels.search import ab
     from lab.kernels.tasks import load

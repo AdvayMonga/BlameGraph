@@ -1,10 +1,4 @@
-"""Paired flip test: same questions to reference and candidate, compared answer by answer.
-
-Average scores hide behaviour changes (quantization can hold accuracy within 1-2% while flipping over 10% of
-answers), and with a few hundred questions an average moves by about two points from chance alone. Pairing fixes
-both: only discordant items carry information, and McNemar's test asks whether right->wrong flips outnumber
-wrong->right flips by more than chance.
-"""
+"""Paired flip test: same questions to reference and candidate, compared answer by answer (McNemar)."""
 from __future__ import annotations
 
 import math
@@ -32,6 +26,6 @@ def flip_test(ref_correct: list[bool], cand_correct: list[bool]) -> dict:
         "net_loss_rate": (lost - gained) / n if n else float("nan"),
         "ref_accuracy": ref_acc, "cand_accuracy": cand_acc,
         "score_ratio": cand_acc / ref_acc if ref_acc else float("nan"),
-        # one-sided exact McNemar: probability of at least this many losses among discordant pairs if no degradation
+        # one-sided exact McNemar
         "p_degraded": _binom_tail_ge(lost, lost + gained),
     }

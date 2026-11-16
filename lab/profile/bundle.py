@@ -32,7 +32,7 @@ def write_json(path: Path, obj: Any) -> None:
 
 
 def git_sha() -> str | None:
-    """LAB_GIT_SHA when lab.infra.cloud.vm shipped it (the pushed tree has no .git), else git here, else None."""
+    """LAB_GIT_SHA if set, else git's HEAD here, else None."""
     if os.environ.get("LAB_GIT_SHA"):
         return os.environ["LAB_GIT_SHA"]
     try:
@@ -85,8 +85,8 @@ def ops_table(prof: Any, top: int = 200) -> dict:
 
 
 def kernels_table(events: Any) -> dict | None:
-    """CUDA kernels aggregated by name (times in us), by total time; None when the trace has no CUDA activity.
-    record_function ranges also appear on the device timeline: they are annotations, not kernels."""
+    """CUDA kernels aggregated by name (times in us), by total time, user annotations excluded; None when no CUDA
+    activity."""
     agg: dict[str, list[float]] = {}
     for e in events:
         if e.device_type == DeviceType.CUDA and not getattr(e, "is_user_annotation", False):
@@ -101,7 +101,7 @@ def kernels_table(events: Any) -> dict | None:
 
 def meta(device: str, settings: Any, prompts: list[list[int]], max_tokens: int, t0: float,
          t1: float, **extra: Any) -> dict:
-    """A number is a fact about a config, so the engine settings travel with every bundle."""
+    """The bundle's provenance: git sha, versions, device, engine settings, workload hash and time window."""
     return {"git_sha": git_sha(), "torch": torch.__version__, "python": sys.version.split()[0],
             "platform": platform.platform(), "device": device,
             "settings": asdict(settings),

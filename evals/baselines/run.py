@@ -1,13 +1,8 @@
-"""The engine comparison, on the GPU VM: every (engine, precision) of engines.toml served one at a time on the same GPU
-and cores, each measured by the same client: the client check once, then per configuration a launch check (the model
-answers, a fixed-length answer runs to its length), the regimes, equiv once, and cold start. Repeats run the
-configurations in a rotated order, so drift over the session falls on every engine alike. Every stage writes one file
-and is skipped when that file exists, so a rerun resumes. Run from the BlameGraph checkout with the engine's python:
+"""The engine comparison, on the GPU VM: every (engine, precision) of engines.toml served one at a time and measured by
+the same client. Every stage writes one file and is skipped when that file exists.
 
     lab compare run --out ~/compare [--engines ours,vllm,sglang,trtllm] [--precisions bf16,fp8]
                           [--stages clientcheck,launch,regimes,equiv,cold] [--repeats 1] [--regimes all] [--tol 0.02]
-    # more repeats of the contested regimes, numbered after the first pass's:
-    lab compare run --out ~/compare --stages launch,regimes --regimes bursty,overload --repeats 2 --first-repeat 1
 """
 from __future__ import annotations
 
@@ -34,8 +29,7 @@ def load(path: Path = HERE / "engines.toml") -> dict:
 
 def command(spec: dict, engine: str, precision: str, out: Path, cache: str, prefix: str = "", mounts: str = "") -> str:
     """The shell command that serves `engine` at `precision`; `cache` is the dir the engine keeps compile caches in.
-    `prefix` runs in front of the server (a profiler's launcher; in a container it replaces the image's entrypoint,
-    which the engine's `entrypoint` names); `mounts` are extra `docker run` flags."""
+    `prefix` runs in front of the server; `mounts` are extra `docker run` flags."""
     c, e = spec["common"], spec["engines"][engine]
     env = e["precision"][precision]
     model = e.get("checkpoint") or spec["precision"][precision]["checkpoint"]
@@ -60,7 +54,7 @@ def command(spec: dict, engine: str, precision: str, out: Path, cache: str, pref
 
 
 def _sh(*args: str) -> str:
-    """A command's stdout; empty where the tool is missing (a laptop has no nvidia-smi)."""
+    """A command's stdout; empty where the tool is missing."""
     try:
         return subprocess.run(args, capture_output=True, text=True).stdout.strip()
     except FileNotFoundError:
@@ -73,7 +67,7 @@ def _get(url: str, timeout: float = 5.0):
 
 
 def gpu_free(timeout_s: float = 300.0) -> bool:
-    """Until no process holds GPU memory (a stopped container can take a while to let go)."""
+    """Wait until no process holds GPU memory, up to `timeout_s`."""
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         used = _sh("nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits").split()
@@ -87,7 +81,7 @@ def facts() -> dict:
     """What the GPU and host were during a configuration's runs."""
     return {"gpu": _sh("nvidia-smi", "--query-gpu=name,driver_version,clocks.sm,clocks.max.sm,clocks.mem,power.limit,"
                      "temperature.gpu,clocks_throttle_reasons.active", "--format=csv,noheader"),
-            "gpu_uuid": _sh("nvidia-smi", "--query-gpu=uuid", "--format=csv,noheader"),   # a spot VM can move hosts
+            "gpu_uuid": _sh("nvidia-smi", "--query-gpu=uuid", "--format=csv,noheader"),
             "cpus": os.cpu_count(), "kernel": _sh("uname", "-r"), "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
 
 

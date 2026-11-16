@@ -1,8 +1,6 @@
-"""A provider for any OpenAI-compatible chat-completions API (OpenAI, Gemini, DeepSeek, Mistral, OpenRouter, ...),
-called directly with that provider's key. Selected by LAB_AGENT_PROVIDER=openai; LAB_MODEL names the model,
-LAB_OPENAI_BASE_URL the API (https, public host; default OpenAI's), OPENAI_API_KEY the key, LAB_MODEL_PRICE
-"in,out" its $ per million tokens. The loop runs here, outside the jail: the key never enters it, file tools are
-confined to the workspace and pass the write guard, and Bash runs jailed with no network."""
+"""A provider for any OpenAI-compatible chat-completions API, selected by LAB_AGENT_PROVIDER=openai.
+
+Env: LAB_MODEL, LAB_OPENAI_BASE_URL (https, public host), OPENAI_API_KEY, LAB_MODEL_PRICE ("in,out", $/MTok)."""
 
 from __future__ import annotations
 
@@ -31,7 +29,7 @@ RETRY_STATUS = (429, 500, 502, 503, 504)
 
 
 def base_url(url: str | None = None) -> str:
-    """The API's base URL: https and a public host only, so nothing is routed through this machine or its network."""
+    """The API's base URL; https and a public host only."""
     url = (url if url is not None else os.environ.get("LAB_OPENAI_BASE_URL", "")).strip() or BASE_URL
     parts = urlsplit(url)
     host = (parts.hostname or "").lower()
@@ -47,7 +45,7 @@ def base_url(url: str | None = None) -> str:
 
 
 def prices(raw: str | None = None) -> tuple[float, float]:
-    """LAB_MODEL_PRICE "in,out" in $ per million tokens. Required: without it the budget cannot be enforced."""
+    """LAB_MODEL_PRICE "in,out" in $ per million tokens; required."""
     raw = raw if raw is not None else os.environ.get("LAB_MODEL_PRICE", "")
     try:
         p_in, p_out = (float(x) for x in raw.split(","))
@@ -99,7 +97,7 @@ FINISH = _fn("finish", "End this session with `status` (`continue` or `stop`) an
 
 
 class Workbench:
-    """The built-in tools, confined to the workspace; writes go through the same guard as the Claude provider."""
+    """The built-in tools, confined to the workspace; writes go through the write guard."""
 
     def __init__(self, workspace: Path, base_files: frozenset[str]):
         self.ws, self.base_files = workspace.resolve(), base_files
@@ -111,7 +109,7 @@ class Workbench:
         return target
 
     def _files(self):
-        for p in sorted(self.ws.rglob("*")):        # a link out of the workspace is never followed
+        for p in sorted(self.ws.rglob("*")):        # links out of the workspace are skipped
             if p.is_file() and ".git" not in p.relative_to(self.ws).parts and p.resolve().is_relative_to(self.ws):
                 yield p
 

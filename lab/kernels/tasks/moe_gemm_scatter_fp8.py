@@ -1,11 +1,8 @@
-"""The MoE down projection as the example engine runs it (inference-server #112, fp8 by default since #122):
-`moe_gemm_scatter(a, w, sorted_ids, expert_ids, M, tok, pair_w, out, w_scale=)` adds, per (token, expert) pair in
-expert-sorted order, pair_w[i] * (a[i] @ dequant(w[expert(i)]).T) into out[tok[i]], `out` [T, N] fp32 zeroed by the
-caller. The task's call zeroes a fresh `out` (same for the baseline and every candidate) and returns it.
+"""The MoE down projection, the example engine's `moe_gemm_scatter`: per pair, adds
+pair_w[i] * (a[i] @ dequant(w[expert(i)]).T) into out[tok[i]]. The task's call zeroes a fresh `out` and returns it.
 
-Shape: (M pairs, K, N, E experts, T tokens). Inputs: a [M, K] bf16 (the pairs' activated rows), w [E, N, K] fp8 e4m3,
-w_scale [E, N] fp32, sorted_ids / expert_ids from `align` (block_m 16), tok [M] int32, pair_w [M] fp32, out0 [T, N]
-fp32 (the output's shape). Captured calls carry the engine's routing (sorted_ids, expert_ids, tok)."""
+Shape: (M pairs, K, N, E experts, T tokens). Inputs: a [M, K] bf16, w [E, N, K] fp8 e4m3, w_scale [E, N] fp32,
+sorted_ids / expert_ids from `align`, tok [M] int32, pair_w [M] fp32, out0 [T, N] fp32."""
 from __future__ import annotations
 
 import torch
@@ -60,7 +57,7 @@ def make_real(shape, dtype, device, g, ints):
 
 
 def shape_of(call):
-    """(M, K, N, E, T) from a call with fp8 weights; bf16 calls are skipped (no task for them)."""
+    """(M, K, N, E, T) from a call with fp8 weights; None for bf16 calls."""
     a, kw = call["args"], call.get("kwargs") or {}
     if len(a) < 8 or "shape" not in a[0] or a[1].get("dtype") != "float8_e4m3fn" or "w_scale" not in kw:
         return None
@@ -70,8 +67,7 @@ def shape_of(call):
 
 
 def cost(shape, dtype, inputs=None):
-    """2·M·N·K FLOPs; bytes: the pairs' rows, the touched experts' fp8 weights and scales, the fp32 output read and
-    written."""
+    """2·M·N·K FLOPs; bytes: the pairs' rows, the touched experts' fp8 weights and scales, the fp32 output twice."""
     M, K, N, E, T = shape
     b = torch.finfo(dtype).bits // 8
     touched = int(inputs[4][inputs[4] < E].unique().numel()) if inputs is not None else min(E, M)
@@ -83,7 +79,6 @@ def edge_shapes(shape):
     return [(1, K, N, E, 1), (3, K, N, E, 2), (E + 1, K, N, E, E + 1)]
 
 
-# Qwen3-30B-A3B's down projection: K = 768 (expert width), N = 2048 (hidden), 128 experts, 8 pairs per token.
 TASK = Task("moe_gemm_scatter_fp8", "inference_server.models.moe_kernel:moe_gemm_scatter", reference, make_inputs,
             shape_of, cost, call=_call, make_real=make_real, graphs=True, kernel_names=(r"_moe_gemm_scatter_kernel",),
             heldout_axes=(0,), edge_shapes=edge_shapes, dtypes=(torch.bfloat16,), layouts=(),

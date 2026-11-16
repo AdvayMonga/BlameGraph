@@ -1,12 +1,4 @@
-"""Where the decode megakernel stops beating the separate kernels (a measured routing table, by batch
-size and context length, instead of MEGAKERNEL_MAX_ROWS). One `lab.profile.profile` run per path, prompt length and batch
-size, its requests decoding together: the engine's timeline records each scheduler step's wall time and its batch
-(`step` events); only steps at the run's own batch size count (a run's tail, as requests finish, has a few).
-Each run has the target's launch env (as served: its CONTEXT_WINDOW sizes the decode graphs, and a row past it decodes
-eagerly), then the path's: the megakernel forced for every batch it takes (MEGAKERNEL_MAX_ROWS=16), or off
-(MEGAKERNEL=0); a megakernel run whose log lacks the engine's "megakernel on" line is marked `megakernel_not_on`. A
-run's bundle is reused only when its env and max tokens match (`crossover-meta.json` in it). Run on the GPU host from
-this repo with the engine's venv:
+"""Median decode step time of the megakernel path against the separate kernels, by prompt length and batch size.
 
   lab crossover --out DIR [--batches 1,2,4,8] [--prompt-lens 512,4096,16384] [--max-tokens 256]
 
@@ -24,9 +16,9 @@ from pathlib import Path
 
 PATHS = {"megakernel": {"MEGAKERNEL": "1", "MEGAKERNEL_MAX_ROWS": "16"}, "kernels": {"MEGAKERNEL": "0"}}
 MAX_ROWS = int(PATHS["megakernel"]["MEGAKERNEL_MAX_ROWS"])     # the most rows the megakernel path takes
-MEGA_ON = "decode-step megakernel on"                         # the engine's log line when it decodes with the megakernel
+MEGA_ON = "decode-step megakernel on"                         # the engine's log line when the megakernel is on
 META = "crossover-meta.json"
-PROFILE = ("import logging, runpy; logging.basicConfig(level=logging.INFO); "     # lab.profile.profile, its INFO lines logged
+PROFILE = ("import logging, runpy; logging.basicConfig(level=logging.INFO); "     # lab.profile.profile with INFO logged
            "runpy.run_module('lab.profile.profile', run_name='__main__', alter_sys=True)")
 
 
@@ -51,8 +43,8 @@ def reusable(d: Path, meta: dict) -> bool:
 
 
 def table(runs: dict[tuple[str, int, int], dict[int, list[float]]], not_on=frozenset()) -> dict:
-    """{prompt_len: {batch: {megakernel_ms, kernels_ms, steps, faster}}} from each run's steps at its own batch; a
-    (prompt_len, batch) in `not_on` (its megakernel run never turned it on) is marked and has no faster."""
+    """{prompt_len: {batch: {megakernel_ms, kernels_ms, steps, faster}}} from each run's steps at its own batch size.
+    A (prompt_len, batch) in `not_on` is marked `megakernel_not_on` and has no `faster`."""
     out: dict = {}
     for (path, plen, b), by in runs.items():
         xs = by.get(b) or []

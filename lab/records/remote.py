@@ -33,7 +33,7 @@ class DirRemote(Remote):
         tmp = dest.with_name(dest.name + f".tmp-{os.getpid()}-{threading.get_ident()}")
         shutil.copyfile(path, tmp)
         try:
-            os.link(tmp, dest)                  # atomic and refuses an existing name: write-once under races
+            os.link(tmp, dest)                  # atomic; refuses an existing name
         except FileExistsError:
             return False
         finally:
@@ -53,8 +53,7 @@ class DirRemote(Remote):
 
 
 class S3Remote(Remote):
-    """A bucket over the S3 API; R2 when LAB_STORE_ENDPOINT names its account endpoint. Credentials from the usual
-    AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY."""
+    """A bucket over the S3 API; LAB_STORE_ENDPOINT names the endpoint, credentials are the usual AWS_* variables."""
 
     def __init__(self, bucket: str, endpoint: str | None = None, client=None):
         import boto3
@@ -72,7 +71,7 @@ class S3Remote(Remote):
             raise
 
     def put(self, key: str, path: Path) -> bool:
-        """A conditional put (If-None-Match: *): the bucket itself refuses a second write of a key."""
+        """A conditional put (If-None-Match: *)."""
         from botocore.exceptions import ClientError
         try:
             with open(path, "rb") as fh:

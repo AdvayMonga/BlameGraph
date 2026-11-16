@@ -1,4 +1,4 @@
-"""evals.agent.canaries.canary patches the engine from outside: unknown names refused, each canary changes the behaviour it names."""
+"""evals.agent.canaries.canary: unknown names refused, each canary changes the behaviour it names."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from evals.agent.canaries import canary
 
 @pytest.fixture
 def engine(monkeypatch):
-    """Fresh class attributes per test, since apply() patches them in place."""
+    """Fresh class attributes per test."""
     for mod in ("inference_server.backends.custom_torch_backend", "inference_server.scheduler"):
         pytest.importorskip(mod, reason="needs the engine and its deps", exc_type=ImportError)
     from inference_server.backends.custom_torch_backend import CustomTorchBackend as B
@@ -61,4 +61,4 @@ def test_admit_fewer_admits_one_less_but_reports_the_config(engine, monkeypatch)
     assert seen == [7] and sched.max_batch_size == 8
     one = SimpleNamespace(max_batch_size=1)
     S._admit_pending(one, "cpu")
-    assert seen[-1] == 0          # not inert at 1: nothing admits, which a harness must notice
+    assert seen[-1] == 0          # nothing admits

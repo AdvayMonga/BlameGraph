@@ -5,7 +5,7 @@ from typing import Callable
 
 
 def length_ratio(ref_lengths: list[int], cand_lengths: list[int]) -> dict:
-    """Candidate output length relative to the reference over the same requests (MLPerf requires >= 90%)."""
+    """Candidate output length relative to the reference over the same requests."""
     if len(ref_lengths) != len(cand_lengths):
         raise ValueError("length lists must be paired request by request")
     tr, tc = sum(ref_lengths), sum(cand_lengths)
@@ -15,9 +15,8 @@ def length_ratio(ref_lengths: list[int], cand_lengths: list[int]) -> dict:
 
 def consistency(responses: list[dict], tokenize: Callable[[str], list], eos_text: tuple[str, ...] = (),
                 count_tolerance: int = 1) -> dict:
-    """Each response: {"text": full text, "first_token_text": text of the first streamed token chunk,
-    "reported_tokens": token count the server reported}. Counts are re-derived with the reference tokenizer;
-    `count_tolerance` allows the end-of-sequence token to be counted or not."""
+    """Check each response's first token, token count and text after EOS against the reference tokenizer.
+    Each response: {"text", "first_token_text", "reported_tokens"}; `count_tolerance` allows for the EOS token."""
     bad_first = bad_count = after_eos = 0
     for r in responses:
         text = r.get("text") or ""

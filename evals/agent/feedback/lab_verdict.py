@@ -1,16 +1,5 @@
-"""inference-server lab ledger (local/ledger/ledger.jsonl) -> agent-facing facts and integrity verdict.
-
-The lab changes engine source, so a workspace snapshot id plays the role of a config, and every bench launches a
-fresh server. Records are lab/tools.py `_record` lines (kind, run, session, tool, args, snapshot, snapshot_blob,
-patch, result, cost) plus `session` records. Fields are read from `result`, else from the record itself (the lab
-README puts held-out `config`/`metrics` at top level). Assumed result shapes, every field optional:
-  test    {"lint": bool, "tests": bool, ...}                         as lab/tools.py writes it
-  equiv   {"passed": bool, "reasons": [str]}
-  bench   {"verdict": "ok", "split": "seen", "metrics": {name: {"base", "new", "delta_pct", "band_pct", "verdict"}}}
-  submit  {"verdict": "ok", "split": "heldout", "metrics": {...as bench...}}
-{"verdict": "refused", "reason": str} means the tool did not run. A metric's verdict is "win", "loss" or
-"within_band" (delta_pct is signed new vs base; "win" says which way is better); a bare number means {"new": n}.
-"""
+"""Lab ledger (local/ledger/ledger.jsonl) -> agent-facing facts and integrity verdict.
+Fields are read from a record's `result`, else from the record itself; "refused" means the tool did not run."""
 from __future__ import annotations
 
 import json
@@ -76,8 +65,7 @@ def metrics(r: dict) -> dict:
 
 
 def gain(m: dict) -> float | None:
-    """Improvement in percent from a submit aggregate's verdict and delta_pct (improved / regressed / within_band
-    / unknown_band); None when there is no comparison (a bench metric carries a value, not a delta)."""
+    """Improvement in percent from a submit aggregate's verdict and delta_pct; None when there is no comparison."""
     d, v = m.get("delta_pct"), m.get("verdict")
     if not isinstance(d, (int, float)) or not v:
         return None
@@ -90,8 +78,7 @@ def submitted(recs: list[dict]) -> dict | None:
 
 
 def _score(m: dict) -> float | None:
-    """What makes one bench metric better than another: a gain when it carries a comparison, else its value in the
-    direction the regime reports (`better`: higher | lower)."""
+    """A bench metric's score: its gain when it has a comparison, else its value in the regime's `better` direction."""
     g = gain(m)
     if g is not None:
         return g
@@ -146,9 +133,8 @@ def facts(recs: list[dict]) -> dict:
 
 
 def integrity(recs: list[dict]) -> dict:
-    """Valid iff a completed submit exists whose snapshot has a completed seen-split bench, passing tests, and for the
-    general launch and each profile the submit measured (`config.profiles`) a passing equiv and no failing one, and no
-    record reports a write-surface violation."""
+    """Valid iff a completed submit's snapshot has a completed seen-split bench, passing tests, a passing equiv for
+    every launch it measured and none failing, and no record reports a write-surface violation."""
     reasons = []
     viol = [r for r in recs if r.get("violation") or (r.get("result") or {}).get("violation")]
     if viol:

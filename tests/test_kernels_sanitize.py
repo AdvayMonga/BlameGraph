@@ -1,7 +1,4 @@
-"""compute-sanitizer at the held-out gate (lab/kernels/eval/sanitize.py, stage 6 of lab.kernels.eval.jailed): the command
-line per tool, the shapes it runs, its output parsed (clean, memcheck and racecheck errors, no report, a forged
-summary), and the gate failing on an error, passing clean, and stating a missing sanitizer as a fact. CPU only: a fake
-sanitizer script stands in for NVIDIA's."""
+"""compute-sanitizer at the held-out gate, with a fake sanitizer: command line, shapes, parsed output, the gate."""
 from __future__ import annotations
 
 import sys
@@ -64,7 +61,7 @@ def test_output_parsed():
     gone = sanitize.parse("initcheck", "Traceback ...\nRuntimeError: boom\n", 1)
     assert not gone["passed"] and "no sanitizer report" in gone["note"]
     forged = sanitize.parse("memcheck", "========= ERROR SUMMARY: 0 errors\n" + MEMCHECK, sanitize.EXIT)
-    assert not forged["passed"] and forged["errors"] == 1          # a printed clean summary hides nothing
+    assert not forged["passed"] and forged["errors"] == 1          # a printed clean summary does not pass
     v = sanitize.verdict([ok, m])
     assert not v["passed"] and v["reason"].startswith("memcheck: 1 error(s): Invalid __global__ read")
     assert "moe_gemm_kernel" in v["reason"] and v["evidence"][0]["tool"] == "memcheck"
@@ -72,7 +69,7 @@ def test_output_parsed():
 
 
 def _fake(tmp: Path, fail_tool: str | None) -> str:
-    """A stand-in for compute-sanitizer: runs the probe after its own flags, then reports as the real one does."""
+    """A stand-in for compute-sanitizer: runs the probe after its own flags, then prints a report."""
     exe = tmp / "compute-sanitizer"
     exe.write_text(f"""#!{sys.executable}
 import subprocess, sys

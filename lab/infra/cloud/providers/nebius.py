@@ -1,4 +1,4 @@
-"""Nebius AI Cloud through the `nebius` CLI (auth: `nebius profile create`). A stopped VM keeps its boot disk; GPU billing ends."""
+"""Nebius AI Cloud through the `nebius` CLI (auth: `nebius profile create`)."""
 
 from __future__ import annotations
 
@@ -10,15 +10,15 @@ from pathlib import Path
 
 from lab.infra.cloud.providers import ProviderError, Record, env_field, pricing
 
-USER = "lab"   # created by cloud-init; Nebius refuses root and admin as login names
+USER = "lab"   # the login cloud-init creates
 
 
 @dataclass(frozen=True)
 class Nebius:
     type: str = env_field("LAB_VM_TYPE", "1gpu-16vcpu-200gb")          # a preset of `platform`
     platform: str = env_field("LAB_VM_PLATFORM", "gpu-h200-sxm")
-    location: str = env_field("LAB_VM_LOCATION", "")                   # the CLI profile's project decides; informational
-    image: str = env_field("LAB_VM_IMAGE", "ubuntu24.04-cuda13.0")      # an image family; CUDA 13 driver, as on Verda (setup installs cu130 torch)
+    location: str = env_field("LAB_VM_LOCATION", "")                   # informational
+    image: str = env_field("LAB_VM_IMAGE", "ubuntu24.04-cuda13.0")      # an image family
     disk_gb: str = env_field("LAB_VM_DISK_GB", "400")
     project: str = env_field("LAB_VM_PROJECT", "")                      # --parent-id; empty uses the profile's
     subnet: str = env_field("LAB_VM_SUBNET", "")                        # empty: the project's first subnet
@@ -92,7 +92,7 @@ class Nebius:
                   "--boot-disk-attach-mode", "READ_WRITE",
                   "--network-interfaces", nics, "--cloud-init-user-data", user_data,
                   *(("--follows-spot-price", "--preemptible-on-preemption", "stop", "--recovery-policy", "fail")
-                    if self.spot else ()))    # a preemptible instance takes only "fail" (the CLI's default: "recover")
+                    if self.spot else ()))    # spot: stop on preemption, no recovery
 
     def _id(self, name: str) -> str:
         raw = self._raw(name)
@@ -107,7 +107,7 @@ class Nebius:
         self._cli("compute", "instance", "stop", self._id(name))
 
     def delete(self, name: str) -> None:
-        """Instance and its managed boot disk; `lab.infra.cloud.vm` never calls this, it is for ending for good."""
+        """Delete the instance and its managed boot disk."""
         self._cli("compute", "instance", "delete", self._id(name))
 
     def types(self) -> str:

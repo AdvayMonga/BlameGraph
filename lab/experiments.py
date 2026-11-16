@@ -1,9 +1,5 @@
-"""Experiment records: no measured number without the agent's reasoning beside it, and no
-reasoning without the number. A measurement names an open `hypothesis` record (the bottleneck and proposed change,
-its rationale, optionally what result would end it) and carries an `expect`: the metric, the predicted value and
-why. The lab computes the gap between expected and measured. Before the next measurement the agent files a
-`reflection` on the last one: why it matched or differed, optionally an alternative hypothesis. All of it is the
-agent's text, attributed and paired with measured outcomes; none of it is the referee's."""
+"""Experiment records: a measurement names an open `hypothesis` and carries an `expect`; the lab computes the gap.
+The next measurement waits for a `reflection` on the last."""
 from __future__ import annotations
 
 import math
@@ -16,8 +12,7 @@ PROFILERS = ("profile", "trace", "kernel", "hostprof")      # results with no `m
 PROFILE_WORKLOAD = ("requests", "max_tokens", "prompt_len", "synthetic", "corpus_class", "seed", "capture", "profile")
 UNITS = ("absolute", "change_pct")
 LAYERS = ("kernels", "model_execution", "runtime", "serving")      # lab/infra/context/layers.py's four layers
-# Runs made outside the lab by a researcher (`lab start`, lab/experiment.py): their text is a person's, so no agent view
-# (the `ledger` tool, the agent's SQL index) shows any of their records.
+# Prefix of run ids made by a researcher (`lab start`); no agent view shows their records.
 RESEARCHER = "researcher-"
 
 
@@ -185,7 +180,6 @@ def new_reflection(root: Path, run: str, args: dict) -> dict:
     return out
 
 
-# -- outcome --------------------------------------------------------------------------------
 def _actual(tool: str, expect: dict, result: dict | None, metrics: dict | None, baseline: dict | None,
             base_result: dict | None, base: str | None) -> tuple:
     """(actual, missing): the measured counterpart of `expect` in this tool's result, or why there is none."""
@@ -225,9 +219,8 @@ def _number(obj, path: str):
 
 
 def _base(tool: str, args: dict) -> str | None:
-    """Where a change_pct prediction finds its baseline in the run's baseline record: the same path for a measured
-    tool; under `profiled` (torch at profile's defaults, general launch) for a profile measured the same way; none
-    for another instrument or workload."""
+    """The path of a change_pct prediction's baseline in the run's baseline record: the same path for a measured tool,
+    under `profiled` for a profile at its defaults, None for another instrument or workload."""
     if tool not in PROFILERS:
         return ""
     return "profiled." if tool == "profile" and not any(k in args for k in PROFILE_WORKLOAD) else None
@@ -271,8 +264,7 @@ def outcome(tool: str, args: dict, result: dict | None = None, metrics: dict | N
 
 
 def summary(root: Path, run: str) -> list[dict]:
-    """This run's hypotheses, each with its measurements (expected, actual, gap) and reflections, for the brief; a
-    bundled measurement is listed under each hypothesis it measured."""
+    """This run's hypotheses, each with its measurements (expected, actual, gap) and reflections, for the brief."""
     hs = hypotheses(root, run)
     refl = {r["record"]: r for r in ledger.records(root, run=run, kind="reflection")}
     out = {h: {"id": h, "hypothesis": r["hypothesis"], "rationale": r["rationale"],

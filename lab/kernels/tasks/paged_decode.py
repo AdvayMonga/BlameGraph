@@ -1,11 +1,8 @@
-"""Paged decode attention, the example engine's `paged_decode_attention`: one query token per sequence attends to
-that sequence's keys and values, read through a block table from a shared paged pool.
+"""Paged decode attention, the example engine's `paged_decode_attention`: one query token per sequence over paged K/V.
 
 Shape: (N sequences, Hq query heads, Hkv KV heads, D head dim, block_size, L longest context). Inputs:
-q [N, Hq, D], k_pool / v_pool [blocks, Hkv, block_size, D], block_tables [N, cols] int32, seq_lens [N]
-int32 (one sequence at L, the rest drawn in [1, L]). The scale is 1/sqrt(D). With the option `context_window` the
-table is as wide as the engine's graphed decode passes it (context_window / block_size columns, unused ones 0);
-without, as wide as the longest sequence needs."""
+q [N, Hq, D], k_pool / v_pool [blocks, Hkv, block_size, D], block_tables [N, cols] int32, seq_lens [N] int32.
+The scale is 1/sqrt(D). The option `context_window` widens the table to context_window / block_size columns."""
 from __future__ import annotations
 
 import math
@@ -44,7 +41,7 @@ def make_inputs(shape, dtype, device, g, lens=None, context_window=None):
     blocks = N * per + 1
     table = torch.randperm(blocks, generator=g)[: N * per].view(N, per).to(torch.int32)
     cols = -(-context_window // bs) if context_window else per
-    if cols > per:                               # the engine's static graph table: wider, unused entries 0
+    if cols > per:                               # pad the table with unused 0 columns
         table = torch.cat([table, torch.zeros(N, cols - per, dtype=torch.int32)], 1)
     q, k, v = (randn(sz, g, device, dtype) for sz in ((N, Hq, D), (blocks, Hkv, bs, D), (blocks, Hkv, bs, D)))
     return q, k, v, table.to(device), lens.to(device)
@@ -66,8 +63,7 @@ def shape_of(call):
 
 
 def cost(shape, dtype, inputs=None):
-    """Read q and every live K/V once, write the output; 4 FLOPs per (head, key, dim) for QK and PV. With inputs, the
-    keys are their real sequence lengths; without, every sequence at L, which overstates the work."""
+    """4 FLOPs per (head, key, dim); bytes: q, each live K/V once, the output. No inputs: every sequence at L."""
     N, Hq, Hkv, D, bs, L = shape
     b = torch.finfo(dtype).bits // 8
     keys = int(inputs[4].sum()) if inputs is not None else N * L
@@ -79,10 +75,9 @@ def edge_shapes(shape):
     return [(1, Hq, Hkv, D, bs, 1), (1, Hq, Hkv, D, bs, bs + 1), (N, Hq, Hkv, D, bs, bs), (3, Hq, Hkv, D, bs, 7)]
 
 
-# Qwen3-30B-A3B: 32 query heads, 4 KV heads, head dim 128; the engine's block size is read from captures.
 TASK = Task("paged_decode", "inference_server.models.paged_attention_kernel:paged_decode_attention", reference,
             make_inputs, shape_of, cost, call=_call, make_real=make_real, graphs=True, options=("context_window",),
             kernel_names=(r"_paged_decode(_splitk)?_kernel", r"_gqa_decode\w*_kernel", r"_splitk_combine(_vec)?_kernel"), heldout_axes=(0, 5), edge_shapes=edge_shapes,
-            dtypes=(torch.bfloat16,), layouts=(),        # the engine passes contiguous tensors only
+            dtypes=(torch.bfloat16,), layouts=(),
             seen_default=((1, 32, 4, 128, 16, 512), (8, 32, 4, 128, 16, 1024), (32, 32, 4, 128, 16, 2048)),
             heldout_default=((64, 32, 4, 128, 16, 4096), (128, 32, 4, 128, 16, 8192)))

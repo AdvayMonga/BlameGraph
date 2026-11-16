@@ -1,17 +1,5 @@
-"""Regions: a run of consecutive decode stations of the engine, from one kernel up to the whole
-step, as a kernel task whose harness is generated rather than hand-written.
-
-The engine declares its stations, in order (name, what each reads and writes, and a function computing its writes;
-local/notes/handoff-engine-stations.md). A region's inputs are what its stations read before any of them writes it;
-its outputs are what it writes that a later station reads or that outlives the step (`live`: the residual stream, the
-KV cache). The baseline runs the stations in order in the engine's dtypes; the reference runs them on fp32 copies of
-the floating inputs, the truth a region's error budget is measured against (2x the baseline's own error). The fusion
-bound is the bytes the region must move (its inputs and outputs; intermediates can stay on chip) at peak bandwidth,
-beside the bytes its stations move one by one. `functional()` gives an in-place writer (kv_append) a copy of the K/V
-pool, a copy the engine never makes, so its winner could not install as is: a region must end before kv_append or
-start after it (refused otherwise, for now). The checker clones every input, shared weights included, several times
-(the reference's fp32 copy, the baseline's, the before-copies), so a whole step of stations does not fit in memory:
-the whole step is lab/kernels/tasks/step.py, whose weights are passed beside the inputs, never cloned."""
+"""Regions: a run of consecutive stations of the engine as a kernel task with a generated harness.
+The baseline runs the stations in the engine's dtypes; the reference runs them on fp32 copies of the floating inputs."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -62,13 +50,12 @@ def run(region: tuple[Station, ...], ctx: dict, outputs: tuple[str, ...], pinned
 
 
 ROUTE_WRITES = ("sorted_ids", "expert_ids", "tok", "pair_w")    # the engine's `route` station's writes
-DISCRETE = ("sorted_ids", "expert_ids", "tok")                  # its discrete choice: which expert each pair goes to
+DISCRETE = ("sorted_ids", "expert_ids", "tok")                  # its discrete choice: each pair's expert
 
 
 def pair_weights(logits, sorted_ids, expert_ids, tok, renorm: bool) -> torch.Tensor:
-    """Each pair's routing weight in fp32 at the expert it was sent to: the softmax of its token's logits there,
-    renormalized over the token's pairs when `renorm` (norm_topk_prob). The layout is the engine's route's: pair ids
-    grouped by expert in `sorted_ids`, padded with M to blocks of `block_m`, `expert_ids` each block's expert."""
+    """Each pair's fp32 softmax weight at the expert it was sent to, renormalized over its token's pairs when `renorm`.
+    `sorted_ids`: pair ids grouped by expert, padded with M to blocks; `expert_ids`: each block's expert."""
     M = tok.numel()
     block_m = sorted_ids.numel() // expert_ids.numel()
     slots = torch.nonzero(sorted_ids < M).view(-1)
@@ -83,18 +70,14 @@ def pair_weights(logits, sorted_ids, expert_ids, tok, renorm: bool) -> torch.Ten
 
 def functions(stations, first, last, live=(), constants: dict | None = None,
               reference_stations=None) -> tuple[Callable, Callable, tuple[str, ...], tuple[str, ...]]:
-    """(baseline, reference, inputs, outputs): both take the inputs as tensors in `inputs` order (the `constants`, e.g.
-    a layer config, bound instead) and return the outputs in `outputs` order. The reference computes in fp32 on
-    `reference_stations` (the same stations in a form that runs in fp32: an engine's torch versions of its kernels),
-    returning each output in the baseline's dtype; without them, on the stations themselves. A region holding the
-    `route` station keeps the baseline's routing (fp32 logits may send a near-tied token to another expert) and
-    computes each pair's weight in fp32 at the baseline's expert (`pair_weights`)."""
+    """(baseline, reference, inputs, outputs): both take tensors in `inputs` order and return them in `outputs` order.
+    The reference runs `reference_stations` (else the stations) in fp32, with the baseline's routing and dtypes."""
     consts = dict(constants or {})
     region = span(stations, first, last)
     ref_region = span(reference_stations, first, last) if reference_stations is not None else region
     ins, outs = interface(stations, first, last, live)
     ins = tuple(i for i in ins if i not in consts)
-    route = next((s for s in region if set(ROUTE_WRITES) <= set(s.writes)), None)   # its reads include `logits`
+    route = next((s for s in region if set(ROUTE_WRITES) <= set(s.writes)), None)
 
     def baseline(*xs):
         return run(region, {**consts, **dict(zip(ins, xs))}, outs)
@@ -104,11 +87,11 @@ def functions(stations, first, last, live=(), constants: dict | None = None,
     def reference(*xs):
         up = [x.float() if isinstance(x, torch.Tensor) and x.is_floating_point() else x for x in xs]
         pinned = None
-        if route is not None:            # the baseline's discrete routing, from the un-upcast inputs
+        if route is not None:            # the baseline's discrete routing
             clones = [x.clone() if isinstance(x, torch.Tensor) else x for x in xs]
             picks = dict(zip(DISCRETE, run(region[:region.index(route) + 1], {**consts, **dict(zip(ins, clones))},
                                            DISCRETE)))
-            ref_route = ref_region[region.index(route)]      # its other writes (e.g. an accumulator it zeroes) stay its own
+            ref_route = ref_region[region.index(route)]      # its other writes stay its own
             pinned = {route.name: lambda c: {**ref_route.fn(c), **picks, "pair_w": pair_weights(
                 c["logits"], *(picks[k] for k in DISCRETE), bool(getattr(c.get("cfg"), "norm_topk_prob", False)))}}
         exact = run(ref_region, {**consts, **dict(zip(ins, up))}, outs, pinned)
@@ -120,8 +103,7 @@ def functions(stations, first, last, live=(), constants: dict | None = None,
 
 
 def bytes_moved(stations, first, last, ctx: dict, live=()) -> dict:
-    """What the region must read and write (`fused_bytes`: its inputs and outputs) beside what its stations read and
-    write one by one (`unfused_bytes`, each intermediate written and read again), on the tensors of `ctx`."""
+    """{fused_bytes: the region's inputs and outputs; unfused_bytes: every station's reads and writes}, on `ctx`."""
     region = span(stations, first, last)
     ins, outs = interface(stations, first, last, live)
     seen, unfused = dict(ctx), 0
@@ -141,9 +123,8 @@ def task(name: str, stations: tuple[Station, ...], first: str, last: str,
          make_ctx: Callable[[tuple, torch.dtype, str, torch.Generator], dict], shape_of: Callable,
          dtypes: tuple = (torch.bfloat16,), live: tuple[str, ...] = (), watch: tuple[str, ...] = (),
          constants: dict | None = None, reference_stations=None, **kw) -> Task:
-    """The region as a kernel task: inputs from `make_ctx(shape, dtype, device, generator)` (a context of named
-    tensors: captured activations, the layer's weights), the stations as the baseline, fp32 as the reference, the
-    error budget on, and the fused bytes as the roofline's bytes (no FLOP count: the bound is memory's)."""
+    """The region as a kernel task: inputs from `make_ctx(shape, dtype, device, generator)`, a dict of named tensors.
+    The stations are the baseline, fp32 the reference; its cost is (0 FLOPs, the fused bytes)."""
     base, ref, ins, _ = functions(stations, first, last, live, constants, reference_stations)
 
     def make_inputs(shape, dtype, device, g):
@@ -159,16 +140,16 @@ def task(name: str, stations: tuple[Station, ...], first: str, last: str,
                 cost=cost, dtypes=dtypes, layouts=(), error_budget=ERROR_BUDGET, baseline_fn=base, watch=watched, **kw)
 
 
-# -- the engine's stations (inference-server models/stations.py; local/notes/handoff-engine-stations.md) ---------------
+# -- the engine's stations --
 ENGINE = "inference_server.models.stations"
 OVERRIDES_PACKAGE = "inference_server.models.regions"    # where the engine's `overrides()` reads OVERRIDES from
-# The engine modules the stations call into at call time (watched for patches; the engine may export this later).
+# The engine modules the stations call into (watched for patches).
 STATION_MODULES = ("inference_server.models.fused", "inference_server.models.moe_kernel",
                    "inference_server.models.paged_attention_kernel", "inference_server.models.paged_kv_cache",
                    "inference_server.models.qwen3_moe", "inference_server.models.prefill_flashinfer")
 POOL = ("k_cache", "v_cache")           # the K/V pool's names when the engine declares no IN_PLACE
-LAYERS = (0, 16, 32, 47)                 # the layers a region is captured at and held for (lab/kernels/tasks/hold.py)
-HELDOUT_LAYER = 32                       # its calls are held out: a program must hold on a layer it was not chosen on
+LAYERS = (0, 16, 32, 47)                 # the layers a region is captured at and held for
+HELDOUT_LAYER = 32                       # its calls are held out
 
 
 def station_set(first: str) -> str:
@@ -181,9 +162,8 @@ def _needs_worker(*_a, **_k):
 
 
 def light(name: str, heldout_axes: tuple[int, ...] = ()) -> Task:
-    """A region as the controller knows it without the engine, its samples or its holder (all on the GPU host): its
-    name, entry, capture traffic's env and, from a shapes file the GPU host wrote, its held-out axes. Enough to
-    capture it, select its shapes and write its prompts; nothing here can run it."""
+    """A region without the engine, its samples or its holder: its name, entry, capture env and held-out axes.
+    Its reference, make_inputs and cost raise."""
     from lab.profile.capture import STEP, STEP_ENTRY
     step = name == STEP
     which = station_set(name.split(":")[1]) if not step else ""
@@ -200,7 +180,7 @@ def _engine():
 
 
 def _importable(names: tuple[str, ...]) -> tuple[str, ...]:
-    """The modules of `names` that import here (core._watched imports every watched module; triton is Linux-only)."""
+    """The modules of `names` that import here."""
     import importlib
     out = []
     for n in names:
@@ -213,13 +193,12 @@ def _importable(names: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def _pool() -> tuple[str, ...]:
-    """The K/V pool's entries: the whole pool, whose block count is the launch's memory budget, not a call's shape."""
+    """The K/V pool's entry names."""
     return tuple(getattr(_engine(), "IN_PLACE", POOL))
 
 
 def engine_stations(which: str = "DECODE", functional: bool = True) -> tuple[Station, ...]:
-    """The engine's stations of set `which` (DECODE or PREFILL), made pure (`functional`: what writes in place gets a
-    copy) unless `functional` is False."""
+    """The engine's stations of set `which` (DECODE or PREFILL); `functional` gives in-place writers a copy."""
     st = _engine()
     own = getattr(st, which)
     pure = st.functional(own) if functional and hasattr(st, "functional") else own
@@ -227,8 +206,7 @@ def engine_stations(which: str = "DECODE", functional: bool = True) -> tuple[Sta
 
 
 def reference_stations(which: str = "DECODE") -> tuple[Station, ...] | None:
-    """The engine's stations of set `which` in a form that runs in fp32 (`reference()`: torch versions of its
-    kernels), or None."""
+    """The engine's stations of set `which` in a form that runs in fp32, or None."""
     st = _engine()
     if not hasattr(st, "reference"):
         return None
@@ -241,8 +219,7 @@ def live() -> tuple[str, ...]:
 
 
 def _shaped(reads: dict) -> list[str]:
-    """The reads that give a call its shape: activations with a shape, not weights (the same for every call) and not
-    the K/V pool (sized by the launch, not the call)."""
+    """The reads that give a call its shape: activations with a shape, not weights or the K/V pool."""
     pool = _pool()
     return [k for k in sorted(reads) if not k.startswith("w.") and k not in pool and "shape" in reads[k]]
 
@@ -253,10 +230,8 @@ def _signature(reads: dict) -> tuple[int, ...]:
 
 
 def _heldout_axes(reads: dict, ins: tuple[str, ...], prefill: bool = False) -> tuple[int, ...]:
-    """Where in the flat signature the held-out axes are: the rows of the region's first activation (its tokens, the
-    second axis, for a prefill wave, packed into one row), and the context when the region reads it: the attention
-    block tables' width (in blocks), or a prefill wave's page list (`fi_kv_indices`), whose queries are padded to the
-    wave's size, so their token axis never varies."""
+    """Positions of the held-out axes in the flat signature: the first activation's rows (tokens for prefill) and the
+    block tables' width; for a prefill region reading `fi_kv_indices`, that list's length only."""
     at, pos = {}, 0
     for k in _shaped(reads):
         at[k], pos = pos, pos + len(reads[k]["shape"])
@@ -268,15 +243,13 @@ def _heldout_axes(reads: dict, ins: tuple[str, ...], prefill: bool = False) -> t
 
 
 def _consts(entries: dict, constants: dict | None) -> dict:
-    """A region's constants, the one source for its task and its start program: a holder's non-tensor entries (`cfg`,
-    `layer`, weights that are None, e.g. bf16 experts' scales) and `constants`."""
+    """A region's constants: a holder's non-tensor entries and `constants`."""
     return {**{k: v for k, v in entries.items() if not isinstance(v, torch.Tensor)}, **(constants or {})}
 
 
 def _region(first: str, last: str) -> tuple[tuple[Station, ...], tuple[str, ...]]:
-    """(the engine's stations of the region's set, what the region writes in place: the K/V pool, e.g. kv_append). A
-    region with an in-place writer gets the stations as they run in the engine, and its calls a copy of what they
-    write (`_copying`); one whose stations need the backend's context (`p_kv_store`) is refused."""
+    """(the engine's stations of the region's set, the names the region writes in place).
+    The stations are not made functional when it writes in place; raises if it reads `paged_ctx`."""
     stations = engine_stations(station_set(first))
     region = span(stations, first, last)
     inplace = tuple(sorted({w for s in region for w in s.writes} & set(getattr(_engine(), "IN_PLACE", ()))))
@@ -287,9 +260,7 @@ def _region(first: str, last: str) -> tuple[tuple[Station, ...], tuple[str, ...]
 
 
 def _copying(ins: tuple[str, ...], outs: tuple[str, ...], inplace: tuple[str, ...]) -> Callable:
-    """A task's `call` for a region writing `inplace` in place: each call writes into a copy of those inputs (the same
-    work for the baseline and a program, inside the timed call), and a program must write them in place and return
-    those same tensors, as the engine's override contract requires."""
+    """A task's `call` that passes fn a copy of the `inplace` inputs; raises unless fn returns those same tensors."""
     at = {n: ins.index(n) for n in inplace if n in ins}
 
     def call(fn, *xs):
@@ -308,26 +279,22 @@ def _copying(ins: tuple[str, ...], outs: tuple[str, ...], inplace: tuple[str, ..
 
 def from_engine(first: str, last: str, samples: str | None = None, shared_weights: str | None = None,
                 dtypes: tuple = (torch.bfloat16,), constants: dict | None = None) -> Task:
-    """The region first..last of the engine's decode stations as a task: inputs from captured samples (`samples`: a
-    CAPTURE_REGION dir, its first call per shape kept whole; only the holder's `layer` when it names one) and the
-    layer's weights and config attached from a holder (`shared_weights`: a lab.kernels.tasks.shared_weights file whose
-    non-tensor entries, e.g. `cfg`, are constants); seed 0 is the captured inputs exactly, later seeds perturb the
-    activations, never the weights."""
+    """The region first..last of the engine's stations as a task: inputs from `samples` (a CAPTURE_REGION dir), weights
+    and constants from the `shared_weights` holder. Seed 0 is the captured inputs; later seeds perturb activations."""
     from lab.kernels.tasks.shared_weights import attach
     stations, inplace = _region(first, last)
-    held = attach(Path(shared_weights), copy_ok=True) if shared_weights else {}   # the jail's IPC may be refused
+    held = attach(Path(shared_weights), copy_ok=True) if shared_weights else {}
     consts = _consts(held, constants)
     ins = tuple(i for i in interface(stations, first, last, live())[0] if i not in consts)
     fn, which = f"region:{first}:{last}", station_set(first)
     layers = consts.get("layers") or ([consts["layer"]] if consts.get("layer") is not None else None)
-    multi = bool(layers) and len(layers) > 1     # a call's shape starts with its layer; each layer its own weights
+    multi = bool(layers) and len(layers) > 1     # a call's shape starts with its layer
     calls = []
     if samples:
         from lab.profile import capture
         calls = [c for c in capture.load(Path(samples))
                  if c.get("fn") == fn and (layers is None or c.get("layer") in layers)]
-    # A read the engine passes as None in some calls (a prefill wave's `tokens`, `fi_tokens` when nothing is padded)
-    # is a constant None: the calls where it is None are kept, the others left out.
+    # A read captured as None is a constant None; calls where it is a tensor are left out.
     nones = sorted({i for c in calls for i, d in (c.get("reads") or {}).items() if i in ins and d.get("value", 1) is None})
     if nones:
         calls = [c for c in calls if all((c.get("reads") or {}).get(i, {}).get("value", 1) is None for i in nones)]
@@ -353,11 +320,11 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
             raise ValueError(f"no captured sample of region {first}..{last} at shape {shape}")
         xs = {k: v.to(device) for k, v in torch.load(got, weights_only=True)["reads"].items()
               if isinstance(v, torch.Tensor)}
-        if g.initial_seed():                         # seed 0: the captured inputs; others perturbed, per seed
+        if g.initial_seed():                         # seed 0: the captured inputs
             for k, v in xs.items():
                 if v.is_floating_point() and k not in ("cos", "sin", "k_cache", "v_cache"):
                     xs[k] = (v.float() * (1 + 1e-2 * torch.randn(v.shape, generator=g).to(device))).to(v.dtype)
-        own = f"L{shape[0]}." if multi else None     # that layer's weights ("L<i>.w.*"), else the one layer's
+        own = f"L{shape[0]}." if multi else None     # that layer's weights ("L<i>.w.*")
         return {**xs, **{(k[len(own):] if own else k): v for k, v in held.items() if isinstance(v, torch.Tensor)
                          and (own is None or k.startswith(own))}}
 
@@ -365,7 +332,7 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
         if call.get("fn") != fn or (layers is not None and call.get("layer") not in layers):
             return None
         s = key(call)
-        return s if s in by_shape else None          # a shape with no saved sample (over the engine's cap) is skipped
+        return s if s in by_shape else None          # a shape with no saved sample is skipped
     start = (lambda: start_program(first, last, {**(constants or {}), **{i: None for i in nones}}, shared_weights)) \
         if shared_weights else None
     return task(fn, stations, first, last, make_ctx, shape_of, dtypes=dtypes, live=live(),
@@ -374,14 +341,13 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
                 heldout_axes=tuple(a + int(multi) for a in _heldout_axes(reads, ins, which == "PREFILL")) if calls else (),
                 heldout_values=((0, (HELDOUT_LAYER,)),) if multi and HELDOUT_LAYER in layers else (),
                 start_program=start,
-                graphs=which == "DECODE",         # the engine replays its decode step as a CUDA graph: no host time
+                graphs=which == "DECODE",
                 **({"call": _copying(ins, interface(stations, first, last, live())[1], inplace)} if inplace else {}),
-                edge_shapes=lambda shape: [])     # inputs come from captures only: no synthetic edge shapes
+                edge_shapes=lambda shape: [])     # no synthetic edge shapes
 
 
 def start_program(first: str, last: str, constants: dict | None = None, shared_weights: str | None = None) -> str:
-    """The starting program of a region: the engine's own stations, called in order, its constants (the holder's,
-    as `from_engine` binds them, and `constants`) written in as values."""
+    """The region's starting program: the engine's stations called in order, its constants written in as values."""
     from lab.kernels.tasks import shared_weights as sw
     stations, inplace = _region(first, last)
     consts = _consts(sw.constants(Path(shared_weights)) if shared_weights else {}, constants)
@@ -400,13 +366,8 @@ def start_program(first: str, last: str, constants: dict | None = None, shared_w
 
 
 def override_module(program: str, first: str, last: str) -> str:
-    """A winning program as a module of the engine's overrides package: the program (`kernel`, `_INPUTS`, `_OUTPUTS`,
-    `_CONST`) plus `OVERRIDES = {(first, last): _override}`, which the engine's `overrides()` reads and `resolve()`
-    checks against the stretch's interface. Each call checks that what the engine passes for a baked constant is
-    that constant (None stays None, `cfg` equal): per call but trivial next to the kernel (graph replays skip it). A
-    call that passes a tensor for an activation the program was built for as None (a padded prefill wave's `tokens`, when
-    only packed waves were captured) runs the engine's own stations instead; any other difference (weights' scales,
-    `cfg`) is an error."""
+    """A winning program as a module of the engine's overrides package, with `OVERRIDES = {(first, last): _override}`.
+    `_override` runs the engine's own stations when a None constant arrives as a tensor; raises on other mismatches."""
     from lab.kernels.eval.ship import module_source
     which = station_set(first)
     return (module_source(program, "kernel").rstrip("\n") + "\n\n\ndef _own(c):\n"

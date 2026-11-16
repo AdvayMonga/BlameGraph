@@ -1,9 +1,6 @@
 """lab kernels evolve ship --task T --program BEST.py --gate GATE.json --engine REPO [--base REF] [--budget USD]
 
-A kernel that passed `gate` becomes an engine change: a commit on a new branch of the engine repo whose only change is
-the task's module, built with git plumbing so the engine's working tree and index are never touched. With --budget,
-the researcher run is started on it (`lab.experiment start`), which the lab then measures end to end (`bench`,
-`equiv`, `submit`) with a person's hypothesis and expectations; the kernel loop writes no reasoning of its own."""
+A gated kernel as a commit on a new branch of the engine repo; with --budget, a researcher run is started on it."""
 from __future__ import annotations
 
 import json
@@ -21,8 +18,7 @@ def _git(repo: Path, *args: str, env: dict | None = None, data: str | None = Non
 
 
 def module_source(program: str, attr: str) -> str:
-    """The engine module inside an evolved program (`run.initial_program`'s markers), with the entry point bound to
-    whatever the program's `kernel` names."""
+    """The engine module inside an evolved program, its entry point bound to whatever the program's `kernel` names."""
     body = program.split("# EVOLVE-BLOCK-START\n", 1)[-1]
     src, _, tail = body.partition("# EVOLVE-BLOCK-END\n")
     name = re.search(r"^kernel\s*=\s*(\w+)\s*$", tail or src, re.M)
@@ -34,8 +30,7 @@ def module_source(program: str, attr: str) -> str:
 
 
 def unstart(task, src: str) -> str:
-    """The task's start edits undone where the program kept them as they were (`run._start`): the engine gets back its
-    own spelling, and the commit holds the kernel change only."""
+    """The task's start edits undone where the program kept them unchanged."""
     for old, new in task.start_edits:
         if src.count(new) == 1:
             src = src.replace(new, old)
@@ -43,8 +38,7 @@ def unstart(task, src: str) -> str:
 
 
 def no_live_autotune(src: str, base: str | None) -> str:
-    """`src`, refused when it would autotune while serving where `base` (the engine module it replaces) does not:
-    a winner ships with its autotune frozen (lab/kernels/eval/freeze.py, which `gate` and `kernel_search` apply)."""
+    """`src`; raises ValueError when it would autotune at run time where `base` does not."""
     from lab.kernels.eval.freeze import introduced
     live = introduced(src, base)
     if live:
@@ -54,7 +48,7 @@ def no_live_autotune(src: str, base: str | None) -> str:
 
 
 def gate_passed(gate: dict) -> bool:
-    """Every gate passed (correctness, physics, memory, timing/capture) and the held-out check judged > 0 cases."""
+    """Every gate passed and the held-out check judged > 0 cases."""
     gates = json.loads(gate.get("artifacts", {}).get("gates") or "{}")
     held = gates.get("correctness_heldout") or {}
     return (gate.get("metrics", {}).get("correct") == 1.0 and bool(gates) and
@@ -108,9 +102,8 @@ def _region_files(task, program: str, repo: Path, base: str) -> dict[str, str]:
 
 
 def region_files(task, program: str, pkg: str, overrides: list, names: list[str], has_init: bool) -> dict[str, str]:
-    """A region's winner as a module of the overrides package `pkg` (`regions.override_module`), refused when it
-    overlaps one of `overrides` ((path, (first, last)), stations ordered as `names`); the package's `__init__.py`
-    added when it lacks one."""
+    """A region's winner as a module of the overrides package `pkg`, plus `__init__.py` when the package lacks one.
+    Raises ValueError when it overlaps one of `overrides` ((path, (first, last)), stations ordered as `names`)."""
     from lab.kernels.tasks import regions
     from lab.profile.capture import STEP
     if task.name == STEP:

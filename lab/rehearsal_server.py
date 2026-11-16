@@ -1,8 +1,5 @@
-"""The practice engine for `lab rehearsal`: an OpenAI-compatible server with a fixed number of decode
-slots. Each decode step costs STEP_S on the simulated device plus the host work of choosing the next word, which
-folds the whole output so far. Each word is one token in the target model's tokenizer. Multiple-choice questions
-("pick one") are answered "(C)". vLLM-shaped teacher-forced scoring at /v1/completions. Stdlib only: this file is
-copied into the practice engine's repo.
+"""The practice engine for `lab rehearsal`: an OpenAI-compatible server with a fixed number of decode slots.
+Stdlib only; copied into the practice engine's repo.
 
   python server.py --port N [--wrong-every K]
 """
@@ -15,7 +12,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SLOTS = 2               # requests decoded at once; the rest wait
-STEP_S = 0.01           # the simulated device: one decode step takes this long (it stands for the GPU)
+STEP_S = 0.01           # the simulated device: seconds per decode step
 MIX_ROUNDS = 2000       # host work per word folded into the decoder state
 WORDS = [" the", " of", " and", " to", " in", " a", " is", " that", " for", " it"]
 ANSWER, ANSWER_TOKENS = "The answer is (C).", 6
@@ -52,7 +49,7 @@ def answer(messages: list[dict], max_tokens: int, wrong: bool = False) -> tuple[
 
 
 def make_server(port: int = 0, wrong_every: int = 0) -> ThreadingHTTPServer:
-    """`wrong_every` = K: every Kth multiple-choice answer is wrong (validation's known-bad launch)."""
+    """`wrong_every` = K: every Kth multiple-choice answer is wrong."""
     slots, lock, counter = threading.Semaphore(SLOTS), threading.Lock(), [0]
 
     def reply(messages: list[dict], max_tokens: int) -> tuple[list[str], int]:

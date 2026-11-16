@@ -1,5 +1,5 @@
-"""Progress lines for the researcher's dashboard (`evals/agent/dashboard.py`): one JSON line per event appended to `path`, the
-running run's `<run_dir>/live.jsonl`. Nothing in the run reads them; with no run going, `emit` does nothing."""
+"""Progress lines for the researcher's dashboard: one JSON line per event appended to `path`, the running run's
+`<run_dir>/live.jsonl`; with no run going, `emit` does nothing."""
 
 from __future__ import annotations
 
@@ -16,5 +16,5 @@ def emit(event: str, **fields) -> None:
     try:
         with open(path, "a") as f:
             f.write(json.dumps({"ts": time.time(), "event": event, **fields}, default=str) + "\n")
-    except OSError:                 # a dashboard is never worth failing a run
+    except OSError:
         pass

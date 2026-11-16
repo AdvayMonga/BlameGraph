@@ -1,17 +1,7 @@
-"""The task: what a run is trying to improve, stated up front so the win condition is known, never inferred.
+"""The task: what a run is trying to improve, and its win condition (`score`).
 
-    [task]
-    goal = "cut p99 time per token under steady load without losing burst capacity"
-    context = "the engine serves one chat product; requests are mostly single-turn"   # optional: specs and facts only
-    [objective]
-    regimes = ["single_stream"]            # the headline(s) that count; several combine by `combine`
-    combine = "min"                        # min | mean of the regimes' gains, in %
-    [constraints]                          # "don't get worse than X": checked on every submit
-    bursty = { max_regression_pct = 5.0 }
-
-A win is a submit whose objective gain clears the noise band on every objective regime (verdict `improved`), with
-no constraint regressed. `score()` computes that from a submit record's metrics; it is the task's definition, not a
-judgment, so the agent sees it.
+A task.toml has [task] goal and optional context, [objective] regimes and combine (min | mean), and
+[constraints] regime = { max_regression_pct = N }.
 """
 
 from __future__ import annotations
@@ -61,13 +51,12 @@ def gain_pct(agg: dict, better: str) -> float | None:
     return d if better == "higher" else -d
 
 
-LOWER_IS_BETTER = ("single_stream", "cold_start")     # fallback when the caller cannot pass the measured direction
+LOWER_IS_BETTER = ("single_stream", "cold_start")     # used when the caller passes no measured direction
 
 
 def score(metrics: dict, task: Task, better: dict | None = None) -> dict:
-    """From a submit record's metrics ({regime: {base, new, delta_pct, band_pct, verdict}}) and each regime's
-    measured direction (`better`, as submit reports it): per-regime gains, the combined objective, constraint
-    checks, and whether this is a win."""
+    """Per-regime gains, the combined objective, constraint checks and whether this is a win.
+    `metrics`: a submit record's {regime: {base, new, delta_pct, band_pct, verdict}}; `better`: {regime: direction}."""
     from evals.loadgen import suite
     better = {**{n: ("lower" if n in LOWER_IS_BETTER else "higher") for n in suite.REGIMES}, **(better or {})}
     gains, verdicts, missing = {}, {}, []

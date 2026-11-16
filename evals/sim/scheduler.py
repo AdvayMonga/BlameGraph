@@ -1,14 +1,5 @@
-"""The scheduler simulator (layer 3): the engine's real `ContinuousBatchScheduler` driven one `step()` at a time on
-a fake clock, with a backend that does no model work and instead charges a cost model's time for every prefill and
-decode. A scheduling change (scheduler.py, scheduling_policy.py, admission, KV reservation) is tried in seconds on a
-CPU, on the same traffic the regimes send; `bench` and `submit` stay the judge.
-
-What is real: the scheduler code, its policy, its admission and KV arithmetic, the request objects and their
-timestamps, TTFT/TPOT as the regimes define them. What is modelled: how long a prefill of N tokens and a decode step
-of B rows over K KV tokens take, and how many tokens each request generates (`CostModel`; its defaults are stand-ins
-until fitted from a GPU run's step telemetry: `fit` is phase 2).
-
-Imports the engine, so it runs with the engine's python (`lab.targets.engine.python()`), the engine's `src` on sys.path."""
+"""The scheduler simulator: the engine's real `ContinuousBatchScheduler` stepped on a fake clock, with a backend that
+charges a cost model's time for every prefill and decode. Runs with the engine's python."""
 from __future__ import annotations
 
 import json
@@ -26,7 +17,7 @@ EOS = -1
 
 # -- the clock ------------------------------------------------------------------------------
 class Clock:
-    """Simulated seconds. The scheduler module's `time` is replaced by this while a simulation runs."""
+    """Simulated seconds; replaces the scheduler module's `time` while a simulation runs."""
 
     def __init__(self, start: float = 1000.0):
         self.now = start
@@ -48,7 +39,7 @@ class Clock:
 
     @contextmanager
     def at(self, t: float):
-        """Briefly read `t` (an arrival that happened while a step ran), then back to now."""
+        """Briefly read `t`, then back to now."""
         saved, self.now = self.now, t
         try:
             yield
@@ -58,7 +49,7 @@ class Clock:
 
 @contextmanager
 def installed(clock: Clock):
-    """`clock` as `time` for the scheduler and its metrics; restored on exit."""
+    """Install `clock` as `time` for the scheduler and its metrics; restored on exit."""
     from inference_server import metrics, scheduler
     saved = (scheduler.time, metrics.time)
     scheduler.time, metrics.time = clock, clock
@@ -71,15 +62,14 @@ def installed(clock: Clock):
 # -- the cost model -------------------------------------------------------------------------
 @dataclass
 class CostModel:
-    """Seconds a backend call takes, and how long each answer is. Linear forms, to be fitted from step telemetry
-    (phase 2); the defaults are stand-ins (an H200-ish decode step of ~20 ms at batch 1) and say so."""
+    """Seconds a backend call takes, and how long each answer is; linear forms."""
     prefill_fixed_s: float = 0.010          # per prefill wave
     prefill_per_token_s: float = 0.00005    # per prompt token in the wave
     decode_fixed_s: float = 0.018           # per decode step
     decode_per_row_s: float = 0.0004        # per active row
     decode_per_kv_token_s: float = 2e-7     # per KV token read across the batch
     step_overhead_s: float = 0.0005         # host time per scheduler iteration, even an empty one
-    out_tokens_default: int | None = None   # None: each request's `max_tokens` (an upper bound) when nothing better
+    out_tokens_default: int | None = None   # None: each request's `max_tokens`
     source: str = "defaults (not fitted)"
 
     def prefill_s(self, tokens: int) -> float:
@@ -107,8 +97,8 @@ class _KV:
 
 
 class SimBackend:
-    """What the scheduler touches on a backend (backends/base.py), charging `cost` to `clock` instead of running.
-    KV capacity is a block budget reserved worst-case per request, as the custom backend's `kv_reserve` does."""
+    """What the scheduler touches on a backend, charging `cost` to `clock` instead of running.
+    KV capacity is a block budget reserved worst-case per request."""
     needs_attention_mask = False
     device_str = "cpu"
 
@@ -119,10 +109,10 @@ class SimBackend:
         self.last_batch_cache_hit_tokens = 0
         self.blocks, self.block_size, self.reserved = blocks, block_size, 0
         self.plan: dict[str, int] = {}          # request id (its first token id) -> tokens to generate
-        self.prefills: list[int] = []           # tokens per prefill wave, for the record
+        self.prefills: list[int] = []           # tokens per prefill wave
         self.decode_steps = 0
 
-    # requests announce their answer length through their token ids: ids[0] is a key into `plan`
+    # ids[0] of a request's token ids is its key into `plan`
     def _rid(self, token_ids: list[int]) -> str:
         return str(token_ids[0]) if token_ids else ""
 
@@ -229,7 +219,7 @@ class _Queue:
 
 @dataclass
 class Settings:
-    """The scheduler's knobs, as the engine's env names them (config.py), so a profile's env applies as is."""
+    """The scheduler's knobs, named as the engine's env names them."""
     max_batch_size: int = 128
     max_queue_size: int = 1000
     max_active_kv_tokens: int = 0
@@ -291,9 +281,7 @@ class Result:
 
 def simulate(records: list[dict], settings: Settings | None = None, cost: CostModel | None = None, seed: int = 0,
              horizon_s: float | None = None) -> Result:
-    """Run `records` (corpus-shaped: arrival_s, build_prompt_tokens, max_tokens, session_id, turn_index, id;
-    `expected_output_tokens` when known) through the engine's scheduler on the fake clock. Returns a regimes-shaped
-    row per request, so `evals.loadgen.runner.summarize` judges a simulation like a bench."""
+    """Run corpus-shaped `records` through the engine's scheduler on the fake clock; one regimes-shaped row each."""
     from inference_server.scheduler import QueueFullError, RequestTooLargeError, ScheduledRequest
     settings, cost = settings or Settings(), cost or CostModel()
     rng = random.Random(seed)
@@ -309,7 +297,7 @@ def simulate(records: list[dict], settings: Settings | None = None, cost: CostMo
 
     def enqueue(rec: dict, at: float) -> None:
         n_prompt = int(rec.get("build_prompt_tokens") or max(1, len(str(rec.get("prompt", "")).split())))
-        key = 10 + len(backend.plan)                      # ids[0] names the row to the backend (never EOS)
+        key = 10 + len(backend.plan)                      # ids[0] names the row to the backend
         backend.plan[str(key)] = cost.out_tokens(rec, rng)
         fut, q = _Future(), _Queue(clock)
         req = ScheduledRequest(token_ids=[key] + [1] * (n_prompt - 1), max_tokens=int(rec.get("expected_output_tokens") or rec.get("max_tokens") or 16),
@@ -319,7 +307,7 @@ def simulate(records: list[dict], settings: Settings | None = None, cost: CostMo
             req.arrival_ts = clock.now
             try:
                 sched.enqueue(req)
-            except (QueueFullError, RequestTooLargeError) as e:      # an explicit rejection, as the server's 429/400
+            except (QueueFullError, RequestTooLargeError) as e:      # an explicit rejection
                 rows.append(Row(id=str(rec.get("id")), status="error", scheduled_s=at - t0, lag_s=0.0,
                                prompt_tokens=n_prompt, http_status=429 if isinstance(e, QueueFullError) else 400,
                                detail=type(e).__name__))
@@ -359,7 +347,7 @@ def simulate(records: list[dict], settings: Settings | None = None, cost: CostMo
             sched.step("cpu")
             steps += 1
             if clock.now == before:
-                clock.advance(cost.step_overhead_s)       # an iteration that ran nothing still took host time
+                clock.advance(cost.step_overhead_s)       # an empty iteration still takes host time
             settle()
         settle()
     for rec, req, fut, q, at in live:                          # cut off by the horizon

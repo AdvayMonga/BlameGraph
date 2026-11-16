@@ -18,23 +18,21 @@ def available() -> bool:
 
 
 def backend() -> str:
-    """`container` on Linux (srt there has no GPU and gives each jail its own network), `srt` elsewhere; LAB_JAIL
-    overrides."""
+    """`container` on Linux, `srt` elsewhere; LAB_JAIL overrides."""
     return os.environ.get("LAB_JAIL") or ("container" if sys.platform.startswith("linux") else "srt")
 
 
 def required() -> bool:
-    """The referee runs agent code jailed unless LAB_NO_JAIL=1 (tests, a dev box you trust)."""
+    """False only when LAB_NO_JAIL=1."""
     return os.environ.get("LAB_NO_JAIL") != "1"
 
 
 def settings(writable: list[Path], venv: Path, domains: list[str],
              readonly: tuple[Path, ...] | list[Path] = (), python: str | None = None,
              local_binding: bool = False) -> dict:
-    """Write only `writable`; read nothing under home but it, `readonly`, `venv` and the interpreter; reach `domains`.
-    `python` is the interpreter that will run inside (the engine's); default this one. `local_binding` lets the
-    jailed process listen on localhost (a served engine); everything else stays unreachable."""
-    # A venv's python is a symlink to the base interpreter, which uv keeps under home.
+    """srt settings: write only `writable`; read nothing under home but it, `readonly`, `venv` and the interpreter;
+    reach only `domains`. `python` is the interpreter run inside; `local_binding` allows listening on localhost."""
+    # the base interpreter a venv's python links to
     interpreter = {Path(sys.base_prefix).resolve(), Path(python or sys.executable).resolve().parent.parent}
     return {
         "network": {"allowedDomains": list(domains), "deniedDomains": [],
@@ -53,7 +51,7 @@ def settings(writable: list[Path], venv: Path, domains: list[str],
 
 
 def wrap(config: dict, settings_path: Path, argv: list[str]) -> list[str]:
-    """`argv` under srt with `config` (written to `settings_path`, outside the jail); bare argv when the jail is waived."""
+    """`argv` under srt with `config` (written to `settings_path`); bare argv when the jail is waived."""
     if not available():
         if required():
             raise JailMissing("sandbox-runtime not installed: npm install -g @anthropic-ai/sandbox-runtime "

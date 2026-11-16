@@ -1,4 +1,4 @@
-"""Lab ledger -> feedback on synthetic inference-server ledgers. Run: python tests/test_lab_verdict.py"""
+"""Lab ledger -> feedback on synthetic inference-server ledgers."""
 from __future__ import annotations
 
 import itertools
@@ -74,10 +74,10 @@ def valid_session() -> list[dict]:
 def test_valid_session():
     fb = run_feedback(valid_session())
     i, f = fb["for_agent"]["integrity"], fb["for_researcher"]["activity"]
-    assert set(fb["for_agent"]["facts"]) == {"harness"}          # option (c): the agent gets no derived facts
+    assert set(fb["for_agent"]["facts"]) == {"harness"}          # the agent gets no derived facts
     assert i["valid"], i
     assert f["submitted_snapshot"] == A and f["snapshots"][A]["tests_passed"] == 1 and f["snapshots"][A]["equiv_passed"] == 1
-    assert f["best_measured_seen"]["single_stream"]["snapshot"] == B                  # lower TPOT: a fact, not advice
+    assert f["best_measured_seen"]["single_stream"]["snapshot"] == B                  # lower TPOT
     assert f["submitted_best_measured_seen"]["single_stream"]["value"] == 0.019
     assert f["submitted_result"]["single_stream"]["verdict"] == "improved" and f["sessions"] == 1
 

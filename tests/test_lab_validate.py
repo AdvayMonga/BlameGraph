@@ -1,5 +1,4 @@
-"""lab.gate.validate on fakes: the reference, a known-good (same fake) and a known-bad (every 4th answer wrong) candidate,
-plus noise bands from repeated runs. Run: python -m pytest tests/test_lab_validate.py"""
+"""lab.gate.validate on fakes: the reference, a known-good and a known-bad candidate, noise bands from repeated runs."""
 from __future__ import annotations
 
 import json
@@ -77,7 +76,7 @@ def test_validate_separates_and_measures_bands(spec, tmp_path, monkeypatch):
     noise = rec["result"]
     assert noise["runs"] == 2 and noise["band_pct"] is not None and rep["bands_measured"] is True
     assert noise["server"] == "engine" and noise["target"] == spec.name
-    assert "engine_commit" in noise and noise["engine_commit"] is None     # this engine dir is no git repo
+    assert "engine_commit" in noise and noise["engine_commit"] is None     # not a git repo
     assert (tmp_path / "ref" / "outputs.jsonl").exists() and (tmp_path / "out" / "report.json").exists()
 
 

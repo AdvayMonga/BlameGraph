@@ -1,9 +1,5 @@
 """Kernel tasks: what a candidate kernel must compute, on which shapes, against which reference.
-
-A task names the engine function it can replace (`entry`, the baseline), a reference implementation, an input
-builder, how to read a shape from a captured call (lab/profile/capture.py), how to split shapes into seen and held-out
-regions, and the bytes and FLOPs a call must move (the roofline bound). Tensors only cross the candidate boundary;
-scalars a call needs (e.g. an attention scale) are derived from the shapes inside `call`."""
+Only tensors cross the candidate boundary; a task's `call` adds the scalars."""
 from __future__ import annotations
 
 import dataclasses
@@ -23,36 +19,28 @@ class Task:
     reference: Callable                     # reference(*inputs) -> output tensor(s)
     make_inputs: Callable                   # make_inputs(shape, dtype, device, generator) -> tuple of tensors
     shape_of: Callable                      # shape_of(captured call dict) -> shape tuple, or None to skip the call
-    cost: Callable                          # cost(shape, dtype, inputs=None) -> (flops, bytes) a call must do and
-                                            # move; with inputs, for those exact inputs (e.g. real sequence lengths)
+    cost: Callable                          # cost(shape, dtype, inputs=None) -> (flops, bytes) a call must do and move
     call: Callable = None                   # call(fn, *inputs) -> fn's output (adds scalars); default fn(*inputs)
     heldout_axes: tuple[int, ...] = ()      # shape axes whose largest values are held out as a region
     heldout_values: tuple = ()              # (axis, values) pairs: a shape with one of those values there is held out
     edge_shapes: Callable = None            # edge_shapes(shape) -> shapes; default: the checker's
     dtypes: tuple = (torch.bfloat16,)
-    layouts: tuple = ("strided", "transposed")  # non-contiguous variants its callers pass (lab/capture records it)
-    graphs: bool = False                    # its callers replay it inside CUDA graphs: it must capture, and is timed
-                                            # as a graph replay (no host launch overhead)
-    scales: tuple | None = None            # value scalings checked beyond the task's own (None: the evaluator's; ties in
-                                            # bf16 make ×0.01 meaningless for an exact top-k)
-    kernel_names: tuple[str, ...] = ()      # regexes of the device kernels its entry launches (lab/kernels/tasks/share.py)
-    make_real: Callable = None              # make_real(shape, dtype, device, generator, ints) -> inputs, `ints` being a
-                                            # captured call's 1-D int args by value (e.g. its real sequence lengths)
-    start_edits: tuple = ()                 # (old, new) exact edits to the engine module before it is the starting
-                                            # program: same behaviour, spelled so the source screen accepts it
-    options: tuple[str, ...] = ()           # deployment facts make_inputs/make_real take as keywords (from the
-                                            # target spec: `options_from_target`), e.g. the engine's context window
+    layouts: tuple = ("strided", "transposed")  # non-contiguous variants its callers pass
+    graphs: bool = False                    # timed as a CUDA graph replay; it must capture
+    scales: tuple | None = None            # value scalings checked beyond the task's own (None: the evaluator's)
+    kernel_names: tuple[str, ...] = ()      # regexes of the device kernels its entry launches
+    make_real: Callable = None              # make_real(shape, dtype, device, generator, ints) -> inputs
+    start_edits: tuple = ()                 # (old, new) exact edits to the engine module for the starting program
+    options: tuple[str, ...] = ()           # deployment facts make_inputs/make_real take as keywords
     error_budget: float | None = None       # regions: a case's atol is at least this times the baseline's own error
-    baseline_fn: Callable | None = None     # the baseline when it is not an engine entry point (a region's stations)
-    watch: tuple[str, ...] = ()             # further modules the evaluator watches for patches (a region's stations)
-    start_program: Callable | None = None   # start_program() -> the starting program when the entry's module is not
-                                            # it (a region: its stations with the holder's constants bound)
-    capture_env: tuple = ()                 # (name, value) launch env its calls need to occur (e.g. fp8 KV pools)
-    capture_fn: str | None = None           # the captured calls' `fn` to read shapes from; None: `entry` (a region's
-                                            # calls are "region:FIRST:LAST")
+    baseline_fn: Callable | None = None     # the baseline when it is not an engine entry point
+    watch: tuple[str, ...] = ()             # further modules the evaluator watches for patches
+    start_program: Callable | None = None   # start_program() -> the starting program when the entry's module is not it
+    capture_env: tuple = ()                 # (name, value) launch env its calls need to occur
+    capture_fn: str | None = None           # the captured calls' `fn` to read shapes from; None: `entry`
     seen_default: tuple = field(default_factory=tuple)      # shapes to use with no capture (tests, toys)
     heldout_default: tuple = field(default_factory=tuple)
-    tolerances: dict | None = None          # {dtype: [atol, rtol]} in place of the target's (a public benchmark's own)
+    tolerances: dict | None = None          # {dtype: [atol, rtol]} in place of the target's
     nonfinite: bool = True                  # NaN/Inf inputs must give the reference's NaN/Inf positions
     judged: Callable | None = None          # a program's outputs as they are compared (raises on a broken rule)
 
@@ -69,8 +57,7 @@ class Task:
         return dataclasses.replace(self, make_inputs=functools.partial(self.make_inputs, **kw), make_real=real)
 
     def with_ints(self, ints: dict | None) -> "Task":
-        """This task with inputs built from captured int args where a shape has them ({json shape: ints}); random
-        values elsewhere (edge shapes, scaled variants keep the captured ints)."""
+        """This task with inputs built from captured int args where a shape has them ({json shape: ints})."""
         if not ints or not self.make_real:
             return self
         synthetic = self.make_inputs
@@ -90,18 +77,14 @@ class Task:
 
 
 def randn(size, g, device, dtype, scale: float = 1.0) -> torch.Tensor:
-    """Normal values made on `device` by a generator seeded from `g` (the checker's seeded CPU generator): the same
-    values for the same seed on a device, and fast for the large tensors (expert weights, KV pools) that took seconds
-    each to generate on the CPU."""
+    """Normal values made on `device` by a generator seeded from `g`."""
     d = torch.Generator(device=device).manual_seed(int(torch.randint(0, 2**62, (1,), generator=g)))
     return (torch.randn(size, generator=d, device=device) * scale).to(dtype)
 
 
 def load(name: str, **region) -> Task:
-    """A named task, a region of the engine's decode stations (`region:FIRST:LAST`, or the whole decode step
-    `region:embed:argmax`; `region` gives its captured `samples` dir and its `shared_weights` holder file, without
-    which it is `regions.light`), a KernelBench problem (`kb:LEVEL:ID`; `region` may give its `source`), or a
-    FlashInfer-Bench definition (`fib:NAME`; `region` may give its dataset dir as `samples`)."""
+    """The task `name`: a module here, `region:FIRST:LAST`, `kb:LEVEL:ID` or `fib:NAME`.
+    `region` keywords: `samples`, `shared_weights`, `source`; a region given none is `regions.light`."""
     if name.startswith("fib:"):
         from lab.kernels.tasks.flashinfer_bench import task
         return task(name, region.get("samples"))
@@ -111,7 +94,7 @@ def load(name: str, **region) -> Task:
     if name.startswith("region:"):
         from lab.kernels.tasks import regions
         from lab.profile.capture import STEP
-        if not region:                           # no samples or holder here: what the controller knows of it
+        if not region:
             return regions.light(name)
         if name == STEP:
             from lab.kernels.tasks import step
@@ -126,7 +109,7 @@ TASKS = ("toy_rmsnorm", "paged_decode", "paged_decode_fp8", "moe_gemm", "moe_gem
 
 
 def from_config(cfg: dict) -> Task:
-    """The task an evaluation config names, with its deployment options and captured ints: what every judge uses."""
+    """The task an evaluation config names, with its deployment options and captured ints."""
     region = {k: cfg[k] for k in ("samples", "shared_weights", "source") if cfg.get(k)} \
         if cfg["task"].startswith(("region:", "kb:", "fib:")) else {}
     return load(cfg["task"], **region).with_options(cfg.get("options")).with_ints(cfg.get("ints"))

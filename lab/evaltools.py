@@ -1,19 +1,5 @@
-"""The three tools that can make a change count: bench, equiv and submit. Each has the worker (lab/infra/runner/worker.py) serve
-the agent's pristine tree outside the jail and measure it with the environment's own instruments; the policy and the
-ledger stay here.
-
-  bench    the regimes on the seen split, short tier -> one headline per regime, raw
-  equiv    the correctness gate against the target's reference -> pass | fail | inconclusive, with every metric
-  submit   the only thing that can produce a win: needs a passing equiv at the target's submit tier and a seen bench for this
-           snapshot, measures the held-out split at the short tier, compares with the base commit measured the same
-           way, and records one aggregate per metric through the Thresholdout guard (the held-out numbers
-           themselves never reach the ledger). Verdict per metric: improved | regressed | within_band | unknown_band.
-
-Each also keeps the run's passive data (lab/infra/runner/artifacts.py): bench and equiv as ledger blobs under `result.artifacts`,
-submit only under `<run>/heldout-private/`, outside the ledger and the jail.
-`baseline` is not a tool: the run measures its base commit under bench's defaults once, before the first session,
-in the same cache submit compares against.
-"""
+"""The tools that can make a change count: bench (seen split), equiv (correctness gate), submit (held-out split).
+The worker serves the agent's pristine tree outside the jail; the policy and the ledger writes are here."""
 
 from __future__ import annotations
 
@@ -31,7 +17,7 @@ from lab.targets import target
 from lab.gate.holdout import HoldoutGuard, Refused
 
 HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT = 100, 2.0, 0.5
-BENCH_TIER = "min"            # bench's default tier, which submit compares against (base is measured at the same tier)
+BENCH_TIER = "min"            # bench's default tier; submit compares at the same tier
 
 
 def _regimes(args: dict, default: tuple[str, ...]) -> list[str]:
@@ -48,9 +34,9 @@ def _regimes(args: dict, default: tuple[str, ...]) -> list[str]:
 def run_regimes(url: str, t: target.Target, names: list[str], split: str, tier: str, seed: int,
                 rows: list | None = None, hints: dict | None = None, bands: dict | None = None) -> list[dict]:
     """Each regime's result; with `rows`, every measured client row is appended to it, tagged with its regime.
-    `hints` / `bands`: where the base's searches ended and each regime's noise band (`suite.Ctx`)."""
+    `hints` / `bands`: where the base's searches ended and each regime's noise band."""
     from evals.loadgen import suite
-    watch = split == "seen"             # the dashboard gets the seen split's progress, never the held-out's
+    watch = split == "seen"             # only the seen split's progress goes to the dashboard
     ctx = suite.Ctx.from_target(t, url, split=split, tier=tier, seed=seed, rows=rows, hints=hints or {},
                                 bands=bands or {}, on_rows=_progress if watch else None)
     out = []
@@ -65,7 +51,7 @@ def run_regimes(url: str, t: target.Target, names: list[str], split: str, tier: 
 
 
 def _progress(rows) -> None:
-    """One load call's raw numbers for the dashboard (`evals.agent.live`), computed after the call: never during it."""
+    """One load call's raw numbers for the dashboard, computed after the call."""
     from evals.loadgen.runner import _q
     ok = [r for r in rows if r.status == "ok"]
     ttft, tpot = [r.ttft_s for r in ok if r.ttft_s is not None], [r.tpot_s for r in ok if r.tpot_s is not None]
@@ -74,8 +60,8 @@ def _progress(rows) -> None:
 
 
 def headline(results: list[dict]) -> dict:
-    """{regime: {objective, value, better, valid, invalid_reasons}}: the numbers, nothing judged. A regime also served
-    under its own profile reports that launch, with `profile` and the general launch's value and validity."""
+    """{regime: {objective, value, better, valid, invalid_reasons}}.
+    A regime also served under its own profile reports that launch, with `profile` and the general launch's values."""
     out: dict = {}
     for r in results:
         h = {"objective": r["objective"], "value": r["value"], "better": r["better"], "valid": r["valid"],
@@ -89,9 +75,8 @@ def headline(results: list[dict]) -> dict:
 
 
 def noise_band_pct(regime: str, t: target.Target | None = None, root: Path = ledger.ROOT) -> float | None:
-    """The latest run-to-run band for a regime from the ledger's `noise` records, only if it was measured on this
-    target's engine (at any engine commit: the calibration is once per user) and on its current corpus version (a
-    record without one counts); a band from another target or corpus version is ignored."""
+    """The latest run-to-run band % for a regime from the ledger's `noise` records, or None.
+    Only records of this target's engine and current corpus version count."""
     from evals.loadgen.workload import corpus_version
     version = corpus_version(t.corpus_dir) if t is not None and t.corpus_dir.is_dir() else None
     d = None
@@ -108,8 +93,7 @@ LOAD_SEARCHED = ("realistic", "bursty", "long_prompt_short_output", "short_promp
 
 
 def search_hints(base: dict) -> dict:
-    """Where each of the base's valid searches ended (saturated: its concurrency; a load search: its load, in
-    sittings/s where the regime searches sittings), for a candidate's search to start there."""
+    """Where each of the base's valid searches ended (concurrency or load), for a candidate's search to start there."""
     out = {}
     for n, h in base.items():
         if not h.get("valid") or h.get("value") is None:
@@ -142,9 +126,7 @@ def aggregate(base: dict, delta: float | None, better: str, band_pct: float | No
 
 
 def heldout_context(seen_cal: dict, base: dict, delta: float | None, better: str) -> dict:
-    """A held-out aggregate's context: the ceiling computed from the base commit's seen-split request shape (nothing
-    about the held-out requests goes into it), as % for the base and the new value. The reference is measured on the
-    seen split at the short tier, so it is not comparable to a held-out full-tier number."""
+    """A held-out aggregate's context: the ceiling from the base's seen-split request shape, as % for base and new."""
     from lab.infra.context.ceiling import pct_of
     c = seen_cal.get("ceiling")
     b = base.get("value")
@@ -156,7 +138,7 @@ def heldout_context(seen_cal: dict, base: dict, delta: float | None, better: str
 
 
 def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
-    """What the referee measures against: the parameters the agent cannot read off its ledger. Facts, not advice."""
+    """What the referee measures against: the parameters the agent cannot read off its ledger."""
     from lab.gate import validate                        # validate imports this module
 
     from evals.loadgen import suite
@@ -188,8 +170,7 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
 
 
 def holdout_guard(t: target.Target) -> HoldoutGuard:
-    """The one Thresholdout guard of the target's corpus prompts (`Manifest.budget_key`), shared by every run and machine through the store
-    (LAB_STORE). Refused where there is no store: a local budget would start over on every machine."""
+    """The Thresholdout guard of the target's corpus prompts, shared through LAB_STORE; refused without it."""
     from lab.records.remote import NoRemote, open_remote
     try:
         remote = open_remote()
@@ -212,9 +193,8 @@ def _ceiling_facts(t: target.Target, ledger_root: Path | None) -> dict:
 
 
 def _layer_facts(ledger_root: Path | None, key: str = "layers") -> dict:
-    """The latest profile's per-layer shares and distances (lab/infra/context/layers.py), or with `key="kernel_tasks"` each kernel
-    task's share of its window, with the record they come from: a `profile` record or a bench's or baseline's
-    after-measurement profile (`profiled`)."""
+    """The latest profile's per-layer shares and distances, or with `key="kernel_tasks"` each kernel task's share.
+    Includes the record they come from (a `profile`, or a bench's or baseline's `profiled`)."""
     if not ledger_root or not (Path(ledger_root) / "ledger.jsonl").exists():
         return {"missing": "no profile in this ledger yet"}
     for r in reversed(list(ledger.records(ledger_root))):
@@ -228,7 +208,7 @@ def _layer_facts(ledger_root: Path | None, key: str = "layers") -> dict:
 
 
 def _last_gpu(ledger_root: Path | None) -> dict | None:
-    """The GPU the run's measurements last ran on, from the latest bench or baseline record (the controller has none)."""
+    """The GPU the run's measurements last ran on, from the latest bench or baseline record."""
     if not ledger_root or not (Path(ledger_root) / "ledger.jsonl").exists():
         return None
     for r in reversed(list(ledger.records(ledger_root))):
@@ -250,8 +230,7 @@ def equiv_rows(out: Path) -> list[dict]:
 
 
 def _profiled_reply(prof: dict) -> dict:
-    """The bench reply's `profiled`: the record's own shape (so a path read here resolves in the record), with only
-    the layer facts of its calibration, or the calibration's error."""
+    """The bench reply's `profiled`: the record's shape with only the layer facts of its calibration, or its error."""
     out = {k: v for k, v in prof.items() if k != "calibrated"}
     cal = prof.get("calibrated")
     if isinstance(cal, dict):
@@ -261,7 +240,7 @@ def _profiled_reply(prof: dict) -> dict:
 
 
 def _failed(e: BaseException) -> dict:
-    """The record of a measurement that did not complete; GPU processes that stopped it are kept as facts."""
+    """The record of a measurement that did not complete, with the GPU processes that stopped it."""
     if isinstance(e, serve.GpuBusy):
         return {"verdict": "refused", "reason": str(e), "gpu_processes": e.apps}
     if isinstance(e, serve.Contaminated):
@@ -270,7 +249,7 @@ def _failed(e: BaseException) -> dict:
 
 
 def _killed(r: dict) -> dict:
-    """Processes of the agent's workbench killed because they held the GPU when the measurement began (a fact)."""
+    """Processes of the agent's workbench killed for holding the GPU when the measurement began."""
     return {"workbench_killed": r["killed"]} if r.get("killed") else {}
 
 
@@ -288,7 +267,6 @@ class EvalTools:
     """Mixin for lab.tools.Toolbox: needs self.s (session), self._audited, self._pristine, self._record,
     self._record_heldout."""
 
-    # -- bench --------------------------------------------------------------------------
     def bench(self, args: dict) -> str:
         snap = self._audited("bench", args)
         names = _regimes(args, self.bench_defaults())
@@ -304,7 +282,7 @@ class EvalTools:
             hints = search_hints(json.loads(base.read_text())) if base.exists() and seed == self.seed else {}
             r = self._measure(tree, work, "serve-bench.log", names=names, split="seen", tier=tier, passive=True,
                               seed=seed, hints=hints, bands=self._bands(names))
-        except Exception as e:                      # a tool never crashes the session: the failure is the record
+        except Exception as e:                      # the failure is recorded, not raised
             result = {**_failed(e), "seconds": time.monotonic() - t0,
                       "artifacts": artifacts.store(work, self.s.ledger_root)}
             self._record("bench", "bench", args, result, snap, config={"split": "seen", "tier": tier, "seed": seed})
@@ -322,7 +300,6 @@ class EvalTools:
                            "calibrated": cal, **({"profiled": _profiled_reply(prof)} if prof else {}), **failed,
                            **_killed(r)}, indent=1)
 
-    # -- equiv --------------------------------------------------------------------------
     def equiv(self, args: dict) -> str:
         snap = self._audited("equiv", args)
         t = target.load()
@@ -341,7 +318,7 @@ class EvalTools:
             return f"equiv refused: {why}"
         out = self.s.run_dir / "equiv" / f"{snap.id}-{tier}{'-' + profile if profile else ''}.json"
         work = self._work("equiv")
-        # answers already collected for this snapshot are reused, never re-rolled: the gate is statistical
+        # answers already collected for this snapshot are reused
         prior = Path(tempfile.mkdtemp(prefix="equiv-prior-", dir=self.s.run_dir))
         if out.with_suffix(".outputs.jsonl").exists():
             shutil.copyfile(out.with_suffix(".outputs.jsonl"), prior / "equiv.outputs.jsonl")
@@ -353,7 +330,7 @@ class EvalTools:
             result = {**_failed(e), "artifacts": self._equiv_store(work, out, prior)}
             self._record("equiv", "equiv", args, result, snap, config=config)
             return _said("equiv", result)
-        passed = {"pass": True, "fail": False}.get(res["verdict"])     # inconclusive and quick's facts are None: neither
+        passed = {"pass": True, "fail": False}.get(res["verdict"])     # None: neither pass nor fail
         record = {"verdict": res["verdict"], "passed": passed, "reasons": res["reasons"], "gates": res["gates"],
                   "metrics": res["metrics"], "thresholds": res["thresholds"], "tier": tier,
                   "artifacts": self._equiv_store(work, out, prior), **_killed(res)}
@@ -362,7 +339,6 @@ class EvalTools:
                            "verdict": res["verdict"], "reasons": res["reasons"], "metrics": res["metrics"],
                            **_killed(res)}, indent=1, default=str)
 
-    # -- submit -------------------------------------------------------------------------
     def submit(self, args: dict) -> str:
         snap = self._audited("submit", args)
         t = target.load()
@@ -390,9 +366,9 @@ class EvalTools:
         seen = benches[-1]["result"]["metrics"]
         try:
             names = [n for n in _regimes(args, tuple(seen)) if n in seen]
-            guard = holdout_guard(t)            # before anything is measured: no budget here is a cheap refusal
+            guard = holdout_guard(t)            # before anything is measured
             tree = self._pristine()
-            # every config that will be measured passed the gate on its own: a profile is a different engine
+            # every profile to be measured needs its own passing equiv
             own = [n for n in names if n in profiles.overrides(tree, t)]
             short = [n for n in own if ((full_equiv(n) or {}).get("result") or {}).get("verdict") != "pass"]
             if short:
@@ -401,12 +377,11 @@ class EvalTools:
                 return f"submit refused: {why}"
             base = self.base_heldout(t, names)
             base_seen = self.base_seen(t, names)
-            # held-out passive data stays operator-only: never a blob, never in the record, never inside the jail.
-            # A contaminated run raises here, before the holdout guard: it spends no query.
+            # held-out passive data stays outside the ledger and the jail; a contaminated run raises here
             private = self.s.run_dir / "heldout-private" / f"{snap.id}-{time.strftime('%Y%m%dT%H%M%S')}"
             r = self._measure(tree, private, "serve-submit.log", names=names, split="heldout", tier=BENCH_TIER,
                               passive=True, hints=search_hints(base), bands=self._bands(names))
-            # which profile launches failed and how (did not start / the exception's type), never its text
+            # which profile launches failed and how, never the exception's text
             failed = {p: why.split(":", 1)[0] for p, why in (r.get("profiles_failed") or {}).items()}
             new = headline(r["results"])
             cal_path = self._base_cache("seen", BENCH_TIER).with_suffix(".calibrated.json")
@@ -414,8 +389,7 @@ class EvalTools:
             metrics, better = {}, {}
             for n in names:
                 held_d, seen_d = delta_pct(base.get(n, {}), new[n]), delta_pct(base_seen.get(n, {}), seen[n])
-                # Thresholdout: a held-out delta is reported only through the guard, and only when it disagrees
-                # with the seen one. Without a seen delta to compare, nothing held-out is reported at all.
+                # a held-out delta is reported only through the guard, and only with a seen delta
                 held_d = guard.query(seen_d, held_d)["value"] if held_d is not None and seen_d is not None else None
                 better[n] = new[n].get("better", "higher")
                 metrics[n] = {**aggregate(base.get(n, {}), held_d, better[n], noise_band_pct(n, t, self.s.ledger_root)),
@@ -432,13 +406,12 @@ class EvalTools:
         out = {"snapshot": snap.id, "split": "heldout", "tier": BENCH_TIER, "metrics": metrics, "record": rec["id"],
                **({"profiles_failed": failed} if failed else {}), **_killed(r)}
         task = getattr(self.s, "task", None)
-        if task is not None:                       # the task's own win condition, applied to these aggregates
+        if task is not None:                       # the task's win condition
             from lab.task import score
             out["score"] = score(metrics, task, better)
         return json.dumps(out, indent=1)
 
-    # -- support ------------------------------------------------------------------------
-    bench_default_regimes = ("saturated",)      # the general regime: the corpus mix under the conversational limits
+    bench_default_regimes = ("saturated",)      # the general regime
 
     def bench_defaults(self) -> tuple[str, ...]:
         """The general regime plus, with a task, its objective and constrained regimes (what submit scores)."""
@@ -450,12 +423,12 @@ class EvalTools:
     serve_jailed = True
 
     def _bands(self, names: list[str]) -> dict:
-        """Each regime's calibrated noise band %, where one exists: the searches resolve to it."""
+        """Each regime's calibrated noise band %, where one exists."""
         t = target.load()
         return {n: b for n in names if (b := noise_band_pct(n, t, self.s.ledger_root)) is not None}
 
     def _work(self, tool: str) -> Path:
-        """A scratch dir outside the jail for one worker job's output; emptied into blobs or removed after."""
+        """A scratch dir outside the jail for one worker job's output."""
         return Path(tempfile.mkdtemp(prefix=f"passive-{tool}-", dir=self.s.run_dir))
 
     def _measure(self, tree: Path, out: Path, log: str, **args) -> dict:
@@ -486,7 +459,7 @@ class EvalTools:
         return artifacts.store(work, self.s.ledger_root)
 
     def _base_cache(self, split: str, tier: str) -> Path:
-        """The base's cached measurement, one per corpus version: a base from another corpus is never compared."""
+        """The base's cached measurement, one per corpus version."""
         from evals.loadgen.workload import corpus_version
         t = target.load()
         v = corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None
@@ -502,7 +475,7 @@ class EvalTools:
             from lab.infra.sandbox import grader
             grader.export(self.s.workspace.repo, self.s.workspace.base, tree)
             work = self._work("base")
-            try:                                # a contaminated base raises: never cached, every later submit reads it
+            try:                                # a contaminated base raises and is never cached
                 r = self._measure(tree, work, f"serve-base-{split}.log", names=missing, split=split, tier=tier,
                                   passive=split == "seen", bands=self._bands(missing))   # held-out rows stay on the worker
                 base_rows = artifacts.read_rows(work) if split == "seen" else []
@@ -531,9 +504,9 @@ class EvalTools:
             calibrated = json.loads(cal.read_text()) if cal.exists() else {}
             result = {"verdict": "ok", "metrics": {n: seen[n] for n in names},
                       "calibrated": {n: calibrated[n] for n in names if n in calibrated}}
-        except Exception as e:                      # no GPU or a base that will not serve is itself the fact
+        except Exception as e:                      # no GPU or a base that will not serve: recorded as the fact
             result = _failed(e)
-        else:                                       # profiled like every bench, for change_pct mechanism predictions
+        else:                                       # profiled like every bench
             from lab.infra.sandbox import grader
             tree = self.s.run_dir / "base-tree-profile"
             shutil.rmtree(tree, ignore_errors=True)

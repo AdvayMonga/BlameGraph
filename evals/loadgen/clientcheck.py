@@ -1,8 +1,4 @@
-"""How much load the client itself can drive before its own timing goes wrong, measured against a fake server that
-streams every token on a fixed schedule and logs when it really sent each one. Per request, the client's TPOT minus
-the server's (from the server's own send times) is the client's error; a level is clean when that error's p99 stays
-under `max_error_s`, the send lag under the runner's limit and no client process is saturated. Run it on the machine
-and cores the comparison will use, with nothing on the GPU:
+"""How much load the client can drive before its own timing goes wrong, measured against a fake server.
 
     lab clientcheck [--client-procs 8] [--client-cpus 8-15] [--server-cpus 0-7] [--out F]
 """
@@ -22,7 +18,7 @@ from . import runner, workload as W
 
 CLOSED = (64, 256, 1024, 2048, 4096)       # concurrency levels
 OPEN = (50.0, 100.0, 200.0, 400.0)         # req/s
-BURST = (100, 200, 400, 800)               # requests arriving within BURST_S (bursty's 32x spike: 453)
+BURST = (100, 200, 400, 800)               # requests arriving within BURST_S
 BURST_S = 0.05
 
 
@@ -108,8 +104,7 @@ def _judge(rows, logdir: Path, elapsed: float, max_error_s: float) -> dict:
 
 def check(client_procs: int = 8, client_cpus=None, server_procs: int = 8, server_cpus=None, tpot_s: float = 0.02,
           tokens: int = 128, duration_s: float = 20.0, max_error_s: float = 0.001) -> dict:
-    """Closed loop at each of CLOSED, open loop at each of OPEN and bursts of BURST; each level's result, and the
-    highest clean one."""
+    """Run each CLOSED, OPEN and BURST level; returns each level's result and the highest clean one."""
     pool = [{"id": f"cc-{k}", "prompt": "x", "max_tokens": tokens, "expected_output_tokens": tokens} for k in range(64)]
     with tempfile.TemporaryDirectory() as d:
         logdir = Path(d)

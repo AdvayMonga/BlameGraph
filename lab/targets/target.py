@@ -44,9 +44,9 @@ class Target:
     add_only: tuple[str, ...]
     test: str
     lint: str
-    deps: tuple[str, ...]          # dependency files the agent may change (pyproject: its dependency tables only)
-    build: str | None              # installs `deps` into $UV_PROJECT_ENVIRONMENT (lab/infra/sandbox/build.py)
-    profiles: str | None           # the engine tree's launch-profiles file (lab/infra/runner/profiles.py), relative to the tree
+    deps: tuple[str, ...]          # dependency files the agent may change
+    build: str | None              # command that installs `deps` into $UV_PROJECT_ENVIRONMENT
+    profiles: str | None           # the engine's launch-profiles file, relative to its tree
     profile_env: str | None        # the env var that names the profile of a launch
     reference: Server | None
     reference_dir: Path | None
@@ -57,8 +57,8 @@ class Target:
     min_length_ratio: float
     corpus_dir: Path
     raw: dict
-    layers: dict = field(default_factory=dict)   # layer -> globs in the engine repo ([layers]): the objective's map
-    submit_tier: str = "full"           # the equiv tier submit requires: full, or dev while full is too slow for the engine
+    layers: dict = field(default_factory=dict)   # layer -> globs in the engine repo ([layers])
+    submit_tier: str = "full"           # the equiv tier submit requires: full or dev
 
     @property
     def name(self) -> str:
@@ -78,7 +78,7 @@ def _submit_tier(v: str) -> str:
 
 
 def reference_complete(ref_dir: Path | None) -> bool:
-    """`reference()` writes meta.json last; its presence means the outputs and sequences are all there."""
+    """Whether the reference dir holds meta.json, the file `reference()` writes last."""
     return ref_dir is not None and (ref_dir / "meta.json").exists()
 
 
@@ -119,7 +119,7 @@ _cache: dict[str, Target] = {}
 
 
 def load(path: str | Path | None = None) -> Target:
-    """`path`, else LAB_TARGET. No target is an error that lists what lab/targets/ holds; nothing is assumed."""
+    """The parsed target at `path`, else LAB_TARGET; raises NoTarget when neither is set."""
     p = path or os.environ.get("LAB_TARGET")
     if not p:
         have = sorted(x.name for x in TARGETS_DIR.glob("*.toml"))

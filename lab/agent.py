@@ -1,4 +1,4 @@
-"""The one place a model is called. A Provider runs one session with the lab's tools; Claude via the Agent SDK is the first."""
+"""The one place a model is called: a Provider runs one session with the lab's tools."""
 
 from __future__ import annotations
 
@@ -21,11 +21,10 @@ from lab.hooks import WRITE_TOOLS, write_guard
 
 BUILTIN_TOOLS = ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "WebSearch", "WebFetch"]
 PASS_ENV = ("CLAUDE_CODE_ENTRYPOINT", "CLAUDE_AGENT_SDK_VERSION")       # what the SDK sets for its CLI
-# The CLI asks for 128k output tokens per request by default; the proxy reserves all of them up front, which at
-# claude-fable-5-1's $50/M is $6.40, more than a session's cap. 16k is ~60 kB of output per reply.
+# Output tokens the CLI may ask for per request.
 MAX_OUTPUT_TOKENS = 16_000
 SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-# What a session says when it ends. `stop` means the agent is done with this run.
+# What a session returns when it ends; `stop` ends the run.
 OUTPUT_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["status", "note"],
                  "properties": {"status": {"type": "string", "enum": ["continue", "stop"]},
                                 "note": {"type": ["string", "null"]}}}
@@ -33,7 +32,7 @@ OUTPUT_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["
 
 @dataclass(frozen=True)
 class ToolSpec:
-    """A lab tool: runs in the harness process, outside the jail, with the referee's rights."""
+    """A lab tool: runs in the harness process, outside the jail."""
     name: str
     description: str
     schema: dict[str, Any]
@@ -84,7 +83,7 @@ def load(name: str | None = None) -> Provider:
     raise ValueError(f"unknown agent provider {name!r}; LAB_AGENT_PROVIDER is claude or openai")
 
 
-PROXY_PORT_IN = 4000              # where a remote workbench serves the tunnelled proxy, inside its own network
+PROXY_PORT_IN = 4000              # the tunnelled proxy's port inside a remote workbench
 
 
 def _scratch(scratch: Path) -> tuple[Path, Path]:
@@ -95,11 +94,11 @@ def _scratch(scratch: Path) -> tuple[Path, Path]:
 
 
 def _weights() -> list[Path]:
-    return [HF_HUB] if HF_HUB.exists() else []      # model weights read-only; the token beside them stays hidden
+    return [HF_HUB] if HF_HUB.exists() else []      # model weights, read-only
 
 
 def cli_env(home: Path, tmp: Path, ws: Path, base_url: str) -> dict[str, str]:
-    """The CLI's whole environment inside its jail: no credential, only the proxy's URL and its placeholder."""
+    """The CLI's whole environment inside its jail: the proxy's URL and a placeholder key, no credential."""
     return {"HOME": str(home), "CLAUDE_CONFIG_DIR": str(home), "TMPDIR": str(tmp), "PYTHONPATH": str(ws / "src"),
             "PYTHONDONTWRITEBYTECODE": "1", "HF_HUB_CACHE": str(HF_HUB), "HF_HUB_OFFLINE": "1",
             "HF_HOME": str(tmp / "hf-home"), "ANTHROPIC_BASE_URL": base_url,
@@ -109,8 +108,8 @@ def cli_env(home: Path, tmp: Path, ws: Path, base_url: str) -> dict[str, str]:
 
 def workbench_command(name: str, ws: Path, scratch: Path, cli: Path, base_url: str | None = None,
                       sock_dir: Path | None = None) -> list[str]:
-    """`docker run` for the CLI's workbench on this host; the SDK's arguments go after it. With `sock_dir`, the proxy
-    is the unix socket `proxy.sock` there (tunnelled from the controller), served inside on 127.0.0.1:PROXY_PORT_IN."""
+    """`docker run` argv for the CLI's workbench on this host.
+    With `sock_dir`, the proxy is the unix socket `proxy.sock` there, served inside on 127.0.0.1:PROXY_PORT_IN."""
     home, tmp = _scratch(scratch)
     ws = Path(ws).resolve()
     env = cli_env(home, tmp, ws, base_url or f"http://127.0.0.1:{PROXY_PORT_IN}")
@@ -124,7 +123,7 @@ def workbench_command(name: str, ws: Path, scratch: Path, cli: Path, base_url: s
 
 
 def _live(msg, spent_usd: float) -> None:
-    """What the agent just said or called, for the dashboard (`evals.agent.live`)."""
+    """Send what the agent just said or called to the dashboard."""
     from claude_agent_sdk import AssistantMessage, TextBlock, ThinkingBlock, ToolResultBlock, ToolUseBlock, UserMessage
     if isinstance(msg, AssistantMessage):
         for b in msg.content:
@@ -140,8 +139,7 @@ def _live(msg, spent_usd: float) -> None:
 
 
 class ClaudeAgentSDK:
-    """Claude through the Agent SDK CLI, jailed with a wiped env (on Linux in the workbench container, elsewhere under
-    srt); its model calls go through the lab's API proxy, so no credential is ever inside; lab tools run out here."""
+    """Claude through the Agent SDK CLI, jailed; model calls go through the lab's API proxy, lab tools run here."""
 
     name = "claude"
     remote = True                       # can work on a Remote worker's host (its CLI over ssh)
@@ -152,13 +150,12 @@ class ClaudeAgentSDK:
 
     def _wrapper(self, spec: AgentSpec, cli: Path, base_url: str) -> Path:
         script = spec.scratch / "cli.sh"
-        if spec.remote is not None:            # the worker host builds its own workbench; the proxy goes down the tunnel
+        if spec.remote is not None:            # the worker host builds its own workbench
             import claude_agent_sdk
             w = spec.remote.workbench(spec.workbench, spec.scratch.name, spec.remote_workspace,
                                       claude_agent_sdk.__version__)
             *ssh, target = spec.remote.prefix
-            # The SDK may launch this more than once, and that sshd need not unlink a socket a launch left behind;
-            # -n: that call must not read the SDK's stdin.
+            # remove a socket left by an earlier launch; -n: do not read the SDK's stdin
             line = (f'args=$(printf " %q" "$@")\ncmd={shlex.quote(shlex.join(w["argv"]))}\n'
                     f'{shlex.join(ssh)} -n -T {target} {shlex.quote("rm -f " + shlex.quote(w["sock"]))} || exit 1\n'
                     f'exec {shlex.join(ssh)} -T -o ExitOnForwardFailure=yes -o StreamLocalBindUnlink=yes '
@@ -172,13 +169,11 @@ class ClaudeAgentSDK:
             home, tmp = _scratch(spec.scratch)
             ws = spec.workspace.resolve()
             tmp_root = "/private/tmp" if sys.platform == "darwin" else "/tmp"
-            cli_tmp = Path(f"{tmp_root}/claude-{os.getuid()}")    # the CLI's own per-project scratch; Bash fails without it
+            cli_tmp = Path(f"{tmp_root}/claude-{os.getuid()}")    # the CLI's own per-project scratch
             cli_tmp.mkdir(parents=True, exist_ok=True)
             config = jail.settings([home.resolve(), tmp.resolve(), ws, cli_tmp.resolve()], engine.venv(),
                                    [base_url.removeprefix("http://")], readonly=_weights(), python=engine.python(),
-                                   local_binding=True)     # srt on macOS reaches 127.0.0.1 only with it (and then
-                                                           # every local port: dev only; measurements that count run
-                                                           # on Linux, where each jail has its own network)
+                                   local_binding=True)     # lets srt on macOS reach 127.0.0.1
             argv = jail.wrap(config, spec.scratch / "srt.json", [str(cli)])
             keep = " ".join(f'"{k}=${k}"' for k in PASS_ENV)
             sets = " ".join(f"{k}={shlex.quote(v)}" for k, v in cli_env(home, tmp, ws, base_url).items())
@@ -193,8 +188,7 @@ class ClaudeAgentSDK:
                                       create_sdk_mcp_server, query, tool)
         base_url = proxy.url
 
-        # The workbench is frozen for every lab tool call, wherever it runs: nothing in it can swap a file or a dir for a
-        # link while the tool snapshots, restores, copies into the workspace, or (Remote) rsyncs it as root on the VM.
+        # The workbench is paused during every lab tool call.
         if spec.remote is not None:
             frozen = lambda: spec.remote.paused(spec.workbench)                                  # noqa: E731
         else:
@@ -206,8 +200,8 @@ class ClaudeAgentSDK:
                     def run():
                         with frozen():
                             return t.fn(args)
-                    text = await asyncio.to_thread(run)          # a long test run must not block the transport
-                except Exception as e:          # the agent sees the refusal, the harness keeps going
+                    text = await asyncio.to_thread(run)          # off the event loop
+                except Exception as e:          # the agent sees the refusal
                     text = f"{t.name} refused: {e}"
                 return {"content": [{"type": "text", "text": text}]}
             return tool(t.name, t.description, t.schema)(call)
@@ -235,7 +229,7 @@ class ClaudeAgentSDK:
         return reply
 
     def run(self, spec: AgentSpec) -> AgentReply:
-        """Never raises. The spend is what the API proxy priced, whatever the CLI reports or however it ended."""
+        """Run one session; never raises. The spend is what the API proxy priced."""
         spec.scratch.mkdir(parents=True, exist_ok=True)
         try:
             host = container.bridge_gateway() if spec.remote is None and self.containerized() else "127.0.0.1"
@@ -249,7 +243,7 @@ class ClaudeAgentSDK:
                 reply = AgentReply(None, 0.0, 0, f"timed out after {spec.timeout_s:.0f}s")
             except Exception as e:
                 reply = AgentReply(None, 0.0, 0, f"provider failed: {type(e).__name__}: {e}")
-            finally:                                    # a CLI killed mid-session leaves its container behind
+            finally:                                    # remove the CLI's container
                 if spec.remote is not None:
                     spec.remote.remove_workbench(spec.workbench)
                 elif spec.workbench and self.containerized():

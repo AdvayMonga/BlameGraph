@@ -1,4 +1,4 @@
-"""NVIDIA GPU state and samples through nvidia-smi (or DCGM). Everything here returns None where there is no nvidia-smi."""
+"""NVIDIA GPU state and samples through nvidia-smi (or DCGM); None where there is no nvidia-smi."""
 
 from __future__ import annotations
 
@@ -19,9 +19,9 @@ QUERY = ("name", "driver_version", "clocks.sm", "clocks.mem", "clocks.max.sm", "
 SAMPLE = ("timestamp", "utilization.gpu", "utilization.memory", "clocks.sm", "clocks.mem",
           "power.draw", "temperature.gpu", "memory.used")
 REASONS = ("clocks_event_reasons.active", "clocks_throttle_reasons.active")   # the field's name on newer, older drivers
-APP_CLOCKS = ("clocks.applications.graphics", "clocks.applications.memory")   # locked clocks are not queryable here
+APP_CLOCKS = ("clocks.applications.graphics", "clocks.applications.memory")   # application clocks
 MISSING = ("[N/A]", "[Not Supported]", "N/A")
-# DCGM field ids -> names: profiling counters (not coarse), then power, clocks and throttle reasons.
+# DCGM field ids -> names.
 DCGM_FIELDS = {1002: "sm_active", 1003: "sm_occupancy", 1004: "tensor_active", 1005: "dram_active",
                1009: "pcie_tx_bytes", 1010: "pcie_rx_bytes", 155: "power_w", 100: "sm_clock_mhz",
                101: "mem_clock_mhz", 112: "throttle_reasons"}
@@ -39,7 +39,7 @@ def _smi(fields: tuple[str, ...]) -> str | None:
 
 @functools.lru_cache(maxsize=None)
 def supported(field: str) -> bool:
-    """Whether this driver accepts `field`: one unknown field fails the whole query."""
+    """Whether this driver accepts `field`."""
     return available() and _smi((field,)) is not None
 
 
@@ -64,7 +64,7 @@ def query() -> dict | None:
 
 
 def add_epoch(raw: str) -> str:
-    """nvidia-smi's local-time `timestamp` column, prefixed with `epoch_s` so samples line up with timeline events."""
+    """nvidia-smi's CSV with an `epoch_s` column prepended, from its local-time `timestamp`."""
     buf = io.StringIO()
     w = csv.writer(buf, lineterminator="\n")
     for i, row in enumerate(r for r in csv.reader(io.StringIO(raw), skipinitialspace=True) if r):
@@ -80,7 +80,7 @@ def add_epoch(raw: str) -> str:
 
 
 class Sampler:
-    """nvidia-smi sampling at `interval_ms`, as a subprocess so it costs the engine nothing; `epoch_s` added on stop."""
+    """nvidia-smi sampling at `interval_ms` in a subprocess; `epoch_s` added on stop."""
 
     def __init__(self, path: Path, interval_ms: int = 100):
         self.path, self.interval_ms, self._proc = Path(path), interval_ms, None
@@ -115,9 +115,8 @@ class Sampler:
 
 
 class DeviceSampler(Sampler):
-    """Samples for a whole served window into `dir`: `samples.csv` (each tool line prefixed `<epoch_s>,`) and
-    `meta.json` (source, fields, coarse). DCGM profiling fields when `dcgmi` is on PATH, else nvidia-smi with
-    throttle reasons; `{"available": false}` with neither."""
+    """Samples into `dir`: `samples.csv` (each tool line prefixed `<epoch_s>,`) and `meta.json` (source, fields,
+    coarse). DCGM when `dcgmi` is on PATH, else nvidia-smi; `{"available": false}` with neither."""
 
     def __init__(self, dir: Path, interval_ms: int = 100):
         super().__init__(Path(dir) / "samples.csv", interval_ms)
@@ -150,7 +149,7 @@ class DeviceSampler(Sampler):
             meta.update(source=self.source, coarse=self.source == "nvidia-smi", fields=self.fields,
                         interval_ms=self.interval_ms, line="<epoch_s>,<raw tool output line>")
             if self._proc is not None and self._proc.poll() is not None:
-                meta["exited"] = self._proc.returncode       # the tool died mid-window (e.g. no DCGM host engine)
+                meta["exited"] = self._proc.returncode       # the tool exited mid-window
             if self._proc is not None:
                 self._proc.terminate()
                 try:
@@ -172,7 +171,7 @@ def _value(name: str, v: str):
     if v in MISSING or v == "":
         return None
     if name == "throttle_reasons":
-        return int(v, 16) if v.lower().startswith("0x") else int(v)   # a bitmask: DCGM prints it decimal, nvidia-smi 0x...
+        return int(v, 16) if v.lower().startswith("0x") else int(v)   # bitmask: decimal (DCGM) or 0x... (nvidia-smi)
     if name == "timestamp":
         return v
     try:

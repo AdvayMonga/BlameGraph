@@ -1,6 +1,4 @@
-"""evals.loadgen.synth: traffic generated fresh from a corpus's seen split. Keeps the seen shapes (sizes exactly per pass,
-the timing pattern), repeats no prompt, never reads the real held-out split, writes nothing, and the seed regenerates
-it. Run: python tests/test_regimes_synth.py"""
+"""evals.loadgen.synth: traffic generated from a corpus's seen split keeps its shapes, repeats no prompt."""
 from __future__ import annotations
 
 import json
@@ -15,8 +13,7 @@ from evals.loadgen import synth  # noqa: E402
 
 
 def _real(d: Path) -> Path:
-    """A two-class corpus: single requests with conversations, and one multi-turn session; then its held-out traces
-    are deleted, so a generator that read them would fail."""
+    """A two-class corpus (single requests, one multi-turn session) with its held-out traces deleted."""
     words = "alpha beta gamma delta epsilon zeta. Eta theta iota kappa! Lambda mu nu xi? Omicron pi rho sigma.".split()
     reqs, t = [], 0.0
     for k in range(40):
@@ -41,7 +38,7 @@ def _real(d: Path) -> Path:
 
 def test_a_generated_trace_keeps_the_seen_shapes_and_repeats_no_prompt():
     with tempfile.TemporaryDirectory() as tmp:
-        real = _real(Path(tmp) / "real")                         # its held-out traces are gone: never read
+        real = _real(Path(tmp) / "real")                         # no held-out traces
         _, src = load_trace("steady", "seen", real)
         one = synth.trace("steady", seed=0, corpus_dir=real, min_requests=0)
         assert len(one) == 40 and {r.prompt for r in one}.isdisjoint({r.prompt for r in src})

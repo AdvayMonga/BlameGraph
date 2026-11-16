@@ -1,5 +1,4 @@
-"""evals.loadgen.arrivals: the timing model fitted from a conversation log. A fake log with known sessions is read into
-sittings by split, fitted, drawn from at steady state, and compared. Run: python tests/test_regimes_arrivals.py"""
+"""evals.loadgen.arrivals: a fake conversation log read into sittings by split, fitted, drawn from, and compared."""
 from __future__ import annotations
 
 import csv
@@ -15,8 +14,7 @@ from evals.loadgen import arrivals  # noqa: E402
 
 
 def _log(path: Path, seed: int = 0) -> None:
-    """Sessions starting Poisson at 0.05/s over two weeks: 1-3 turns with gaps 100 s, 200 s, every fifth one resumed after an
-    hour (a break), API rows in between that must be ignored."""
+    """Two weeks of sessions at 0.05/s: 1-3 turns, every fifth resumed after an hour, API rows between."""
     rng, t, rows = random.Random(seed), 0.0, []
     for k in range(60000):
         t += rng.expovariate(0.05)

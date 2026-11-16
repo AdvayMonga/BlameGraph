@@ -1,13 +1,5 @@
 """Run the correctness gate against live servers.
-
-  reference   once per model/hardware: the unmodified model (vLLM, BF16, VLLM_BATCH_INVARIANT=1) answers every task
-              item and scores its own outputs token by token. Saved to a directory.
-  candidate   per change: the optimized server answers the same items; the gate compares accuracy and length
-              (MLPerf's rule only; divergence is `quick`'s). Items go in one fixed order (by id hash, the same for
-              every candidate) and the gate looks at 200, 400, 800, ... of them, stopping once the accuracy is clear of the line either way (`_decided`).
-              Writes the verdict and an inference-server lab-ledger `equiv` record.
-  verdict     re-judge saved candidate results under a policy, without a server.
-"""
+`reference` saves the reference's answers, `candidate` judges a server against them, `verdict` re-judges results."""
 from __future__ import annotations
 
 import hashlib
@@ -28,7 +20,7 @@ FIRST_LOOK = 200
 
 
 def _ordered(items: list[dict]) -> list[dict]:
-    """Items in a fixed order independent of the candidate (so a rerun cannot draw a different sample)."""
+    """Items in a fixed order independent of the candidate."""
     return sorted(items, key=lambda it: hashlib.sha256(it["id"].encode()).hexdigest())
 
 
@@ -42,8 +34,7 @@ def _looks(n: int) -> list[int]:
 
 
 def _decided(flips: dict, unanswered: int, th: Thresholds, looks: int) -> bool:
-    """Accuracy is clear of the line on this sample: the CI's low end is above it, or the net loss is significant;
-    both Bonferroni-corrected over the looks. Unanswered items keep it open."""
+    """True when the sample's accuracy is clear of the line (Bonferroni over `looks`) and nothing is unanswered."""
     acc = pooled_accuracy(flips)
     if unanswered or not acc["ref_correct"]:
         return False
@@ -82,12 +73,12 @@ def _jsonl_read(path: Path) -> list[dict]:
     return [json.loads(l) for l in Path(path).read_text().splitlines() if l.strip()] if Path(path).exists() else []
 
 
-TRACE_PREFIX = "eq"          # X-Trace-Id of a gate request: eq-<item id>, so equiv rows join engine telemetry
-RETRIES = 12                # a 429/503 (the server shedding under the gate's load) is retried with backoff, ~6 min in all
+TRACE_PREFIX = "eq"          # X-Trace-Id prefix of a gate request: eq-<item id>
+RETRIES = 12                # retries of a 429/503, with backoff
 
 
 def _retrying(fn, *args, **kw):
-    """fn(*args) with exponential backoff on HTTP 429/503: being shed is not a wrong answer. Other errors propagate."""
+    """fn(*args) with exponential backoff on HTTP 429/503; other errors propagate."""
     import time
     import urllib.error
     for attempt in range(RETRIES):
@@ -101,8 +92,7 @@ def _retrying(fn, *args, **kw):
 
 def collect(url: str, model: str, items: list[dict], out: Path, concurrency: int = 16,
             api: client.Api = client.DEFAULT) -> dict[str, dict]:
-    """Greedy answers for every item; resumable (answered items in `out` are skipped, errored ones retried).
-    An item that still fails after retries is recorded with `error`: it is unanswered, never a wrong answer."""
+    """Greedy answers for every item, resumable; an item that fails after retries is recorded with `error`."""
     done = {r["id"]: r for r in _jsonl_read(out) if not r.get("error")}
     todo = [it for it in items if it["id"] not in done]
 
@@ -110,7 +100,7 @@ def collect(url: str, model: str, items: list[dict], out: Path, concurrency: int
         try:
             g = _retrying(client.generate, url, model, it["messages"], it.get("max_tokens", 2048), api,
                           trace_id=f"{TRACE_PREFIX}-{it['id']}")
-        except Exception as e:                      # a failed request is a recorded fact, not a crash
+        except Exception as e:
             g = {"text": "", "completion_tokens": None, "finish_reason": None, "error": f"{type(e).__name__}: {e}"[:200]}
         return {"id": it["id"], **g}
 
@@ -133,7 +123,7 @@ def reference(url: str, model: str, out_dir: str | Path, items: list[dict], enco
     if unanswered:
         raise RuntimeError(f"the reference left {len(unanswered)} item(s) unanswered (e.g. {unanswered[0]}: "
                            f"{outputs[unanswered[0]]['error']}); a reference must answer everything")
-    # divergence set: prompt + the reference's own answer, for a spread of items across tasks
+    # divergence set: prompt + the reference's own answer, spread across tasks
     pick = [it for k, it in enumerate(items) if k % max(1, len(items) // div_n) == 0][:div_n]
     seqs = []
     for it in pick:
@@ -153,12 +143,11 @@ def reference(url: str, model: str, out_dir: str | Path, items: list[dict], enco
     return meta
 
 
-CANDIDATE_SCORE_MAX = 4    # scoring on a candidate engine stays where it was (16 // 4) while generation goes wider
+CANDIDATE_SCORE_MAX = 4    # cap on scoring concurrency against a candidate
 
 
 def _score_concurrency(concurrency: int) -> int:
-    """Teacher-forced scoring holds a [prompt, vocab] logits tensor per request: a quarter of the generation
-    concurrency, so a 32k prompt x 32 in flight does not OOM an engine that generation alone would not."""
+    """Teacher-forced scoring concurrency for a generation concurrency."""
     return max(1, concurrency // 4)
 
 
@@ -189,9 +178,7 @@ def _divergence(ref: Path, url: str, model: str, top_k: int, api: client.Api, wo
 
 
 def quick(ref_dir: str | Path, url: str, model: str, out_path: str | Path, api: client.Api = client.DEFAULT) -> dict:
-    """The fast check: the candidate scores the reference's own answers teacher-forced (prefill only, nothing
-    generated) and reports how far its next-token distributions are from the reference's. Facts, no verdict: the
-    gate is the generated-answer test (`candidate`)."""
+    """Score the reference's own answers teacher-forced on the candidate and report the divergence; no verdict."""
     ref = Path(ref_dir)
     meta = json.loads((ref / "meta.json").read_text())
     div, unscored = _divergence(ref, url, model, meta["top_k"], api, CANDIDATE_SCORE_MAX)
@@ -228,7 +215,7 @@ def candidate(ref_dir: str | Path, url: str, model: str, out_path: str | Path, e
         ids = {it["id"] for it in items}
         answered = {i: r for i, r in cand_out.items() if i in ids and not r.get("error")}
         unanswered = {i: r["error"] for i, r in cand_out.items() if i in ids and r.get("error")}
-        # flips, per task, over the items the candidate answered: an unanswered item is neither right nor wrong
+        # flips per task, over the items the candidate answered
         by_task: dict[str, tuple[list, list]] = {}
         for it in items:
             r, c = ref_out.get(it["id"]), answered.get(it["id"])
@@ -253,7 +240,7 @@ def candidate(ref_dir: str | Path, url: str, model: str, out_path: str | Path, e
 
 
 def verdict_file(result_path: str | Path, thresholds: Thresholds) -> dict:
-    """Re-judge a saved candidate result under new thresholds, from its recorded metrics (no server needed)."""
+    """Re-judge a saved candidate result under new thresholds, from its recorded metrics."""
     m = json.loads(Path(result_path).read_text())["result"]["metrics"]
     return evaluate(m.get("divergence"), {k[6:]: v for k, v in m.items() if k.startswith("flips:")},
                     m.get("length"), m.get("consistency"), thresholds)

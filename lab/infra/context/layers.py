@@ -1,18 +1,11 @@
-"""Each layer's share of a profiled window and its distance from a ceiling, as facts (the agent
-chooses the layer; it is given these, never a recommendation). From one `profile` bundle (lab/profile/bundle.py: meta.json's
-window, kernels.json, the engine's timeline in events.jsonl, stats.json):
-
-  kernels          CUDA kernel time / window                                   (layer 1)
-  model_execution  prefill + decode phase wall time beyond kernel time / window: launches, framework, sampling  (2)
-  runtime          admit + evict phase time / window, with the GPU idle share, batch fill, admissions blocked      (3)
-  serving          window time outside scheduler steps / window: HTTP, tokenizer, waiting for arrivals            (4)
-
-Distance: layer 2 = the mean decode step against the step floor (lab.infra.context.ceiling) at the window's mean batch and
-context; layer 1 = the kernels' call-weighted % of their roofline bounds when gate results are given
-(lab.kernels.tasks.share.weighted_pct), else missing and why; layers 3 and 4 have no single ceiling, so the facts beside them
-are what a change there moves. Every number names its basis; a missing one says why.
+"""Each layer's share of a profiled window and its distance from a ceiling, from one `profile` bundle.
 
   lab layers BUNDLE [--target T]
+
+  kernels          CUDA kernel time / window; distance: call-weighted % of roofline when gate results are given
+  model_execution  prefill + decode phase wall time beyond kernel time / window; distance: decode step vs its floor
+  runtime          admit + evict phase time / window
+  serving          window time outside scheduler steps / window
 """
 from __future__ import annotations
 
@@ -25,7 +18,7 @@ OUTER_PHASES = ("admit", "prefill_chunk", "evict", "decode")      # the step's o
 
 
 def _events(bundle: Path, window: dict) -> list[dict]:
-    """The timeline events of the profiled window (the timeline covers the whole run, warmup included)."""
+    """The timeline events inside the profiled window."""
     p = bundle / "events.jsonl"
     if not p.exists():
         return []
@@ -125,8 +118,7 @@ def _kernel_distance(gates: dict | None, tasks: list | None) -> dict:
 
 
 def _weighted_pct(gate: dict) -> float | None:
-    """Call-weighted % of the roofline bound over the shapes a kernel `gate` result timed (as lab.kernels.tasks.share.weighted_pct;
-    repeated here because the kernels package imports torch, which the lab does not require)."""
+    """Call-weighted % of the roofline bound over the shapes a kernel `gate` result timed."""
     rows = [r for k in ("timings", "heldout_timings") for r in json.loads((gate.get("artifacts") or {}).get(k) or "[]")
             if r.get("pct_of_roofline") is not None]
     w = sum(r.get("weight") or 1 for r in rows)
@@ -162,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     try:
         t = target.load(a.target) if getattr(a, "target", None) else target.load()
-    except Exception:                        # noqa: BLE001  shares need no target; only the decode floor does
+    except Exception:                        # noqa: BLE001  the target is optional
         t = None
     out = from_bundle(a.bundle, t)
     if out is None:

@@ -1,37 +1,12 @@
-"""What the tokenizer turns a corpus prompt into — the variable chat templating introduces.
-
-Posting a corpus prompt to `/v1/chat/completions` instead of `/v1/completions` is what makes an
-instruct model answer at all (`kb-20260919-6ef4e6bf`). The cost is that the tokens the model sees
-are no longer the trace's bytes: they are the trace's bytes wrapped in whatever chat template the
-tokenizer happens to ship, with whatever `enable_thinking` the shim happens to pass. A template
-revision would then move every number in the panel with nothing in the record changing — a
-silent variable swapped for a silent variable.
-
-So the fingerprint is recorded beside `corpus_version` and the device state, and two runs with
-different fingerprints are not comparable.
-
-`verify()` closes the last gap. The fingerprint is computed by the CLIENT; the SERVER is what
-actually applies the template. They are the same tokenizer on this box and on the pod (the
-replayer runs beside the engine in both shapes), but nothing enforces that, so the rendered
-length is checked against the `prompt_tokens` the server reported for a request whose text we
-know. `verified=False` in a panel means the stamp describes a different tokenizer than the one
-that served the run.
-
-transformers is imported lazily and every failure yields None: an unknown fingerprint must be
-an ordinary outcome, never an exception.
-"""
+"""Fingerprint of the chat template the tokenizer applies to a corpus prompt, checked against the server's token count.
+transformers is imported lazily and every failure yields None."""
 
 from __future__ import annotations
 
 import hashlib
 from typing import Any
 
-# What openai_shim.chat_completions passes to Tokenizer.encode_messages. Recorded rather than
-# assumed: it decides whether the template injects a `<|think|>` system turn, which on
-# gemma-4-E2B-it is the difference between a corpus that terminates early and one where every
-# request runs to max_tokens. False since the shim stopped inheriting encode_messages' True
-# default (kb-20260919-9ea56f98); runs either side of that are not comparable, and the
-# fingerprint is what records it.
+# The `enable_thinking` the shim's chat route passes to Tokenizer.encode_messages.
 SHIM_ENABLE_THINKING = False
 
 _CACHE: dict[str, Any] = {}
@@ -64,12 +39,8 @@ def rendered_len(model_name: str, prompt: str, *,
 
 def fingerprint(model_name: str, *,
                 enable_thinking: bool = SHIM_ENABLE_THINKING) -> dict[str, Any] | None:
-    """Identify the template that will be applied. None when it cannot be read.
-
-    `probe_tokens` is the rendered length of a fixed one-word prompt. It catches a tokenizer or
-    transformers upgrade that renders the same template string differently — the hash alone
-    would not.
-    """
+    """Identify the template that will be applied; None when it cannot be read.
+    `probe_tokens` is the rendered length of a fixed one-word prompt."""
     tk = _tokenizer(model_name)
     template = getattr(tk, "chat_template", None) if tk is not None else None
     if not isinstance(template, str):
@@ -85,11 +56,7 @@ def fingerprint(model_name: str, *,
 
 def verify(fp: dict[str, Any] | None, prompt: str, server_prompt_tokens: int | None,
            *, enable_thinking: bool = SHIM_ENABLE_THINKING) -> dict[str, Any] | None:
-    """Set `verified` by re-rendering `prompt` and comparing with what the server encoded.
-
-    Left None when either side is unknown — "not checked" and "checked and wrong" are different
-    facts, and only the second one invalidates the panel.
-    """
+    """Set `verified` by re-rendering `prompt` and comparing with the server's count; None when either is unknown."""
     if fp is None or server_prompt_tokens is None:
         return fp
     mine = rendered_len(fp["tokenizer"], prompt, enable_thinking=enable_thinking)

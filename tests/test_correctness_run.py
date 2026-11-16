@@ -1,6 +1,4 @@
-"""End-to-end gate flow against fake servers: reference -> candidates -> verdicts under the default policy.
-A 'good' candidate (small two-way churn, tiny logprob noise) must pass; a 'bad' one (systematic answer loss,
-flattened distributions) must fail. Run: python tests/test_correctness_run.py"""
+"""The gate end to end against fake servers: a good candidate passes, a bad one fails."""
 from __future__ import annotations
 
 import hashlib
@@ -44,7 +42,7 @@ def answer(item_text: str, mode: str) -> str:
     k = int(item_text.split()[1]); is_mc = item_text.startswith("question")
     right = h("ref", k) % 10 < 6
     if mode == "good" and h("churn", k) % 25 < (1 if right else 2):
-        right = not right                                  # churn both ways, net gain (wrong items are fewer)
+        right = not right                                  # churn both ways, net gain
     if mode == "bad" and right and h("loss", k) % 3 == 0:
         right = False                                      # systematic loss
     if is_mc:
@@ -99,7 +97,7 @@ def server(mode):
 
 
 def test_gate_flow():
-    enc, its = Enc(), items(3000)              # large n: churn averages out, as the 99% rule needs
+    enc, its = Enc(), items(3000)              # large n
     servers = {m: server(m) for m in ("ref", "good", "bad")}
     try:
         with tempfile.TemporaryDirectory() as d:
@@ -116,9 +114,9 @@ def test_gate_flow():
             assert same["passed"] and same["metrics"]["sample"] == {"items": 200, "of": 3000, "looks": [200]}
             assert run._looks(3000) == [200, 400, 800, 1600, 3000] and run._looks(150) == [150]
             rec = json.loads((d / "bad2.json").read_text())["ledger_record"]
-            assert rec["kind"] == "equiv" and set(rec["gates"]) == {"accuracy", "length"}   # MLPerf's rule only
+            assert rec["kind"] == "equiv" and set(rec["gates"]) == {"accuracy", "length"}   # these gates only
             assert "divergence" not in good["metrics"]
-            # the quick check: the same divergence, no answers generated, facts and no verdict
+            # the quick check: divergence facts, no answers, no verdict
             qg = run.quick(d / "ref", servers["good"][1], "m", d / "qgood.json")
             qb = run.quick(d / "ref", servers["bad"][1], "m", d / "qbad.json")
             assert qg["verdict"] == "facts" and qg["passed"] is None and qg["metrics"]["n_sequences"] == 60

@@ -1,8 +1,5 @@
-"""MLPerf Inference Mixtral-8x7B: 15,000 prompts, 5k each from OpenOrca (single instruction), GSM8K (5-shot math as a
-6-turn conversation) and MBXP (code completion), reference output >= 2 tokens. Output up to 1024 tokens. Server limits
-TTFT 2000 ms / TPOT 200 ms (p99). Accuracy there: ROUGE (OpenOrca), exact match (GSM8K), pass rate (MBXP), each
->= 99% of FP16. MBXP's assistant prefill ("Here's the completed code:\\n\\n```lang") and stop sequence are dropped:
-the chat API has no prefill.
+"""MLPerf Inference Mixtral-8x7B: 15,000 prompts, 5k each from OpenOrca, GSM8K and MBXP; output up to 1024 tokens.
+Server limits TTFT 2000 ms / TPOT 200 ms (p99). MBXP's assistant prefill and stop sequence are dropped.
 """
 from __future__ import annotations
 

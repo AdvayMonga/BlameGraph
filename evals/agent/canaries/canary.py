@@ -7,8 +7,8 @@ import functools
 import time
 
 NAMES = ("slow_decode", "slow_start", "kv_leak", "admit_fewer")
-SLOW_DECODE_S = 0.003      # per decode step: worse TPOT in every decode-heavy regime
-SLOW_START_S = 20.0        # after the model loads: worse cold start
+SLOW_DECODE_S = 0.003      # per decode step
+SLOW_START_S = 20.0        # after the model loads
 
 
 def parse(spec: str) -> frozenset[str]:
@@ -20,7 +20,7 @@ def parse(spec: str) -> frozenset[str]:
 
 
 def apply(names: frozenset[str]) -> None:
-    """Monkeypatch the engine in this process. The engine's own tree never changes, so the player cannot edit a canary away."""
+    """Monkeypatch the engine in this process."""
     from inference_server.backends.custom_torch_backend import CustomTorchBackend as B
     from inference_server.scheduler import ContinuousBatchScheduler as S
 
@@ -47,7 +47,7 @@ def apply(names: frozenset[str]) -> None:
 
         @functools.wraps(admit)
         def admit_fewer(self, device):
-            cap = self.max_batch_size            # one fewer row admitted per pass; stats still report the config
+            cap = self.max_batch_size            # one fewer row admitted per pass
             self.max_batch_size = max(0, cap - 1)
             try:
                 admit(self, device)

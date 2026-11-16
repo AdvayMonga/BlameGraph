@@ -1,6 +1,4 @@
-"""The MoE grouped GEMM as the example engine runs it by default since inference-server #122: `moe_gemm` with fp8
-e4m3 expert weights and a per-output-channel fp32 scale (`w_scale` [E, N]), here the gate_up projection (rows
-gathered from the tokens). Shape and routing as `moe_gemm` (bf16 weights), which keeps the bf16 path.
+"""The MoE grouped GEMM with fp8 e4m3 expert weights and a per-output-channel fp32 scale; shape as `moe_gemm`.
 
 Inputs: a [T, K] bf16, tok [M] int32, w [E, N, K] float8_e4m3fn, w_scale [E, N] fp32, sorted_ids / expert_ids."""
 from __future__ import annotations
@@ -15,7 +13,7 @@ FP8, FP8_MAX = torch.float8_e4m3fn, 448.0
 
 
 def quantize(w):
-    """Per output channel (the engine's scheme): w ~= q * scale[..., None], q fp8 e4m3, scale fp32 [E, N]."""
+    """Per output channel: w ~= q * scale[..., None], q fp8 e4m3, scale fp32 [E, N]."""
     scale = (w.float().abs().amax(-1) / FP8_MAX).clamp_min(1e-12)
     return (w.float() / scale[..., None]).to(FP8), scale
 

@@ -1,6 +1,4 @@
-"""Researcher experiments: a change on a branch measured through the lab's own tools, with the same hypothesis,
-expect and reflection rules as the agent's, and hidden from every agent view. Fake instruments from the proftools
-tests."""
+"""Researcher experiments: a branch's change measured through the lab's tools under the agent's rules."""
 from __future__ import annotations
 
 import json
@@ -10,13 +8,13 @@ import pytest
 
 from lab import cli, experiment, experiments
 from lab.records import ledger
-pytest_plugins = ["tests.test_lab_proftools"]   # its `tb` fixture: an agent Toolbox with fake instruments
+pytest_plugins = ["tests.test_lab_proftools"]   # its `tb` fixture
 
 EXPECT = {"metric": "kernel_ms", "value": 1.0, "unit": "absolute", "why": "half the launches"}
 
 
 def commit(repo, files, branch="change"):
-    """`files` committed on `branch` off HEAD; HEAD stays where it was (the agent's workspace is exported from it)."""
+    """`files` committed on `branch` off HEAD; HEAD stays where it was."""
     git = ["git", "-C", str(repo), "-c", "user.name=Res Earcher", "-c", "user.email=r@r", "-c", "commit.gpgsign=false"]
     subprocess.run(git + ["checkout", "-q", "-b", branch], check=True)
     for rel, text in files.items():

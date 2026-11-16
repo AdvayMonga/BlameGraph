@@ -1,6 +1,4 @@
-"""The layer-1 loop end to end on CPU, with no model calls: tasks, shape capture and split, the judge, and a real
-OpenEvolve run whose "model" is a scripted stand-in that returns one known-good diff and one cheating diff.
-Run: python tests/test_kernels_evolve.py (skips without openevolve)."""
+"""The layer-1 loop end to end on CPU with a scripted model: tasks, shapes, the judge, an OpenEvolve run."""
 from __future__ import annotations
 
 import json
@@ -14,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("LAB_TARGET", str(ROOT / "lab" / "targets" / "inference-server.toml"))
 os.environ.setdefault("LAB_ENGINE_PYTHON", sys.executable)
-os.environ.setdefault("LAB_NO_JAIL", "1")          # no srt or container jail on a dev box; the jail's argv is tested
+os.environ.setdefault("LAB_NO_JAIL", "1")          # no srt or container jail
 
 import torch  # noqa: E402
 
@@ -65,7 +63,7 @@ def test_the_screen_refuses_exploit_routes_and_passes_real_kernels():
                 "import lab.kernels.tasks\n",
                 "os.system('id')\n", "open('/etc/passwd')\n", "import ctypes\n", "inspect.stack()\n"):
         assert screen(src), src
-    ev = ROOT / "tests" / "fixtures" / "paged_decode_evolved.py"     # a program an earlier run evolved
+    ev = ROOT / "tests" / "fixtures" / "paged_decode_evolved.py"     # an evolved program
     assert screen(SEED.read_text()) == [] and screen(ev.read_text()) == []
     assert screen("x = os.environ.get('A', '0')\n") == []
     assert screen("import torch\nclass A:\n    def f(self, x):\n        self.a = 1\n        x.b = 2\n") == []
@@ -142,7 +140,7 @@ def test_a_programs_cpp_builds_once_for_all_its_stages_and_only_for_that_source(
         finally:
             jailed.grader.jailed, jailed.EVAL_DIRS = orig, dirs
     (t1, a), (t2, b), (t3, c) = seen
-    assert t1 == t2 != t3                                         # one fixed tree per source: the build path is stable
+    assert t1 == t2 != t3                                         # one fixed tree per source
     assert a == [".result_key", "candidate.py", "eval_config.json"] and c == a
     assert b == [".result_key", "candidate.py", "eval_config.json", "scale_ext", "scale_ext.so",
                  "torch_extensions"]                                           # the build kept, nothing else
@@ -212,8 +210,7 @@ def test_ncu_counters_reach_the_judge_on_the_gpu():
     shapes = json.loads(a["ncu"])["shapes"]
     assert len(shapes) == 2 and all(s.get("kernels") for s in shapes), shapes      # counters on both shapes
 def test_the_fused_tasks_start_launches_what_the_engine_module_launches():
-    """The start edits only change how the kernels module is reached: with a stand-in kernels module, the original
-    fused.py and the edited start make the same launches with the same arguments, and the start passes the screen."""
+    """The original fused.py and the edited start make the same launches; the start passes the screen."""
     import types
     from lab.kernels.eval.core import screen
     from lab.kernels.evolve.run import _start
@@ -273,8 +270,7 @@ def test_the_fused_tasks_start_launches_what_the_engine_module_launches():
     from lab.kernels.eval.ship import unstart
     assert unstart(load("rmsnorm"), start).rstrip() == src.rstrip()      # shipping undoes the edits
 def test_the_fp8_moe_tasks_judge_the_engines_calls():
-    """References against an independent per-pair computation; an engine-shaped kernel passes every gate and the value
-    scalings (fp8 weights kept, their scales scaled); a 5% scale error fails; each task reads only its own calls."""
+    """An engine-shaped kernel passes every gate; a 5% scale error fails; each task reads only its own calls."""
     from lab.kernels.eval.check import _gen, check_kernel
     from lab.kernels.eval.core import _scaled
     from lab.kernels.tasks.moe_gemm import _block_m
@@ -393,7 +389,7 @@ def test_noise_rule_and_physics_alarm():
     err = json.loads(same["artifacts"]["error_vs_reference"])["candidate"]
     assert err["max_abs"]["float32"] is not None and err["cases"] > 0
     from lab.infra.context.peaks import Peaks
-    fast = Peaks("toy", 1.0, 1.0, 1e9, "spec")      # a 1 FLOP/s, 1 B/s machine: any real time beats its bound
+    fast = Peaks("toy", 1.0, 1.0, 1e9, "spec")      # a 1 FLOP/s, 1 B/s machine
     orig = core._peaks
     core._peaks = lambda device: fast
     try:
@@ -419,7 +415,7 @@ def test_paged_decode_tables_are_as_wide_as_the_engines_graphs():
 
 def test_paged_decode_checks_with_no_edge_shapes_do_not_fall_back_to_the_defaults():
     from lab.kernels.eval import check_kernel
-    t = load("paged_decode")                    # its default edge shapes (Hq = 1 < Hkv) are not valid GQA inputs
+    t = load("paged_decode")                    # its default edge shapes are not valid GQA inputs
     r = check_kernel(t.reference, t.reference, t.make_inputs, [(2, 8, 2, 16, 4, 11)], [], dtypes=(torch.float32,),
                      edge_shapes=[], repeats=1, layouts=())
     assert r["passed"]
@@ -464,7 +460,7 @@ def test_graph_timing_is_cuda_only_and_a_kernel_that_cannot_be_timed_scores_zero
     from lab.kernels.evolve.run import system_message
     t = load("toy_rmsnorm")
     p = time_pair(t.reference, t.reference, t.make_inputs, (8, 256), torch.float32, iters=3, warmup=1, graphs=True)
-    assert p["clock"] == "host"                                  # no CUDA here: timed eagerly
+    assert p["clock"] == "host"                                  # no CUDA: host clock
     g = dataclasses.replace(t, graphs=True)
     assert judge(g, SEED, list(t.seen_default), [], None, "cpu", None, 2, iters=3)["metrics"]["correct"] == 1.0
     orig = core.time_pair
@@ -490,7 +486,7 @@ def test_share_of_the_window_per_task_and_the_kernels_no_task_covers():
         (b / "kernels.json").write_text(json.dumps({"kernels": [
             {"name": "fused_moe_kernel", "count": 10, "total_us": 500_000.0},
             {"name": "_paged_decode_splitk_kernel", "count": 10, "total_us": 150_000.0},
-            {"name": "_gqa_decode_splitk_kernel", "count": 10, "total_us": 30_000.0},          # #106's names
+            {"name": "_gqa_decode_splitk_kernel", "count": 10, "total_us": 30_000.0},
             {"name": "_splitk_combine_vec_kernel", "count": 10, "total_us": 20_000.0},
             {"name": "rms_norm_kernel", "count": 10, "total_us": 20_000.0}]}))
         r = shares(b, [load("paged_decode"), load("toy_rmsnorm")])
@@ -584,7 +580,7 @@ def test_moe_gemm_task_reference_routing_capture_and_judge():
     real = t.with_ints({json.dumps(list(shape)): ints}).make_inputs(shape, torch.float32, "cpu", g)
     assert real[1].tolist() == tok.tolist() and real[3].tolist() == sorted_ids.tolist()
     assert t.cost(shape, torch.bfloat16, real)[1] <= t.cost(shape, torch.bfloat16)[1] and t.graphs
-    toy = dataclasses.replace(t, entry=None)                    # the engine's Triton kernel needs CUDA: reference baseline
+    toy = dataclasses.replace(t, entry=None)                    # the reference as baseline
     with tempfile.TemporaryDirectory() as d:
         prog = Path(d) / "k.py"
         prog.write_text("import torch\n\n\ndef kernel(a, tok, w, sorted_ids, expert_ids, M, block_m=16):\n"
@@ -634,7 +630,7 @@ def test_the_fused_kernel_tasks_check_their_own_references_and_read_captured_sha
         assert t.shape_of(call) == tuple(t.seen_default[0]), name
         assert all(v > 0 for v in t.cost(t.seen_default[0], torch.bfloat16)) and t.graphs and t.kernel_names
     x, w, cos, sin = rmsnorm_rope.make_inputs((2, 3, 4, 128), torch.float32, "cpu", torch.Generator().manual_seed(1))
-    x32 = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-6) * w                    # the HF formula, fp32
+    x32 = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-6) * w                    # RMSNorm in fp32
     half = 64
     hf = x32 * cos[:, :, None] + torch.cat((-x32[..., half:], x32[..., :half]), -1) * sin[:, :, None]
     assert torch.allclose(rmsnorm_rope.reference(x, w, cos, sin), hf, atol=1e-4)
@@ -695,7 +691,7 @@ def test_capture_records_calls_and_the_split_holds_out_a_band():
         from unittest import mock
         with mock.patch.object(capture, "SMALL_INT", 8), tempfile.TemporaryDirectory() as d2:
             with capture.capture(["fake_engine_kernels:paged_decode_attention"], Path(d2)):
-                for n in (4, 16):                            # 16 lengths: too long to log by value
+                for n in (4, 16):                            # 16 lengths: not logged by value
                     user.paged_decode_attention(torch.zeros(n, 32, 128), pool, pool, torch.zeros(n, 2, dtype=torch.int32),
                                                 torch.full((n,), 17, dtype=torch.int32), scale=0.1)
             part = shapes.ints_from_captures(task, [Path(d2)])
@@ -757,7 +753,7 @@ def test_remote_evaluation_sends_the_source_on_stdin_and_never_a_key():
 
 
 RIGHT = "    xf = x.float()\n    return (xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + 1e-6) * w.float()).to(x.dtype)\n"
-# Published exploit routes (Sakana, CUDA-L1, METR, KernelBot) as toy kernels: each must score 0, for the reason given.
+# Exploit routes as toy kernels: each must score 0, for the reason given.
 CANARIES = {
     "timer via __import__": ("import torch\n__import__('time').perf_counter = lambda: 0.0\n"
                              "def kernel(x, w):\n" + RIGHT, "refused"),
@@ -804,7 +800,7 @@ def test_exploit_canaries_all_score_zero():
 
 def test_a_kernel_right_while_checked_and_wrong_while_timed_scores_zero():
     from lab.kernels.eval.jailed import judge_jailed
-    t = load("toy_rmsnorm")                      # wrong from the 5th call on one input object: only timing gets there
+    t = load("toy_rmsnorm")                      # wrong from the 5th call on one input object
     src = ("import torch\n_seen = []\ndef kernel(x, w):\n    n = sum(1 for t in _seen if t is x)\n"
            "    _seen.append(x)\n    if n >= 4:\n        return torch.zeros_like(x)\n" + RIGHT)
     r = judge_jailed({"task": t.name, "seen": [list(s) for s in t.seen_default], "device": "cpu", "iters": 20}, src, 2)
@@ -880,8 +876,7 @@ def test_the_jail_sees_a_fresh_tree_and_a_copied_harness_never_this_repo():
 
 
 def _scripted_class():
-    """A stand-in model, at module level so OpenEvolve's worker processes can unpickle it: odd calls (counted in a
-    file, since every worker has its own instance) return the cheat, even calls the real speedup."""
+    """A stand-in model: odd calls (counted in a file) return the cheat, even calls the real speedup."""
     from openevolve.llm.base import LLMInterface
 
     class Scripted(LLMInterface):
@@ -932,7 +927,7 @@ def test_openevolve_finds_the_known_good_edit_and_rejects_the_cheat():
                             output_dir=str(Path(d) / "oe"), cleanup=False)
         assert "rsqrt" in res.best_code and "return x.clone()" not in res.best_code
         seed = judge(t, SEED, list(t.seen_default), [], None, "cpu", None, 2, iters=3)["metrics"]["combined_score"]
-        assert res.metrics.get("correct") == 1.0 and res.best_score > 3 * seed     # the naive seed is ~0.1x
+        assert res.metrics.get("correct") == 1.0 and res.best_score > 3 * seed
         from lab.kernels.evolve.run import record
         from lab.records import ledger
         best = Path(d) / "best.py"
@@ -958,7 +953,7 @@ if __name__ == "__main__":
 def test_captures_with_no_call_of_the_task_are_refused_not_replaced_by_defaults(tmp_path):
     from types import SimpleNamespace
     from lab.kernels.evolve.run import _shapes
-    (tmp_path / "calls.jsonl").write_text("")                   # every call replayed from a CUDA graph: none seen
+    (tmp_path / "calls.jsonl").write_text("")                   # no call seen
     try:
         _shapes(load("toy_rmsnorm"), SimpleNamespace(shapes=None, captures=[str(tmp_path)], equal_captures=False))
         raise AssertionError("empty captures fell back to the default shapes")

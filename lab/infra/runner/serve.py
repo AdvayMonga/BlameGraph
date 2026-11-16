@@ -1,9 +1,6 @@
-"""Serve an engine tree the way the agent cannot tamper with: launched from the pristine copy, inside the jail, on a
-free localhost port, with the target's env; ready when its health path answers 200; torn down with its whole
-process group. `with Served(tree, spec) as s: ... s.url`. With `artifacts`, the run's passive data lands in that dir:
-`device/` (samples for the whole served window), `telemetry/` (files the engine wrote, when the target asks for them)
-and `serve.log` (this run's part of the log). The GPU must be free when the engine starts (else `GpuBusy`, nothing
-launched); while it is served, any other process holding the GPU is recorded and `exclusive()` raises `Contaminated`."""
+"""Serve an engine tree from its pristine copy, inside the jail, on a free localhost port, with the target's env.
+`with Served(tree, spec) as s: ... s.url`; with `artifacts`, `device/`, `telemetry/` and `serve.log` land in that dir.
+Raises `GpuBusy` if the GPU is held at launch; `exclusive()` raises `Contaminated` if another process held it since."""
 
 from __future__ import annotations
 
@@ -23,8 +20,8 @@ from lab.targets import engine, target
 from lab.profile import gpu
 from lab.infra.sandbox import grader
 
-TELEMETRY_SUBDIR = "lab-telemetry"        # inside the served tree, the one place a jailed engine may write
-POLL_S = 1.0                              # how often the GPU's processes are checked while an engine is served
+TELEMETRY_SUBDIR = "lab-telemetry"        # the engine's telemetry dir inside the served tree
+POLL_S = 1.0                              # seconds between checks of the GPU's processes
 
 
 def free_port() -> int:
@@ -49,7 +46,7 @@ def _listed(apps: list[dict]) -> str:
 
 
 class GpuBusy(RuntimeError):
-    """Something already held the GPU, so no engine was launched."""
+    """The GPU was held before launch; no engine was started."""
 
     def __init__(self, apps: list[dict]):
         super().__init__(f"the GPU was in use before the engine started: {_listed(apps)}")
@@ -65,9 +62,8 @@ class Contaminated(RuntimeError):
 
 
 class Watch:
-    """One job's hold on the GPU, for every GPU job (a served engine, a profiler run): `GpuBusy` on creation if
-    anything holds the GPU; once `start(pids)` names the job's own processes, any other holder is kept every POLL_S;
-    `stop()` returns them. Nothing to watch where there is no nvidia-smi."""
+    """One job's hold on the GPU: raises `GpuBusy` on creation if anything holds it; after `start(pids)` records
+    every holder outside the job's own pids each POLL_S; `stop()` returns them. Inactive without nvidia-smi."""
 
     def __init__(self):
         busy = gpu.compute_apps()
@@ -75,7 +71,7 @@ class Watch:
             raise GpuBusy(busy)
         self.on = busy is not None
         self.foreign: dict[int, dict] = {}
-        self._own: set[int] = set()             # every pid ever seen as the job's: gone from pids() at teardown
+        self._own: set[int] = set()             # every pid ever seen as the job's
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -180,14 +176,14 @@ class Served:
             time.sleep(0.5)
 
     def exclusive(self) -> None:
-        """Call once the measurement is done: raises `Contaminated` if anything else held the GPU since launch."""
+        """Stop watching; raises `Contaminated` if anything else held the GPU since launch."""
         foreign = self.watch.stop()
         if foreign:
             raise Contaminated(foreign)
 
     def __exit__(self, *exc) -> None:
         if self.watch:
-            self.watch.stop()           # before teardown: an engine going away must not read as someone else
+            self.watch.stop()           # stop watching before teardown
         if self.proc is not None and self.proc.poll() is None:
             try:
                 os.killpg(self.proc.pid, signal.SIGTERM)
@@ -205,7 +201,7 @@ class Served:
             self._collect()
 
     def _collect(self) -> None:
-        """Device samples closed, telemetry moved out of the tree (empty means none), this run's log copied."""
+        """Close the device samples, move telemetry out of the tree, copy this run's part of the log."""
         if self.sampler is not None:
             self.sampler.stop()
             self.sampler = None

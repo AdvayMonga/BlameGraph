@@ -1,12 +1,5 @@
-"""The precheck (step 7 of the funnel): what can be judged without a GPU, run jailed with no GPU
-attached (lab.kernels.eval.jailed's PRECHECK_STAGE), so it costs no GPU time and can run beside GPU jobs.
-
-The program's source screen, then its import with no visible device: a program that builds CUDA C++ with
-`load_inline` builds it here for the GPU's architecture ($TORCH_CUDA_ARCH_LIST), and a build that fails drops the
-program. Each built kernel's resource use (registers, stack, shared and local memory, from `cuobjdump`) is the
-compiler's report, kept as facts: local memory means spills, which some fast kernels have, so it never drops a program.
-A failure that is not a build failure (e.g. code that needs a device at import) is inconclusive: stage 1 decides.
-Triton kernels compile on their first call with real inputs, so they are not built here.
+"""The precheck: a program's source screen, its import with no device (building its CUDA C++) and each built kernel's
+resource use, run jailed with no GPU.
 
   python -m lab.kernels.eval.precheck CONFIG PROGRAM     (prints one JSON line)
 """
@@ -56,7 +49,7 @@ def report(build_dir: Path) -> list[dict]:
 
 
 def precheck(source: str, program: Path, build_dir: Path) -> dict:
-    """{passed: True|False|None, reason, compile_report}: None when the import failed for a reason other than a build."""
+    """{passed: True|False|None, reason, compile_report}: None when the import failed but not on a build."""
     from lab.kernels.eval.core import load_program, screen
     refused = screen(source)
     if refused:
@@ -75,7 +68,7 @@ def precheck(source: str, program: Path, build_dir: Path) -> dict:
 def main() -> int:
     cfg, program = json.loads(Path(sys.argv[1]).read_text()), Path(sys.argv[2])
     key = None
-    if cfg.get("result_key"):                    # read and removed before the candidate loads, as core does
+    if cfg.get("result_key"):                    # read and removed before the candidate loads
         key = Path(cfg["result_key"]).read_text()
         Path(cfg["result_key"]).unlink()
     r = precheck(program.read_text(), program, Path(os.environ.get("TORCH_EXTENSIONS_DIR", program.parent)))
