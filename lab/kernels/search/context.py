@@ -1,8 +1,5 @@
-"""Context: everything a model call reads, built in one place, and how its answer is read back. Facts only.
-
-Five calls: `ports` (once, before the first generation: the public implementations to port), `name` (one a
-generation: the changes to make), `review` (one a generation: the final list, duplicates merged and combinations
-added), `write` (one a change or port: the program it makes) and `reflect` (once, after the last generation). `name` and `review` share their system prompt and the programs shown, so the second reads them cached."""
+"""Context: everything a model call reads and how its answer is read back, facts only. The calls are `ports`, `name`,
+`review`, `write` and `reflect`; `name` and `review` share their system prompt and programs, so the second is cached."""
 from __future__ import annotations
 
 import json

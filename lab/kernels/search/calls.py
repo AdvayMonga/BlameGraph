@@ -1,7 +1,5 @@
-"""Every model call of a search, kept whole: its prompt parts and its answer, each distinct text stored once.
-
-`<out>/calls.jsonl`: one row per call {id, role, generation, model, system, user, answer, usd, stop}; `system`, `user` and
-`answer` are keys into `<out>/texts.jsonl` ({key, text} rows), which also holds every program a writer made."""
+"""Every model call of a search, kept whole: `<out>/calls.jsonl` has one row per call, its prompt parts and answer as
+keys into `<out>/texts.jsonl`, which stores each distinct text once and every program a writer made."""
 from __future__ import annotations
 
 import hashlib

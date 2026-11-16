@@ -22,9 +22,8 @@ START = "a = 1\n"
 
 
 class Namer:
-    """Names the changes asked for over the programs shown (m0, m1, ...), reflects on every idea it is shown, and
-    reviews by keeping each named change (or as `review(named)` says; None: an answer that is no JSON). Asked for
-    ports it names two of the program shown, and writes each as a Writer does."""
+    """Names the changes asked for over the programs shown, reflects on every idea it is shown, and reviews by keeping
+    each named change (or as `review(named)` says). Asked for ports it names two and writes each as a Writer does."""
 
     def __init__(self, tag="opus", review=None):
         self.model, self.calls, self.review, self.pen = tag, [], review, Writer(tag)
