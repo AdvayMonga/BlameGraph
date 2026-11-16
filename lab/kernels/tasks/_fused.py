@@ -1,6 +1,4 @@
-"""Shared pieces of the tasks for the example engine's fused kernels (inference_server.models.fused): Qwen3-30B-A3B's
-constants and the engine's own eager semantics as references (HF Qwen3 RMSNorm: normalise in fp32, cast back, then
-scale; HF rotary: halves rotated)."""
+"""Shared pieces of the fused-kernel tasks: Qwen3-30B-A3B's constants and the engine's eager RMSNorm as a reference."""
 from __future__ import annotations
 
 import torch
@@ -28,9 +26,7 @@ def weight(d, g):
     return 1 + 0.1 * torch.randn(d, generator=g)
 
 
-# models/fused.py finds triton with importlib.util.find_spec and reaches its kernels module through a lazy object's
-# getattr; the source screen refuses both. The starting program imports the kernels module directly instead: the same
-# kernels, the same eager fallback without triton.
+# Edits that make models/fused.py import its kernels module directly.
 START_EDITS = (
     ("\nimport importlib.util\n", "\ntry:                                    # its kernels module\n"
      "    from inference_server.models import fused_kernels as K\nexcept ImportError:                     # no triton\n"

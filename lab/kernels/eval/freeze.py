@@ -1,11 +1,4 @@
-"""A program's Triton autotune frozen into a table before it is gated and shipped.
-
-`triton.autotune` tunes at run time for every key it has not seen, so a kernel keyed on a size that changes every step
-(the batch's rows) tunes again in the middle of serving. The freeze stage (core.FREEZE_STAGE, jailed) runs the program
-on every seen shape and records the config each autotuner chose for each key; `rewrite` replaces each autotune with
-`_FrozenTune`, which launches the config tuned for the call's key, else for the nearest tuned key (equal non-numeric
-values, then the smallest tuned sizes at or above the call's, then the closest), and never tunes. The table is a
-literal in the module, so it ships with it, as vLLM's and SGLang's offline-tuned MoE configs do."""
+"""A program's Triton autotune frozen into a table: each autotune replaced by `_FrozenTune`, which never tunes."""
 from __future__ import annotations
 
 import ast
@@ -66,8 +59,8 @@ def _is_autotune(node) -> bool:
 
 
 def sites(source: str) -> list[dict]:
-    """Each autotune in `source`: {name, line, form ("decorator" | "call"), text}; `name` is the module-level name it
-    binds, None when it binds none (inside a function, a class or an expression), which cannot be frozen."""
+    """Each autotune in `source`: {name, line, form ("decorator" | "call" | "other"), text}.
+    `name` is the module-level name it binds, None when it binds none."""
     tree = ast.parse(source)
     top, out = set(), []
     for st in tree.body:
@@ -86,8 +79,7 @@ def sites(source: str) -> list[dict]:
 
 
 def introduced(source: str, base: str | None) -> list[str]:
-    """The live autotunes in `source` that are not, as written, in `base` (the engine module it replaces): what a
-    shipped program would tune while serving that the engine did not."""
+    """The autotunes in `source` that are not, as written, in `base`."""
     def live(src):
         return [re.sub(r"\s+", "", s["text"]) for s in sites(src)] if src else []
     have = live(base)
@@ -95,7 +87,7 @@ def introduced(source: str, base: str | None) -> list[str]:
 
 
 def config_of(c) -> dict:
-    """A Triton Config as the launch keywords it adds (`all_kwargs`: its meta-parameters, num_warps, num_stages, ...)."""
+    """A Triton Config as the launch keywords it adds; raises ValueError on a pre_hook."""
     if getattr(c, "pre_hook", None) is not None:
         raise ValueError("a config with a pre_hook cannot be frozen into a table")
     if hasattr(c, "all_kwargs"):
@@ -105,8 +97,7 @@ def config_of(c) -> dict:
 
 
 def record(tuner) -> dict:
-    """Wrap one autotuner's `run` so each call's key and the config it launched with are kept (the returned dict,
-    {"keys", "table"}, filled as the program runs)."""
+    """Wrap one autotuner's `run` to keep each call's key and config; returns {"keys", "table"}, filled as it runs."""
     keys = list(tuner.keys)
     names = list(getattr(tuner, "arg_names", None) or tuner.fn.arg_names)
     rows, run = {}, tuner.run
@@ -134,8 +125,7 @@ def tables(recorded: dict) -> dict:
 
 
 def rewrite(source: str, frozen: dict) -> str:
-    """`source` with each autotune named in `frozen` replaced by `_FrozenTune` over its table, the helper written once
-    before the first; the rest left as they are."""
+    """`source` with each autotune named in `frozen` replaced by `_FrozenTune` over its table, the helper added once."""
     tree = ast.parse(source)
     lines = source.splitlines(keepends=True)
     edits = []                                   # (first line, last line, replacement), 1-based, inclusive
@@ -171,9 +161,8 @@ def _bind(name: str, fn: str, t: dict) -> str:
 
 
 def freeze(source: str, judge: Callable[[str], dict]) -> tuple[str, dict]:
-    """(`source` with every autotune that ran on a seen shape frozen, the tables). `judge(source)` is the freeze
-    stage's result for it; a source without autotune is returned as it is, never judged. Raises when an autotune binds
-    no module-level name or the stage failed."""
+    """(`source` with every autotune that ran on a seen shape frozen, the tables); `judge` runs the freeze stage.
+    Raises when an autotune binds no module-level name or the stage failed."""
     found = sites(source)
     if not found:
         return source, {}

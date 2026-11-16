@@ -1,9 +1,6 @@
-"""ncu counters for one candidate, a fact for the search's judge: CudaForge's curated 24 Nsight Compute metrics (its
-Table 8; it found them better than the full set, and KernelPro found a raw dump worse than none) plus each kernel's
-duration, for the device kernels of one call on the seen shape it is given (jailed runs the smallest and largest).
+"""ncu counters for one candidate: 24 Nsight Compute metrics plus duration for the device kernels of one call.
 
-`python -m lab.kernels.eval.ncu CONFIG PROGRAM` is the probe ncu wraps (stage 3 of lab.kernels.eval.jailed): it warms the
-candidate up, then makes one call between cudaProfilerStart/Stop, so ncu (`--profile-from-start off`) sees only that."""
+`python -m lab.kernels.eval.ncu CONFIG PROGRAM` is the probe ncu wraps: a warm-up, then one profiled call."""
 from __future__ import annotations
 
 import csv
@@ -33,12 +30,11 @@ METRICS = (
 
 def flags() -> list[str]:
     return ["--profile-from-start", "off", "--target-processes", "all", "--csv", "--page", "raw",
-            "--print-units", "base", "--metrics", ",".join(METRICS)]          # ns and bytes, never rescaled per row
+            "--print-units", "base", "--metrics", ",".join(METRICS)]          # ns and bytes
 
 
 def parse(stdout: str, top: int = 3) -> dict:
-    """ncu's raw CSV (one row per kernel launch, after its own log lines) -> the `top` kernels by duration, each with
-    its metrics as numbers where they parse."""
+    """ncu's raw CSV (one row per kernel launch) -> the `top` kernels by duration, metrics as numbers."""
     lines = [x for x in stdout.splitlines() if x.startswith('"')]
     if len(lines) < 2:
         return {"kernels": [], "note": "ncu printed no metrics (no kernel ran inside the profiled call?)"}
@@ -71,7 +67,7 @@ def probe(cfg: dict, program: Path) -> int:
     fn = task.bind(load_program(program))
     inputs = task.make_inputs(tuple(cfg["seen"][0]), task.dtypes[0], cfg.get("device", "cuda"),
                               torch.Generator().manual_seed(0))
-    for _ in range(2):                           # compile and autotune outside the profiled call
+    for _ in range(2):                           # warm-up: compile and autotune
         fn(*inputs)
     torch.cuda.synchronize()
     torch.cuda.profiler.start()

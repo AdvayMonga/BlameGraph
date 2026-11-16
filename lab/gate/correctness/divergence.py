@@ -1,10 +1,5 @@
-"""Teacher-forced divergence between reference and candidate.
-
-Both servers score the *same* token sequence (the reference's own output), so one early token difference cannot
-cascade. Each position carries the logprob of the actual next token and the top-k alternatives. With full logits
-(local scoring) KL is exact; with top-k (server APIs) it is computed over the reference's top-k support, with
-tokens missing from the candidate's top-k assigned the candidate's smallest listed logprob (a conservative bound).
-"""
+"""Teacher-forced divergence between reference and candidate over the same token sequence.
+KL is exact with full logits; with top-k it is computed over the reference's top-k support."""
 from __future__ import annotations
 
 import math
@@ -23,7 +18,7 @@ def _kl_topk(ref: Position, cand: Position) -> float:
     support.setdefault(ref.token, ref.logprob)
     floor = min(cand.top.values()) if cand.top else cand.logprob
     cand_lp = {**cand.top, cand.token: cand.logprob}
-    # renormalize both over the shared support so the bound is a proper KL between two distributions
+    # renormalize both over the shared support
     toks = list(support)
     p = [math.exp(support[t]) for t in toks]
     q = [math.exp(cand_lp.get(t, floor)) for t in toks]

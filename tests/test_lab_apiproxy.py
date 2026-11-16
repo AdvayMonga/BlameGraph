@@ -152,7 +152,7 @@ def test_a_client_that_drops_mid_stream_is_charged_its_input_and_all_of_max_toke
             self.wfile.write(start)
             self.wfile.flush()
             try:
-                for _ in range(50):                     # the rest never comes before the client hangs up
+                for _ in range(50):                     # the rest never comes
                     time.sleep(0.05)
                     self.wfile.write(b'data: {"type":"ping"}\n\n')
                     self.wfile.flush()

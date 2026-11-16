@@ -1,7 +1,4 @@
-"""The competitor timings' and the crossover's host-side logic (lab/kernels/library/competitors.py, lab/profile/crossover.py): a wrong
-competitor is reported and never timed, and so is one whose timed outputs differ; SASS and PTX are filtered to the
-kernels that matter; adapters' per-call work; step times by batch from a timeline; the faster path per batch and prompt
-length, and when a run is reused. The GPU parts run on the GPU host."""
+"""The competitor timings' and the crossover's host-side logic."""
 from __future__ import annotations
 
 import sys

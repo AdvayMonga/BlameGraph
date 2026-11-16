@@ -1,11 +1,6 @@
-"""The PTX comparison (after Standard Kernel's method): several implementations of one operation
-lowered to PTX and condensed into comparable feature cards, so the judge can see what the fastest does that ours
-does not. The cards are counted from the PTX itself (instruction classes, memory spaces, vector widths, shared memory,
-the Hopper features in use), not written by a model: facts, not a reading of them. A card may carry its measured time
-on our shapes (`timing_ms`, from a GPU run) beside it.
+"""The PTX comparison: implementations of one operation, as PTX or `cuobjdump -sass` output, counted into feature cards.
 
   lab kernels ptx card --name NAME PTX [--name NAME PTX ...] [--timing NAME=MS ...] --out CARDS.txt
-  (a file of `cuobjdump -sass` output is read as SASS: libraries that ship compiled code without PTX)
 """
 from __future__ import annotations
 
@@ -16,7 +11,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-# Instruction classes by opcode prefix (the first match wins), the features that tell kernels apart on Hopper.
+# Instruction classes by opcode prefix (the first match wins).
 CLASSES = (
     ("wgmma", "wgmma."),                      # warpgroup tensor-core MMA (Hopper)
     ("mma", "mma."),                          # warp-level tensor-core MMA
@@ -25,7 +20,7 @@ CLASSES = (
     ("cp_async", "cp.async"),                 # async global -> shared copies (Ampere+)
     ("ldmatrix", "ldmatrix"),
     ("mbarrier", "mbarrier."),
-    ("setmaxnreg", "setmaxnreg"),             # register reallocation between warpgroups: warp specialization
+    ("setmaxnreg", "setmaxnreg"),             # register reallocation between warpgroups
     ("barrier", "bar."),
     ("barrier", "barrier."),
     ("shuffle", "shfl."),
@@ -53,8 +48,7 @@ def entries(ptx: str) -> dict[str, str]:
 
 
 def features(body: str) -> dict:
-    """One kernel's card: instruction counts by class, the widest vector access, declared registers and static shared
-    memory, and which Hopper features it uses."""
+    """One kernel's card: instruction counts by class, widest vector, registers, static shared bytes, features used."""
     ops = Counter(_OP.findall(body))
     counts: Counter = Counter()
     for op, n in ops.items():
@@ -71,7 +65,7 @@ def features(body: str) -> dict:
                            if counts[k])}
 
 
-# The same classes in SASS (`cuobjdump -sass`), for libraries that ship compiled code without PTX.
+# The same classes in SASS (`cuobjdump -sass`).
 SASS = (("wgmma", "HGMMA"), ("mma", "HMMA"), ("tma", "UTMALDG"), ("tma", "UTMASTG"), ("bulk_copy", "UBLKCP"),
         ("cp_async", "LDGSTS"), ("ldmatrix", "LDSM"), ("mbarrier", "SYNCS"), ("setmaxnreg", "USETMAXREG"),
         ("barrier", "BAR"), ("shuffle", "SHFL"), ("atomic", "ATOM"), ("red", "RED"), ("ld_global", "LDG"),
@@ -109,7 +103,7 @@ def card(name: str, ptx: str, timing_ms: float | None = None) -> dict:
 
 
 def render(cards: list[dict]) -> str:
-    """The cards as the judge's slice: one line per kernel per implementation, fastest implementation first."""
+    """The cards as text: one line per kernel per implementation, fastest implementation first."""
     lines = []
     for c in sorted(cards, key=lambda c: c.get("timing_ms", float("inf"))):
         head = f"{c['implementation']}" + (f" ({c['timing_ms']} ms on our shapes)" if "timing_ms" in c else "")

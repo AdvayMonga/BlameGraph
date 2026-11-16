@@ -1,4 +1,4 @@
-"""The client-capacity check against its own fixed-schedule server, at small levels. Run: python tests/test_regimes_clientcheck.py"""
+"""The client-capacity check against its own fixed-schedule server, at small levels."""
 from __future__ import annotations
 
 import sys

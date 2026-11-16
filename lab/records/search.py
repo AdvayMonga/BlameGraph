@@ -1,10 +1,5 @@
-"""Search over every run's experiments: each `hypothesis` record with its rationale, and each measurement made under
-it with its `expect`, measured value, gap and `reflection`. One document per hypothesis, its fields verbatim.
-
-Ranking is reciprocal-rank fusion of two orders: BM25 over the words, and cosine similarity of embeddings from a
-local model (fastembed, ONNX on CPU; no key, nothing leaves the machine). Embeddings are cached under
-<ledger>/index/embeddings/ by model and content hash, so a document is embedded once, and again only when a new
-measurement or reflection changes it. Researcher runs are left out unless the caller is one (lab/experiments.py)."""
+"""Search over every run's experiments: one document per hypothesis with its measurements and reflections.
+Ranking is reciprocal-rank fusion of BM25 and cosine similarity of local embeddings, cached by content hash."""
 from __future__ import annotations
 
 import hashlib
@@ -19,11 +14,11 @@ from lab import experiments
 from lab.records import ledger
 
 MODEL = "BAAI/bge-base-en-v1.5"
-RRF_K = 60                      # the usual constant (Cormack et al. 2009): rank r contributes 1 / (60 + r)
+RRF_K = 60                      # rank r contributes 1 / (RRF_K + r)
 BM25_K1, BM25_B = 1.2, 0.75
 MAX_K = 50
 _WORD = re.compile(r"[a-z0-9_.]+")
-# English function words: BM25 ignores them, else "why are tokens slow" ranks a document by its "are".
+# English function words, ignored by BM25
 STOPWORDS = frozenset("""a an and are as at be been being but by can could did do does doing for from had has have
 having he her here hers him his how i if in into is it its itself just me more most my no nor not of off on once only
 or other our ours out over own same she should so some such than that the their theirs them then there these they
@@ -84,7 +79,7 @@ def documents(root: Path, researcher: bool = False) -> list[dict]:
 
 
 def text(doc: dict) -> str:
-    """What is indexed: the person- or agent-written text and the prediction, with the measured numbers."""
+    """The indexed text of a document: the written text, the prediction and the measured numbers."""
     parts = [doc.get("hypothesis", ""), doc.get("rationale", ""), doc.get("abandon_if", "")]
     for m in doc["measurements"]:
         e = m.get("expect") or {}
@@ -136,7 +131,7 @@ class Cache:
             for line in self.path.read_text().splitlines():
                 try:
                     d = json.loads(line)
-                except ValueError:                  # a torn last line: re-embedded on demand
+                except ValueError:                  # a torn last line
                     continue
                 self.v[d["h"]] = d["v"]
 
@@ -154,8 +149,7 @@ class Cache:
 
 
 def search(root: Path, query: str, k: int = 10, embedder: Embedder | None = None, researcher: bool = False) -> dict:
-    """The `k` best documents for `query`, each with its rank under BM25 and under the embeddings (None when that
-    order did not place it: no shared word, or no embeddings)."""
+    """The `k` best documents for `query`, each with its rank under BM25 and the embeddings (None when unplaced)."""
     k = max(1, min(int(k), MAX_K))
     docs = documents(root, researcher)
     out = {"query": query, "documents": len(docs), "ranking": f"reciprocal-rank fusion (k={RRF_K}) of BM25 and "

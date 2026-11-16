@@ -19,7 +19,7 @@ def _bits(t):
 
 
 def _span(t):
-    """Storage byte range; on MPS data_ptr is a buffer handle, so only identical storages compare as overlapping."""
+    """Storage byte range; on MPS one byte at the buffer handle, so only identical storages overlap."""
     s = t.untyped_storage()
     return s.data_ptr(), s.data_ptr() + (1 if t.device.type == "mps" else s.nbytes())
 
@@ -37,10 +37,10 @@ def _transposed(t):
 
 
 def _poison(inputs):
-    """Write NaN, +Inf and -Inf into the first floating-point input that is not a shared weight (kernels/shared_weights)."""
+    """Write NaN, +Inf and -Inf into the first floating-point input that is not a shared weight."""
     from lab.kernels.tasks.shared_weights import is_shared_weight
     v = next((t for t in inputs if t.is_floating_point() and not is_shared_weight(t)), None)
-    if v is not None and v.numel():                  # by index, so a non-contiguous input (a transposed q) works too
+    if v is not None and v.numel():                  # by index, for non-contiguous inputs
         n = v.numel()
         for i, x in ((0, float("nan")), (n // 2, float("inf")), (n - 1, float("-inf"))):
             v[tuple(int(j) for j in torch.unravel_index(torch.tensor(i), v.shape))] = x
@@ -52,12 +52,11 @@ def _edge_shapes(shape):
     return ones + [tuple(d + 1 if d > 1 and d & (d - 1) == 0 else d for d in shape)]
 
 
-BASELINE_CALLS = 3           # the baseline's error is taken over this many calls: its run-to-run spread is its error too
+BASELINE_CALLS = 3           # calls the baseline's error is taken over
 
 
 def baseline_envelope(baseline, inputs, ref) -> list:
-    """The baseline's outputs with each element as far from the reference as any of `BASELINE_CALLS` calls on clones
-    of `inputs` put it (a NaN or Inf kept): a non-deterministic baseline's own spread counts as its error."""
+    """The baseline's outputs, each element as far from `ref` as any of `BASELINE_CALLS` calls put it (NaN/Inf kept)."""
     runs = [_flat(baseline(*[t.clone() for t in inputs])) for _ in range(BASELINE_CALLS)]
     out = []
     for i, r in enumerate(_flat(ref)):
@@ -77,7 +76,7 @@ def baseline_envelope(baseline, inputs, ref) -> list:
 
 
 def _by_size(r, err):
-    """`err` with each position given the largest error among positions whose reference has the same binary exponent."""
+    """`err` with each position given the largest error among positions of the same reference binary exponent."""
     if not r.numel():
         return err
     e = torch.frexp(r)[1]
@@ -87,9 +86,8 @@ def _by_size(r, err):
 
 
 def _compare(ref, out, atol, rtol, base=None, k: float = 0.0) -> dict:
-    """Max abs/rel error over finite positions; non-finite positions (and Inf signs) must match exactly. With `base`,
-    each element may also differ by `k` times the baseline's largest error on reference values of its size, and a
-    non-finite mismatch where the baseline has it too."""
+    """{ok, max_abs, max_rel, nonfinite_mismatch}: errors over finite positions; non-finite positions must match.
+    With `base`, an element may also differ by `k` times the baseline's largest error on references of its size."""
     refs, outs = _flat(ref), _flat(out)
     bases = _flat(base) if base is not None else [None] * len(refs)
     if len(refs) != len(outs):
@@ -152,13 +150,9 @@ def check_kernel(reference, candidate, make_inputs, seen_shapes, heldout_shapes,
                  nonfinite=True, judged=None) -> dict:
     """Return {"passed", "reasons", "gates": {name: {passed, reason, evidence}}} for candidate vs reference.
     make_inputs(shape, dtype, device, generator) -> tuple of tensors; generator is a seeded CPU torch.Generator.
-    `layouts`: the non-contiguous input variants to test, for a kernel whose callers pass such inputs.
-    `nonfinite`: whether NaN/Inf inputs are a case (off for a public benchmark whose contract has none).
-    `record(case, outputs)` is called with each plain case's outputs (inputs straight from make_inputs and the seed),
-    so they can be checked again outside this process (lab/kernels/eval/verify.py).
-    `budget` (with `baseline`): each element may also differ from the reference by `budget` times the baseline's own
-    largest error among reference values of its size, on the same inputs over `BASELINE_CALLS` calls (a region's error budget, never stricter than
-    `tolerances`)."""
+    `layouts`: the non-contiguous input variants to test. `nonfinite`: whether NaN/Inf inputs are a case.
+    `record(case, outputs)` is called with each plain case's outputs.
+    `budget` (with `baseline`): each element may also differ by `budget` times the baseline's own largest error."""
     tol = {**TOLERANCES, **(tolerances or {})}
     mutated, aliased, nondet = [], [], []
 

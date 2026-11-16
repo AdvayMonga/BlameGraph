@@ -1,5 +1,4 @@
-"""The scheduler simulator: the engine's real scheduler on a fake clock. Skips unless the engine imports (run with
-the engine's python, its src on sys.path: tests/conftest.py)."""
+"""The scheduler simulator: the engine's scheduler on a fake clock; skips unless the engine imports."""
 from __future__ import annotations
 
 import pytest
@@ -41,7 +40,7 @@ def test_a_full_queue_is_an_explicit_rejection_and_the_scheduler_is_the_engines(
 
 
 def test_kv_budget_holds_admission_and_arrivals_keep_their_own_time():
-    # 4 blocks of 16: one request of 100 + 20 tokens needs 8 blocks and can never fit (400); a smaller one fits
+    # 4 blocks of 16: a 100 + 20 token request needs 8 and is refused (400); a smaller one fits
     r = simulate([req(0, prompt=100, out=20), req(1, at=0.5, prompt=20, out=4)], Settings(kv_blocks=4, kv_block_size=16))
     by = {x.id: x for x in r.rows}
     assert by["r0"].status == "error" and by["r0"].http_status == 400                # too large for the cache

@@ -1,5 +1,4 @@
-"""`lab rehearsal setup`: the practice engine is a working git repo, the target loads, and the references
-are complete. A word-per-token encoder stands in for the model's tokenizer."""
+"""`lab rehearsal setup`: the practice engine is a git repo, the target loads, the references are complete."""
 from __future__ import annotations
 
 import subprocess

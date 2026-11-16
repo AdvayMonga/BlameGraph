@@ -1,5 +1,5 @@
-"""The GPU arm: one persistent VM on a cloud of your choice, same lifecycle everywhere.
-It carries two trees: the engine (LAB_VM_DIR, where its venv and GPU checks live) and this environment (LAB_VM_ENV_DIR)."""
+"""One persistent GPU VM on the chosen cloud, carrying two trees (the engine in LAB_VM_DIR, this environment in
+LAB_VM_ENV_DIR)."""
 
 from __future__ import annotations
 
@@ -21,18 +21,18 @@ from lab.infra.cloud.providers import ProviderError, Record, env_field, pricing
 
 KNOWN_HOSTS_DIR = Path.home() / ".cache" / "inference-server-lab"
 POLL_S = 5.0             # between state and ssh probes
-LOST_WAIT_S = 60.0       # after ssh drops (exit 255): how long the provider may take to report the VM stopped
+LOST_WAIT_S = 60.0       # after ssh drops: seconds to wait for the provider to report the VM stopped
 START_TIMEOUT_S = 900.0
 STOP_TIMEOUT_S = 600.0
 SSH_TIMEOUT_S = 300.0
-MAX_MINUTES = int(os.environ.get("LAB_VM_MAX_MINUTES", "180"))   # hard wall-clock cap on any VM session
+MAX_MINUTES = int(os.environ.get("LAB_VM_MAX_MINUTES", "180"))   # wall-clock cap on any VM session, minutes
 
 
 @dataclass(frozen=True)
 class VM:
     """Read from env at construction. The provider supplies GPU type, location, image and the login user."""
     name: str = env_field("LAB_VM", "lab-gpu")
-    keyfile: str = env_field("LAB_VM_KEYFILE", "~/.ssh/lab_ed25519.pub")   # passphrase-free: BatchMode cannot unlock one
+    keyfile: str = env_field("LAB_VM_KEYFILE", "~/.ssh/lab_ed25519.pub")   # must be passphrase-free
     remote_dir: str = env_field("LAB_VM_DIR", "~/inference-server")       # the engine, with its venv
     env_dir: str = env_field("LAB_VM_ENV_DIR", "~/BlameGraph")             # this environment
     user: str = env_field("LAB_VM_USER", "")
@@ -44,7 +44,7 @@ class VM:
 
     @property
     def known_hosts(self) -> Path:
-        """Per-VM host keys: a recreated VM may get a reused IP, and a stale global entry would block every probe."""
+        """This VM's own known_hosts file."""
         return KNOWN_HOSTS_DIR / f"{self.name}.known_hosts"
 
     @property
@@ -55,7 +55,7 @@ class VM:
 
 
 def _wait(vm: VM, wanted: str, timeout_s: float) -> Record:
-    """Until the provider reports `wanted`; `running` also needs a public ip, which can lag the state."""
+    """Poll until the provider reports `wanted` (`running` also needs a public ip); ProviderError on timeout."""
     deadline = time.monotonic() + timeout_s
     while True:
         record = vm.provider.get(vm.name)
@@ -93,9 +93,8 @@ def _watchdog_file(vm: VM) -> Path:
 
 
 def arm(vm: VM, record: Record, minutes: int = MAX_MINUTES) -> None:
-    """Three layers against a VM left running: a detached local watchdog that calls the provider's stop at the
-    deadline (powering off from inside does not end billing on Nebius), an in-VM `shutdown -h` as a last resort,
-    and (in `run`) a `timeout` around the command. Re-arming replaces the previous deadline."""
+    """Arm the auto-stop: a detached local watchdog that stops the VM at the deadline, and an in-VM `shutdown -h`.
+    Re-arming replaces the previous deadline."""
     disarm(vm)
     deadline = time.time() + minutes * 60
     KNOWN_HOSTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -112,7 +111,7 @@ def arm(vm: VM, record: Record, minutes: int = MAX_MINUTES) -> None:
 
 
 def _spawn_watchdog(argv: list[str], log) -> int:
-    """Detached, in its own session, so it outlives the shell that started it."""
+    """Start the watchdog detached, in its own session; returns its pid."""
     proc = subprocess.Popen(argv, cwd=engine.ENV_ROOT, env=os.environ, stdin=subprocess.DEVNULL, stdout=log,
                             stderr=log, start_new_session=True)
     return proc.pid
@@ -123,7 +122,7 @@ def disarm(vm: VM) -> None:
     if f.exists():
         try:
             pid = int(f.read_text().split()[0])
-            if pid != os.getpid():                 # the watchdog itself calls stop(): it must not kill itself
+            if pid != os.getpid():                 # the watchdog does not kill itself
                 os.kill(pid, signal.SIGTERM)
         except (ProcessLookupError, ValueError, PermissionError):
             pass
@@ -143,7 +142,7 @@ def watchdog(deadline: float) -> int:
 
 
 def stop(vm: VM) -> None:
-    """Ends GPU billing. Crusoe/Nebius: stop, disk kept. Verda: delete instance and disk (its hibernate cannot be restored)."""
+    """End GPU billing: stop the VM (disk kept), or delete it where the provider's stop deletes."""
     disarm(vm)
     record = vm.provider.get(vm.name)
     if record is None or record.state == "stopped":
@@ -199,12 +198,10 @@ def _rsync(vm: VM, *args: str) -> None:
 
 
 def push(vm: VM, record: Record) -> None:
-    """Both working trees, minus .git and everything .gitignore excludes (secrets, weights, venvs, ledger, runs),
-    except the held-out traces, which submit needs and git does not hold."""
-    # .venv is named explicitly: a gitignore-only exclusion did not protect it from --delete on the VM.
+    """Rsync both working trees, minus .git and everything .gitignore excludes, plus the held-out traces."""
     for local, remote, keep in ((engine.repo(), vm.remote_dir, []),
                                 (engine.ENV_ROOT, vm.env_dir, ["--include=evals/regimes/*/heldout.jsonl"])):
-        # local/runs is named explicitly too: it holds the worker's cache and the agent's live workspaces there.
+        # .venv and local/runs are excluded by name, so --delete leaves them on the VM
         _rsync(vm, "--delete", "--exclude=.git", "--exclude=.venv", "--exclude=__pycache__", "--exclude=/local/runs",
                *keep, "--filter=:- .gitignore",
                f"{local}/", f"{ssh_target(vm, record)}:{remote}/")
@@ -217,8 +214,8 @@ def fetch(vm: VM, record: Record, remote: str, local: Path, base: str | None = N
 
 
 def collect(vm: VM, record: Record) -> None:
-    """Bring a lab run home before the VM goes: its ledger merged into this one, its run dirs (minus the trees that
-    can be rebuilt), then everything pushed to the store when LAB_STORE is set."""
+    """Bring a lab run home: its ledger merged into this one, its run dirs, then pushed to the store when LAB_STORE
+    is set."""
     from lab.records import ledger
     staging = Path(tempfile.mkdtemp(prefix="vm-ledger-"))
     try:
@@ -236,7 +233,7 @@ def collect(vm: VM, record: Record) -> None:
 
 
 def local_sha() -> str | None:
-    """The working tree's HEAD, shipped to the VM as LAB_GIT_SHA because the pushed tree carries no .git."""
+    """The engine working tree's HEAD, shipped to the VM as LAB_GIT_SHA."""
     try:
         out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=engine.repo(), capture_output=True, text=True)
     except OSError:
@@ -245,7 +242,7 @@ def local_sha() -> str | None:
 
 
 def _lost(vm: VM) -> bool:
-    """The VM stopped under an ssh session that dropped; False when it is still running or the provider cannot say."""
+    """Whether the VM stopped under a dropped ssh session; False when still running or the provider cannot say."""
     deadline = time.monotonic() + LOST_WAIT_S
     while True:
         try:
@@ -264,8 +261,7 @@ def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | Non
         push_tree: bool = True, where: str = "engine", keep: bool | None = None, minutes: int = MAX_MINUTES) -> int:
     """Start the VM if needed, push both trees, run `command` in the engine dir (or `where="env"`: this environment's)
     with the engine's venv on PATH under a `minutes` wall-clock timeout, fetch `fetch_dir` from that dir, then stop
-    the VM. `keep=True` leaves it running with the watchdog armed; `keep=None` keeps it only where stop would delete
-    the disk (Verda), since a rebuilt VM re-downloads the weights: there the wall-clock cap is the guard."""
+    the VM. `keep=True` leaves it running with the watchdog armed; `keep=None` keeps it only where stop deletes."""
     if keep is None:
         keep = bool(getattr(vm.provider, "stop_deletes", False))
     record = start(vm)
@@ -360,7 +356,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "setup":
         code = run(vm, f"bash {vm.env_dir}/lab/infra/cloud/vm-setup.sh {vm.remote_dir}", keep=True)
-        try:                                   # the measured peaks come home: every ceiling is computed from them
+        try:                                   # fetch the measured peaks
             fetch(vm, p.get(vm.name), "lab/infra/calibration/peaks", engine.ENV_ROOT / "lab" / "infra" / "calibration" / "peaks", base=vm.env_dir)
         except ProviderError as e:
             print(f"[lab.infra.cloud.vm] peaks not fetched: {e}", file=sys.stderr)

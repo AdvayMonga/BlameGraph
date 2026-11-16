@@ -114,7 +114,7 @@ def test_crusoe_state_accepts_both_spellings(fake):
 
 
 def test_run_pushes_runs_in_repo_dir_and_fetches(fake, monkeypatch):
-    monkeypatch.setenv("LAB_ENGINE_REPO", str(labvm.engine.ENV_ROOT))     # any git checkout: its sha ships as LAB_GIT_SHA
+    monkeypatch.setenv("LAB_ENGINE_REPO", str(labvm.engine.ENV_ROOT))     # its sha ships as LAB_GIT_SHA
     vm = labvm.VM(name="t4", user="u", remote_dir="~/repo")
     local = fake / "out"
     assert labvm.run(vm, "python -m lab.profile.profile", fetch_dir="lab/runs", local=local) == 0
@@ -146,7 +146,7 @@ def test_run_in_the_environment_dir(fake, monkeypatch):
     cmd = [c for c in log if c[0] == "ssh" and c[-1].startswith("cd ")][-1][-1]
     assert cmd.startswith("cd ~/env && ") and 'PATH="$HOME/env/bin:$HOME/repo/.venv/bin:$PATH" timeout --signal=TERM --kill-after=60 180m lab regimes' in cmd
     rsyncs = [c for c in log if c[0] == "rsync"]
-    assert "--include=evals/regimes/*/heldout.jsonl" in rsyncs[1]                     # held-out traces travel, not via git
+    assert "--include=evals/regimes/*/heldout.jsonl" in rsyncs[1]                     # held-out traces travel
     assert [r[-2] for r in rsyncs[-3:]] == ["u@10.0.0.7:~/env/out/", "u@10.0.0.7:~/env/local/ledger/",
                                             "u@10.0.0.7:~/env/local/runs/"]      # a lab run is always brought home
     assert "--exclude=workspace/" in rsyncs[-1]
@@ -192,7 +192,7 @@ def test_run_keeps_the_vm_where_stop_would_delete_the_disk(fake, monkeypatch):
     monkeypatch.setattr(type(vm.provider), "stop_deletes", True, raising=False)
     assert labvm.run(vm, "true") == 0
     assert vm.provider.get("t4d").state == "running" and labvm._watchdog_file(vm).exists()
-    monkeypatch.setattr(type(vm.provider), "stop_deletes", False)   # the fake cannot delete; the forced path is plain stop
+    monkeypatch.setattr(type(vm.provider), "stop_deletes", False)   # the forced path is plain stop
     assert labvm.run(vm, "true", keep=False) == 0
     assert vm.provider.get("t4d").state == "stopped"
 

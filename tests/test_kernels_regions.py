@@ -1,5 +1,4 @@
-"""Regions (lab/kernels/tasks/regions.py): the interface, the generated baseline and fp32 reference, the bytes a region moves,
-and the error budget in the checker (a candidate may be at most 2x as wrong as the baseline). CPU, fake stations."""
+"""Regions: the interface, the baseline and fp32 reference, the bytes a region moves, the checker's error budget."""
 from __future__ import annotations
 
 import sys
@@ -59,7 +58,7 @@ def test_the_reference_keeps_the_baselines_experts_and_weighs_them_in_fp32():
         top = torch.argsort(c["logits"], dim=-1, descending=True, stable=True)[:, 0]
         return {"sorted_ids": torch.arange(top.numel()), "expert_ids": top, "tok": torch.arange(top.numel()),
                 "pair_w": torch.softmax(c["logits"].float(), -1).gather(1, top[:, None])[:, 0],
-                "acc": torch.zeros(top.numel(), c["logits"].shape[-1])}     # the accumulator `down` adds into, as the engine's
+                "acc": torch.zeros(top.numel(), c["logits"].shape[-1])}     # the accumulator `down` adds into
     stations = (Station("router", ("x", "w"), ("logits",), lambda c: {"logits": c["x"] @ c["w"]}),
                 Station("route", ("logits",), ("sorted_ids", "expert_ids", "tok", "pair_w", "acc"), route),
                 Station("down", ("e", "expert_ids", "pair_w", "acc"), ("y",),
@@ -105,7 +104,7 @@ def test_the_error_budget_is_twice_the_baselines_own_error_on_numbers_of_that_si
 
     def toward(k):                                          # each element moved k times the baseline's error there
         return lambda *a: ((ref(*a)[0].float() + k * (base(*a)[0].float() - ref(*a)[0].float())).to(torch.bfloat16),)
-    tol = {torch.bfloat16: (1e-6, 0.0)}                       # tiny dtype tolerance: the budget decides
+    tol = {torch.bfloat16: (1e-6, 0.0)}                       # tiny dtype tolerance
     common = dict(dtypes=(torch.bfloat16,), tolerances=tol, edge_shapes=[], layouts=(), seeds=(0, 1), repeats=1,
                   baseline=base, budget=t.error_budget)
     assert check_kernel(ref, toward(1.5), t.make_inputs, [(4, 64)], [], **common)["passed"]
@@ -115,7 +114,7 @@ def test_the_error_budget_is_twice_the_baselines_own_error_on_numbers_of_that_si
 
 
 def test_the_budget_covers_the_baselines_own_run_to_run_spread():
-    """A baseline whose outputs differ across identical calls (the megakernel's do) has that spread as its error."""
+    """A baseline whose outputs differ across identical calls has that spread as its error."""
     import itertools
     t = task("toy_region", STATIONS, "norm", "add", ctx, lambda call: None, live=("x",),
              seen_default=((4, 64),))
@@ -135,8 +134,7 @@ def test_the_budget_covers_the_baselines_own_run_to_run_spread():
 
 
 def test_the_budget_bounds_how_wrong_a_number_may_be_not_where():
-    """The step's case: a non-deterministic baseline's error lands anywhere, so a candidate off by more than 2x the
-    baseline's error at one element passes while within 2x the baseline's largest error on values of that size."""
+    """A candidate passes within 2x the baseline's largest error on values of that size, wherever the error lands."""
     t = task("toy_region", STATIONS, "norm", "add", ctx, lambda call: None, live=("x",), seen_default=((4, 64),))
     base, ref = t.baseline(), t.reference
 
@@ -161,7 +159,7 @@ def test_the_budget_bounds_how_wrong_a_number_may_be_not_where():
 
 
 def test_one_large_value_loosens_nothing_else():
-    """Outlier channels (x1000) make the baseline's largest error large; a candidate that zeroes the rest must fail."""
+    """With outlier channels (x1000), a candidate that zeroes the rest fails."""
     def outliers(shape, dtype, device, g):
         c = ctx(shape, dtype, device, g)
         c["x"] = c["x"].float()
@@ -182,8 +180,7 @@ def test_one_large_value_loosens_nothing_else():
 
 
 def test_a_non_finite_mismatch_is_within_budget_only_where_the_baseline_has_it_too():
-    """The engine's kernel turns NaN/Inf rows finite (a PTX min/max returns the non-NaN operand); its fp32 reference
-    keeps them. The stations as the program pass the NaN/Inf case; a program adding a non-finite mismatch fails."""
+    """The stations as the program pass the NaN/Inf case; a program adding a non-finite mismatch fails."""
     def clamp(c):
         return {"y": torch.nan_to_num(c["n"] @ c["w"], nan=0.0, posinf=448.0, neginf=-448.0)}
     engine = (*STATIONS[:1], Station("mm", ("n", "w"), ("y",), clamp), *STATIONS[2:])
@@ -206,8 +203,7 @@ def test_a_non_finite_mismatch_is_within_budget_only_where_the_baseline_has_it_t
 
 
 def test_a_region_is_judged_end_to_end_by_the_evaluator(tmp_path):
-    """Stage 2 on the CPU: the stations as the program pass and time against themselves; a program off by far more
-    than the budget fails."""
+    """The stations as the program pass and time against themselves; a program far outside the budget fails."""
     from lab.kernels.eval import core
     t = task("toy_region", STATIONS, "norm", "add", ctx, lambda call: None, live=("x",), dtypes=(torch.float32,))
     good = tmp_path / "good.py"

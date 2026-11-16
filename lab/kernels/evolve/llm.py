@@ -1,7 +1,5 @@
-"""OpenEvolve's OpenAI-compatible client, minus the parameters current Claude models refuse over Anthropic's
-OpenAI-compatible endpoint (a temperature, which OpenEvolve always sends). Named as `init_client` in the config.
-Each call's usage is priced at lab.apiproxy's rates and appended to $KERNELS_USAGE_LOG (OpenEvolve calls models from
-worker processes, so a file, not a counter), so a run's model cost is measured, as lab.kernels.search's is."""
+"""OpenEvolve's OpenAI-compatible client without temperature, top_p and seed; named as `init_client` in the config.
+Each call's cost is appended to $KERNELS_USAGE_LOG."""
 from __future__ import annotations
 
 import json

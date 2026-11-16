@@ -44,7 +44,7 @@ INSTRUMENTS = ("nsys", "ncu", "py-spy")
 @pytest.fixture
 def tb(tmp_path, monkeypatch):
     monkeypatch.setenv("LAB_NO_JAIL", "1")
-    monkeypatch.setattr(jail, "available", lambda: False)        # the fake instruments log outside any jail
+    monkeypatch.setattr(jail, "available", lambda: False)        # no jail
     monkeypatch.setattr(container, "available", lambda: False)
     monkeypatch.setenv("LAB_GPU_USD_PER_HOUR", "3600")          # $1 per second: the charge equals the seconds
     bin_dir = tmp_path / "bin"
@@ -117,7 +117,7 @@ def test_kernel_targets_the_regex_with_limits_and_keeps_raw_metrics(tb):
 def test_hostprof_runs_the_workload_with_py_spy_readable_in_the_jail(tb, monkeypatch):
     seen = {}
 
-    def runner(tree, argv, read=(), **_):            # stands in for lab.profile.profile, which needs the engine
+    def runner(tree, argv, read=(), **_):            # stands in for lab.profile.profile
         seen.update(argv=argv, read=read)
         b = tree / proftools.OUT / "bundle" / "b1"
         b.mkdir(parents=True)
@@ -224,11 +224,10 @@ def test_gpu_time_is_charged_to_the_budget_and_stops_at_the_cap(tb, monkeypatch)
 
 
 def test_every_instrument_passes_a_workload_source_to_lab_profile(tb):
-    """lab.profile.profile refuses to run without one of --corpus-class/--workload/--prompts/--synthetic."""
     tb.trace({"requests": 2, "synthetic": True})
     prof = calls(tb)[0]
     assert "--synthetic" in prof and after(prof, "--prompt-len") == "64"
-    tb.kernel({"kernel_regex": "gemm", "requests": 2})          # default: the seen corpus, staged in the harness
+    tb.kernel({"kernel_regex": "gemm", "requests": 2})          # default: the seen corpus
     ncu = [c for c in calls(tb) if c[0] == "ncu"][0]
     wl = after(ncu, "--workload")
     assert wl.endswith("_harness/workload.json")

@@ -1,6 +1,4 @@
-"""Repeated-request audit (adapted from MLPerf TEST04): a repeated request must not decode faster than a fresh one.
-Prefix caching legitimately cuts a repeat's TTFT, so only decode-side timing is judged: TPOT = (E2E - TTFT)/(n - 1),
-streamed and timed client-side. Stdlib only.
+"""Repeated-request audit: a repeated request must not decode faster than a fresh one (TPOT, timed client-side).
 
   lab repeat-audit --url http://127.0.0.1:8000 [--model M] [--n 20] [--api chat|completions]
 """

@@ -1,4 +1,4 @@
-"""The agent's copy of the engine: exported from git without history, snapshotted into the ledger on every tool call, restorable."""
+"""The agent's copy of the engine: exported from git without history, snapshotted into the ledger, restorable."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ class Workspace:
         self.repo, self.base, self.path, self.ledger_root = Path(repo), base, Path(path), Path(ledger_root)
 
     def create(self) -> None:
-        """Fresh export; contents are cleared in place so a process whose cwd is the workspace keeps it."""
+        """Fresh export; contents are cleared in place."""
         self.path.mkdir(parents=True, exist_ok=True)
         for child in self.path.iterdir():
             shutil.rmtree(child) if child.is_dir() and not child.is_symlink() else child.unlink()
@@ -37,7 +37,7 @@ class Workspace:
         return grader.audit(self.repo, self.base, self.path)
 
     def snapshot(self) -> Snapshot:
-        """The changed files as a content-addressed blob plus a diff; the id ties every ledger record to code."""
+        """The changed files as a content-addressed blob plus a diff."""
         a = self.audit()
         if not a.changed:
             return Snapshot("base", [], [], "", "", a.violations)

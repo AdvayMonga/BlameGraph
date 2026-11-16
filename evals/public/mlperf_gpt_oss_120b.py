@@ -1,10 +1,5 @@
-"""MLPerf Inference gpt-oss-120b (v6.0). Two sets, told apart by `subset`:
-  perf:pubmed_summarization  6,396 PubMed papers (~8k-token inputs) to summarize, reasoning low, output <= 10,240
-  acc:<dataset>              4,395 LiveCodeBench v6 (3,165), GPQA Diamond (990), AIME25 (240), reasoning high,
-                             output <= 32,768
-Latency limits were not in loadgen's mlperf.conf at the pinned commit. Accuracy there: 99% of the reference score;
-the perf set's mean output length must stay within +-10% of 1278 tokens (TEST09). The harmony-formatted prompt is
-split back into system (developer) and user messages.
+"""MLPerf Inference gpt-oss-120b (v6.0): `perf:pubmed_summarization` and `acc:<dataset>` sets, told apart by `subset`.
+The harmony-formatted prompt is split back into system (developer) and user messages.
 """
 from __future__ import annotations
 

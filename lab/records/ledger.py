@@ -19,9 +19,9 @@ SCHEMA = 1
 ROOT = Path(__file__).resolve().parents[2] / "local" / "ledger"
 KINDS = {"test", "equiv", "bench", "profile", "submit", "session", "note", "baseline", "noise", "hypothesis",
          "reflection", "kernels"}
-LEGACY_KINDS = {"finding"}             # in older ledgers: read and merged, never written
+LEGACY_KINDS = {"finding"}             # read and merged, never written
 WRITER_FIELDS = {"id", "at", "schema"}
-# A held-out record is one aggregate per metric and nothing else: these fields, scalar values.
+# The only fields a held-out record may carry, with scalar values.
 HELDOUT_FIELDS = {"kind", "config", "metrics", "run", "session", "snapshot", "snapshot_blob", "patch",
                   "tool", "args", "cost", "claim", "experiment"}
 HELDOUT_METRIC_KEYS = {"base", "new", "delta_pct", "band_pct", "verdict",
@@ -41,7 +41,7 @@ def _file(root: Path) -> Path:
 
 @contextlib.contextmanager
 def _lock(root: Path):
-    """One lock file per ledger; parallel sessions share it. Held across whole read-then-write steps."""
+    """One lock file per ledger, held across whole read-then-write steps."""
     Path(root).mkdir(parents=True, exist_ok=True)
     with (Path(root) / "ledger.lock").open("a") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
@@ -52,7 +52,7 @@ def _lock(root: Path):
 
 
 def _mentions_heldout(obj: Any) -> bool:
-    """A `"split": "heldout"` anywhere in a nested value, so held-out data can't slip in under another field."""
+    """Whether `"split": "heldout"` appears anywhere in a nested value."""
     if isinstance(obj, dict):
         return obj.get("split") == "heldout" or any(_mentions_heldout(v) for v in obj.values())
     if isinstance(obj, list):
@@ -61,7 +61,7 @@ def _mentions_heldout(obj: Any) -> bool:
 
 
 def _check(record: dict, kinds: set[str] = KINDS) -> None:
-    """Integrity rules only: known kind, writer-owned fields, no held-out detail beyond one aggregate per metric."""
+    """Integrity rules: known kind, writer-owned fields, no held-out detail beyond one aggregate per metric."""
     if record.get("kind") not in kinds:
         raise LedgerError(f"unknown kind {record.get('kind')!r}; one of {sorted(kinds)}")
     if WRITER_FIELDS & record.keys():
@@ -69,7 +69,7 @@ def _check(record: dict, kinds: set[str] = KINDS) -> None:
     config = record.get("config")
     if config is not None and not isinstance(config, dict):
         raise LedgerError("config must be an object")
-    # `claim` is untrusted text that may name the split; everything else marks the record held-out
+    # every field but `claim` marks the record held-out
     if not _mentions_heldout({k: v for k, v in record.items() if k != "claim"}):
         return
     if (config or {}).get("split") != "heldout":
@@ -105,7 +105,7 @@ def _stamp(record: dict) -> dict:
 
 
 def _write(stored: dict, root: Path) -> None:
-    """One line, one os.write, so a reader never sees half a record. Caller holds the lock."""
+    """One line in one os.write; the caller holds the lock."""
     try:
         line = json.dumps(stored) + "\n"
     except TypeError as e:
@@ -127,7 +127,7 @@ def append(record: dict, root: Path = ROOT) -> dict:
 
 
 def _hash(src: Path | bytes) -> str:
-    """Content hash; directories hash each file's path and sha with length prefixes, so layouts cannot collide."""
+    """Content hash; a directory hashes each file's path and sha with length prefixes."""
     h = hashlib.sha256()
     if isinstance(src, bytes):
         h.update(b"bytes\0" + src)
@@ -163,10 +163,7 @@ def put_blob(src: Path | bytes, root: Path = ROOT, suffix: str = "") -> str:
 
 def records(root: Path = ROOT, **match: Any) -> Iterator[dict]:
     """Every record in write order, optionally only those whose top-level fields equal `match`.
-
-    A torn final line (a writer killed mid-append) is skipped with a warning; a bad line anywhere
-    else is corruption and raises.
-    """
+    A torn final line is skipped with a warning; a bad line anywhere else raises."""
     path = _file(root)
     if not path.exists():
         return
@@ -186,9 +183,8 @@ def records(root: Path = ROOT, **match: Any) -> Iterator[dict]:
 
 
 def merge(src: Path, root: Path = ROOT) -> int:
-    """Records and blobs of another ledger dir (one fetched from a VM) that `root` lacks, in their order; returns
-    the records added. Record ids and blob names are unique, so merging twice adds nothing. Every new record passes
-    the same integrity check as an appended one (it comes from the VM, where agent code runs), or nothing is merged."""
+    """Add the records and blobs of another ledger dir that `root` lacks, in their order; returns the records added.
+    Every new record passes the append integrity check, or nothing is merged."""
     with _lock(root):
         have = {r["id"] for r in records(root)}
         new = [r for r in records(src) if r["id"] not in have]
@@ -207,7 +203,7 @@ def merge(src: Path, root: Path = ROOT) -> int:
             tmp = dest.with_name(dest.name + f".tmp-{os.getpid()}")
             shutil.copytree(p, tmp) if p.is_dir() else shutil.copyfile(p, tmp)
             os.replace(tmp, dest)
-        for r in new:                      # blobs first: a record never names a blob that is not there yet
+        for r in new:                      # after the blobs
             _write(r, root)
     return len(new)
 

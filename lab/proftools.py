@@ -1,13 +1,5 @@
-"""Instrumented runs of the agent's pristine tree, one tool per instrument, all through one path (`instrument` on the
-worker, `run_instrument` here): lab.profile.profile's workload inside the jail, the instrument's own flags passed through as
-an argument list, the GPU watched like a served engine, one record shape (verdict ok | failed | refused |
-contaminated), the raw output kept as a ledger blob and a short raw summary returned.
-
-  profile   torch.profiler: the bundle (event timeline, chrome trace, op and kernel tables, memory) with layer facts
-  trace     Nsight Systems: timeline of the measured window (.nsys-rep) plus `nsys stats` CSV tables
-  kernel    Nsight Compute: kernels whose name matches a regex (.ncu-rep) plus `ncu --import --csv --page raw`
-  hostprof  py-spy: the engine process sampled for D seconds under a sustained workload (speedscope) plus one dump
-"""
+"""Instrumented runs of the agent's pristine tree, one tool per instrument: profile (torch.profiler), trace (Nsight
+Systems), kernel (Nsight Compute), hostprof (py-spy). Each keeps its raw output as a ledger blob."""
 
 from __future__ import annotations
 
@@ -24,7 +16,7 @@ from lab.agent import ToolSpec
 from lab.evaltools import _failed, _killed
 
 PROFILE_ARG = " `profile`: run the engine under that regime's launch profile (default the general one)."
-OUT = "_instr"                      # in the pristine tree: writable in the jail, rebuilt on every call
+OUT = "_instr"                      # in the pristine tree; rebuilt on every call
 NSYS_REPORTS = "cuda_gpu_kern_sum,cuda_api_sum,cuda_gpu_mem_time_sum,nvtx_sum"
 NSYS_FLAGS = ["--trace", "cuda,nvtx,osrt", "--capture-range", "cudaProfilerApi", "--capture-range-end", "stop",
               "--cuda-graph-trace", "node"]
@@ -40,7 +32,7 @@ def _int(args: dict, name: str, default: int, lo: int) -> int:
 
 
 def _flags(args: dict, name: str, default: list[str] | None = None) -> list[str]:
-    """An instrument's own flags, passed through as argv items (never through a shell)."""
+    """An instrument's own flags as argv items."""
     v = args.get(name, default if default is not None else [])
     if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
         raise ValueError(f"{name} must be a list of strings")
@@ -76,9 +68,8 @@ def _head(path: Path | None) -> str:
 
 
 def instrument(kind: str, args: dict) -> dict:
-    """One instrument from validated args: its binary (None: torch, in lab.profile.profile itself), `wrap(exe, out)` around
-    lab.profile.profile, lab.profile.profile `flags`, `post(exe, out)` -> (argv, file for its stdout) run after, the `summary` glob,
-    `extra(exe)` flags, and `bundle_only`: the blob is lab.profile.profile's bundle rather than the whole output dir."""
+    """One instrument from validated args, as a dict: its binary (None for torch), `wrap(exe, out)`, `flags`,
+    `post(exe, out)` -> (argv, stdout file), the `summary` glob, `extra(exe)` flags and `bundle_only`."""
     wl = workload(args)
     if kind == "profile":
         capture = [w for f in _flags(args, "capture") for w in ("--capture", f)]
@@ -135,7 +126,7 @@ class ProfTools:
         return self._instrumented("hostprof", args)
 
     def _instrumented(self, tool: str, args: dict) -> str:
-        """A profiler tool call: arguments checked before anything is snapshotted, then one run, recorded as `profile`."""
+        """A profiler tool call: check the arguments, run once, record as `profile`."""
         instrument(tool, args)
         snap = self._audited(tool, args)
         tree = self._pristine()
@@ -149,14 +140,13 @@ class ProfTools:
             return f"{tool} {result['verdict']}: {result['reason']}{killed}"
         if result["verdict"] == "failed":
             return f"{tool} failed ({result['returncode']}):\n{result['output']}{killed}"
-        if not head:                             # torch's bundle has no one summary file: its file names
+        if not head:                             # torch's bundle has no summary file: list its file names
             head = "\n".join(f"  {p.name}" for p in sorted((self.s.workspace.path / result["workspace_copy"]).iterdir()))
         return f"{tool} output at {result['workspace_copy']} (in your workspace; left out of your change)\n{head}{killed}"
 
     def run_instrument(self, tool: str, tree: Path, args: dict, timeout_s: int | None = None) -> dict:
-        """One run of `tool`'s instrument on `tree` on the worker, as the result its record keeps: `verdict` ok |
-        failed | refused | contaminated (`reason`, `gpu_processes`, as a bench's), the output as a blob and a
-        workspace copy, `calibrated`, and `head` (the summary returned to the agent, not recorded)."""
+        """One run of `tool`'s instrument on `tree` on the worker, as the result its record keeps.
+        Keys: `verdict` ok | failed | refused | contaminated, `reason`, `gpu_processes`, blob, `calibrated`, `head`."""
         out = self._work(tool)
         t0 = time.monotonic()
         job = {"kind": tool, "args": args, "workbench": getattr(self.s, "workbench", None),
@@ -180,9 +170,7 @@ class ProfTools:
                 "head": r.get("head", ""), **_killed(r)}
 
     def _calibrated(self, tool: str, args: dict, blob: str, gpu: dict | None) -> dict | None:
-        """The instrument's numbers in context: torch's kernel time with each layer's facts and each kernel task's
-        share, ncu's metrics against the GPU's peaks, nsys's kernel and API time against the window, py-spy's samples
-        per thread and function; never costs the run it describes."""
+        """The instrument's numbers in context (layer facts, GPU peaks, window shares, samples per function)."""
         from lab.tools import task_shares
         path = self.s.ledger_root / blob
         try:

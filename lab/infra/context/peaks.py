@@ -1,6 +1,5 @@
-"""Hardware peaks the ceilings are computed against: HBM bandwidth and bf16 tensor-core throughput, measured once
-per GPU + driver (`lab peaks`, run by lab/infra/cloud/vm-setup.sh) into lab/infra/calibration/peaks/<gpu>-<driver>.json. Spec-sheet
-numbers are the fallback, labelled `source: spec`; a ceiling from them says so."""
+"""Hardware peaks per GPU and driver: HBM bandwidth and bf16 tensor-core throughput, measured (`lab peaks`) into
+lab/infra/calibration/peaks/<gpu>-<driver>.json, with spec-sheet numbers (`source: spec`) as the fallback."""
 from __future__ import annotations
 
 import argparse
@@ -50,8 +49,7 @@ def path_for(gpu: str, driver: str | None, peaks_dir: Path | None = None) -> Pat
 
 
 def load(gpu: str, driver: str | None = None, peaks_dir: Path | None = None) -> Peaks | None:
-    """Measured peaks for this GPU and driver; without a driver, the latest measurement of the GPU; else the spec
-    sheet; else None. A measurement on another driver is not used."""
+    """Measured peaks for this GPU and driver; without a driver, the GPU's latest measurement; else spec; else None."""
     d = peaks_dir or PEAKS_DIR
     if driver:
         p = path_for(gpu, driver, d)
@@ -61,14 +59,14 @@ def load(gpu: str, driver: str | None = None, peaks_dir: Path | None = None) -> 
 
 
 def measure(seconds: float = 3.0) -> Peaks:
-    """Copy bandwidth and a large bf16 GEMM on the first CUDA device; the best of repeated trials (clocks warm)."""
+    """Copy bandwidth and a large bf16 GEMM on the first CUDA device; the best of repeated trials."""
     import torch
     if not torch.cuda.is_available():
         raise RuntimeError("no CUDA device")
     dev = torch.device("cuda:0")
     name = torch.cuda.get_device_name(dev)
     props = torch.cuda.get_device_properties(dev)
-    n = 1 << 28                                                 # 512 MiB per bf16 buffer, well past L2
+    n = 1 << 28                                                 # 512 MiB per bf16 buffer
     a, b = torch.empty(n, dtype=torch.bfloat16, device=dev), torch.empty(n, dtype=torch.bfloat16, device=dev)
     best_bw = 0.0
     t_end = time.monotonic() + seconds

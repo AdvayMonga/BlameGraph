@@ -1,19 +1,7 @@
-"""The whole decode step as one region (`region:embed:argmax`, lab.profile.capture.STEP): the engine's decode-step megakernel
-(`inference_server.models.megakernel.decode_step`: embedding, every layer, final norm, lm_head, greedy argmax, each
-layer's K/V written into the paged cache) as a kernel task (local/notes/handoff-megakernel-framework.md).
+"""The whole decode step (`region:embed:argmax`) as a kernel task; its baseline is the engine's megakernel.
 
-Inputs, captured at a step's start (lab.profile.capture.step): tokens [B], pos [B] (each row's length so far), the block
-table [B, cols] and every layer's K/V of the blocks the rows touch, stacked [layers, blocks, kv heads, 16, head dim].
-Outputs: logits [B, V], next tokens [B] (judged only as a greatest logit of their row, `judged`), and the K/V after
-the step. A pure function: the K/V comes back as new
-tensors, so the baseline and every program copy it per call (the engine writes in place). The weights are not inputs:
-the call passes the holder's (kernels/shared_weights, CUDA IPC; a step's do not fit the copy fallback) as a dict `w`
-after the inputs, so the checker never clones them; a write into them voids the judgment (`restore`). The baseline is
-the engine's megakernel; the reference runs the engine's stations in torch (`stations.reference()`) in fp32 over every
-layer, and the error budget is 2x the baseline's error against it. No NaN/Inf inputs: a row whose router logits are all
-NaN has no top-8 (the megakernel picked expert E and read past the expert stack until inference-server's fix). A winner
-does not install: the engine's `STEP` hook writes the K/V pools in place, this task's K/V is pure (copied per call), so
-a shipped program would copy the pools every step."""
+Inputs: tokens [B], pos [B], block table [B, cols], K/V [layers, blocks, kv heads, 16, head dim]; the holder's weights
+follow them as a dict `w`. Outputs: logits [B, V], next tokens [B], and the K/V after the step as new tensors."""
 from __future__ import annotations
 
 import importlib
@@ -28,7 +16,7 @@ from lab.kernels.tasks import Task, randn
 from lab.profile.capture import STEP, STEP_ENTRY
 
 INPUTS = ("tokens", "pos", "bt", "k_cache", "v_cache")
-OUTPUTS = ("logits", "k_cache", "v_cache")      # compared; `next` is checked against the logits and dropped (`judged`)
+OUTPUTS = ("logits", "k_cache", "v_cache")      # compared; `next` is checked against the logits and dropped
 ROW = ("w.input_norm", "w.qkv", "w.q_norm", "w.k_norm", "w.o_proj", "w.post_norm", "w.router", "w.gate_up",
        "w.gate_up_scale", "w.down", "w.down_scale")      # the megakernel's per-layer pointer table, then K and V
 EXPERTS = ("w.gate_up", "w.down")        # the reference widens these per expert used, never whole
@@ -36,13 +24,12 @@ MODULE = STEP_ENTRY.partition(":")[0]
 STATIONS = "inference_server.models.stations"
 START_EDITS = (("__device__ __forceinline__ unsigned long long gtimer() { unsigned long long t; asm volatile(\"mov.u64 "
                 "%0, %%globaltimer;\" : \"=l\"(t)); return t; }",
-                "__device__ __forceinline__ unsigned long long gtimer() { return 0ull; }"),)   # debug stamps only
+                "__device__ __forceinline__ unsigned long long gtimer() { return 0ull; }"),)   # zero the debug timer
 
 
 def weights(model) -> tuple[dict, dict]:
-    """(tensors, constants) a holder keeps for the step: every layer's stations weights as `<i>.w.*` (the experts as
-    the engine runs them: fp8 with scales or bf16 with None), the embedding, final norm, lm_head and rotary
-    frequencies; the layer config and the layer count."""
+    """(tensors, constants) a holder keeps for the step.
+    Tensors: each layer's weights as `<i>.w.*`, embed, final_norm, lm_head, inv_freq; constants: cfg, n_layers."""
     st = importlib.import_module(STATIONS)
     m = model.model
     t = {f"{i}.{k}": v for i in range(len(m.layers)) for k, v in st.layer_weights(model, i).items()}
@@ -59,7 +46,7 @@ def _table(w: dict, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
 
 
 def baseline(tokens, pos, bt, k_cache, v_cache, w):
-    """The engine's megakernel on copies of the K/V, given what its Model holds (the held weights, these pools)."""
+    """The engine's megakernel on copies of the K/V; returns (logits, next, k, v)."""
     mk = importlib.import_module(MODULE)
     k, v = k_cache.clone(), v_cache.clone()
     kv8 = k.dtype == torch.float8_e4m3fn
@@ -103,8 +90,7 @@ def reference(w: dict):
 
 
 def _cost(w: dict):
-    """(0, bytes) a step must move at least: every non-expert weight, the top-k experts of each layer (the fewest any
-    step reads; which ones depends on the routing), lm_head, and the K/V it is given; no FLOP bound."""
+    """A cost function giving (0, bytes): every non-expert weight, each layer's top-k experts, and the K/V given."""
     def size(x):
         return x.numel() * x.element_size() if isinstance(x, torch.Tensor) else 0
     cfg = w["cfg"]
@@ -118,7 +104,7 @@ def _cost(w: dict):
 
 
 def judged(out):
-    """A program's (logits, next, k, v) as compared: `next` must be a greatest logit of its row (a tie counts), then dropped."""
+    """(logits, k, v) of a program's (logits, next, k, v); raises unless `next` is a greatest logit of its row."""
     logits, nxt, k, v = out
     if nxt.shape != logits.shape[:1] or bool(((nxt < 0) | (nxt >= logits.shape[-1])).any()):
         raise ValueError("`next` is not one token id per row")
@@ -129,15 +115,14 @@ def judged(out):
 
 
 def _baseline(*xs):
-    """The baseline's compared outputs: its own `next` is not checked (its fault never fails a candidate)."""
+    """The baseline's compared outputs; its `next` is not checked."""
     logits, _, k, v = baseline(*xs)
     return logits, k, v
 
 
 def task(samples: str | None = None, shared_weights: str | None = None) -> Task:
-    """The step as a task: inputs from a capture's samples (`samples`: lab.profile.capture.step's dir, its first call per
-    (rows, block-table width) kept whole), the weights attached from a holder (`shared_weights`, `weights`'s
-    entries); seed 0 is the capture exactly, later seeds perturb the K/V."""
+    """The step as a task: inputs from `samples` (a step capture dir), weights from the `shared_weights` holder.
+    Seed 0 is the capture; later seeds perturb the K/V."""
     from lab.kernels.tasks.shared_weights import attach
     from lab.profile import capture
     w = attach(Path(shared_weights)) if shared_weights else {}
@@ -153,7 +138,7 @@ def task(samples: str | None = None, shared_weights: str | None = None) -> Task:
             raise ValueError(f"no captured sample of the decode step at shape {shape}")
         r = torch.load(got, weights_only=True)["reads"]
         xs = [r[n].to(device) for n in INPUTS]
-        if g.initial_seed():                     # seed 0: the captured step; others perturb its K/V, per seed
+        if g.initial_seed():                     # seed 0: the captured step
             xs[3:5] = [(x.float() * (1 + 1e-2 * randn(x.shape, g, device, torch.float32))).to(x.dtype) for x in xs[3:5]]
         return tuple(xs)
 
@@ -172,7 +157,7 @@ def _missing(*_a, **_k):
 
 
 def _shape(call: dict) -> tuple[int, int]:
-    """A step's shape: its rows and its block table's width (its longest context, in blocks)."""
+    """A step's shape: (rows, block table width)."""
     r = call.get("reads") or {}
     return r["tokens"]["shape"][0], r["bt"]["shape"][1]
 
@@ -183,12 +168,11 @@ def _watch() -> tuple[str, ...]:
 
 
 def start_program() -> str:
-    """The starting program: the engine's megakernel source as a literal (its debug timer stamped 0: the source screen
-    refuses the clock), built with load_inline under the engine's own build flags, called as the baseline calls it."""
+    """The starting program: the engine's megakernel source as a literal, built with load_inline under its flags."""
     mk = importlib.import_module(MODULE)
     d = Path(importlib.util.find_spec(MODULE).origin).parent
     src = (d / "decode_step.cu").read_text()
-    if (d / "common.cuh").exists():              # the framework branch's shared header, inlined: one self-contained file
+    if (d / "common.cuh").exists():              # inline the shared header
         src = src.replace('#include "common.cuh"', (d / "common.cuh").read_text().replace("#pragma once", ""), 1)
     for old, new in START_EDITS:
         if src.count(old) != 1:

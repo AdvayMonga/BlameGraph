@@ -1,5 +1,4 @@
-"""lab.infra.sandbox.build: when a tree gets its own venv, the cache, the index-only proxy, and (Linux + docker + internet) a build
-room that reaches the package index through the proxy and nothing else."""
+"""lab.infra.sandbox.build: when a tree gets its own venv, the cache, the index-only proxy, the build room."""
 
 from __future__ import annotations
 
@@ -28,7 +27,7 @@ def deps_target(tmp_path, monkeypatch):
 
 
 def pristine(tmp_path, repo: Path, change: dict[str, str]) -> Path:
-    """A two-commit tree like grader.pristine_tree's: base, then `change`."""
+    """A two-commit tree: base, then `change`."""
     from lab.infra.sandbox import grader
     from tests.lab_fixtures import make_repo
     tree = tmp_path / "tree"

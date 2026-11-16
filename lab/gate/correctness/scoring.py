@@ -1,14 +1,10 @@
-"""Answer extraction and scoring for the flip-test task sets (non-thinking outputs).
-
-Implemented: multiple choice (MMLU-Pro, letters A-J) and math final answers (MATH-500 style \\boxed{...}).
-Code (unit-tested) and long-context retrieval scorers come next.
-"""
+r"""Answer extraction and scoring for the flip-test task sets: multiple choice (A-J) and \boxed{...} math answers."""
 from __future__ import annotations
 
 import re
 
 _CHOICE_PATTERNS = [
-    r"answer is \(?([A-J])\)?",          # MMLU-Pro's own prompt format: "The answer is (X)"
+    r"answer is \(?([A-J])\)?",          # "The answer is (X)"
     r"[Aa]nswer\s*[:：]\s*\(?([A-J])\)?",
     r"^\s*\(?([A-J])\)?[.)]?\s*$",       # a reply that is only the letter
 ]

@@ -1,5 +1,4 @@
-"""The dashboard's progress file and its view: a run writes what it is doing, the view reads only files, and the held-out
-split's load numbers never reach the file."""
+"""The dashboard's progress file and view: a run writes its state, the view reads only files, no held-out numbers."""
 from __future__ import annotations
 
 import json
@@ -15,12 +14,12 @@ from evals.loadgen import suite
 from evals.loadgen.client import Row
 from tests.test_lab_runtime import ScriptedProvider
 
-pytest_plugins = ["tests.test_lab_runtime"]     # its `cfg` fixture: a run on a tiny repo
+pytest_plugins = ["tests.test_lab_runtime"]     # its `cfg` fixture
 
 
 @pytest.fixture(autouse=True)
 def no_live(monkeypatch):
-    monkeypatch.setattr(live, "path", None)     # restored after each test: session.run sets it
+    monkeypatch.setattr(live, "path", None)     # session.run sets it
 
 
 def lines(p):
@@ -53,7 +52,7 @@ def test_a_run_writes_progress_and_the_view_reads_it(cfg):
 
     end = dashboard.state(out["run"], cfg.ledger_root, cfg.runs_dir)
     assert end["status"] == "ended: agent" and end["session"]["ended"]
-    assert end["budget"] == {"cap_usd": 2.0, "model_usd": 0.5, "gpu_usd": 0.0}     # the ledger's figure, not the live one
+    assert end["budget"] == {"cap_usd": 2.0, "model_usd": 0.5, "gpu_usd": 0.0}     # the ledger's figure
     assert [m["kind"] for m in end["measurements"]] == ["test"] and end["measurements"][0]["tests"] is True
     evs = lines(cfg.runs_dir / out["run"] / "live.jsonl")
     assert [e["event"] for e in evs if e["event"] != "agent"] == ["run", "session", "job", "job", "run_end"]

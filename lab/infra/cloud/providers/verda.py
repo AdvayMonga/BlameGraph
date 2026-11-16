@@ -1,8 +1,5 @@
-"""Verda (ex DataCrunch) through its REST API (auth: VERDA_CLIENT_ID / VERDA_CLIENT_SECRET from the console).
-
-`stop` deletes the instance and its OS volume. Verda's hibernate hides the instance from GET /instances,
-so it cannot be restored through this API, and `shutdown` keeps billing the GPU. Setup reruns on each new VM.
-"""
+"""Verda (ex DataCrunch) through its REST API (auth: VERDA_CLIENT_ID / VERDA_CLIENT_SECRET).
+`stop` deletes the instance and its OS volume."""
 
 from __future__ import annotations
 
@@ -18,7 +15,7 @@ from lab.infra.cloud.providers import ProviderError, Record, as_list, env_field
 
 API = "https://api.datacrunch.io/v1"
 RUNNING, STOPPED = "running", "stopped"
-# Verda statuses -> ours. Anything unlisted is transitional (provisioning, restoring, ...).
+# Verda statuses -> ours; anything unlisted is transitional.
 STATES = {"running": RUNNING, "hibernating": STOPPED, "offline": "offline",
           "error": "error", "installation_failed": "error", "no_capacity": "no_capacity",
           "discontinued": "absent", "deleting": "absent", "notfound": "absent"}
@@ -26,10 +23,10 @@ STATES = {"running": RUNNING, "hibernating": STOPPED, "offline": "offline",
 
 @dataclass(frozen=True)
 class Verda:
-    type: str = env_field("LAB_VM_TYPE", "1H200.141S.44V")       # the GPU BlameGraph's gate is calibrated on
+    type: str = env_field("LAB_VM_TYPE", "1H200.141S.44V")
     location: str = env_field("LAB_VM_LOCATION", "FIN-02")
     image: str = env_field("LAB_VM_IMAGE", "ubuntu-24.04-cuda-12.8-open-docker")
-    disk_gb: int = field(default_factory=lambda: int(os.environ.get("LAB_VM_DISK_GB", "400")))   # 30B weights
+    disk_gb: int = field(default_factory=lambda: int(os.environ.get("LAB_VM_DISK_GB", "400")))
     default_user: str = "root"
     stop_word: str = "delete"
     stop_deletes: bool = True
@@ -73,7 +70,7 @@ class Verda:
 
     # -- lifecycle ----------------------------------------------------------------------
     def _raw(self, name: str) -> dict | None:
-        """Verda has no unique names; the hostname is ours, and the newest live match wins."""
+        """The newest live instance whose hostname is `name`."""
         live = [i for i in as_list(self._request("GET", "/instances"), "GET /instances")
                 if i.get("hostname") == name and STATES.get(i.get("status"), "") != "absent"]
         return max(live, key=lambda i: i.get("created_at", ""), default=None)
@@ -122,7 +119,7 @@ class Verda:
         self._action(name, lambda status: "restore" if status == "hibernating" else "start")
 
     def stop(self, name: str) -> None:
-        """Delete the instance, wait until it is gone, then delete its OS volume; all billing ends."""
+        """Delete the instance, wait until it is gone, then delete its OS volume."""
         raw = self._raw(name)
         if raw is None:
             return

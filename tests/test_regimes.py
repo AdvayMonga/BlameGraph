@@ -1,4 +1,4 @@
-"""Load regimes against a fake engine with a known capacity. Run: python tests/test_regimes.py"""
+"""Load regimes against a fake engine with a known capacity."""
 from __future__ import annotations
 
 import json
@@ -140,12 +140,12 @@ def test_workload_builders():
 def test_every_regime_runs_on_a_fake_engine():
     proc, url = spawn(slots=2, token_s=0.005, out_tokens=10)       # ~40 req/s capacity
     saved, think, lag, settle = dict(suite.TIERS["short"]), suite.ARRIVALS, runner.MAX_CLIENT_LAG_S, suite._settle_s
-    suite._settle_s = lambda reqs, limits: 0.3     # the limits' bound is 51 s for a 1,024-token answer
+    suite._settle_s = lambda reqs, limits: 0.3     # a short settle time
     suite.TIERS["short"].update(probe_s=1.0, final_s=2.0)
     suite.ARRIVALS = fast_arrivals()
-    runner.MAX_CLIENT_LAG_S = 0.05      # wiring test; client precision is test_open_loop_keeps_its_schedule's job
+    runner.MAX_CLIENT_LAG_S = 0.05      # a loose lag bound for the wiring test
     try:
-        tight = Limits(ttft_s=0.25, tpot_s=0.05)                  # 1 s probes only see overload against a tight TTFT
+        tight = Limits(ttft_s=0.25, tpot_s=0.05)                  # a tight TTFT limit
         ctx = suite.Ctx(url, "m", min_requests=10, interactive=tight, conversational=tight)
         for name, fn in suite.REGIMES.items():
             res = fn(ctx, max_concurrency=8) if name == "saturated" else fn(ctx)
@@ -158,7 +158,7 @@ def test_every_regime_runs_on_a_fake_engine():
 
 
 def test_every_regime_runs_from_a_workload_file():
-    """A `lab workloads` file stands in for the corpus: one pool for every regime; bursty has no arrival times."""
+    """One workload file is the pool for every regime; bursty has no arrival times."""
     recs = [{"id": f"w-{k}", "prompt": f"question {k}", "max_tokens": 16, "build_prompt_tokens": 3, "subset": "s"}
             for k in range(30)]
     recs += [{"id": f"c-{k}", "max_tokens": 16, "subset": "multi", "messages": [
@@ -168,7 +168,7 @@ def test_every_regime_runs_from_a_workload_file():
     path.write_text("".join(json.dumps(r) + "\n" for r in recs))
     proc, url = spawn(slots=2, token_s=0.005, out_tokens=10)
     saved, think, lag, settle = dict(suite.TIERS["short"]), suite.ARRIVALS, runner.MAX_CLIENT_LAG_S, suite._settle_s
-    suite._settle_s = lambda reqs, limits: 0.3     # the limits' bound is 51 s for a 1,024-token answer
+    suite._settle_s = lambda reqs, limits: 0.3     # a short settle time
     suite.TIERS["short"].update(probe_s=1.0, final_s=2.0)
     suite.ARRIVALS = fast_arrivals()
     runner.MAX_CLIENT_LAG_S = 0.05

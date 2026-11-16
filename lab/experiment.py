@@ -1,15 +1,6 @@
-"""Experiments made outside the lab (a person's change on a branch), recorded the way the agent's are: a run whose
-workspace is the change, a `hypothesis`, measurements through the lab's own tools with an `expect`, and a
-`reflection` on each. Run ids start with `researcher-`, so no agent view shows these records (lab/experiments.py).
+"""A person's change on a branch, recorded like the agent's experiments; run ids start with `researcher-`.
 
-  lab start --base REF --change REF --budget USD [--repo PATH]   -> prints the run id
-  lab baseline --run ID
-  lab hypothesis --run ID --hypothesis TEXT --rationale TEXT --layer LAYER [--abandon-if TEXT]
-  lab TOOL --run ID --hypothesis-id H --expect JSON [the tool's own arguments]   (lab/cli.py)
-  lab reflect --run ID --record ID --reflection TEXT [--alternative TEXT]
-
-The change's files outside the target's write surface are left out of the measured tree, and the start record lists
-them: what is measured is what an agent's change could have been."""
+  lab start --base REF --change REF --budget USD [--repo PATH]   -> prints the run id"""
 from __future__ import annotations
 
 import subprocess

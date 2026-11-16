@@ -1,6 +1,5 @@
-"""What the jails need from a real GPU host, checked on one: run on the GPU VM, as root the way the remote
-worker runs (`sudo`), with the engine's venv first on PATH. Each check prints PASS or FAIL with its evidence; the exit
-status is the number of failures. `--only NAME,...` runs a subset; `--skip-build` leaves out the dependency build.
+"""Check what the jails need from a real GPU host; run on the GPU VM as root with the engine's venv first on PATH.
+Each check prints PASS or FAIL with its evidence; the exit status is the number of failures.
 
     sudo -n env HOME="$HOME" PATH="$HOME/inference-server/.venv/bin:$PATH" LAB_ENGINE_REPO="$HOME/inference-server" \\
         LAB_TARGET=lab/targets/inference-server.toml lab gpucheck
@@ -37,7 +36,7 @@ def check(name: str):
 
 
 def base_tree(root: Path) -> Path:
-    """The worker's engine checkout as a two-commit tree (base, empty change): the shape every job gets."""
+    """The worker's engine checkout as a two-commit tree (base, empty change)."""
     tree = root / "base"
     shutil.copytree(engine.repo(), tree, ignore=shutil.ignore_patterns(".venv", ".git", "__pycache__", "*.pyc"))
     grader._commit(tree, "base", init=True)
@@ -125,7 +124,7 @@ def exclusive(tmp: Path) -> str:
 
 @check("ncu")
 def ncu(tmp: Path) -> str:
-    """Nsight Compute inside a measurement room (needs the GPU's performance counters for the jail's user)."""
+    """Nsight Compute inside a measurement room."""
     r = worker.Local().call("profile", {"tree": base_tree(tmp)}, {"kind": "kernel", "args": {"launch_count": 2}},
                             tmp / "out")
     assert not r.get("refused") and r["returncode"] == 0 and r["head"], r.get("refused") or r["output"][-1500:]
@@ -134,7 +133,7 @@ def ncu(tmp: Path) -> str:
 
 @check("sanitizer")
 def sanitizer(tmp: Path) -> str:
-    """compute-sanitizer around a jailed kernel call: the held-out gate's stage 6, every tool clean on a plain program."""
+    """compute-sanitizer around a jailed kernel call: every tool clean on a plain program."""
     from lab.kernels.eval import jailed
     assert jailed.sanitizer(), "compute-sanitizer not found (CUDA toolkit bin/ or PATH)"
     src = "import torch\ndef kernel(x, w, eps=1e-6):\n    return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * w\n"

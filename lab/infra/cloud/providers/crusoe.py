@@ -1,4 +1,4 @@
-"""Crusoe Cloud through the `crusoe` CLI (auth: `crusoe config init`). A stopped on-demand VM keeps its disk and bills nothing."""
+"""Crusoe Cloud through the `crusoe` CLI (auth: `crusoe config init`)."""
 
 from __future__ import annotations
 

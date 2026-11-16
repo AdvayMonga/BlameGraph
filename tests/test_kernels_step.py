@@ -1,7 +1,4 @@
-"""The whole decode step as one region (lab/kernels/tasks/step.py, lab.profile.capture.step): a step captured from a fake megakernel,
-the task built from it and a CPU holder (shapes, inputs, the weights passed uncloned), and, where the engine imports
-(run with LAB_ENGINE_REPO set), the fp32 reference through the engine's stations on a tiny model and the starting
-program built from the engine's decode_step.cu. The megakernel itself needs an H200: not run here."""
+"""The decode step as one region: capture from a fake megakernel, the task, the fp32 reference, the starting program."""
 from __future__ import annotations
 
 import importlib.util
@@ -9,7 +6,7 @@ import json
 import types
 from types import SimpleNamespace
 
-if __name__ == "__main__":          # CI's referee job runs each test file as a script: these need pytest's fixtures
+if __name__ == "__main__":          # these tests need pytest's fixtures
     import pytest
     raise SystemExit(pytest.main(["-q", __file__]))
 
@@ -29,7 +26,7 @@ def pools(g):
 
 
 def fake_megakernel(ps):
-    """decode_step as the engine's is called: writes each layer's K/V for the new token, returns (logits, next)."""
+    """decode_step: writes each layer's K/V for the new token, returns (logits, next)."""
     def decode_step(mdl, tokens, pos, bt):
         for p in ps:
             p.k[bt[torch.arange(len(pos)), pos // BS], :, pos % BS] = 1.0
@@ -66,8 +63,7 @@ def test_a_captured_step_keeps_the_touched_blocks_of_every_layer_before_and_afte
 
 
 def test_a_captured_step_reads_as_the_megakernel_indexes_its_pools(tmp_path, monkeypatch):
-    """decode_step.cu's layout: each layer's pool [blocks, NKV, BS, D] contiguous, row b's position t at block
-    bt[b, t // BS], slot t % BS, flat offset ((bid * NKV + g) * BS + slot) * D; every id in range, padding included."""
+    """Each layer's pool is [blocks, NKV, BS, D]; row b's position t is at block bt[b, t // BS], slot t % BS."""
     ps = pools(torch.Generator().manual_seed(0))
     before = [SimpleNamespace(k=p.k.clone(), v=p.v.clone()) for p in ps]
     mk = fake_megakernel(ps)
@@ -91,7 +87,7 @@ def test_a_captured_step_reads_as_the_megakernel_indexes_its_pools(tmp_path, mon
 
 
 def test_the_step_is_never_given_nonfinite_inputs():
-    assert step.task().nonfinite is False      # the megakernel reads past its experts on all-NaN router logits
+    assert step.task().nonfinite is False
 
 
 def held_step(tmp, cfg=None):
@@ -170,7 +166,7 @@ def test_the_reference_runs_the_engines_stations_over_every_layer_in_fp32(tmp_pa
 def test_the_starting_program_is_the_engines_megakernel_built_inline_and_passes_the_screen():
     from lab.kernels.eval import core
     src = step.start_program()
-    cu = importlib.import_module(step.MODULE).source()      # decode_step.cu with common.cuh inlined, as the start is
+    cu = importlib.import_module(step.MODULE).source()      # decode_step.cu with common.cuh inlined
     assert core.screen(src) == [] and "globaltimer" not in src and "load_inline(" in src
     assert cu.replace(*step.START_EDITS[0]) in src and f"ROW = {step.ROW!r}" in src
 
@@ -213,9 +209,9 @@ def test_the_step_is_judged_end_to_end_on_the_cpu(tmp_path, monkeypatch):
     from lab.kernels.eval import core
     caps, _ = capture_steps(tmp_path, monkeypatch)
     h = held_step(tmp_path, LayerConfig(NQ, NKV, D, D ** -0.5, 1e-6, E, K, True))
-    def baseline(*xs):                                       # the megakernel needs CUDA: the reference, with a `next`
+    def baseline(*xs):                                       # the reference, with a `next`
         logits, k, v = step.reference(xs[-1])(*xs[:-1])
-        return logits, torch.zeros(len(logits), dtype=torch.long), k, v      # a wrong `next`: never held against anyone
+        return logits, torch.zeros(len(logits), dtype=torch.long), k, v      # a wrong `next`
     monkeypatch.setattr(step, "baseline", baseline)
     t = step.task(str(caps), str(h.path))
     program = tmp_path / "candidate.py"

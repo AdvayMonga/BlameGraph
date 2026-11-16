@@ -1,7 +1,4 @@
-"""FlashInfer-Bench definitions as kernel tasks, on CPU with a small made-up dataset (no download): workloads as
-shapes, recorded tensors read from safetensors, each workload's scalars, the refusals, the starting program,
-the judge on a correct rewrite and a wrong one, the solution and TraceSet written for the benchmark's own evaluator,
-the leaderboard's score. Run: python tests/test_flashinfer_bench.py"""
+"""FlashInfer-Bench definitions as kernel tasks, on CPU with a small made-up dataset."""
 from __future__ import annotations
 
 import hashlib
@@ -50,7 +47,7 @@ def run(x, idx, weight, scale):
 
 
 def dataset(d: Path, definition: dict = DEFINITION, scales=None) -> Path:
-    """A TraceSet-shaped dataset dir with a manifest, as `fib.fetch` leaves one."""
+    """A TraceSet-shaped dataset dir with a manifest."""
     files = {}
 
     def put(rel: str, data: bytes) -> None:

@@ -1,23 +1,7 @@
-"""Shared read-only weights: a region as large as a whole decode step reads the whole model
-(~30 GB), and each candidate is judged in a fresh process, so reloading per judgment would take minutes. A holder
-process keeps the weights on the device and writes handles to a file; each candidate's process attaches to the same
-memory without copying (CUDA IPC through torch's tensor sharing; on the CPU, shared memory). CUDA cannot map shared
-memory read-only, so the holder also writes a pristine CPU copy beside the handles file (mounted read-only in a jail
-for the copy fallback: weights leak nothing, and integrity comes from `restore` comparing the holder's real memory with
-it outside the jail); before and after each judgment the evaluator compares every tensor with it on the device
-(`restore`): a judgment that changed any weight is void and the weight is copied back. Judgments on one holder run one at a time (`exclusive`). A
-jail attaching over CUDA IPC needs the holder's IPC namespace (docker --ipc) and the holder's IPC semaphore pool:
-CUDA keeps it in /dev/shm as `cuda.shm.<uid>.<pid>.<n>` (both in hex) and an importer looks for it under its own uid,
-so a holder run as root for a jail of another user (`jail_uid`) links its pools under that uid's name, open to that
-user's group (without it the attach fails: "Failed to open/find remote IPC semaphore pool", CUDA_ERROR_MAP_FAILED
-from cuIpcOpenEventHandle). A jail can then
-write the pool's semaphores, which can break the holder's IPC events but not its weights. `python -m
-lab.kernels.tasks.shared_weights` reports a plain and a jailed attach. When the attach is refused, `attach(copy_ok=True)` (the evaluator's task
-inside the jail) copies the pristine weights to the device instead (a layer's weights are ~0.6 GB, so a single-layer
-region is judged this way; a whole step is not): its writes reach only its copy. `restore` never copies: it raises when
-it cannot alias the holder's memory. Residual risk: a write undone before
-the judgment ends is unseen here (the timer fingerprints inputs between calls, lab/kernels/eval/timing.py, and stage 2's
-outputs are recomputed outside the jail on the restored weights, verify.py)."""
+"""Shared read-only weights: a holder process keeps tensors on the device and writes handles to a file; other
+processes attach to the same memory. `restore` copies back any tensor that differs from the holder's pristine CPU copy.
+
+python -m lab.kernels.tasks.shared_weights [--plain]    reports a plain and a jailed attach"""
 from __future__ import annotations
 
 import fcntl
@@ -31,10 +15,10 @@ from pathlib import Path
 import torch
 from torch.multiprocessing import reductions
 
-reductions.init_reductions()                     # torch's tensor reducers: a reference to shared memory, not its bytes
-CHUNK = 1 << 28                                  # bytes compared per copy of the pristine copy to the device
+reductions.init_reductions()                     # pickle tensors as references to shared memory
+CHUNK = 1 << 28                                  # bytes compared at a time
 SHM = Path("/dev/shm")
-DEVICE = "_device"                               # the holder's device, kept in the constants file, never a constant
+DEVICE = "_device"                               # the constants file's key for the holder's device
 _HELD: dict = {}                                    # holder files made by this process -> their entries
 _COPIED: set[Path] = set()                      # holders attached by copying the pristine file
 _ATTACHED: list[weakref.ref] = []               # every tensor attached in this process, while it lives
@@ -45,8 +29,7 @@ def _side(path: Path, kind: str) -> Path:
 
 
 def _trusted(path: Path) -> Path:
-    """`path`, refused under /dev/shm (a jail with the host's IPC namespace writes there) and unless it is owned by
-    this user (or root) and writable by no one else: it is unpickled outside the jail."""
+    """`path` resolved; raises if it is under /dev/shm, not owned by this user or root, or writable by others."""
     p = Path(path).resolve()
     if p.is_relative_to(SHM.resolve()) or p.is_relative_to(SHM):
         raise ValueError(f"shared weights file {p} is under {SHM}, which a jail can write")
@@ -67,17 +50,15 @@ class Holder:
 
     def __init__(self, tensors: dict[str, torch.Tensor], path: Path, constants: dict | None = None,
                  jail_uid: int | None = None):
-        """`constants`: small picklable values shared beside the weights (a region's layer config and `layer`);
-        `jail_uid`: the user a jail attaches as, when it is not this process's (a root lab's jail)."""
+        """`constants`: small picklable values shared beside the weights; `jail_uid`: the user a jail attaches as."""
         torch.multiprocessing.set_sharing_strategy("file_system")
-        # a model's Parameters, detached: attached ones requiring grad refuse the checker's in-place refill
         tensors = {k: (v.detach() if v is not None else None) for k, v in tensors.items()}
         self.tensors = {k: (v if v.is_cuda else v.share_memory_()) for k, v in tensors.items() if v is not None}
         self.path = Path(path)
         torch.save({k: v.detach().cpu() for k, v in self.tensors.items()}, _side(self.path, "pristine"))
         _side(self.path, "pristine").chmod(0o644)
-        rest = {**{k: None for k, v in tensors.items() if v is None}, **(constants or {})}   # None: bf16 has no scale
-        dev = next(iter(self.tensors.values())).device.type if self.tensors else "cpu"   # a jail renumbers GPUs
+        rest = {**{k: None for k, v in tensors.items() if v is None}, **(constants or {})}
+        dev = next(iter(self.tensors.values())).device.type if self.tensors else "cpu"
         _write(_side(self.path, "constants"), pickle.dumps({**rest, DEVICE: dev}))
         _write(self.path, bytes(ForkingPickler.dumps({**self.tensors, **rest})))
         _HELD[self.path.resolve()] = {**self.tensors, **rest}
@@ -85,14 +66,13 @@ class Holder:
             _share_pools(jail_uid)
 
     def changed(self) -> list[str]:
-        """The weights whose bytes differ from when they were shared (written by a judgment)."""
+        """The weights whose bytes differ from when they were shared."""
         clean = _pristine(self.path)
         return [k for k, v in self.tensors.items() if not _equal(v, clean[k])]
 
 
 def _share_pools(uid: int, shm: Path = SHM) -> list[Path]:
-    """This process's CUDA IPC semaphore pools linked under `uid`'s name, open to `uid`'s group (as `uid` == gid in
-    the jail); the links go when this process exits."""
+    """Links this process's CUDA IPC semaphore pools under `uid`'s name, open to group `uid`; unlinked at exit."""
     import atexit
     me, pid = format(os.getuid(), "x"), format(os.getpid(), "x")
     links = []
@@ -108,14 +88,14 @@ def _share_pools(uid: int, shm: Path = SHM) -> list[Path]:
 
 
 def attach(path: Path, copy_ok: bool = False) -> dict[str, torch.Tensor]:
-    """The holder's tensors, in this process, aliasing its memory (no copy); with `copy_ok`, a copy of the pristine
-    weights on the holder's device when CUDA IPC refuses the attach."""
+    """The holder's tensors in this process, aliasing its memory.
+    When CUDA IPC refuses the attach: with `copy_ok`, a copy of the pristine weights; else RuntimeError."""
     torch.multiprocessing.set_sharing_strategy("file_system")
     raw = _trusted(path).read_bytes()
-    own = _HELD.get(Path(path).resolve())        # the holder's own process: CUDA IPC cannot reopen its own handles
+    own = _HELD.get(Path(path).resolve())        # the holder's own process
     try:
         held = dict(own) if own is not None else _rebuild(raw)
-    except RuntimeError as e:                    # CUDA IPC refused (a jail)
+    except RuntimeError as e:                    # CUDA IPC refused
         if "cuda" not in str(e).lower():
             raise
         if not copy_ok:
@@ -129,8 +109,7 @@ def attach(path: Path, copy_ok: bool = False) -> dict[str, torch.Tensor]:
 
 
 def _rebuild(raw: bytes) -> dict:
-    """The handles file's entries, each CPU storage given back the one reference its rebuild spends (torch's handoff is
-    one-shot), so the shared memory survives repeated attaches."""
+    """The handles file's entries, each CPU storage given back the one reference its rebuild spends."""
     d = pickle.loads(raw)
     for s in {t.untyped_storage().data_ptr(): t.untyped_storage() for t in d.values()
               if isinstance(t, torch.Tensor) and not t.is_cuda}.values():
@@ -139,12 +118,12 @@ def _rebuild(raw: bytes) -> dict:
 
 
 def attached_by_copy(path: Path) -> bool:
-    """Whether this process holds its own copy of `path`'s weights (the IPC attach was refused)."""
+    """Whether this process holds its own copy of `path`'s weights."""
     return Path(path).resolve() in _COPIED
 
 
 def _device(path: Path) -> str:
-    """The device the holder's tensors live on, as it wrote it; for an older holder, whether its handles name CUDA."""
+    """The device the holder's tensors live on."""
     dev = pickle.loads(_trusted(_side(path, "constants")).read_bytes()).get(DEVICE)
     return dev or ("cuda" if b"cuda" in _trusted(path).read_bytes() else "cpu")
 
@@ -155,7 +134,7 @@ def is_shared_weight(t: torch.Tensor) -> bool:
 
 
 def constants(path: Path) -> dict:
-    """The holder's non-tensor entries (its constants and None weights), read without attaching any tensor."""
+    """The holder's non-tensor entries, read without attaching any tensor."""
     d = pickle.loads(_trusted(_side(path, "constants")).read_bytes())
     d.pop(DEVICE, None)
     return d
@@ -177,7 +156,7 @@ def restore(path: Path) -> list[str]:
     held, clean = attach(path), _pristine(path)
     bad = [k for k, v in held.items() if isinstance(v, torch.Tensor) and not _equal(v, clean[k])]
     for k in bad:
-        held[k].copy_(clean[k])                  # into the shared memory: the holder's tensor too
+        held[k].copy_(clean[k])                  # writes the shared memory
     if any(held[k].is_cuda for k in bad):
         torch.cuda.synchronize()
     return bad
@@ -185,8 +164,7 @@ def restore(path: Path) -> list[str]:
 
 @contextmanager
 def exclusive(path: Path):
-    """Held around a judgment that attaches the holder: such judgments run one at a time, so a write is blamed on the
-    judgment that made it."""
+    """A lock held around a judgment that attaches the holder: one judgment at a time."""
     with open(_side(path, "lock"), "a") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         yield
@@ -205,7 +183,7 @@ torch.cuda.synchronize()
 
 
 def harness(root: Path) -> Path:
-    """`root` holding this module alone as `kernels.shared_weights` (it imports only torch): what `check` mounts."""
+    """`root` holding this module alone as `kernels.shared_weights`."""
     import shutil
     (root / "kernels").mkdir(parents=True)
     (root / "kernels" / "__init__.py").write_text("")
@@ -214,9 +192,8 @@ def harness(root: Path) -> Path:
 
 
 def check(jailed: bool = True) -> dict:
-    """On a GPU host: a holder shares a weight, a child (in the container jail, host IPC namespace) attaches, reads it
-    and writes to it; the holder must see the same values, catch the write and restore it. `python -m
-    lab.kernels.tasks.shared_weights`."""
+    """On a GPU host: a holder shares a weight; a child (jailed when `jailed`) attaches, reads it and writes to it.
+    Returns the child's output and what the holder found changed, restored, and changed after the restore."""
     import shutil
     import subprocess
     import sys
@@ -224,7 +201,7 @@ def check(jailed: bool = True) -> dict:
     d = Path(tempfile.mkdtemp(prefix="shared-weights-"))
     root = harness(Path(tempfile.mkdtemp(prefix="shared-weights-harness-")))
     hd = Path(tempfile.mkdtemp(prefix="shared-weights-holder-"))       # outside the jail's writable tree
-    for p in (root, root / "kernels", hd):       # mkdtemp's 0700: the jail's user (not root) could not read them
+    for p in (root, root / "kernels", hd):       # readable by the jail's user
         p.chmod(0o755)
     for f in (root / "kernels").iterdir():
         f.chmod(0o644)

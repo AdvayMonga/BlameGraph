@@ -1,9 +1,5 @@
-"""Where each engine's time goes, at fixed load points: every engine of engines.toml served as the comparison serves it,
-under nsys (`nsys launch`, kernels inside CUDA graphs traced), driven by the comparison's client at each point of
-POINTS; at each point a WINDOW_S nsys capture once the load is steady, then WINDOW_S of py-spy over the server's
-processes, then the client's own numbers for the point. Run on the GPU VM, from the BlameGraph checkout with the
-engine's python, with nothing else on the GPU; `lab compare gap DIR` reads the result. `--plain`: no profiler,
-the client's numbers over the same windows (for A/B runs; the engine's environment is this process's).
+"""Where each engine's time goes at fixed load points: each engine served under nsys and driven by the comparison's
+client at each of POINTS, with a WINDOW_S nsys capture, WINDOW_S of py-spy and the client's numbers per point.
 
     lab compare profile --out ~/gap [--engines ours,vllm,trtllm] [--precision fp8] [--points decode1,sat256] [--plain]
 """
@@ -23,13 +19,13 @@ from pathlib import Path
 from evals.baselines import run as R
 
 WARM_S, WINDOW_S = 30.0, 10.0
-NSYS_TRACE = "--trace=cuda,nvtx --cuda-graph-trace=node"          # at launch; sampling is chosen at start
+NSYS_TRACE = "--trace=cuda,nvtx --cuda-graph-trace=node"          # launch-time flags
 
 # name: (loop, pool class or None for every class, concurrency or req/s, fixed answer length or None for the corpus's)
 POINTS = {
     "decode1": ("closed", "steady_interactive", 1, None),        # single stream
     "sat256": ("closed", None, 256, None),                     # the saturated mix
-    "long512": ("closed", "short", 512, 1024),                 # short prompts, 1,024-token answers: large-batch decode
+    "long512": ("closed", "short", 512, 1024),                 # short prompts, 1,024-token answers
     "lp8": ("open", "long_context", 8.0, 64),                  # long prompts, short answers
 }
 
@@ -56,8 +52,7 @@ def _drive(ctx, point, duration_s: float, rows: list):
 
 
 def _nsys() -> tuple[str, str]:
-    """The host's nsys binary and the install dir that holds it (mounted at the same path into a container). Not
-    CUDA's bin/nsys: that is a wrapper that runs only beside the host's toolkit."""
+    """The host's nsys binary and the install dir that holds it."""
     found = sorted(Path("/opt/nvidia/nsight-systems").glob("*/target-linux-x64/nsys"))
     exe = str(found[-1]) if found else os.path.realpath(shutil.which("nsys") or "nsys")
     return exe, str(Path(exe).parents[1])
@@ -101,7 +96,7 @@ def profile(out: Path, engines: list[str], precision: str, points: list[str], pl
                     if not plain:
                         _capture(engine, srv, d, point, ctl, where)
                     load.join()
-                    steady = [r for r in rows if r.scheduled_s >= WARM_S]     # after the first calls' compiles
+                    steady = [r for r in rows if r.scheduled_s >= WARM_S]     # after warm-up
                     summary = runner.summarize(steady, ctx.conversational, total - WARM_S)
                     (d / f"{point}.json").write_text(json.dumps({"point": point, "def": POINTS[point],
                                                                  "summary": summary, "facts": R.facts()}) + "\n")

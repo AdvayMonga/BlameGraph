@@ -1,16 +1,8 @@
-"""Request timing fitted from real conversation traffic (BurstGPT_3's conversation log), for the open-loop regimes.
-
-The model: sittings start as a Poisson process at the load's rate; each sitting is a run of turns of one conversation
-(it may resume one: `first_turn` > 0 means that many turns of history), with the gap to the next turn drawn from the
-real gaps by transition index. A session's gap over BREAK_S ends the sitting (the user comes back later as a resumed
-sitting). Load rises by raising the sitting rate: the data says busy hours have more sittings, not different ones
-(the fit report records turns and gaps by hour of day). `schedule` starts with users already mid-conversation, so a
-short run is at steady state from its first second.
+"""Request timing fitted from real conversation traffic, for the open-loop regimes: sittings start as a Poisson process
+and each is a run of turns of one conversation, with gaps drawn from the real ones.
 
   lab arrivals fit [--cache DIR] [--out evals/loadgen/arrivals.json]     fit on the seen weeks
   lab arrivals compare [--model F] [--cache DIR]                    the model against the held-out weeks
-
-Both are measurements: the fitted file carries its source's hash and the comparison reports statistics, no verdict.
 """
 from __future__ import annotations
 
@@ -29,10 +21,10 @@ from pathlib import Path
 DEFAULT_MODEL = Path(__file__).with_name("arrivals.json")
 DEFAULT_CACHE = Path.home() / ".cache" / "inference-server" / "traces"
 BURSTGPT_CSV = "burstgpt/BurstGPT_3.csv"
-WEEK_S = 7 * 86400          # even trace weeks are `seen`, odd weeks `heldout` (evals/regimes/build_corpus.py's rule)
+WEEK_S = 7 * 86400          # even trace weeks are `seen`, odd weeks `heldout`
 BREAK_S = 1800.0            # a gap this long ends a sitting
-INDEX_BUCKETS = (0, 1, 2, 3, 4, 5, 10, 20, 40)   # gaps are kept by transition index, pooled within these buckets
-HORIZON_DRAWS = 100000      # sittings drawn from the fit to find how long its own sittings run
+INDEX_BUCKETS = (0, 1, 2, 3, 4, 5, 10, 20, 40)   # gaps are pooled by transition index within these buckets
+HORIZON_DRAWS = 100000      # sittings drawn from the fit to find its horizon
 QUANTILES = 201
 WINDOW_S = 1200.0           # the comparison's windows
 MIN_STARTS = 30             # a window with fewer sitting starts is not compared
@@ -54,7 +46,7 @@ class Turn:
     sitting: int
     turn_index: int
     at_s: float
-    first: bool             # the sitting's first turn (a sitting under way at t=0 has none in the run)
+    first: bool             # the sitting's first turn
 
 
 # ------------------------------------------------------------------ reading
@@ -112,8 +104,8 @@ def _index(k: int) -> str:
 
 
 def fit(sittings: list[Sitting]) -> dict:
-    """Counts of (first_turn, turns) and gap quantiles by transition index; `horizon_s` is the p99.99 span of the
-    fitted model's own sittings (at least the real p99.9), so a schedule's pre-roll covers what the model draws."""
+    """Counts of (first_turn, turns) and gap quantiles by transition index.
+    `horizon_s` is the p99.99 span of the fitted model's own sittings, at least the real p99.9."""
     gaps: dict[str, list[float]] = defaultdict(list)
     for s in sittings:
         for k, g in enumerate(s.gaps):
@@ -130,7 +122,7 @@ def fit(sittings: list[Sitting]) -> dict:
 
 
 def by_hour(sittings: list[Sitting]) -> dict:
-    """Turns per sitting and median gap by hour of day: whether busy hours change what a user does."""
+    """Turns per sitting and median gap by hour of day."""
     starts, turns, gaps = Counter(), defaultdict(list), defaultdict(list)
     for s in sittings:
         h = int(s.start_s // 3600) % 24
@@ -149,7 +141,7 @@ class Model:
         self.shapes = [tuple(int(x) for x in k.split(":")) for k in fitted["shapes"]]
         self.weights = list(fitted["shapes"].values())
         self.gap_q = dict(fitted["gap_s"])
-        self.horizon_s = float(fitted["horizon_s"])     # sittings longer than this (0.01%) under way at t=0 are missed
+        self.horizon_s = float(fitted["horizon_s"])     # span of the schedule's pre-roll
         self.max_span = {sh: sum(self.gap_q[_index(sh[0] + k)][-1] for k in range(sh[1] - 1)) for sh in self.shapes}
         self.turns_mean = sum(t * c for (_, t), c in zip(self.shapes, self.weights)) / sum(self.weights)
 
@@ -164,7 +156,7 @@ class Model:
         return q[i] + (q[min(i + 1, len(q) - 1)] - q[i]) * frac
 
     def draw_sitting(self, start_s: float, rng: random.Random, reach_s: float = 0.0) -> Sitting | None:
-        """None when the drawn shape cannot last `reach_s` (the pre-roll skips what cannot reach t=0)."""
+        """A sitting starting at `start_s`; None when the drawn shape cannot last `reach_s`."""
         shape = rng.choices(self.shapes, self.weights)[0]
         if self.max_span[shape] < reach_s:
             return None
@@ -172,8 +164,7 @@ class Model:
         return Sitting(start_s, first, [self.draw_gap(first + k, rng) for k in range(turns - 1)])
 
     def schedule(self, rate: float, duration_s: float, seed) -> list[Turn]:
-        """Turns in [0, duration_s) of sittings starting as Poisson(rate) from -horizon on, so users already
-        mid-conversation at t=0 are there (steady state); sorted by time."""
+        """Turns in [0, duration_s) of sittings starting as Poisson(rate) from -horizon on; sorted by time."""
         rng, t, out, k = random.Random(seed), -self.horizon_s, [], 0
         while True:
             t += rng.expovariate(rate)
@@ -241,10 +232,8 @@ def _window_stats(starts: list[float], requests: list[float], lo: float) -> dict
 
 
 def compare(model: Model, heldout: list[Sitting], seed: int = 0) -> dict:
-    """The model's traffic beside the held-out weeks': per busy window (>= MIN_STARTS sitting starts in WINDOW_S),
-    the sitting starts' inter-arrival CV and KS p against exponential and the request counts' variance/mean at 1,
-    10 and 60 s, each as the median over windows, real and generated at the window's own rate; and the KS statistic
-    between real and model for turns per sitting, first turn and the gaps by index."""
+    """The model's traffic beside the held-out weeks': per busy window, inter-arrival CV, KS p against exponential and
+    count variance/mean (medians); and KS statistics for turns per sitting, first turn and gaps by index."""
     t0 = heldout[0].start_s
     times = sorted(s.start_s + sum(s.gaps[:j]) for s in heldout for j in range(s.turns))
     real, gen = defaultdict(list), defaultdict(list)

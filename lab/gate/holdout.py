@@ -1,5 +1,5 @@
-"""Held-out access control: a Thresholdout query budget (Dwork et al. 2015, reusable holdout) kept in a write-once
-store, and a sealed split that can be unsealed once per corpus version. Stdlib only."""
+"""Held-out access control: a Thresholdout query budget kept in a write-once store, and a sealed split that can be
+unsealed once per corpus version."""
 from __future__ import annotations
 
 import hashlib
@@ -38,9 +38,7 @@ STATE = re.compile(r"/state-(\d{6})\.json$")
 
 
 def _step(s: dict, seen_value: float, heldout_value: float, threshold: float, sigma: float) -> tuple[dict, dict]:
-    """One Thresholdout query on state `s`: (the answer, the next state). The seen value if it agrees with held-out
-    within the noisy threshold, else held-out + Laplace (spends budget). Pure: the noise is drawn from the state's
-    seed and counters."""
+    """One Thresholdout query on state `s`: (answer, next state); noise is drawn from the state's seed and counters."""
     if s["budget_left"] <= 0:
         raise Refused(f"held-out budget of {s['params']['budget']} exhausted after {s['n_queries']} queries")
     seed = s["seed"]
@@ -56,10 +54,8 @@ def _step(s: dict, seen_value: float, heldout_value: float, threshold: float, si
 
 
 class HoldoutGuard:
-    """Thresholdout for one scalar metric per query, its state in a write-once store (lab/records/remote.py: `keys`,
-    `get`, and a `put` that refuses an existing key). State n is `<prefix>/state-<n>.json`; a query writes n + 1 and,
-    when another writer took n + 1 first, re-reads and tries again, so every run and machine sharing the store shares
-    one budget and loses no query. The seed is drawn once, with state 0, and lives only in the store."""
+    """Thresholdout for one scalar metric per query; its state lives in a write-once store shared by every run.
+    State n is `<prefix>/state-<n>.json`; a query writes n + 1 and retries when another writer took it first."""
 
     RACES = 100
 
@@ -67,7 +63,7 @@ class HoldoutGuard:
         self.remote, self.prefix = remote, prefix.rstrip("/")
         self.threshold, self.sigma = threshold, sigma
         params = {"budget": budget, "threshold": threshold, "sigma": sigma}
-        if not self._keys():          # a lost race here is another writer creating the same guard
+        if not self._keys():
             self._put(0, {"params": params, "seed": secrets.token_hex(16) if seed is None else str(seed),
                           "budget_left": budget, "n_queries": 0, "log": []})
         if self._latest()[1]["params"] != params:

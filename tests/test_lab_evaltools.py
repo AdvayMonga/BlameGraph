@@ -108,7 +108,7 @@ def lab(tmp_path, monkeypatch):
     tb.bench_default_regimes = ("single_stream",)
     from evals.loadgen import runner
     saved, think, lag = dict(suite.TIERS["min"]), suite.ARRIVALS, runner.MAX_CLIENT_LAG_S
-    runner.MAX_CLIENT_LAG_S = 0.05      # wiring tests on a shared laptop; client precision has its own test
+    runner.MAX_CLIENT_LAG_S = 0.05      # a loose lag bound for wiring tests
     suite.TIERS["min"].update(probe_s=1.0, final_s=1.5)
     suite.TIERS["full"].update(probe_s=1.0, final_s=1.5)
     suite.ARRIVALS = fast_arrivals()
@@ -125,7 +125,7 @@ def test_bench_serves_and_measures(lab):
     assert out["metrics"]["single_stream"]["value"] is not None
     rec = next(ledger.records(s.ledger_root, kind="bench"))
     assert rec["config"] == {"split": "seen", "tier": "min", "seed": tb.seed} and rec["result"]["verdict"] == "ok"
-    cal = out["calibrated"]["single_stream"]                   # every number with its context, or why it has none
+    cal = out["calibrated"]["single_stream"]
     assert cal["value"] == out["metrics"]["single_stream"]["value"] and cal["fingerprint"]["tier"] == "min"
     assert ("ceiling_missing" in cal) == (cal.get("ceiling") is None) and "reference_missing" in cal
     assert cal["shape"]["prompt_tokens_mean"] > 0 if cal.get("shape") else True
@@ -151,7 +151,7 @@ def test_bench_keeps_passive_data_as_blobs(lab):
     assert not (s.run_dir / "pristine" / serve.TELEMETRY_SUBDIR).exists()          # moved out of the served tree
     assert not list(s.run_dir.glob("passive-*"))                                     # scratch emptied into blobs
     contract = json.loads((s.ledger_root / a["telemetry"] / "contract.json").read_text())
-    assert contract["valid"] is False and contract["errors"]      # checked on collection; the fake's rows don't conform
+    assert contract["valid"] is False and contract["errors"]      # the fake's rows don't conform
 
 
 def test_equiv_judges_against_the_reference(lab):
@@ -166,7 +166,7 @@ def test_equiv_judges_against_the_reference(lab):
     assert len(rows) == 40 and all("text" not in r for r in rows)
     from lab.gate.correctness.run import TRACE_PREFIX
     joined = artifacts.joined(rec, s.ledger_root, prefix=TRACE_PREFIX)
-    assert all(j["engine"] for j in joined)                    # every gate request has its engine row (X-Trace-Id)
+    assert all(j["engine"] for j in joined)                    # every gate request has its engine row
 
 
 def test_a_second_equiv_on_the_same_snapshot_reuses_its_answers(lab):
@@ -176,7 +176,7 @@ def test_a_second_equiv_on_the_same_snapshot_reuses_its_answers(lab):
     marked = "".join(json.dumps({**json.loads(x), "kept": True}) + "\n" for x in answers.read_text().splitlines())
     answers.write_text(marked)
     tb.equiv({})
-    assert answers.read_text() == marked                        # nothing asked again: the gate is never re-rolled
+    assert answers.read_text() == marked                        # nothing asked again
     assert not list(s.run_dir.glob("equiv-prior-*")) and not list(s.run_dir.glob("passive-*"))
 
 
@@ -258,7 +258,7 @@ def test_inconclusive_equiv_is_neither_passing_nor_failing(lab, monkeypatch):
     monkeypatch.setattr(crun, "candidate", inconclusive)
     assert json.loads(tb.equiv({}))["verdict"] == "inconclusive"
     rec = list(ledger.records(s.ledger_root, kind="equiv"))[-1]
-    assert rec["result"]["passed"] is None                              # lab_verdict counts neither pass nor fail
+    assert rec["result"]["passed"] is None                              # neither pass nor fail
     from evals.agent.feedback.lab_verdict import passed
     assert passed(rec) is None
 
@@ -278,11 +278,11 @@ def test_submit_reports_no_heldout_delta_without_a_seen_delta(lab, monkeypatch, 
     assert evaltools.noise_band_pct("single_stream", target.load(), root) is None
     ledger.append({"kind": "noise", "result": {**band, "target": target.load().name}}, root)
     assert evaltools.noise_band_pct("single_stream", target.load(), root) == 1.0
-    # the latest band counts, whatever engine commit it was measured at (one calibration per user)
+    # the latest band counts, whatever the engine commit
     ledger.append({"kind": "noise", "result": {**band, "target": target.load().name, "engine_commit": "abc",
                                                "band_pct": 2.0}}, root)
     assert evaltools.noise_band_pct("single_stream", target.load(), root) == 2.0
-    # but only on the corpus version it was measured on: fixed answer lengths are a new version
+    # only on the corpus version it was measured on
     import dataclasses
 
     from evals.regimes import CORPUS_DIR
@@ -304,7 +304,7 @@ def test_submit_scores_the_task(lab, tmp_path):
     tb.equiv({"tier": "full"}); tb.bench({"regimes": ["single_stream"]})
     out = json.loads(tb.submit({}))
     sc = out["score"]
-    assert set(sc["gains_pct"]) == {"single_stream"} and sc["win"] is False       # no noise band yet: unknown_band
+    assert set(sc["gains_pct"]) == {"single_stream"} and sc["win"] is False       # no noise band
     assert sc["verdicts"]["single_stream"] == "unknown_band" and sc["missing_regimes"] == []
 
 
@@ -609,7 +609,7 @@ def test_submit_says_which_heldout_profile_launch_failed_and_how_only(lab, monke
 
 
 def test_bench_profiles_the_tree_only_when_asked_and_a_failed_profile_is_only_a_fact(lab):
-    tb, s = lab                                 # no corpus to sample here, so the profile job fails
+    tb, s = lab                                 # no corpus here: the profile job fails
     out = json.loads(tb.bench({"regimes": ["single_stream"]}))
     rec = next(ledger.records(s.ledger_root, kind="bench"))
     assert "profiled" not in rec["result"] and "profiled" not in out
@@ -641,7 +641,7 @@ def test_an_after_profile_shares_no_gpu_and_spends_no_budget_that_is_gone(lab, m
 
 
 def test_task_shares_come_with_every_profile_and_the_latest_reaches_the_harness_facts(tmp_path):
-    pytest.importorskip("torch")                 # the kernel tasks import it
+    pytest.importorskip("torch")
     from lab.records import ledger as L
     from lab.evaltools import _layer_facts
     from lab.tools import task_shares

@@ -1,5 +1,4 @@
-"""The precheck (lab/kernels/eval/precheck.py): the compiler's resource report parsed, a plain program passing, a refused
-one and a failed build dropped, an import that needs a device inconclusive, and the jailed stage end to end."""
+"""The precheck: the resource report parsed, pass, refusal, failed build, inconclusive import, the jailed stage."""
 from __future__ import annotations
 
 import sys

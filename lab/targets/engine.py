@@ -1,5 +1,4 @@
-"""Where the engine under optimization lives, per the target spec (lab/targets/target.py): its repo (the agent's workspace
-is exported from it) and the Python that runs its code. The environment never imports the engine itself."""
+"""Where the engine under optimization lives, per the target spec: its repo and the Python that runs its code."""
 
 from __future__ import annotations
 
@@ -22,7 +21,7 @@ _using: list[str] = []
 
 @contextmanager
 def using(py: str):
-    """`python()` is `py` inside the block: the venv a tree's own dependency files were built into (lab/infra/sandbox/build.py)."""
+    """`python()` is `py` inside the block."""
     _using.append(py)
     try:
         yield
@@ -31,8 +30,7 @@ def using(py: str):
 
 
 def python() -> str:
-    """The target's engine interpreter (LAB_ENGINE_PYTHON overrides); this interpreter if that file does not exist.
-    The engine's venv needs what its test and lint commands import (e.g. `uv sync --extra dev`)."""
+    """The target's engine interpreter (LAB_ENGINE_PYTHON overrides); this interpreter if that file does not exist."""
     if _using:
         return _using[-1]
     from lab.targets import target
@@ -46,8 +44,7 @@ def venv(py: str | None = None) -> Path:
 
 
 def commit(repo: Path, ref: str = "HEAD", clean: bool = False) -> str | None:
-    """`ref` as a commit sha in the engine repo; with `clean`, None when the working tree has uncommitted changes
-    (a measurement of that tree belongs to no commit)."""
+    """`ref` as a commit sha in the engine repo; with `clean`, None when the working tree has uncommitted changes."""
     def git(*a):
         return subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True, check=True).stdout.strip()
     try:

@@ -1,4 +1,4 @@
-"""Repeated-request audit passes prefix caching and fails replayed answers. Run: python tests/test_repeat_audit.py"""
+"""Repeated-request audit passes prefix caching and fails replayed answers."""
 from __future__ import annotations
 
 import json
@@ -16,7 +16,7 @@ PROMPTS = ["a", "b", "c"]
 
 
 def _upstream():
-    """Fake streaming engine: TTFT 60 ms (6 ms for a prompt seen before, like prefix caching), then 8 ms per token."""
+    """Fake streaming engine: TTFT 60 ms (6 ms for a prompt seen before), then 8 ms per token."""
     seen = set()
 
     class Upstream(BaseHTTPRequestHandler):

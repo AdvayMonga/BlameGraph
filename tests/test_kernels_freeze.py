@@ -1,6 +1,4 @@
-"""A winner's autotune frozen into a table before the gate and ship (lab/kernels/eval/freeze.py), on CPU: the rewrite,
-the nearest-key lookup, the freeze stage with a stand-in for Triton's autotuner, and ship's refusal of a live one.
-Run: python tests/test_kernels_freeze.py"""
+"""A winner's autotune frozen into a table, on CPU: the rewrite, the lookup, the freeze stage, ship's refusal."""
 from __future__ import annotations
 
 import ast

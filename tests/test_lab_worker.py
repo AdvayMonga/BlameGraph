@@ -1,4 +1,4 @@
-"""lab.infra.runner.worker: tree hashes, and the Remote transport end to end through a local shell (the same CLI ssh would run)."""
+"""lab.infra.runner.worker: tree hashes, and the Remote transport end to end through a local shell."""
 
 from __future__ import annotations
 
@@ -167,7 +167,7 @@ def test_a_capture_profile_runs_with_the_targets_capture_env(tmp_path, monkeypat
 
 
 def test_a_capture_for_a_task_adds_the_tasks_own_env(tmp_path, monkeypatch):
-    pytest.importorskip("torch")                  # the task module is read on the worker host, which has torch
+    pytest.importorskip("torch")
     from lab import tools as T
     seen = {}
     monkeypatch.setattr(T, "stage_harness", lambda tree: tmp_path / "h")

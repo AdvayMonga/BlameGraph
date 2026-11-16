@@ -1,5 +1,5 @@
-"""The gap register's facts from a evals/baselines/profile.py dir: per load point, every engine's client numbers, GPU busy share of
-the nsys window, kernel time, launches, the top kernels by time, and the top Python frames by samples per process.
+"""The gap register's facts from an evals/baselines/profile.py dir: per load point, every engine's client numbers, GPU
+busy share, kernel time, launches, top kernels and top Python frames.
 
     lab compare gap DIR [--top 12] [--out gap.md]
 """
@@ -20,7 +20,7 @@ def kernels(db: Path, top: int) -> dict:
         return {"error": "no kernels in the window"}
     every = q("select k.start, k.end, s.value from CUPTI_ACTIVITY_KIND_KERNEL k join StringIds s on s.id = k.shortName "
               "order by k.start")
-    rows = [r for r in every if 0 <= r[0] <= r[1] and r[1] - r[0] < 1e9]   # nsys gives some graph nodes a bogus start
+    rows = [r for r in every if 0 <= r[0] <= r[1] and r[1] - r[0] < 1e9]   # drop rows with a bogus start
     span = (max(e for _, e, _ in rows) - rows[0][0]) / 1e9
     busy, cur_s, cur_e = 0, None, None
     for s, e, _ in rows:
@@ -48,7 +48,7 @@ def kernels(db: Path, top: int) -> dict:
 
 
 def frames(path: Path, top: int) -> list:
-    """py-spy speedscope: the frames with the most self samples, per profile (process or thread), with their share."""
+    """py-spy speedscope: the frames with the most self samples per profile, with their share."""
     d = json.loads(path.read_text())
     names = [f"{f['name']} ({Path(f.get('file') or '?').name}:{f.get('line')})" for f in d["shared"]["frames"]]
     out = []

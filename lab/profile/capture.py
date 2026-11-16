@@ -1,9 +1,6 @@
-"""Record what an engine's kernels are actually called with: wrap Python entry points ("module:function") for the
-duration of a block and log every call's argument shapes, dtypes and small 1-D integer tensors (sequence lengths, expert
-offsets; block tables by shape only); keep the first call of each shape signature whole when it fits a byte cap, as real inputs.
-Synchronizes to read integer tensors, so it is for a capture run, never a timed one. Calls replayed from a CUDA graph
-never reach Python: capture with the engine's graphs off (the example engine: CUSTOM_BACKEND_CUDA_GRAPH=0) to see every
-call; a call made while a graph records is logged by shape only."""
+"""Record what an engine's kernels are called with: wrap Python entry points ("module:function") for a block and log
+each call's argument shapes, dtypes and small 1-D integer tensors; the first call per shape signature is saved whole
+when it fits a byte cap. Reading integer tensors synchronizes; a call made while a CUDA graph records is shape only."""
 from __future__ import annotations
 
 import contextlib
@@ -19,7 +16,7 @@ SMALL_INT = 4096           # integer tensors up to this many elements are logged
 
 
 def _capturing() -> bool:
-    """Inside a CUDA graph recording no tensor may be read back: such calls are logged by shape only."""
+    """Whether a CUDA graph is recording on the current stream."""
     return torch.cuda.is_available() and torch.cuda.is_current_stream_capturing()
 
 
@@ -27,7 +24,7 @@ def _describe(x, graph: bool = False) -> dict:
     if isinstance(x, torch.Tensor):
         d = {"shape": list(x.shape), "dtype": str(x.dtype).removeprefix("torch."), "contiguous": x.is_contiguous()}
         if not graph and not x.is_floating_point() and x.dim() == 1 and x.numel() <= SMALL_INT:
-            d["values"] = x.detach().tolist()        # lengths and offsets; 2-D tables are shape only (cost per call)
+            d["values"] = x.detach().tolist()        # lengths and offsets
         return d
     if isinstance(x, (int, float, bool, str)) or x is None:
         return {"value": x}
@@ -101,9 +98,9 @@ def load(out: Path) -> list[dict]:
     return [json.loads(x) for x in p.read_text().splitlines() if x.strip()] if p.exists() else []
 
 
-STEP = "region:embed:argmax"     # the whole decode step as one region: the engine's decode-step megakernel
+STEP = "region:embed:argmax"     # the whole decode step as one region
 STEP_ENTRY = "inference_server.models.megakernel:decode_step"
-STEP_SAMPLE_BYTES = 256 * 2**20  # a step whose reads and writes are larger is logged, not sampled (as region_capture)
+STEP_SAMPLE_BYTES = 256 * 2**20  # a larger step is logged, not sampled
 
 
 def _renumber(table: torch.Tensor, blocks: torch.Tensor) -> torch.Tensor:
@@ -114,10 +111,10 @@ def _renumber(table: torch.Tensor, blocks: torch.Tensor) -> torch.Tensor:
 
 @contextlib.contextmanager
 def step(pools: list, out: Path, sample_bytes: int = STEP_SAMPLE_BYTES):
-    """Every decode-step megakernel call (STEP_ENTRY: mdl, tokens, pos, bt) while the block runs, as `STEP` calls in
-    <out>/calls.jsonl; the first per (rows, block-table width) whole in samples/<n>.pt: {"reads": tokens, pos, bt and
-    every layer's K/V of the blocks its rows touch, stacked [layers, blocks, ...], bt renumbered to them; "writes":
-    logits, next tokens and those blocks after the step}. `pools`: the engine's per-layer K/V pools (`.k`, `.v`)."""
+    """Log every decode-step megakernel call (STEP_ENTRY) in the block as `STEP` calls in <out>/calls.jsonl.
+    The first per (rows, block-table width) is saved to samples/<n>.pt: {"reads": tokens, pos, bt (renumbered), and
+    the touched blocks' K/V stacked [layers, blocks, ...]; "writes": logits, next tokens and those blocks after}.
+    `pools`: the engine's per-layer K/V pools (`.k`, `.v`)."""
     out = Path(out)
     (out / "samples").mkdir(parents=True, exist_ok=True)
     log = open(out / "calls.jsonl", "a")
@@ -136,7 +133,7 @@ def step(pools: list, out: Path, sample_bytes: int = STEP_SAMPLE_BYTES):
         blocks = None
         if key not in seen:
             seen.add(key)
-            used = torch.arange(bt.shape[1], device=bt.device)[None, :] < ((pos + bs) // bs)[:, None]   # new token's too
+            used = torch.arange(bt.shape[1], device=bt.device)[None, :] < ((pos + bs) // bs)[:, None]  # new token's too
             blocks = bt[used].long().unique()
             k, v = kv(blocks)
             reads = {"tokens": tokens, "pos": pos, "bt": _renumber(bt, blocks), "k_cache": k, "v_cache": v}
@@ -155,7 +152,7 @@ def step(pools: list, out: Path, sample_bytes: int = STEP_SAMPLE_BYTES):
         log.write(json.dumps(call) + "\n")
         return res
 
-    setattr(mod, attr, traced)                   # callers reach it as `mk.decode_step`
+    setattr(mod, attr, traced)
     try:
         yield out
     finally:

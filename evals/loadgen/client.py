@@ -1,9 +1,5 @@
-"""One streamed chat request, timed client-side. Stdlib only, so the client is never the engine's dependency.
-
-Times are seconds on the run's perf_counter clock. TTFT runs from the request's *scheduled* send time to its first
-real token (a role-only chunk with empty content is not a token), so a lagging client counts against itself and is
-reported separately as `lag_s`.
-"""
+"""One streamed chat request, timed client-side. Stdlib only.
+Times are seconds on the run's perf_counter clock; TTFT runs from the scheduled send time to the first real token."""
 from __future__ import annotations
 
 import asyncio
@@ -24,7 +20,7 @@ class Request:
     at_s: float = 0.0                 # scheduled send, seconds after the run starts (open loop)
     session_id: str | None = None
     turn_index: int | None = None
-    ignore_eos: bool = False          # fixed answer length: the server runs to max_tokens past its stop token
+    ignore_eos: bool = False          # the server runs to max_tokens past its stop token
 
 
 @dataclass
@@ -37,11 +33,11 @@ class Row:
     e2e_s: float | None = None
     n_tokens: int = 0
     prompt_tokens: int | None = None   # from the server's usage
-    cached_tokens: int | None = None   # prompt tokens the server served from its prefix cache, when it reports them
+    cached_tokens: int | None = None   # prompt tokens served from the server's prefix cache
     tpot_s: float | None = None
     http_status: int | None = None
     finish_reason: str | None = None
-    client_cpu: float | None = None    # closed loop: CPU time / wall time of the process that sent it, over its call
+    client_cpu: float | None = None    # closed loop: CPU time / wall time of the sending process
     detail: str = ""
     text: str = field(default="", repr=False)
 
@@ -58,7 +54,7 @@ def _encode(model: str, req: Request, chat_kwargs: dict | None, trace_prefix: st
             "stream": True, "stream_options": {"include_usage": True}}
     if chat_kwargs:
         body["chat_template_kwargs"] = dict(chat_kwargs)
-    if req.ignore_eos:            # special tokens kept in the text, so a re-count from it stays exact
+    if req.ignore_eos:            # special tokens kept in the text
         body.update(ignore_eos=True, skip_special_tokens=False)
     headers = {"Content-Type": "application/json", "X-Trace-Id": f"{trace_prefix}-{req.id}"}
     if req.session_id is not None:
@@ -79,7 +75,7 @@ class _Stream:
         if not line.startswith(b"data: "):
             return
         if line == b"data: [DONE]":
-            self.done = True                   # keep reading to EOF: closing early breaks the server's last write
+            self.done = True                   # keep reading to EOF
             return
         chunk = json.loads(line[6:])
         self.usage = chunk.get("usage") or self.usage
@@ -118,7 +114,7 @@ class _Stream:
 
 
 def _rejected(row: Row, status: int, detail: bytes, clock, scheduled: float) -> Row:
-    explicit = status < 500 or status == 503          # a deliberate rejection; other 5xx is the server failing
+    explicit = status < 500 or status == 503          # a deliberate rejection
     row.status, row.http_status = ("error" if explicit else "crash"), status
     row.detail, row.e2e_s = detail[:200].decode("utf-8", "replace"), clock() - scheduled
     return row
@@ -139,7 +135,7 @@ def send(url: str, model: str, req: Request, scheduled: float, clock, timeout: f
     except urllib.error.HTTPError as e:
         return _rejected(row, e.code, e.read(), clock, scheduled)
     except (urllib.error.URLError, OSError, http.client.HTTPException, json.JSONDecodeError, ValueError) as e:
-        row.detail = f"{type(e).__name__}: {e}"[:200]   # includes a stream that dies mid-way (IncompleteRead)
+        row.detail = f"{type(e).__name__}: {e}"[:200]   # includes a stream that dies mid-way
         row.e2e_s = clock() - scheduled
         return row
     return stream.row(row, req, scheduled, clock(), count_tokens)
@@ -147,9 +143,7 @@ def send(url: str, model: str, req: Request, scheduled: float, clock, timeout: f
 
 async def asend(url: str, model: str, req: Request, clock, timeout: float = 600, count_tokens=None,
                 trace_prefix: str = "bg", chat_kwargs: dict | None = None, lead_s: float = 0.1) -> Row:
-    """`send` on an event loop, sent at `req.at_s` on `clock`: the body is encoded and the connection opened `lead_s`
-    before, so at the send time only the request's bytes are written. One loop drives a process's whole schedule; a
-    thread per request made a burst's sends queue behind each other (and the interpreter lock)."""
+    """`send` on an event loop at `req.at_s` on `clock`; the connection is opened `lead_s` early."""
     scheduled = req.at_s
     await asyncio.sleep(max(0.0, scheduled - lead_s - clock()))
     data, headers = _encode(model, req, chat_kwargs, trace_prefix)
@@ -215,7 +209,7 @@ def recount(row: Row, count_tokens=None) -> Row:
     if count_tokens is not None:
         row.n_tokens = len(count_tokens(row.text)) if row.text else 0
     row.tpot_s = (row.e2e_s - row.ttft_s) / (row.n_tokens - 1) if row.ttft_s is not None and row.n_tokens > 1 else None
-    return row                                    # a one-token answer has no TPOT and never meets the limits
+    return row                                    # a one-token answer has no TPOT
 
 
 def wall_clock():

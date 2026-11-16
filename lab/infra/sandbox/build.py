@@ -1,10 +1,6 @@
-"""The dependency build step. A measurement room is rebuilt from the agent's change alone and runs
-offline, so a change to the engine's dependency files (the target's `deps`) is installed from scratch for it: a
-fresh venv built by the target's `build` command in a container with no GPU, no secrets and no network but a
-CONNECT proxy to the package-index hosts, cached by the dependency files' hash. A tree whose change leaves the dependency
-files as they were in its base keeps the engine's venv (built from that base by vm-setup.sh), so the base and an
-unchanged candidate run identically. A measured tree is a two-commit repo (base, change; grader.pristine_tree); one
-without that history, such as the exported base itself, has no change."""
+"""The dependency build step: a tree whose change touches the target's `deps` gets a fresh venv, built by the target's
+`build` command in a container with no GPU, no secrets and no network but a CONNECT proxy to the package-index hosts,
+cached by the dependency files' hash. Any other tree runs on the engine's venv."""
 
 from __future__ import annotations
 
@@ -23,8 +19,7 @@ from pathlib import Path
 from lab.targets import engine, target
 from lab.infra.sandbox import container
 
-# PyPI, plus the wheel hosts that CUDA builds of torch pull from (its nvidia-* dependencies live on NVIDIA's index);
-# every https host the dependency files and the build command name is added per build.
+# Index hosts every build may reach; https hosts the dependency files and build command name are added per build.
 INDEX_HOSTS = ("pypi.org", "files.pythonhosted.org", "download.pytorch.org", "download-r2.pytorch.org",
                "pypi.nvidia.com")
 PROXY_PORT_IN = 3128
@@ -59,7 +54,7 @@ def changed(tree: Path) -> bool:
     for rel in target.load().deps:
         old = subprocess.run(["git", "-C", str(tree), "show", f"HEAD~1:{rel}"], capture_output=True)
         if old.returncode != 0 and b"exists on disk, but not in" not in old.stderr and b"does not exist" not in old.stderr:
-            return False                        # no base commit: nothing to compare against
+            return False                        # no base commit
         now = (tree / rel).read_bytes() if (tree / rel).is_file() else None
         if (old.stdout if old.returncode == 0 else None) != now:
             return True
@@ -117,7 +112,7 @@ class _Connect(socketserver.BaseRequestHandler):
 
 
 class IndexProxy:
-    """`with IndexProxy(hosts, sock):` a CONNECT-only proxy on unix socket `sock` that reaches `hosts` and nothing else."""
+    """`with IndexProxy(hosts, sock):` a CONNECT-only proxy on unix socket `sock` that reaches only `hosts`."""
 
     def __init__(self, allowed: set[str], sock: Path):
         handler = type("Handler", (_Connect,), {"allowed": {h.lower() for h in allowed}})
@@ -135,9 +130,8 @@ class IndexProxy:
 
 
 def build(tree: Path, venv: Path) -> None:
-    """The target's `build` in a container: the tree's dependency files only, the engine's interpreter and uv read-only,
-    uv's cache and `venv` writable (uv makes the environment at `venv/env`), the index proxy as the only way out.
-    A failed build leaves no venv behind."""
+    """Run the target's `build` in a container on the tree's dependency files, making the environment at `venv/env`;
+    only the index proxy is reachable. Raises BuildFailed and leaves no venv behind."""
     t = target.load()
     if not t.build:
         raise BuildFailed("the dependency files changed, and the target has no `build` command to install them")
@@ -156,7 +150,7 @@ def build(tree: Path, venv: Path) -> None:
         if (Path(tree) / rel).is_file():
             (src / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(Path(tree) / rel, src / rel)
-    shutil.rmtree(venv, ignore_errors=True)         # an interrupted earlier build
+    shutil.rmtree(venv, ignore_errors=True)         # remove a partial earlier build
     venv.mkdir()
     container.give([src, venv, uv_cache])
     name = container.new_name()

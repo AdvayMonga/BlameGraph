@@ -1,5 +1,4 @@
-"""Experiment records: a measured call needs an open hypothesis and a prediction, the record keeps both with the
-computed gap, and the next measured call waits for a reflection. Uses the fake instruments from the proftools tests."""
+"""Experiment records: a measured call needs an open hypothesis and a prediction; the next waits for a reflection."""
 from __future__ import annotations
 
 import json
@@ -8,7 +7,7 @@ import pytest
 
 from lab import experiments
 from lab.records import ledger
-pytest_plugins = ["tests.test_lab_proftools"]   # its `tb` fixture: a Toolbox with fake instruments
+pytest_plugins = ["tests.test_lab_proftools"]   # its `tb` fixture
 
 EXPECT = {"metric": "single_stream", "value": 0.02, "unit": "absolute", "why": "fewer bytes per step"}
 

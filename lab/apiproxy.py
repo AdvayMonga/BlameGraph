@@ -1,9 +1,6 @@
-"""The model API key stays out of every jail: the agent's CLI talks to this proxy, which adds the lab's credential,
-forwards to the Anthropic API, prices each response's usage, and refuses once the session's dollar cap is spent.
+"""A proxy between the agent's CLI and the Anthropic API: adds the lab's credential, prices usage, enforces the cap.
 
-Only /v1/messages, /v1/messages/count_tokens and /v1/models[/id] are forwarded (not batches, files or anything else); a request naming a model
-without a price here, or asking for fast mode, is refused (fail closed: anything unpriced could spend unmetered).
-Prices are first-party per-million-token rates (claude-api reference)."""
+Forwards only /v1/messages, /v1/messages/count_tokens and /v1/models[/id]; refuses unpriced models and fast mode."""
 
 from __future__ import annotations
 
@@ -31,7 +28,7 @@ HOP = {"connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrad
 
 
 def price(model: str) -> tuple | None:
-    """The model's rates; a `[1m]`-style suffix the CLI adds does not change them."""
+    """The model's rates; a `[1m]`-style suffix is ignored."""
     return PRICES.get(model.split("[")[0])
 
 
@@ -55,8 +52,7 @@ def credential() -> dict[str, str]:
 
 
 class _Usage:
-    """Usage read off a response as it streams by: JSON, or SSE message_start + message_delta. `complete` once the
-    final output count is known."""
+    """Usage read off a response as it streams by (JSON or SSE); `complete` once the final output count is known."""
 
     def __init__(self, sse: bool):
         self.sse, self.buf, self.model, self.usage, self.complete = sse, b"", None, {}, False
@@ -164,9 +160,7 @@ class Proxy:
         if "authorization" in self.auth:
             betas = [b for b in headers.pop("anthropic-beta", "").split(",") if b.strip()]
             headers["anthropic-beta"] = ",".join(dict.fromkeys([*betas, OAUTH_BETA]))
-        # Its worst case is reserved before it goes, so concurrent requests cannot overshoot the cap: the input as the
-        # API counts it (or a token per body byte when it cannot say) at the dearest rate the request can incur (a cache
-        # write when it marks cache_control, 1 h when any mark asks for it), and all of max_tokens as output.
+        # Reserve the request's worst-case cost before forwarding it.
         hold = 0.0
         if metered:
             p = price(model)
@@ -197,7 +191,7 @@ class Proxy:
                 h.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                 h.wfile.flush()
             h.wfile.write(b"0\r\n\r\n")
-        finally:                                    # charged however it ended: a dropped client still spent
+        finally:                                    # charged however it ended
             conn.close()
             if usage is not None:
                 usage.done()

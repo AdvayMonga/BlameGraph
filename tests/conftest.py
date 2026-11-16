@@ -1,6 +1,4 @@
-"""pytest setup for the lab's tests. The engine is a separate repo: tests that drive its code import it from
-LAB_ENGINE_REPO (default ../inference-server) and skip when it can't be imported here. Run those with the engine's
-interpreter: <engine>/.venv/bin/python -m pytest tests/test_lab_profile.py tests/test_lab_canary.py"""
+"""pytest setup for the lab's tests; tests that drive engine code skip when it can't be imported."""
 from __future__ import annotations
 
 import importlib.util
@@ -18,7 +16,7 @@ from lab.targets import engine  # noqa: E402
 _src = engine.repo() / "src"
 if _src.is_dir() and str(_src) not in sys.path:
     sys.path.insert(0, str(_src))
-# Hermetic: the grader runs lint and tests with this interpreter, not whatever venv sits next to the repo.
+# The grader runs lint and tests with this interpreter.
 os.environ.setdefault("LAB_ENGINE_PYTHON", sys.executable)
 
 

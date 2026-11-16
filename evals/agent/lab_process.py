@@ -1,11 +1,5 @@
-"""Process evals on a lab ledger, researcher-only (never shown to the agent): how the agent's predictions held up
-against what was measured, outcome and mechanism (lab/experiments.py); bundles whose hypotheses were never measured
-apart; reflections checked against the run's recorded numbers. Facts derived from the records, never the verdict.
-
-A `change_pct` outcome prediction "held" when it and the measurement have the same sign and the measurement is beyond
-the record's noise band, or, for a prediction of 0, within it; with no band (only bench and submit have one) it is not
-judged. A mechanism prediction is judged by sign alone (a prediction of 0 by an exact 0). `absolute` predictions have
-no direction without a baseline and are reported by gap only."""
+"""Process evals on a lab ledger, researcher-only: how the agent's predictions held up against what was measured,
+bundles whose hypotheses were never measured apart, and reflections checked against the run's recorded numbers."""
 from __future__ import annotations
 
 from evals.agent.feedback.claim_facts import claim_facts
@@ -78,7 +72,7 @@ def process(recs: list[dict]) -> dict:
     def held(key):
         v = [f[key] for f in per if key in f]
         return {"held": sum(v), "of": len(v)}
-    # reflections as claims about the record they reflect on; the experiment blocks' numbers count as recorded
+    # reflections as claims about the record they reflect on
     as_claims = [{**r, "snapshot": (by_id.get(r.get("record")) or {}).get("snapshot"),
                   "claim": "\n".join(t for t in (r.get("reflection"), r.get("alternative")) if isinstance(t, str))}
                  if r.get("kind") == "reflection" else {k: v for k, v in r.items() if k != "claim"} for r in recs]

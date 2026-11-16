@@ -1,6 +1,5 @@
-"""MLPerf Inference Llama-2-70B: OpenOrca GPT-4 subset, 24,576 instruction prompts sampled equally from its
-CoT / NIV / FLAN / T0 origins, English only, input and reference output < 1024 tokens each. Output up to 1024 tokens.
-Server limits TTFT 2000 ms / TPOT 200 ms; interactive 450 ms / 40 ms (p99). Accuracy there: ROUGE >= 99% of FP16.
+"""MLPerf Inference Llama-2-70B: OpenOrca GPT-4 subset, 24,576 instruction prompts, output up to 1024 tokens.
+Server limits TTFT 2000 ms / TPOT 200 ms; interactive 450 ms / 40 ms (p99).
 """
 from __future__ import annotations
 

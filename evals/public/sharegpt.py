@@ -1,8 +1,5 @@
-"""ShareGPT (Vicuna unfiltered, V3 cleaned split): the ~90k real user conversations behind most engine benchmark
-numbers (vLLM / SGLang `bench_serving`, InferenceMAX-style sweeps). Not an MLPerf benchmark: no latency limits or
-accuracy target. Conversations that start with the user and alternate cleanly are kept whole, so they also serve the
-shared-prefix multi-turn regime; single-exchange ones become plain prompts. Output up to 1024 tokens (`bench_serving`
-instead replays each reply's length). Token counts need `--tokenizer`; the file carries none.
+"""ShareGPT (Vicuna unfiltered, V3 cleaned split): ~90k real user conversations; output up to 1024 tokens.
+Conversations that start with the user and alternate cleanly are kept whole; single-exchange ones become prompts.
 """
 from __future__ import annotations
 

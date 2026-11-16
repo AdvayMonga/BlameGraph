@@ -1,7 +1,4 @@
-"""Shared read-only weights (lab/kernels/tasks/shared_weights.py), on the CPU's shared memory: another process attaches to the
-holder's tensors without copying, reads the same values, and a write it makes is caught against the pristine copy;
-the jailed evaluator (lab/kernels/eval/jailed.py) voids a judgment that wrote one, restores it on every exit path, and
-runs judgments on one holder one at a time."""
+"""Shared read-only weights on the CPU's shared memory: attached without copying, writes caught and restored."""
 from __future__ import annotations
 
 import sys
@@ -85,8 +82,7 @@ def test_the_check_mounts_only_this_module(tmp_path):
 
 
 def fake_jail(monkeypatch, calls, result, write=None):
-    """grader.jailed replaced: records its kwargs and the config it was given, optionally writes a shared weight (the
-    candidate), and prints the keyed result line."""
+    """grader.jailed replaced: records its kwargs and config, may write a shared weight, prints the result line."""
     from lab.kernels.eval import jailed
 
     def fake(tree, argv, **kw):
@@ -211,7 +207,7 @@ def test_a_refused_ipc_attach_falls_back_to_a_copy_only_where_asked_and_restore_
     got["w"].zero_()                                        # a write reaches the copy only
     assert torch.equal(h.tensors["w"], torch.arange(6.0)) and sw.is_shared_weight(got["w"])
     assert not sw.is_shared_weight(got["w"].clone())
-    for f in (sw.attach, sw.restore):                       # never a copy unasked: restore would compare copy to copy
+    for f in (sw.attach, sw.restore):                       # never a copy unasked
         with pytest.raises(RuntimeError, match="holder's own memory"):
             f(h.path)
     monkeypatch.setattr(sw, "_rebuild", lambda b: (_ for _ in ()).throw(RuntimeError("other")))

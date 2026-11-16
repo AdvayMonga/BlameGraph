@@ -1,4 +1,4 @@
-"""A dollar budget the run cannot talk itself past: model tokens plus GPU time at the provider's rate."""
+"""A dollar budget for a run: model tokens plus GPU time at the provider's rate."""
 
 from __future__ import annotations
 

@@ -1,6 +1,4 @@
-"""`search`: one document per hypothesis with its measurements and reflections, ranked by BM25 fused with
-embeddings; researcher runs hidden from the agent; embeddings cached by content. A fake embedder stands in for the
-model (one test runs the real one when fastembed and its weights are present)."""
+"""`search`: one document per hypothesis, ranked by BM25 fused with embeddings; researcher runs hidden."""
 from __future__ import annotations
 
 import json
@@ -10,7 +8,7 @@ import pytest
 
 from lab.records import ledger, search
 
-# Words that mean the same thing share a dimension: what an embedding model gives and BM25 cannot.
+# Words that mean the same thing share a dimension.
 CONCEPTS = [{"latency", "tpot", "slow", "slower"}, {"attention", "decode"}, {"memory", "bandwidth", "bytes"},
             {"scheduler", "admission", "batch"}]
 
@@ -109,7 +107,7 @@ def test_k_is_bounded(root):
     assert len(search.search(root, "latency", k=10_000, embedder=FakeEmbed())["results"]) == 3
 
 
-pytest_plugins = ["tests.test_lab_proftools"]   # its `tb` fixture: a Toolbox on a tmp ledger
+pytest_plugins = ["tests.test_lab_proftools"]   # its `tb` fixture
 
 
 def test_the_tool_reports_a_missing_model_and_still_ranks_by_words(tb, monkeypatch):

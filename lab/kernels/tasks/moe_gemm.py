@@ -1,10 +1,7 @@
-"""The MoE grouped GEMM, the example engine's `moe_gemm`: per (token, expert) pair in expert-sorted order, that
-token's row times its expert's weights. Both expert projections call it: gate_up with rows gathered from the tokens
-(`tok`), down with the pairs' rows given directly (`tok` empty here; None to the engine).
+"""The MoE grouped GEMM, the example engine's `moe_gemm`: each (token, expert) pair's row times its expert's weights.
 
 Shape: (M pairs, K, N, E experts, T rows of `a`, from_tokens 1|0). Inputs: a [T, K], tok [M] int32 (empty when not
-from tokens; since inference-server #112 the engine's down projection uses `moe_gemm_scatter` instead), w [E, N, K], sorted_ids / expert_ids from `align` (block_m 16): the pair ids per padded row block and
-each block's expert. Captured calls carry the engine's real routing (tok, sorted_ids, expert_ids by value)."""
+from tokens), w [E, N, K], sorted_ids / expert_ids from `align` (block_m 16)."""
 from __future__ import annotations
 
 import torch
@@ -15,8 +12,8 @@ BLOCK_M = 16
 
 
 def align(sorted_experts, num_experts: int, block_m: int = BLOCK_M):
-    """The engine's `align`: each expert's run of sorted pairs padded to a multiple of block_m; (pair id per padded
-    row with M as padding, expert per row block with num_experts past the end)."""
+    """The engine's `align`: each expert's run of sorted pairs padded to a multiple of block_m.
+    Returns (pair id per padded row, M as padding; expert per row block, num_experts past the end)."""
     M, dev = sorted_experts.numel(), sorted_experts.device
     ar = torch.arange(num_experts, device=dev)
     ends, starts = torch.searchsorted(sorted_experts, ar, right=True), torch.searchsorted(sorted_experts, ar)
@@ -38,15 +35,13 @@ def _pairs(tok, a):
 
 
 def _block_m(sorted_ids, expert_ids) -> int:
-    """Rows per block: the power of two p with len(sorted_ids) // p == the number of blocks. Unique under both the
-    engine's paddings (`align`: M + E(p - 1) ids; `align_fused`: exactly blocks x p)."""
+    """Rows per block: the power of two p with len(sorted_ids) // p == the number of blocks."""
     n = expert_ids.numel()
     return next(p for p in (2 ** i for i in range(11)) if sorted_ids.numel() // p == n)
 
 
 def _call(fn, a, tok, w, sorted_ids, expert_ids):
-    """The engine's call; its fp32 output (when it splits the GEMM over K, which the engine's next kernel reads as is)
-    is compared in the reference's dtype, the same cast for the baseline and every candidate."""
+    """The engine's call, its output cast to a's dtype."""
     M = _pairs(tok, a)
     block_m = _block_m(sorted_ids, expert_ids)
     out = fn(a, tok if tok.numel() else None, w, sorted_ids, expert_ids, M, block_m=block_m)
@@ -78,7 +73,7 @@ def _routing(M, E, T, from_tokens, g, sorted_e=None):
 
 
 def _with_values(T, K, N, E, dtype, device, g, tok, sorted_ids, expert_ids):
-    """Random a and w made on the device (w is E·N·K: ~400M values at the real shapes), routing as given."""
+    """Random a and w made on the device, routing as given."""
     a, w = randn((T, K), g, device, dtype), randn((E, N, K), g, device, dtype, 0.05)
     return a, tok.to(device), w, sorted_ids.to(device), expert_ids.to(device)
 
@@ -121,8 +116,6 @@ def edge_shapes(shape):
     return [(1, K, N, E, 1, ft), (3, K, N, E, 3, ft), (E + 1, K, N, E, E + 1, ft)]
 
 
-# Qwen3-30B-A3B: 128 experts, hidden 2048, expert width 768 (gate_up N = 1536, K = 2048; down N = 2048, K = 768); the
-# engine calls this kernel for up to 2048 pairs (CUSTOM_BACKEND_MOE_KERNEL_ROWS) inside its decode CUDA graphs.
 TASK = Task("moe_gemm", "inference_server.models.moe_kernel:moe_gemm", reference, make_inputs, shape_of, cost,
             call=_call, make_real=make_real, graphs=True, kernel_names=(r"_moe_gemm_kernel",), heldout_axes=(0,),
             edge_shapes=edge_shapes, dtypes=(torch.bfloat16,), layouts=(),

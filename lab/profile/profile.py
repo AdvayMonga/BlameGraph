@@ -40,13 +40,13 @@ def synthetic_prompts(n: int, length: int, vocab: int = 1000, seed: int = 0) -> 
 
 
 def warmup_prompts(prompts: list[list[int]], n: int, vocab: int = 1000, seed: int = 1) -> list[list[int]]:
-    """Random ids at the window's prompt lengths: the same shapes get compiled, nothing lands in the prefix cache."""
+    """`n` prompts of random ids at the window's prompt lengths."""
     rng = random.Random(seed)
     return [[rng.randrange(1, vocab) for _ in prompts[i % len(prompts)]] for i in range(n)]
 
 
 def _profiler(device: str) -> tuple[torch.profiler.profile, dict]:
-    """All threads: by default the profiler records only the thread that opened it, and the scheduler has its own."""
+    """A torch profiler that records all threads where torch supports it, and its config."""
     acts = [ProfilerActivity.CPU]
     if device.startswith("cuda"):
         acts.append(ProfilerActivity.CUDA)
@@ -54,7 +54,7 @@ def _profiler(device: str) -> tuple[torch.profiler.profile, dict]:
     try:
         from torch._C._profiler import _ExperimentalConfig
         exp = _ExperimentalConfig(profile_all_threads=True)
-    except (ImportError, TypeError):   # older torch: the trace will miss the scheduler thread
+    except (ImportError, TypeError):   # older torch: main thread only
         logger.warning("torch %s cannot profile all threads; trace covers the main thread only",
                        torch.__version__)
         return torch.profiler.profile(activities=acts), {**config, "all_threads": False}
@@ -63,8 +63,7 @@ def _profiler(device: str) -> tuple[torch.profiler.profile, dict]:
 
 @contextlib.contextmanager
 def _cuda_range(device: str):
-    """cudaProfilerStart/Stop around the window: nsys --capture-range=cudaProfilerApi and ncu --profile-from-start off
-    record only inside it."""
+    """cudaProfilerStart/Stop around the window, the range nsys and ncu capture."""
     on = device.startswith("cuda")
     if on:
         torch.cuda.profiler.start()
@@ -77,7 +76,7 @@ def _cuda_range(device: str):
 
 
 def _allow_ptrace() -> None:
-    """Let any process of ours read this one: under Yama ptrace_scope 1 only ancestors may, and py-spy is a child."""
+    """Allow any process to ptrace this one (Linux), for py-spy."""
     if sys.platform.startswith("linux"):
         import ctypes
         ctypes.CDLL(None).prctl(0x59616D61, ctypes.c_ulong(-1), 0, 0, 0)    # PR_SET_PTRACER, PR_SET_PTRACER_ANY
@@ -113,7 +112,7 @@ async def _fire(sched: ContinuousBatchScheduler, prompts: list[list[int]], max_t
                 session: str) -> list:
     loop = asyncio.get_running_loop()
     fixed = {"ignore_eos": True} if "ignore_eos" in {f.name for f in dataclasses.fields(ScheduledRequest)} else {}
-    reqs = [ScheduledRequest(token_ids=p, max_tokens=max_tokens, session_id=f"{session}-{i}",   # each runs to max_tokens
+    reqs = [ScheduledRequest(token_ids=p, max_tokens=max_tokens, session_id=f"{session}-{i}",   # runs to max_tokens
                              future=loop.create_future(), **fixed) for i, p in enumerate(prompts)]
     return await asyncio.gather(*(sched.submit(r) for r in reqs), return_exceptions=True)
 
@@ -121,8 +120,7 @@ async def _fire(sched: ContinuousBatchScheduler, prompts: list[list[int]], max_t
 async def _steady(sched: ContinuousBatchScheduler, prompts: list[list[int]], max_tokens: int, concurrency: int,
                   session: str) -> list:
     """Closed loop: `concurrency` requests in flight, each replaced by the next prompt when it ends, until every prompt
-    has run once: a loaded regime's steady state (rows at every point of their answers), not one wave started
-    together."""
+    has run once."""
     loop = asyncio.get_running_loop()
     fixed = {"ignore_eos": True} if "ignore_eos" in {f.name for f in dataclasses.fields(ScheduledRequest)} else {}
     todo, results = iter(enumerate(prompts)), [None] * len(prompts)
@@ -133,14 +131,14 @@ async def _steady(sched: ContinuousBatchScheduler, prompts: list[list[int]], max
                                  future=loop.create_future(), **fixed)
             try:
                 results[i] = await sched.submit(r)
-            except Exception as e:               # noqa: BLE001  counted as an error, as _fire's gather does
+            except Exception as e:               # noqa: BLE001  counted as an error
                 results[i] = e
     await asyncio.gather(*(lane() for _ in range(min(concurrency, len(prompts)))))
     return results
 
 
 def stats_delta(start: dict, end: dict) -> dict:
-    """What the window itself did: counter differences, wave sizes included."""
+    """Counter differences over the window, wave sizes included."""
     d = {k: end[k] - start[k] for k in COUNTERS if k in start and k in end}
     waves = {k: v - start.get("wave_sizes", {}).get(k, 0) for k, v in end.get("wave_sizes", {}).items()}
     d["wave_sizes"] = {k: v for k, v in waves.items() if v}
@@ -148,7 +146,7 @@ def stats_delta(start: dict, end: dict) -> dict:
 
 
 def outcomes(results: list, max_tokens: int) -> dict:
-    """Per-request outcome counts and output lengths; `short` stopped before max_tokens (EOS or cut: not recorded)."""
+    """Per-request outcome counts and output lengths; `short` stopped before max_tokens."""
     toks = [len(r) for r in results if not isinstance(r, BaseException)]
     return {"errors": len(results) - len(toks), "empty": toks.count(0),
             "short": sum(0 < n < max_tokens for n in toks), "full": toks.count(max_tokens),
@@ -259,13 +257,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--capture-bytes", type=int, default=64 * 2**20, help="largest call kept whole as a sample")
     args = ap.parse_args(argv)
 
-    # The served configuration, from the same env the server reads; only the workload is ours.
+    # settings from the env the server reads
     settings = load_settings()
     overrides = {k: v for k, v in (("backend_name", args.backend), ("model_name", args.model)) if v}
     settings = dataclasses.replace(settings, **overrides)
     staged = Path(tempfile.mkdtemp(prefix="capture-", dir=Path(args.out).parent if Path(args.out).parent.exists() else None))
     entries = [c for c in args.capture if not c.startswith("region:")]
-    for c in args.capture:                       # the engine's own region capture, read at its first decode step
+    for c in args.capture:                       # the engine's own region capture
         if c.startswith("region:") and c != capture.STEP:
             os.environ.update(CAPTURE_REGION=c.removeprefix("region:"), CAPTURE_REGION_DIR=str(staged))
     backend = build_backend(settings)

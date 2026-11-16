@@ -1,5 +1,4 @@
-"""The regimes' load searches started from the base's result and resolved to the noise band, on synthetic probes (no
-server). Run: python tests/test_regimes_suite.py"""
+"""The regimes' load searches started from the base's result and resolved to the noise band, on synthetic probes."""
 from __future__ import annotations
 
 import itertools
@@ -42,8 +41,7 @@ def test_the_search_reports_its_bracket_and_never_stops_on_its_budget_first():
 
 
 def test_open_loop_probes_are_scored_under_steady_load_and_a_failed_confirmation_backs_off_by_the_resolution():
-    """Arrivals start one request's time at the limits before the scored window and run as long after it; a load that
-    passes its probe but fails the confirmation steps down by the search's resolution and counts as failing."""
+    """Arrivals span the scored window plus a settle time each side; a failed confirmation steps down."""
     from evals.loadgen.client import Request, Row
     from evals.loadgen.runner import Limits
     load, _, found = suite._search_and_confirm(lambda x, final: {"valid": True, "meets_limits": x <= (7.0 if final else 8.0)},
@@ -139,7 +137,7 @@ def test_saturated_starts_at_the_bases_concurrency():
 
 
 def test_saturated_bisects_between_the_doubling_levels():
-    res, calls = _saturated(200)                       # 128 passes, 256 fails: the result is within 10% of 200, not 128
+    res, calls = _saturated(200)                       # 128 passes, 256 fails: the result is within 10% of 200
     assert 200 * 0.9 <= res["value"] <= 200 and res["concurrency"] == res["value"]
     assert calls[-1] == res["concurrency"]             # the confirmation reran the best bisected level
 

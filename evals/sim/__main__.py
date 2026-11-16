@@ -1,8 +1,5 @@
 """lab sim run CLASS [--synthetic] [--seed N] [--env JSON] [--cost FILE] [--horizon S] [--out FILE]
-Simulate one corpus class's traffic (the target's corpus; `--synthetic` generates it fresh, evals/loadgen/synth.py)
-through the engine's scheduler under `--env` (the engine's scheduler env vars, e.g. a profile's) and `--cost`
-(a CostModel JSON; defaults are unfitted stand-ins). Prints the regimes summary under the conversational limits.
-Run with the engine's python."""
+Simulate one corpus class's traffic through the engine's scheduler and print the regimes summary."""
 from __future__ import annotations
 
 import argparse

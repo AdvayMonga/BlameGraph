@@ -1,7 +1,5 @@
-"""Launch profiles: an engine may ship a config per regime in a TOML file of its own tree, named
-by the target (`[engine] profiles`): `[general]` plus a table per regime. A measurement serves the general config once
-for every regime, then serves each regime whose table is non-empty on its own with `<profile_env>=<regime>`; that
-launch's number is the regime's headline. The harness reads only the file, never engine code, to decide the launches."""
+"""Launch profiles: the engine's per-regime configs, read from the TOML file the target names (`[engine] profiles`).
+One launch serves `[general]` for every regime, then one launch per regime with a non-empty table of its own."""
 
 from __future__ import annotations
 
@@ -13,7 +11,7 @@ from lab.targets import target
 
 def overrides(tree: Path, t: target.Target) -> dict[str, dict]:
     """{regime: its table} for every non-empty table but [general]; {} when the target names no file or it is absent.
-    A file that does not parse raises: the measurement fails rather than silently serving one config."""
+    Raises tomllib.TOMLDecodeError on a file that does not parse."""
     if not t.profiles:
         return {}
     p = Path(tree) / t.profiles
@@ -24,15 +22,13 @@ def overrides(tree: Path, t: target.Target) -> dict[str, dict]:
 
 
 def launches(tree: Path, t: target.Target, names: list[str]) -> list[tuple[str | None, list[str]]]:
-    """(profile, regimes) per engine launch: (None, every regime) for the general config, then one per regime in
-    `names` that has its own table."""
+    """(profile, regimes) per engine launch: (None, every regime), then one per regime in `names` with its own table."""
     own = overrides(tree, t)
     return [(None, list(names))] + [(n, [n]) for n in names if n in own]
 
 
 def refusal(tree: Path, t: target.Target, profile: str | None) -> str | None:
-    """Why `profile` cannot be served from `tree`, or None (no profile is the general launch). Never raises: a file
-    that does not parse is a reason too, so the refusal is recorded like any other."""
+    """Why `profile` cannot be served from `tree`, or None. Never raises."""
     from evals.loadgen import suite
     if not profile:
         return None

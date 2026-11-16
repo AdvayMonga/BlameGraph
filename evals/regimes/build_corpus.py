@@ -1,22 +1,9 @@
-"""Build the frozen workload corpus from real public traces, deterministically, then commit it.
+"""Build the frozen workload corpus from real public traces, deterministically.
 
-    uv sync --extra dev --extra corpus
-    .venv/bin/python evals/regimes/fetch_traces.py           # once: raw inputs into the cache
     .venv/bin/python evals/regimes/build_corpus.py [--seed N]    # default: the secret seed in evals/regimes/.seed
 
-Timing and sessions come from BurstGPT (`BurstGPT_3.csv`; mixed classes also draw on the earlier,
-session-less `BurstGPT_1.csv` and `_2.csv`): every arrival, its session (API-log
-requests have none and become one-request sessions) and its `Request tokens`. Text comes from
-WildChat-1M: real conversations with their stored assistant replies. Each BurstGPT session is
-paired with one WildChat conversation, and each of its requests with the conversation turn
-whose templated prompt length (the build tokenizer, Qwen3 by default, enable_thinking=False) is
-closest to the trace's Request tokens, turns strictly increasing within a session. Turn k > 0
-is a real `[user, assistant, ..., user]` message list. No conversation is used twice.
-
-Same seed + same cached inputs + same tokenizer = same bytes (the test asserts it). The seed is
-secret: it is kept in evals/regimes/.seed and the store's heldout/ prefix, never in git, because the
-held-out split is reproducible from it. Anything
-else is a NEW corpus version. Do not hand-edit a trace.
+Timing and sessions come from BurstGPT, text from WildChat-1M; the same seed, cached inputs and tokenizer give the
+same bytes.
 """
 
 from __future__ import annotations
@@ -46,19 +33,19 @@ from evals.regimes import SPLITS, Manifest, TraceRequest, WorkloadClass, build_m
 DEFAULT_TOKENIZER = "tokenizers/Qwen3-30B-A3B"     # relative to the cache, or any HF id/path
 TOKENIZER_LABEL = f"Qwen/Qwen3-30B-A3B@{QWEN3_REV[:12]}"
 BURSTGPT_CSV = "burstgpt/BurstGPT_3.csv"
-# Earlier, disjoint months with no session ids; mixed classes only, so the others stay as built.
+# Earlier months with no session ids; mixed classes only.
 BURSTGPT_EARLIER = ("burstgpt/BurstGPT_1.csv", "burstgpt/BurstGPT_2.csv")
 PROMPT_CAP = 16384       # templated prompt tokens; longer turns are never used
-MAX_TOKENS = 2048        # generous, so answers end on their own; prompt + budget < 32k context
-MIN_TARGET = 16          # Request tokens of 0 (failed logs) still need a prompt
+MAX_TOKENS = 2048        # answer budget per request
+MIN_TARGET = 16          # floor on a request's target length, tokens
 WEEK_S = 7 * 86400       # even trace weeks are `seen`, odd weeks `heldout`
 MAX_SESSION_TURNS = 16   # longer window sessions are split into consecutive conversations
 CANDIDATES = 400         # conversations scored per multi-request session
 DAY_S = 86400
-MIXED_WINDOW_S = 1200    # 3 mixed classes x 20 min = one GPU-hour of real-time replay per split
+MIXED_WINDOW_S = 1200    # mixed-class window length
 MIXED_MIN = {"cold_start": 20, "spike": 20, "steady_interactive": 50}   # requests per regime
-MIXED_PEAK = 150         # requests in any one minute: the spike class's ceiling for one replica
-MIXED_STEADY_MIN = 10    # minutes with steady traffic: a spread-out mix, not one scripted burst
+MIXED_PEAK = 150         # most requests in any one minute of a mixed window
+MIXED_STEADY_MIN = 10    # fewest minutes with steady traffic in a mixed window
 
 NOTES_TMPL = (
     "Real-trace corpus. Timing + sessions: BurstGPT v2.0 BurstGPT_3.csv (HPMLL, CC-BY-4.0); "
@@ -117,7 +104,7 @@ def _specs() -> list[ClassSpec]:
 
 @dataclass(frozen=True)
 class Arrival:
-    t: float               # seconds from the trace's first row (BurstGPT has 1 s resolution)
+    t: float               # seconds from the trace's first row
     session: str           # "" for API-log requests
     tokens: int
     regime: str = ""       # set only in mixed windows: the class whose SLO judges this request
@@ -132,7 +119,7 @@ def _read_burstgpt(path: Path, t0: float | None = None) -> tuple[float, list[Arr
     with open(path) as f:
         rows = list(csv.DictReader(f))
     t0 = float(rows[0]["Timestamp"]) if t0 is None else t0
-    # A failed request is logged with 0 request tokens: no length to pair, so it is dropped.
+    # Rows with 0 request tokens are dropped.
     return t0, [Arrival(float(r["Timestamp"]) - t0, r.get("Session ID", ""),
                         int(r["Request tokens"])) for r in rows if int(r["Request tokens"]) > 0]
 
@@ -144,15 +131,14 @@ def load_burstgpt(cache: Path) -> tuple[Arrival, ...]:
 
 @lru_cache(maxsize=2)
 def load_burstgpt_all(cache: Path) -> tuple[Arrival, ...]:
-    """All three files on BurstGPT_3's clock (earlier months are negative), so every class
-    shares one week numbering and one seen/heldout split."""
+    """All three files on BurstGPT_3's clock (earlier months are negative)."""
     t0, arr = _read_burstgpt(cache / BURSTGPT_CSV)
     for rel in BURSTGPT_EARLIER:
         arr += _read_burstgpt(cache / rel, t0)[1]
     return tuple(sorted(arr, key=lambda a: a.t))
 
 
-# Credentials users pasted into chats, placeholders included (scanners flag those too).
+# Credentials users pasted into chats, placeholders included.
 SECRET_RE = re.compile(
     r"sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_\w{40,}"
     r"|xox[abposr]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|hf_[A-Za-z0-9]{30,}"
@@ -186,8 +172,7 @@ class Pool:
 
 @lru_cache(maxsize=2)
 def load_pool(cache: Path, tokenizer: str) -> Pool:
-    """Filtered WildChat, de-duplicated by first user message, with per-turn templated lengths.
-    The lengths are cached under `derived/`, keyed by every input that determines them."""
+    """Filtered WildChat, de-duplicated by first user message, with per-turn templated lengths cached in `derived/`."""
     convs, seen_first = [], set()
     with open(cache / WILDCHAT_JSONL) as f:
         for line in f:
@@ -224,7 +209,7 @@ def _prefix_lens(convs: list[list[dict]], tokenizer: str) -> list[list[int]]:
             for k in range(len(m) // 2):
                 text = tk.apply_chat_template(m[:2 * k + 1], tokenize=False,
                                               add_generation_prompt=True, enable_thinking=False)
-                if len(text) > 8 * PROMPT_CAP:      # far over the cap; so is every later turn
+                if len(text) > 8 * PROMPT_CAP:      # far over the cap
                     break
                 texts.append(text)
                 owner.append(c)
@@ -246,8 +231,7 @@ def _cv(tok: list[int]) -> float:
 
 
 def varied(window: list[Arrival]) -> bool:
-    """Mixed prompt lengths, not one scripted client: request-token CV >= 0.3 and at most 60% of
-    requests within +-25% of the median. Most post-idle BurstGPT windows fail this."""
+    """Mixed prompt lengths: request-token CV >= 0.3 and at most 60% of requests within +-25% of the median."""
     tok = sorted(a.tokens for a in window)
     med = tok[len(tok) // 2]
     return _cv(tok) >= 0.3 and sum(0.75 * med <= x <= 1.25 * med for x in tok) <= 0.6 * len(tok)
@@ -304,11 +288,10 @@ def _windows_spike(arr, spec):
 
 
 def regimes(arr) -> list[str]:
-    """Each arrival's regime from its context in the whole trace, first match wins: a long
-    prompt is long_context; one of the first 60 requests within 20 min after a >=10 min gap is
-    cold_start; one arriving in a burst minute (>=40 requests) is spike; else steady."""
+    """Each arrival's regime from its context in the whole trace, first match wins: long_context (a long prompt),
+    cold_start (after a long gap), spike (in a burst minute), else steady."""
     t = [a.t for a in arr]
-    m0 = int(t[0] // 60)                  # earlier BurstGPT months sit at negative times
+    m0 = int(t[0] // 60)                  # may be negative
     per_min = _per_min([x - m0 * 60 for x in t])
     burst = {i + m0 for i in range(10, len(per_min)) if per_min[i] >= 40 and _burst(per_min, i)}
     cold, i = set(), 1
@@ -326,9 +309,8 @@ def regimes(arr) -> list[str]:
 
 @lru_cache(maxsize=2)
 def _mixed_candidates(arr: tuple, window_s: int, target_rps: float) -> tuple:
-    """Every window_s window on a 1-minute grid with at most target_rps x window_s requests and
-    MIXED_PEAK in any minute (one replica, real time), MIXED_MIN of each regime, steady traffic
-    in MIXED_STEADY_MIN minutes and request-token CV >= 0.3 (not one scripted client), labelled."""
+    """Every labelled window_s window on a 1-minute grid that meets the mixed-class limits (target_rps, MIXED_PEAK,
+    MIXED_MIN, MIXED_STEADY_MIN, request-token CV >= 0.3)."""
     t = [a.t for a in arr]
     labels = regimes(arr)
     out = []
@@ -365,8 +347,7 @@ WINDOWS = {"cold_start": _windows_cold_start, "steady_interactive": _windows_ste
 
 def pick_window(arr, spec: ClassSpec, split: str, rng: random.Random,
                 avoid_days: frozenset[int] = frozenset()) -> list[Arrival]:
-    """One real window lying wholly inside one of `split`'s weeks, not starting on an
-    `avoid_days` day, chosen by the seed."""
+    """One real window wholly inside one of `split`'s weeks, not starting on an `avoid_days` day, chosen by the seed."""
     windows = _windows_mixed if spec.window_s else WINDOWS[spec.cls.name]
     cands = [w for w in windows(arr, spec)
              if split_of(w[0].t) == split and int(w[0].t // WEEK_S) == int(w[-1].t // WEEK_S)
@@ -377,13 +358,13 @@ def pick_window(arr, spec: ClassSpec, split: str, rng: random.Random,
 
 
 def dilation(window: list[Arrival], spec: ClassSpec) -> float:
-    """>= 1. Every inter-arrival is stretched by the same factor, so the burst SHAPE is kept."""
-    if spec.cls.name == "spike":       # the peak minute, not the mean, is what must be servable
+    """>= 1; every inter-arrival is stretched by this same factor."""
+    if spec.cls.name == "spike":       # by the peak minute
         per_min: dict[int, int] = defaultdict(int)
         for a in window:
             per_min[int(a.t // 60)] += 1
         rate = max(per_min.values()) / 60
-    elif spec.window_s:                # a mixed window is its whole span, silences included
+    elif spec.window_s:                # by its whole span, silences included
         rate = len(window) / spec.window_s
     else:
         rate = (len(window) - 1) / max(window[-1].t - window[0].t, 1.0)
@@ -460,9 +441,9 @@ def build_trace(window: list[Arrival], spec: ClassSpec, split: str, dil: float, 
               for i in range(0, len(g), MAX_SESSION_TURNS)]
     t0 = window[0].t
     out: list[tuple[TraceRequest, int]] = []
-    for si, g in enumerate(chunks):        # first-arrival order: dicts keep insertion order
+    for si, g in enumerate(chunks):        # first-arrival order
         targets = [a.tokens for a in g]
-        if len(g) == 1:     # any turn: an API call's Request tokens may well include history
+        if len(g) == 1:     # any turn
             c, k = pair_single(pool.index, targets[0], used)
             turns = [k]
         else:
@@ -485,8 +466,7 @@ def build_trace(window: list[Arrival], spec: ClassSpec, split: str, dil: float, 
 
 def build_corpus(out: Path, seed: int, cache: Path = DEFAULT_CACHE,
                  tokenizer: str = DEFAULT_TOKENIZER, verbose: bool = False) -> Manifest:
-    """Write every (class, split) trace and the manifest. Class c, split s uses seed + 100c + s;
-    conversations are drawn in that order, so reordering classes is a new corpus version."""
+    """Write every (class, split) trace and the manifest; class c, split s uses seed + 100c + s."""
     cache = Path(cache).expanduser()
     arr, pool = load_burstgpt(cache), load_pool(cache, tokenizer)
     arr_all = load_burstgpt_all(cache)

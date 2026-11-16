@@ -1,5 +1,4 @@
-"""Correctness gate on synthetic data: equal passes, acceptable noise passes, degradation and cheats fail.
-Run: python tests/test_correctness.py"""
+"""The correctness gate on synthetic data: equal and noisy candidates pass, degradation and cheats fail."""
 from __future__ import annotations
 
 import math
@@ -63,15 +62,15 @@ CONS = {"n": 1, "first_token_mismatch": 0, "token_count_mismatch": 0, "text_afte
 
 def test_policy_gate_is_pooled_accuracy():
     ln = length_ratio([100] * 10, [98] * 10)
-    good = {"math": flip_test(*_answers(20_000, 0.6, 0.02, 0.03, seed=7))}   # large n: churn averages out
+    good = {"math": flip_test(*_answers(20_000, 0.6, 0.02, 0.03, seed=7))}   # large n
     ok = evaluate(_seqs(0.05, seed=7), good, ln, CONS)
     assert ok["passed"], ok["reasons"]
     no = evaluate(_seqs(0.05, seed=9), {"math": flip_test(*_answers(500, 0.6, 0.2, 0.02, seed=9))}, ln, CONS)
     assert not no["passed"] and no["reasons"][0].startswith("accuracy: pooled score ratio")
-    # divergence is a fact, not a gate: large KL with intact answers passes, and is still reported
+    # large KL with intact answers passes and is reported
     far = evaluate(_seqs(1.0, temp=1.5, seed=9), good, ln, CONS)
     assert far["passed"] and far["metrics"]["divergence"]["kl_mean"] > ok["metrics"]["divergence"]["kl_mean"]
-    # pooled over items: a 4% loss on a small task is outweighed by a large intact one
+    # a small task's loss pooled with a large intact one
     small = {"n": 100, "lost": 4, "gained": 0, "ref_accuracy": 0.5, "cand_accuracy": 0.46}
     big = {"n": 1000, "lost": 10, "gained": 10, "ref_accuracy": 0.7, "cand_accuracy": 0.7}
     r = evaluate(None, {"code": small, "mmlu_pro": big}, ln, CONS)
@@ -87,7 +86,7 @@ def test_truncation_and_fake_first_token_fail():
     r = evaluate(_seqs(0.0), None, trunc, fake)
     assert not r["passed"]
     assert r["gates"]["length"]["passed"] is False and r["gates"]["consistency"]["passed"] is False
-    assert r["gates"]["accuracy"]["passed"] is None       # not run is not a pass
+    assert r["gates"]["accuracy"]["passed"] is None       # not run: None
     rec = to_ledger_record(r, {"split": "seen"}, base="abc123")
     assert rec["kind"] == "equiv" and "gates" in rec and "id" not in rec
 
@@ -116,7 +115,7 @@ def test_client_contract_against_fake_server():
                 plp = [None] + [{str(t): {"logprob": -0.1}, str(t + 1): {"logprob": -2.5}} for t in body["prompt"][1:]]
                 out = {"choices": [{"text": "x", "prompt_logprobs": plp}]}
             else:
-                assert body["chat_template_kwargs"] == {"enable_thinking": False} and body["temperature"] == 0.0  # from Api
+                assert body["chat_template_kwargs"] == {"enable_thinking": False} and body["temperature"] == 0.0
                 out = {"choices": [{"message": {"content": "The answer is (C)."}, "finish_reason": "stop"}],
                        "usage": {"completion_tokens": 7}}
             data = json.dumps(out).encode()
@@ -142,7 +141,7 @@ def test_client_contract_against_fake_server():
 
 def test_verdict_is_three_valued():
     ln = length_ratio([10], [10])
-    # under the line but the net loss is within churn: inconclusive, never a pass
+    # under the line, net loss within churn: inconclusive
     churn = {"math": {"n": 1000, "lost": 40, "gained": 32, "ref_accuracy": 0.700, "cand_accuracy": 0.692}}
     r = evaluate(None, churn, ln, CONS)
     assert r["verdict"] == "inconclusive" and r["passed"] is False and r["gates"]["accuracy"]["passed"] is None
@@ -155,7 +154,7 @@ def test_verdict_is_three_valued():
     r = evaluate(None, good, ln, CONS, unanswered=3)
     assert r["verdict"] == "inconclusive" and "3 item(s) unanswered" in r["reasons"][0]
     assert evaluate(None, good, ln, CONS)["verdict"] == "pass"
-    # divergence is never a gate, and consistency gates only when given (the candidate run gives neither)
+    # divergence is not a gate; consistency gates only when given
     assert "divergence" not in evaluate(None, good, ln, CONS)["metrics"]
     assert set(evaluate(None, good, ln)["gates"]) == {"accuracy", "length"} and evaluate(None, good, ln)["passed"]
 
@@ -221,7 +220,7 @@ def test_shed_requests_are_retried_and_persistent_errors_are_unanswered(monkeypa
             assert out["shed"]["text"] and seen["shed"] == 2                # retried once, then answered
             assert out["broken"].get("error", "").startswith("HTTPError") and out["broken"]["text"] == ""
             again = crun.collect(f"http://127.0.0.1:{srv.server_address[1]}", "m", items, Path(d) / "o.jsonl", 2)
-            assert seen["ok"] == 1 and seen["broken"] == 2                  # resume: answered items skipped, errored ones retried
+            assert seen["ok"] == 1 and seen["broken"] == 2                  # answered skipped, errored retried
             assert again["broken"].get("error")
     finally:
         crun.RETRIES = retries
@@ -238,7 +237,7 @@ def test_verdict_file_rejudges_saved_result():
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"result": saved}, f)
     assert verdict_file(f.name, Thresholds(min_score_ratio=0.98))["passed"]
-    strict = verdict_file(f.name, Thresholds())                   # 692/700 with 20 lost, 12 gained: not significant
+    strict = verdict_file(f.name, Thresholds())                   # 20 lost, 12 gained: not significant
     assert strict["verdict"] == "inconclusive" and "pooled score ratio 0.9886" in strict["reasons"][0]
     strict = verdict_file(f.name, Thresholds(alpha=0.5))
     assert strict["verdict"] == "fail" and strict["reasons"][0].startswith("accuracy: pooled score ratio 0.9886")
@@ -252,7 +251,7 @@ def test_stream_role_chunk_is_not_a_first_token():
     from lab.gate.correctness.client import generate_stream
 
     class H(BaseHTTPRequestHandler):
-        """vLLM-shaped stream: a role chunk with content "", then the tokens."""
+        """A role chunk with empty content, then the tokens."""
         protocol_version = "HTTP/1.1"
 
         def log_message(self, *a):

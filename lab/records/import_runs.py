@@ -1,12 +1,6 @@
 """Manual measurements into the ledger as numbers only.
 
-A run dir written by `lab regimes run --out DIR` (`regimes.json`) or `lab correctness candidate --out
-DIR/equiv.json` becomes a `bench` or `equiv` record under a `manual-<date>` run: the engine commit and the launch env
-as its config, the numbers as its result, the regimes' full results kept, no text. The agent sees it like any
-measurement (`ledger`, `query`; `search` has nothing to index). `cost` is unknown for a manual run and stays null.
-
-    lab import-runs --run manual-20261018 --commit 9c6b79a --env PREFILL_MODE=mixed --env ASYNC_DECODE=1 \\
-        --label s9packed local/engine-h200-20261018/s9packed
+    lab import-runs --run manual-<date> --commit SHA [--env K=V] [--label L] [--gpu G] DIR...
 """
 
 from __future__ import annotations
@@ -57,7 +51,7 @@ def equiv_record(run: str, commit: str, env: dict, label: str, equiv_json: dict)
 
 def import_dir(d: Path, run: str, commit: str, env: dict, label: str | None, gpu: str | None,
                root: Path = ledger.ROOT) -> list[dict]:
-    """Every regimes.json / equiv.json under `d` (not recursive) → one record each; returns the stored records."""
+    """Store every regimes.json / equiv.json under `d` (not recursive) as one record each; returns the records."""
     label = label or d.name
     stored = []
     rj = d / "regimes.json"

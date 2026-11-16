@@ -1,4 +1,4 @@
-"""Agent SDK PreToolUse hook: refuse a file-tool write outside the surface before it happens (Bash writes are caught by the audit)."""
+"""Agent SDK PreToolUse hook: refuse a file-tool write outside the write surface."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ WRITE_TOOLS = "Write|Edit|MultiEdit|NotebookEdit"
 
 
 def allowed(workspace: Path, base_files: frozenset[str], file_path: str) -> bool:
-    """`new_file` means not in the base tree: a test the agent added stays editable by the agent."""
+    """Whether a file tool may write `file_path`; a file not in the base tree counts as new."""
     ws = workspace.resolve()
     target = (ws / file_path).resolve()
     if not target.is_relative_to(ws):

@@ -1,23 +1,9 @@
-"""Other implementations of our kernel tasks, timed on our own shapes beside the engine's kernel, and their compiled
-code kept for the PTX comparison's cards (lab/kernels/library/ptx.py). Run on the GPU host in a venv that has the competitors'
-libraries (vLLM, FlashInfer) beside this repo and the engine's source:
+"""Other implementations of our kernel tasks, checked and timed on our shapes beside the engine's kernel.
 
-  uv venv ~/comp && uv pip install --python ~/comp/bin/python vllm flashinfer-python ninja   (FlashInfer JIT-builds;
-  ~/comp/bin on PATH)
   PYTHONPATH=~/BlameGraph:~/inference-server/src ~/comp/bin/python -m lab.kernels.library.competitors \\
       --task rmsnorm --shapes shapes-rmsnorm.json --out DIR
 
-Each competitor is first checked against the task's reference on every shape, inputs from the shapes file's captured
-ints where it has them (a wrong one is reported, never timed), then timed in pairs with the engine's kernel on the same
-inputs (kernels.time_pair; as CUDA graph replays for a task the engine replays in graphs), the outputs of its timed
-calls checked too. DIR gets `timings.json` (per shape, our time over each competitor's per pair: median, p25, p75; their
-call-weighted summaries; `fastest`: a competitor only when its weighted p25 is above 1, else "within_noise" or
-"ours") and one text file of compiled code per implementation: Triton kernels' PTX from Triton's cache by kernel name
-(a competitor's: the files new since its first call), a library's SASS from `cuobjdump -sass` of its extension, the
-running GPU's code filtered to the kernels that ran. `--start` also writes `start-<competitor>.py` for each timed
-competitor that has a port, the search's starting program for `lab.kernels.search --initial`. `starts` gives every port of
-a task from vendored source (lab/kernels/library/vllm_sources.py), which `lab.kernels.search` judges at generation 0; the score stays
-relative to the engine's kernel."""
+DIR gets `timings.json` and one text file of compiled code (PTX or SASS) per implementation."""
 from __future__ import annotations
 
 import argparse
@@ -43,7 +29,7 @@ ADAPTERS: dict[str, dict[str, Callable]] = {}       # task -> {competitor: make(
 SASS_NAMES: dict[str, str] = {}                     # competitor -> regex of its device kernels' names
 TRITON: set[str] = set()                            # competitors whose kernels are Triton: their PTX, not SASS
 CONFIGS: dict[str, dict] = {}                       # competitor -> the launch config it chose for the current shape
-UNTIMED: dict[str, Callable] = {}                   # competitor -> (its timed call's outputs, *inputs) -> the checked form
+UNTIMED: dict[str, Callable] = {}                   # competitor -> (timed outputs, *inputs) -> the checked form
 IN_PLACE: set[str] = set()                          # competitors whose timed call writes its outputs into its inputs
 CONFIG_DTYPE = {"vllm.fused_moe": None, "vllm.fused_moe_w8a8": "fp8_w8a8"}    # vLLM's config table key for each
 
@@ -62,8 +48,7 @@ EPS = 1e-6
 
 
 def _vllm(*mods: str):
-    """vLLM's custom ops register when their extension modules are imported (`vllm._C`; from 0.32 on
-    `vllm._C_stable_libtorch`, the ops still under torch.ops._C)."""
+    """Imports the extension modules that register vLLM's custom ops."""
     for m in mods:
         _module(m)
 
@@ -87,8 +72,8 @@ def _vllm_rms_norm(x, w):
 @adapter("add_rmsnorm", "vllm.fused_add_rms_norm", r"fused_add_rms_norm_kernel")
 def _vllm_fused_add_rms_norm(h, a, w, timed=False):
     _vllm("vllm._C")
-    if timed:                                    # its own copies, made once per input set (outside the timed calls):
-        key = (h.data_ptr(), a.data_ptr())       # in place on the shared buffers would change what ours then reads
+    if timed:                                    # its own copies, made once per input set
+        key = (h.data_ptr(), a.data_ptr())
         if key not in _SCRATCH:
             _SCRATCH[key] = (h.clone(), a.clone())
         res, x = _SCRATCH[key]
@@ -136,9 +121,7 @@ UNTIMED["vllm.topk_softmax"] = lambda out, *_: (out[0], out[1].long())
 
 @adapter("paged_decode", "flashinfer.batch_decode", r"BatchDecode|batch_decode|SingleDecode")
 def _flashinfer_decode(q, k_pool, v_pool, block_tables, seq_lens):
-    """FlashInfer's paged decode on our pool (its HND layout: [pages, kv heads, page size, head dim]). The page lists
-    and the plan are host work, done once per input set (as an engine plans once per step), so a call is `run` alone
-    and captures in a CUDA graph."""
+    """FlashInfer's paged decode on our pool (its HND layout); page lists and plan are made once per input set."""
     import flashinfer
     n, hq, d = q.shape
     hkv, bs = k_pool.shape[1], k_pool.shape[2]
@@ -157,7 +140,7 @@ def _flashinfer_decode(q, k_pool, v_pool, block_tables, seq_lens):
 
 @functools.lru_cache(maxsize=None)
 def _fi_workspace(device) -> torch.Tensor:
-    """One float workspace for every plan: split-KV scratch used within a run (each plan's data is in its wrapper)."""
+    """One float workspace shared by every plan."""
     return torch.empty(128 * 2**20, dtype=torch.uint8, device=device)
 
 
@@ -165,10 +148,8 @@ _FI: dict = {}
 
 
 def _vllm_routing(a, tok, sorted_ids, expert_ids, E: int, block_m: int):
-    """Our routing in vLLM's layout. vLLM reads pair p's row at p // top_k, so when every token has the same number of
-    pairs (real routing does) pairs are renumbered token by token and the rows are read in place; otherwise top_k = 1
-    on rows gathered per call (`gather`). Returns (vLLM's pair of each of ours, top_k, gather, its sorted ids at its
-    own block size, expert per block, padded length as a 1-element tensor)."""
+    """Our routing in vLLM's layout: pairs renumbered token by token when every token has as many; else top_k = 1.
+    Returns (vLLM's pair of each of ours, top_k, gather, its sorted ids, expert per block, padded length [1])."""
     from lab.kernels.tasks.moe_gemm import _block_m, align
     dev, T = a.device, a.shape[0]
     M = tok.numel() or T
@@ -201,8 +182,7 @@ _MOE: dict = {}
 
 
 def _reset():
-    """Forget what was prepared per input set (vLLM's translated routing, FlashInfer's plans) and the configs chosen:
-    keyed by address, so never reused across inputs."""
+    """Forget what was prepared per input set (vLLM's routing, FlashInfer's plans) and the configs chosen."""
     _MOE.clear()
     _FI.clear()
     _SCRATCH.clear()
@@ -210,13 +190,8 @@ def _reset():
 
 
 def _vllm_fused_moe(name: str, w8a8: bool):
-    """vLLM's fused_moe Triton kernel at the config vLLM picks for this GPU and expert shape: fp8 weights with bf16
-    activations (`int8_w8a16`'s path, which upcasts fp8 the same way: our engine's decode numerics), or W8A8 (its
-    activations quantized per token by vLLM's own op inside the call). The fp8-weight path's configs come from vLLM's
-    table under dtype key None (its bf16 table): vLLM has no tuned table for fp8 weights with bf16 activations at this
-    shape (`CONFIG_DTYPE`, recorded as `vllm_config_dtype`). The routing is translated once per input set, outside the
-    timed call (layout, as FlashInfer's plan). Called with timed=True it returns vLLM's own output order (`UNTIMED`
-    maps it back)."""
+    """vLLM's fused_moe Triton kernel at the config vLLM picks for this GPU and expert shape: fp8 weights, or W8A8.
+    With timed=True it returns vLLM's own output order (`UNTIMED` maps it back)."""
     def key(a, tok, w, sorted_ids, expert_ids):
         return tok.data_ptr(), sorted_ids.data_ptr(), expert_ids.data_ptr(), tuple(a.shape), tuple(w.shape), w8a8
 
@@ -250,9 +225,8 @@ adapter("moe_gemm_fp8", "vllm.fused_moe_w8a8", r"fused_moe_kernel", triton=True)
     _vllm_fused_moe("vllm.fused_moe_w8a8", True))
 
 
-# -- starting the search from a competitor: its kernel ported into the engine module ------------------------------
-# Exact edits to vLLM 0.32's fused_moe_kernel so it reads our routing: rows through `tok` (vLLM reads pair // top_k),
-# blocks past the last expert end (ours carry E, vLLM's a padded length it loads), our block size. Each must apply once.
+# -- a competitor's kernel ported into the engine module --
+# Exact edits to vLLM 0.32's fused_moe_kernel so it reads our routing. Each must apply once.
 FUSED_MOE_EDITS = (
     ("    a_ptr,\n    b_ptr,", "    a_ptr,\n    tok_ptr,\n    b_ptr,"),
     ("    USE_TD: tl.constexpr = False,\n):",
@@ -307,9 +281,8 @@ def moe_gemm(a, tok, w, sorted_ids, expert_ids, M, block_m=16, split_k=None, w_s
 
 def port_fused_moe(program: str, kernel_src: str, zeros_src: str, configs: dict, version: str,
                    wrapper: str = FUSED_MOE_WRAPPER) -> str:
-    """The starting program `program` (the engine module) with vLLM's fused_moe kernel ported in and `wrapper`'s entry
-    point (by default `moe_gemm`, for bf16 and fp8 weights) routed to it; `configs` = vLLM's tuned configs {tokens:
-    config}."""
+    """`program` (the engine module) with vLLM's fused_moe kernel ported in and `wrapper`'s entry point routed to it.
+    `configs`: vLLM's tuned configs {tokens: config}."""
     for old, new in FUSED_MOE_EDITS:
         if kernel_src.count(old) != 1:
             raise ValueError(f"vLLM's fused_moe_kernel changed: an edit no longer applies once: {old[:60]!r}")
@@ -321,15 +294,14 @@ def port_fused_moe(program: str, kernel_src: str, zeros_src: str, configs: dict,
 
 
 def _before_end(program: str, block: str) -> str:
-    """`program` with `block` inserted before its EVOLVE-BLOCK-END marker, so the port is open to the search."""
+    """`program` with `block` inserted before its EVOLVE-BLOCK-END marker."""
     end = "\n# EVOLVE-BLOCK-END\n"
     if program.count(end) != 1:
         raise ValueError("the starting program has no single EVOLVE-BLOCK-END")
     return program.replace(end, block + end)
 
 
-# vLLM's topk_softmax CUDA kernel, made self-contained for `torch.utils.cpp_extension.load_inline` in the engine's fused
-# module: only system and torch headers, one C++ entry point, nothing of vLLM's binding layer.
+# vLLM's topk_softmax CUDA kernel, self-contained for `torch.utils.cpp_extension.load_inline`.
 TOPK_CUDA = r'''
 /*
  * Adapted from vLLM's csrc/moe/topk_softmax_kernels.cu (commit 58759182c, 2026-10-25), itself adapted from
@@ -788,14 +760,12 @@ def topk_softmax(logits: torch.Tensor, k: int, renorm: bool, fp32: bool = False)
 
 
 def port_topk_softmax(program: str) -> str:
-    """The starting program `program` (the engine's fused module) with vLLM's topk_softmax kernel built at import and
-    `topk_softmax` routed to it."""
+    """`program` (the engine's fused module) with vLLM's topk_softmax kernel and `topk_softmax` routed to it."""
     return _before_end(program, TOPK_WRAPPER)
 
 
 def vllm_configs(fm, shapes, dtype: str | None) -> dict:
-    """vLLM's tuned configs {tokens: config} for the expert shape of `shapes` ((M, K, N, E, T, ft) tuples), else
-    get_default_config at each token count T they have."""
+    """vLLM's tuned configs {tokens: config} for the expert shape of `shapes`, else its default per token count."""
     dims = {(K, N, E) for M, K, N, E, T, ft in shapes}
     if len(dims) != 1:
         raise ValueError(f"one expert shape expected, the shapes have {sorted(dims)}")
@@ -805,9 +775,7 @@ def vllm_configs(fm, shapes, dtype: str | None) -> dict:
 
 
 def starts(task: str, program: str) -> dict[str, str]:
-    """Every competitor port for `task` as a starting program built on `program` (the engine module, as the search
-    starts from it), {competitor: program}, from the sources vendored in lab/kernels/library/vllm_sources.py: no competitor library
-    is needed. Empty when no competitor's kernel is ported for the task."""
+    """{competitor: starting program} for every port of `task`, built on `program` from the vendored sources."""
     from lab.kernels.library import vllm_sources as v
 
     def moe(wrapper: str) -> str:
@@ -825,9 +793,7 @@ def starts(task: str, program: str) -> dict[str, str]:
 
 
 def start_program(task, name: str, shapes) -> str | None:
-    """The starting program built on competitor `name`'s kernel, or None when it has no port (a library's compiled code
-    cannot be evolved as source): vLLM's fused_moe on moe_gemm_fp8 from the installed vLLM at its configs for
-    `shapes`, every other port from `starts`."""
+    """The starting program built on competitor `name`'s kernel, or None when it has no port."""
     from lab.kernels.evolve.run import initial_program
     if name != "vllm.fused_moe" or task.name != "moe_gemm_fp8":
         return starts(task.name, initial_program(task)).get(name)
@@ -869,9 +835,7 @@ def check(task, fn, shapes, device) -> str | None:
 
 
 def timed_wrong(task, name: str, timed, p: dict) -> str | None:
-    """Why competitor `name`'s outputs of its timed calls (time_pair's `outputs_a`) differ from the reference on the
-    same input sets, or None. An in-place one's inputs already hold its outputs, so its timed path runs once more on a
-    copy of each set."""
+    """Why competitor `name`'s timed outputs differ from the reference on the same input sets, or None."""
     atol, rtol = _tolerance(task)
     for i, (xs, out) in enumerate(zip(p["inputs"], p["outputs_a"])):
         if name in IN_PLACE:
@@ -891,7 +855,7 @@ def _tool(name: str) -> str:
 def launched(fn, inputs) -> set[str]:
     """The device kernels one call of `fn` launches, by the names the profiler gives (demangled)."""
     from torch.profiler import ProfilerActivity, profile
-    fn(*[x.clone() for x in inputs])                          # built and warm before the profiled call
+    fn(*[x.clone() for x in inputs])                          # warm up
     with profile(activities=[ProfilerActivity.CUDA]) as prof:
         fn(*[x.clone() for x in inputs])
         torch.cuda.synchronize()
@@ -899,9 +863,7 @@ def launched(fn, inputs) -> set[str]:
 
 
 def _signature(name: str) -> str:
-    """A demangled name's qualified function name with its template args, whitespace removed: the parameter list (the
-    first "(" outside template args) and any return type before it (cu++filt keeps `std::enable_if<...>::type`, the
-    profiler does not) dropped."""
+    """A demangled name's qualified function name with template args: no whitespace, parameters or return type."""
     s, depth, start = name.replace("(anonymous namespace)", "{anon}"), 0, 0
     for i, c in enumerate(s):
         depth += (c == "<") - (c == ">")
@@ -922,10 +884,8 @@ def cuobjdump(module_file: str) -> str:
 
 def sass(module_file: str, pattern: str, names: set[str] | None = None, arch: str | None = None,
          dump=None) -> str:
-    """The SASS of the functions in a library's extension whose names match `pattern`, only `arch`'s code when given
-    (e.g. sm_90, which also takes sm_90a); with `names` (from `launched`) only the instantiations that ran, matched on
-    their demangled names (a library holds every template's copy). `dump(file)` gives the disassembly (default:
-    `cuobjdump`). Raises if cuobjdump fails."""
+    """The SASS of the functions in a library's extension whose names match `pattern`, only `arch`'s code when given.
+    With `names`, only those instantiations (demangled). `dump(file)` disassembles. Raises if cuobjdump fails."""
     code = (dump or cuobjdump)(module_file)
     if arch:                                     # cuobjdump heads each architecture's code with "code for sm_XY"
         code = "".join(c for c in re.split(r"(?=\n\s*code for sm_)", code) if re.match(rf"\s*code for {arch}[a-z]?\s", c))
@@ -941,7 +901,7 @@ def sass(module_file: str, pattern: str, names: set[str] | None = None, arch: st
 
 
 def _flashinfer_jit_dir() -> Path:
-    """Where FlashInfer keeps its JIT-built extensions (`flashinfer.jit.env.FLASHINFER_JIT_DIR`, else its default)."""
+    """Where FlashInfer keeps its JIT-built extensions."""
     try:
         from flashinfer.jit import env
         return Path(env.FLASHINFER_JIT_DIR)
@@ -950,8 +910,7 @@ def _flashinfer_jit_dir() -> Path:
 
 
 def library_sass(name: str, names: set[str], arch: str | None) -> str:
-    """Competitor `name`'s SASS from its library's extension (FlashInfer's: every JIT-built .so); raises with the
-    reason when none holds a matching function."""
+    """Competitor `name`'s SASS from its library's extension; raises when none holds a matching function."""
     if name.startswith("flashinfer."):
         files = sorted(str(f) for f in _flashinfer_jit_dir().rglob("*.so"))
         if not files:
@@ -971,9 +930,7 @@ def library_sass(name: str, names: set[str], arch: str | None) -> str:
 
 
 def ptx(cache: Path, pattern: str, before: set | frozenset = frozenset()) -> str:
-    """The PTX of the Triton kernels in `cache` whose names match `pattern` (Triton names each file after its kernel)
-    and that are not in `before` (the files present before its first call), so each implementation's card holds its
-    own kernels only, also when two share a kernel."""
+    """The PTX of the Triton kernels in `cache` whose names match `pattern` and whose files are not in `before`."""
     return "".join(f.read_text() for f in sorted(cache.rglob("*.ptx")) if f not in before and re.search(pattern, f.stem))
 
 
@@ -987,8 +944,8 @@ def weighted(per: list[dict], key: str = "ours_over_competitor") -> float:
 
 
 def fastest(competitors: dict) -> str:
-    """The timed competitor whose call-weighted p25 ratio is above 1 (faster clear of the pairs' spread; of several,
-    the highest weighted median), else "within_noise" when one's weighted p25..p75 spans 1, else "ours"."""
+    """The competitor with the highest weighted median among those whose call-weighted p25 ratio is above 1.
+    Else "within_noise" when one's weighted p25..p75 spans 1, else "ours"."""
     timed = {k: v for k, v in competitors.items() if "per_shape" in v}
     clear = [k for k, v in timed.items() if v["ratio_p25"] > 1]
     if clear:
@@ -997,14 +954,13 @@ def fastest(competitors: dict) -> str:
 
 
 def time_competitor(task, name: str, fn, ours, shapes, calls: dict, iters: int, device="cuda") -> list[dict] | str:
-    """Each shape's paired timing of competitor `name` against ours (the config it chose there, if any), or why it is
-    not timed: its timed outputs differ from the reference (a kernel doing other work when timed) or timing raised."""
+    """Each shape's paired timing of competitor `name` against ours, or why it is not timed."""
     from lab.kernels.eval.timing import time_pair
     timed = functools.partial(fn, timed=True) if "timed" in inspect.signature(fn).parameters else fn
     per = []
     try:
         for s in shapes:
-            _reset()                             # the 4 input sets of one timing stay alive, so their addresses differ
+            _reset()
             p = time_pair(timed, ours, task.make_inputs, s, task.dtypes[0], device, iters=iters, graphs=task.graphs)
             why = timed_wrong(task, name, timed, p)
             if why:
@@ -1045,7 +1001,7 @@ def main(argv: list[str] | None = None) -> int:
     rows = {"task": a.task, "shapes": [list(s) for s in seen], "graphs": task.graphs, "competitors": {}}
     arch = "sm_%d%d" % torch.cuda.get_device_capability()          # the running GPU's code only, in SASS cards
     for name, fn in (ADAPTERS.get(a.task) or {}).items():
-        before = set(cache.rglob("*.ptx"))       # its card: the Triton kernels it compiles, not an earlier one's
+        before = set(cache.rglob("*.ptx"))       # the PTX files present before its first call
         per = check(task, fn, seen, "cuda") or time_competitor(task, name, fn, ours, seen, calls, a.iters)
         if isinstance(per, str):
             rows["competitors"][name] = {"not_timed": per}

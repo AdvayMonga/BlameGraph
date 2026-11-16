@@ -43,7 +43,7 @@ def pack(src: Path, out: Path) -> None:
 
 
 def unpack(packed: Path, dest: Path) -> None:
-    """Back to `dest` (a .tar.zst to the directory it held); appears whole or not at all."""
+    """Unpack to `dest` (a .tar.zst to the directory it held); appears whole or not at all."""
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp(prefix=".unpack-", dir=dest.parent))
@@ -92,7 +92,7 @@ def _segments(remote: Remote) -> list[tuple[int, int, str]]:
 
 
 def _same(remote: Remote, seg: tuple[int, int, str], local: bytes) -> bool:
-    """Whether `local` holds the remote segment's bytes at its range: the same ledger, not one of equal length."""
+    """Whether `local` holds the remote segment's bytes at its range."""
     start, end, key = seg
     with tempfile.TemporaryDirectory() as d:
         _get(remote, key, Path(d) / "part")
@@ -146,14 +146,14 @@ def pull_ledger(root: Path, remote: Remote) -> int:
 
 
 def _drop_trace(blob: Path, runs: Path | None) -> None:
-    """A stored blob's trace.json (GBs each) is kept only in the store: removed from it and its workspace copies."""
+    """Remove a stored blob's trace.json from the blob and its workspace copies."""
     copies = Path(runs).glob(f"*/workspace/lab/runs/{blob.name}/trace.json") if runs else []
     for t in [blob / "trace.json", *copies]:
         t.unlink(missing_ok=True)
 
 
 def push(root: Path, remote: Remote, runs: Path | None = None, corpus: Path | None = None) -> dict:
-    """Ledger, blobs, held-out passive data and held-out traces; returns what went up."""
+    """Push the ledger, blobs, held-out passive data and held-out traces; returns what went up."""
     root = Path(root)
     out = {"ledger_bytes": push_ledger(root, remote), "blobs": 0, "heldout_private": 0, "corpus": 0}
     have = set(remote.keys("blobs/"))
@@ -165,7 +165,7 @@ def push(root: Path, remote: Remote, runs: Path | None = None, corpus: Path | No
     if runs and Path(runs).is_dir():
         have = set(remote.keys("heldout/private/"))
         for d in sorted(Path(runs).glob("*/heldout-private/*")):
-            if (d / "client_rows.jsonl").exists():        # written last: the held-out serve is complete
+            if (d / "client_rows.jsonl").exists():        # written last
                 out["heldout_private"] += _put(remote, f"heldout/private/{d.parents[1].name}/{d.name}.tar.zst", d, have)
     if corpus and Path(corpus).is_dir():
         version = corpus_version(Path(corpus))
@@ -178,7 +178,7 @@ def push(root: Path, remote: Remote, runs: Path | None = None, corpus: Path | No
 
 
 def pull(root: Path, remote: Remote, blobs: bool = False, corpus: Path | None = None) -> dict:
-    """The ledger; with `blobs`, every blob missing locally; with `corpus`, its held-out traces."""
+    """Pull the ledger; with `blobs`, every blob missing locally; with `corpus`, its held-out traces."""
     root = Path(root)
     out = {"ledger_bytes": pull_ledger(root, remote), "blobs": 0, "corpus": 0}
     if blobs:

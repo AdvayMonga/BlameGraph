@@ -1,4 +1,4 @@
-"""lab.records.ledger appends stamped records, stores blobs by hash, guards held-out detail, and merges another ledger."""
+"""lab.records.ledger: stamped appends, blobs by hash, the held-out guard, merging another ledger."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def test_append_stamps_and_reads_back(tmp_path):
     {"kind": "submit", "config": {"split": "heldout"}, "raw": {"per_request": "blobs/x"}},
     {"kind": "submit", "config": {"split": "heldout"},
      "metrics": {"ttft_p50_ms": {"delta_pct": -3, "by_class": {"cold_start": -9}}}},
-    # held-out data nested where the guard used to look away: under result, args, or a list
+    # held-out data nested under result, args, or a list
     {"kind": "submit", "result": {"split": "heldout", "per_request": [1, 2, 3]}},
     {"kind": "bench", "args": {"split": "heldout"}, "result": {"metrics": {}}},
     {"kind": "submit", "result": {"runs": [{"split": "heldout", "rows": "blobs/x"}]}},
@@ -78,7 +78,7 @@ def test_merge_adds_only_new_records_and_blobs(tmp_path):
 def test_merge_refuses_a_record_the_ledger_would_not_accept(tmp_path):
     root, vm = tmp_path / "local", tmp_path / "vm"
     ledger.append({"kind": "note", "run": "b"}, vm)
-    with open(vm / "ledger.jsonl", "a") as f:       # written around append, as agent code on the VM could
+    with open(vm / "ledger.jsonl", "a") as f:       # written around append
         f.write(json.dumps({"id": "ev-x", "at": "t", "schema": 1, "kind": "submit", "config": {"split": "heldout"},
                             "metrics": {"ttft": {"new": {"per_request": [1, 2]}}}}) + "\n")
     with pytest.raises(ledger.LedgerError, match="ev-x refused, nothing merged"):
@@ -93,7 +93,7 @@ def test_merge_keeps_legacy_findings_readable(tmp_path):
         f.write(json.dumps({"id": "ev-f", "at": "t", "schema": 1, "kind": "finding", "claim": "old"}) + "\n")
     assert ledger.merge(vm, root) == 2
     with pytest.raises(ledger.LedgerError):
-        ledger.append({"kind": "finding", "claim": "new"}, root)       # never written any more
+        ledger.append({"kind": "finding", "claim": "new"}, root)       # a `finding` is refused
 
 
 def test_root_is_anchored_on_the_repo_not_cwd():

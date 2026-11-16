@@ -1,4 +1,4 @@
-"""Honest kernel timing: synchronized, rotated input buffers, L2 flushed on CUDA; plus a memoization check."""
+"""Kernel timing: synchronized, rotated input buffers, L2 flushed on CUDA; plus a memoization check."""
 from __future__ import annotations
 
 import random
@@ -9,15 +9,14 @@ import torch
 
 from .check import _gen
 
-# Bound at import, before any candidate loads: a candidate that patches the clock, the events or the syncs on their
-# modules changes nothing the timer calls.
+# Bound at import, before any candidate loads.
 _perf_counter, _quantiles, _Random = time.perf_counter, statistics.quantiles, random.Random
 _Event, _record, _elapsed = torch.cuda.Event, torch.cuda.Event.record, torch.cuda.Event.elapsed_time
 _cuda_sync, _mps_sync = torch.cuda.synchronize, torch.mps.synchronize
 _CUDAGraph, _graph, _Stream, _stream, _current = (torch.cuda.CUDAGraph, torch.cuda.graph, torch.cuda.Stream,
                                                   torch.cuda.stream, torch.cuda.current_stream)
 _sleep = torch.cuda._sleep
-SPIN_CYCLES = 1_000_000          # ~0.5 ms of GPU spin queued ahead of a graph replay, so its launch is never timed
+SPIN_CYCLES = 1_000_000          # ~0.5 ms of GPU spin queued ahead of a graph replay
 
 
 def _sync(device):
@@ -29,9 +28,8 @@ def _sync(device):
 
 
 def _one(fn, inputs, device, flush, spin=False) -> tuple[float, object]:
-    """One synchronized call's time in ms and its output: L2 flushed first on CUDA, where CUDA events time it on the
-    device (host clock jitter swamps a ~10 µs kernel). spin=True queues a GPU spin before the start event, so the
-    host's launch of fn happens while the GPU is busy and is not in the window (graph replays)."""
+    """One synchronized call's time in ms and its output; on CUDA, L2 flushed first and timed by CUDA events.
+    spin=True queues a GPU spin before the start event."""
     if flush is not None:
         flush.zero_()
     _sync(device)
@@ -51,8 +49,7 @@ def _one(fn, inputs, device, flush, spin=False) -> tuple[float, object]:
 
 
 def _fingerprint(inputs) -> torch.Tensor:
-    """Every input tensor's bytes as order-sensitive sums of int words, computed on its device (cheap, no copy to the
-    host): taken between calls, never inside the timed window."""
+    """Every input tensor's bytes as order-sensitive sums of int words, computed on its device."""
     out = []
     for t in inputs:
         if not isinstance(t, torch.Tensor):
@@ -82,8 +79,8 @@ def _flush(device):
 
 def time_kernel(fn, make_inputs, shape, dtype, device="cpu", iters=50, warmup=5, n_buffers=4, fresh=False,
                 seed=0) -> dict:
-    """Median and IQR (ms) of fn(*inputs) over n_buffers rotated input sets; fresh=True refills them with new
-    values before every call. Each call is synchronized before and after, L2 flushed between calls on CUDA."""
+    """Median and IQR (ms) of fn(*inputs) over n_buffers rotated input sets, each call synchronized, L2 flushed on CUDA.
+    fresh=True refills the inputs with new values before every call."""
     bufs = [make_inputs(shape, dtype, device, _gen(seed + i)) for i in range(n_buffers)]
     flush, times = _flush(device), []
     for i in range(warmup + iters):
@@ -99,9 +96,8 @@ def time_kernel(fn, make_inputs, shape, dtype, device="cpu", iters=50, warmup=5,
 
 
 def graphed(fn, bufs: list, device) -> list:
-    """One CUDA graph per input set, captured after a warm-up outside the capture (compiles, autotuning): each entry
-    replays fn on that set, as an engine that decodes in graphs runs it, and returns the graph's static output (what
-    the replay wrote). Raises if fn cannot be captured."""
+    """One CUDA graph per input set, captured after a warm-up; each entry replays fn and returns its static output.
+    Raises if fn cannot be captured."""
     side = _Stream(device)
     side.wait_stream(_current(device))
     with _stream(side):
@@ -119,11 +115,8 @@ def graphed(fn, bufs: list, device) -> list:
 
 def time_pair(a, b, make_inputs, shape, dtype, device="cpu", iters=50, warmup=5, n_buffers=4, seed=0,
               graphs=False) -> dict:
-    """a and b timed in pairs on the same inputs, in a seeded random order per pair, so drift (clocks, heat, other
-    load) lands on both: each one's stats plus the per-pair ratio b/a (above 1: a is faster). Raises if a call changes
-    any input (fingerprinted between calls). graphs=True (CUDA):
-    each is captured once per input set and timed as a graph replay, so host launch overhead is not counted. Returns a's
-    outputs of its timed calls too: the caller checks them, since a kernel may behave differently when timed."""
+    """a and b timed in pairs on the same inputs in a seeded random order: each one's stats and the per-pair ratio b/a.
+    graphs=True (CUDA) times graph replays. Also returns inputs and a's timed outputs; raises if an input changes."""
     bufs = [make_inputs(shape, dtype, device, _gen(seed + i)) for i in range(n_buffers)]
     graphs = graphs and torch.device(device).type == "cuda"
     ga, gb = (graphed(a, bufs, device), graphed(b, bufs, device)) if graphs else (None, None)
@@ -132,7 +125,7 @@ def time_pair(a, b, make_inputs, shape, dtype, device="cpu", iters=50, warmup=5,
         inputs = bufs[i % n_buffers]
         fa, fb = (ga[i % n_buffers], gb[i % n_buffers]) if graphs else (a, b)
         first_a = order.random() < 0.5
-        before = _fingerprint(inputs)            # outside the window: a write meant to slow the other call is caught
+        before = _fingerprint(inputs)            # outside the timed window
         x, ox = _one(fa if first_a else fb, inputs, device, flush, spin=graphs)
         _unchanged(inputs, before, "the candidate" if first_a else "the baseline", i % n_buffers)
         y, oy = _one(fb if first_a else fa, inputs, device, flush, spin=graphs)

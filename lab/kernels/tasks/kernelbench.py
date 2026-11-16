@@ -1,24 +1,6 @@
-"""KernelBench (Stanford's ScalingIntelligence/KernelBench, MIT): PyTorch programs whose `Model.forward` a candidate
-rewrites as faster GPU code, in a `ModelNew` with the same constructor. Level 1: 100 single operators, level 2: 100
-fusions, level 3: 50 full architectures. The benchmark kernel-generation work reports on (Kevin, CudaForge, KernelPro,
-evolutionary searches); metrics: correct, speedup over eager PyTorch, fast_p = share of problems correct and more than
-p times faster. Researcher-only: nothing in `lab/` reads it, and it is no agent tool.
+"""KernelBench (ScalingIntelligence/KernelBench, MIT): each problem's `Model.forward` as a kernel task `kb:LEVEL:ID`.
 
-`lab kernels kernelbench fetch` downloads the repo at COMMIT (the problems and the benchmark's own evaluation
-code) into local/kernelbench/<commit>/, with a manifest of every file's sha256; nothing is re-hosted. Each problem is a
-kernel task `kb:LEVEL:ID` (`lab.kernels.tasks.load`): inputs from its own get_inputs (made on the device), weights from
-`Model(*get_init_inputs())` under WEIGHT_SEED, fp32, reference and baseline its eager forward under no_grad,
-KernelBench's tolerance at COMMIT. The starting program is the problem plus `class ModelNew(Model)`, the class
-KernelBench scores, and the `kernel` entry the evaluator calls. The search's checks follow the benchmark's contract:
-contiguous inputs, no value scalings, no NaN/Inf or edge shapes, and no roofline (an algorithmic rewrite, e.g. a
-diagonal matmul done as a row scaling, beats any bound computed from the reference's work). The anti-gaming gates stay
-(inputs unchanged, no aliasing, no kept answers, outputs verified outside the jail). Our own addition is a held-out
-shape: the first module-level size constant get_inputs reads and Model's construction does not, doubled.
-
-`score` runs the benchmark's own `eval_kernel_against_ref` on a program's ModelNew, jailed (5 correctness trials,
-100 timed, cuda events with L2 flushed, speedup over its own eager timing), again at v0/v0.1's fp32 tolerance (1e-2;
-most published numbers), its static checker, and torch.compile's time. `run` puts problems through
-`lab.kernels.search.ab`'s arms (same shapes, start, evaluator, model, budget) and then `score`, and writes fast_p per arm.
+  lab kernels kernelbench fetch | list | score | run
 """
 from __future__ import annotations
 
@@ -126,8 +108,7 @@ def problem_source(name: str) -> str:
 
 
 def _size_constant(src: str, ns: dict) -> str | None:
-    """The first module-level int constant get_inputs reads that neither get_init_inputs nor Model reads: the axis a
-    held-out shape scales (None when there is none)."""
+    """The first module-level int constant get_inputs reads that neither get_init_inputs nor Model reads, or None."""
     names = [t.id for n in ast.parse(src).body if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant)
              and type(n.value.value) is int for t in n.targets if isinstance(t, ast.Name)]
     used = set(ns["get_inputs"].__code__.co_names)
@@ -201,8 +182,7 @@ def task(name: str, source: str | None = None) -> Task:
 
 
 def start_program(src: str) -> str:
-    """The problem with `ModelNew(Model)` (what KernelBench scores) and the evaluator's `kernel` entry. The problem's
-    comment lines are left out: the source screen matches words anywhere (two problems' comments say "signal")."""
+    """The problem, its comment lines left out, with `ModelNew(Model)` and the evaluator's `kernel` entry."""
     code = "\n".join(x for x in src.rstrip().splitlines() if not x.lstrip().startswith("#"))
     return f'''# EVOLVE-BLOCK-START
 {code}
@@ -230,8 +210,7 @@ def kernel(*args):
 
 
 def _import_kernelbench(src: Path) -> None:
-    """The benchmark's package without its __init__, whose utils import LLM clients (openai, litellm) the evaluation
-    never calls; `get_gpu_vendor`, the one name the evaluation takes from utils, answers nvidia."""
+    """The benchmark's package without its __init__; a stub utils whose `get_gpu_vendor` answers nvidia."""
     pkg = types.ModuleType("kernelbench")
     pkg.__path__ = [str(src / "kernelbench")]
     utils = types.ModuleType("kernelbench.utils")
@@ -300,16 +279,16 @@ def score(name: str, program: Path, work: Path) -> dict:
 
 def fast_p(rows: list[dict], p: float, key: str = "speedup_eager", correct: str = "correct",
            static: bool = False) -> float:
-    """KernelBench's fast_p: the share of problems whose program is correct and more than p times faster; `static`:
-    and passes the benchmark's static checker (a custom kernel, none of its known hacks)."""
+    """KernelBench's fast_p: the share of problems whose program is correct and more than p times faster.
+    With `static`, it must also pass the benchmark's static checker."""
     ok = [bool(r.get(correct)) and (r.get(key) or 0) > p and (not static or bool((r.get("static") or {}).get("valid")))
           for r in rows]
     return sum(ok) / len(rows) if rows else 0.0
 
 
 def summary(rows: list[dict]) -> dict:
-    """fast_0, fast_1, fast_2 over eager (the published convention) and over torch.compile, at both tolerances, and
-    over eager at the pinned tolerance counting only programs the static checker passes."""
+    """fast_0, fast_1, fast_2 over eager and over torch.compile, at both tolerances.
+    Also over eager at the pinned tolerance, counting only programs the static checker passes."""
     out = {"n": len(rows)}
     for tol, correct in (("pinned", "correct"), ("v01", "correct_v01")):
         for base in ("eager", "compile"):
@@ -322,8 +301,8 @@ def summary(rows: list[dict]) -> dict:
 
 
 def run(names: list[str], arms: str, out: Path, extra: list[str]) -> dict:
-    """Each problem through lab.kernels.search.ab's arms (the same shapes, start, evaluator and budget for every arm),
-    then each arm's winner through `score`; writes <out>/kernelbench.json."""
+    """Each problem through lab.kernels.search.ab's arms, then each arm's winner through `score`.
+    Writes <out>/kernelbench.json."""
     from collections import Counter
 
     from lab.kernels.tasks import shapes as shapes_mod

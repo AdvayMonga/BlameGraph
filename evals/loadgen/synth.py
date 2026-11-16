@@ -1,16 +1,6 @@
-"""Synthetic traffic, generated fresh for each run from the public corpus and then gone: as much as a regime needs,
-with the seen split's shapes and none of its prompts. Only the seen split is read, so the real held-out split is
-never touched; nothing is written, and the seed (in the run's config) regenerates the same traffic.
+"""Synthetic traffic generated fresh for each run from the seen split: its shapes, none of its prompts.
 
-Per class, whole sessions are drawn in shuffled passes over every real session (each shape used once per pass, so the
-tails survive) with their structure (turn count, think time between turns, each request's message roles and
-per-message lengths, max_tokens, and the `regime` that judges a mixed-class request). The gaps between session
-starts are the real sequence, repeated as often as needed, each scaled by a seeded jitter, so a burst stays a burst
-where it was (what `spike` and `cold_start` are defined by). Each message's text is real text of the same role from
-the seen split, cut at sentence ends and recombined to the original length: it reads and tokenizes like the real
-traffic but repeats no prompt.
-
-  regimes: `lab regimes run REGIME --synthetic` (Ctx.synthetic): every pool is generated, not read
+  lab regimes run REGIME --synthetic                            every pool is generated, not read
   lab synth compare [--corpus DIR] [--seed N] [--requests N]   the generated shapes beside the real ones
 """
 from __future__ import annotations
@@ -25,8 +15,8 @@ from pathlib import Path
 
 from evals.regimes import CORPUS_DIR, TraceRequest, load_manifest, load_trace
 
-JITTER = 0.1                # each gap scaled by exp(N(0, JITTER)): the same pattern, never the same instants
-MIN_REQUESTS = 2000         # a generated pool holds at least this many, so a full-tier run rarely cycles it
+JITTER = 0.1                # each gap is scaled by exp(N(0, JITTER))
+MIN_REQUESTS = 2000         # fewest requests in a generated pool
 _CUT = re.compile(r"(?<=[.!?\n])\s+")
 
 
@@ -43,7 +33,7 @@ def _messages(r: TraceRequest) -> list[dict]:
 
 
 def pieces(reqs: list[TraceRequest]) -> dict[str, list[str]]:
-    """Real text by role, cut at sentence ends: what generated messages are built from."""
+    """Real text by role, cut at sentence ends."""
     out: dict[str, list[str]] = defaultdict(list)
     for r in reqs:
         for m in _messages(r):
@@ -80,8 +70,7 @@ def _draw(sessions: list, n: int, rng: random.Random) -> list:
 
 
 def synthesize(reqs: list[TraceRequest], n_sessions: int, seed, tag: str) -> list[TraceRequest]:
-    """`n_sessions` sessions shaped like `reqs`'. `build_prompt_tokens` is the real request's count scaled by the
-    character ratio (generated text tokenizes like the text it was cut from)."""
+    """`n_sessions` sessions shaped like `reqs`'; `build_prompt_tokens` is the real count scaled by character ratio."""
     rng = random.Random(seed)
     real = _sessions(reqs)
     pool = pieces(reqs)
@@ -107,8 +96,7 @@ def synthesize(reqs: list[TraceRequest], n_sessions: int, seed, tag: str) -> lis
 
 def trace(cls: str, seed: int, split: str = "seen", corpus_dir: Path = CORPUS_DIR,
           min_requests: int = MIN_REQUESTS) -> list[TraceRequest]:
-    """A fresh trace for one class, fitted to its seen split: whole passes over its sessions until it holds at least
-    `min_requests`. `split` only names the seed stream (a held-out run draws different traffic from the same shapes)."""
+    """A fresh trace for one class from its seen split, at least `min_requests` long; `split` names the seed stream."""
     _, reqs = load_trace(cls, "seen", corpus_dir)
     passes = max(1, math.ceil(min_requests / max(len(reqs), 1)))
     return synthesize(reqs, passes * len(_sessions(reqs)), f"{cls}:{split}:{seed}", f"syn-{cls}-{split}-{seed}")
@@ -173,13 +161,12 @@ def shape(reqs: list[TraceRequest]) -> dict:
             "prompt_tokens": {"p50": _q(p, .5), "p90": _q(p, .9), "p99": _q(p, .99)},
             "max_tokens": {"p50": _q(m, .5), "p90": _q(m, .9)},
             "gap_s": {"mean": mean, "cv": sd / mean if mean else None},
-            "per_10s": {"mean": cm, "cv": csd / cm if cm else None},     # burstiness whatever the clock's resolution
+            "per_10s": {"mean": cm, "cv": csd / cm if cm else None},     # burstiness
             "_p": p, "_gaps": gaps}
 
 
 def compare(corpus_dir: Path = CORPUS_DIR, seed: int = 0, min_requests: int = 0) -> dict:
-    """Per class: the real seen shape beside a generated trace's, with KS distances on prompt tokens and gaps
-    (`min_requests` 0 = one pass, the real trace's own size)."""
+    """Per class: the real seen shape beside a generated trace's, with KS distances on prompt tokens and gaps."""
     out = {}
     for name in load_manifest(Path(corpus_dir)).classes:
         a = shape(load_trace(name, "seen", Path(corpus_dir))[1])

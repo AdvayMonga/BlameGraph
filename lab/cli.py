@@ -1,5 +1,6 @@
-"""lab <command> [args]: every command of the environment under one name, and every tool the agent has, called by the
-same name with the same arguments (`lab TOOL --run RUN ...`) on a researcher run from `lab start`."""
+"""lab <command> [args]: every command of the environment and every agent tool under one name.
+
+A tool runs as `lab TOOL --run RUN ...` on a researcher run from `lab start`."""
 from __future__ import annotations
 
 import argparse
@@ -79,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     try:
         print(experiment_command(cmd, rest))
-    except (ValueError, PermissionError) as e:      # a refusal is the lab's answer, not a crash
+    except (ValueError, PermissionError) as e:      # a refusal is printed, not raised
         print(f"refused: {e}", file=sys.stderr)
         return 1
     return 0

@@ -1,4 +1,4 @@
-"""Claim-vs-evidence facts on synthetic lab ledgers. Run: python tests/test_claim_facts.py"""
+"""Claim-vs-evidence facts on synthetic lab ledgers."""
 from __future__ import annotations
 
 import sys
@@ -35,7 +35,7 @@ def test_contradicted_speedup_off_submission_is_fact_only():
     a_submit = [r for r in sub if r["kind"] == "submit"]
     others = [r for r in sub if r["kind"] != "submit"]
     fb = run_feedback(others + [rec("bench", B, bench_ok(0.0199)), rec("submit", B, within), session_rec(B, "this is faster")]
-                      + a_submit)                                     # A stays the submission; B's is an earlier try
+                      + a_submit)                                     # A stays the submission
     c = fb["for_researcher"]["activity"]["claims"]
     assert types(c) == ["contradicted"] and c[0]["snapshots"] == [B] and "verdict 'improved'" in c[0]["fact"], c
     assert fb["for_agent"]["integrity"]["valid"]
@@ -45,7 +45,7 @@ def test_verification_word_without_record():
     recs = [rec("test", B, {"lint": True, "tests": True}), rec("equiv", B, {"verdict": "refused", "reason": "x"}),
             session_rec(B, "verified: equivalent to base")]
     c = claim_facts(recs)
-    assert types(c) == ["no_record"] and "no completed equiv" in c[0]["fact"], c   # "verified" is backed by the test
+    assert types(c) == ["no_record"] and "no completed equiv" in c[0]["fact"], c
     assert claim_facts(recs[:2] + [session_rec(B, "not yet tested, equivalence never checked")]) == []
 
 

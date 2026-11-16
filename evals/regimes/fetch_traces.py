@@ -1,13 +1,8 @@
 """Download the raw inputs of the real-trace corpus into a local cache, pinned and verified.
 
-    uv sync --extra dev --extra corpus
     .venv/bin/python evals/regimes/fetch_traces.py [--cache ~/.cache/inference-server/traces]
 
-Idempotent: a file already present with the pinned sha256 is not fetched again; a mismatch is
-re-downloaded once and then refused. Raw data never enters git — only the built corpus does.
-After download, the WildChat parquet shards are reduced to `wildchat/conversations.jsonl`: the
-fields build_corpus.py reads (no IPs, locations or headers), in shard order. That step needs
-pyarrow (the `corpus` extra); the build itself reads only the jsonl.
+The WildChat parquet shards are then reduced to `wildchat/conversations.jsonl` (needs pyarrow).
 """
 
 from __future__ import annotations

@@ -1,13 +1,5 @@
 """The workload corpus: frozen, hashed traces per workload class, split seen / held-out.
-
-The corpus defines the landscape the lab measures — anything not in it is invisible. Traces are
-data committed to `evals/regimes/`, never generated at run time, and every file is hashed into a
-`corpus_version` that travels with every measurement so a comparison across corpus drift can be
-refused. A modified trace is a new version, never a silent change: `load_manifest`
-raises on any hash mismatch.
-
-Stdlib only.
-"""
+`load_manifest` raises on any hash mismatch. Stdlib only."""
 
 from __future__ import annotations
 
@@ -26,7 +18,7 @@ SPLITS = ("seen", "heldout")
 
 
 class CorpusError(ValueError):
-    """The corpus on disk does not match its manifest. Always fatal."""
+    """The corpus on disk does not match its manifest."""
 
 
 @dataclass
@@ -40,8 +32,8 @@ class TraceRequest:
     max_tokens: int
     sampling: dict[str, Any] = field(default_factory=lambda: {"temperature": 0.0, "top_p": 1.0,
                                                                "top_k": 0})
-    expected_output_hash: str | None = None    # filled by a reference run; the correctness oracle
-    expected_output_tokens: int | None = None  # ditto; the termination oracle. None = not measured
+    expected_output_hash: str | None = None    # filled by a reference run
+    expected_output_tokens: int | None = None  # the reference's answer length; None = not measured
     # the reference's answer length to each user-turn prefix of `messages` (the shared-prefix regime's turns)
     expected_turn_output_tokens: list[int] | None = None
     # A real conversation ending in a user turn; None = one user message, `prompt`. When set,
@@ -54,9 +46,7 @@ class TraceRequest:
         return self.messages or [{"role": "user", "content": self.prompt}]
 
     def to_dict(self) -> dict[str, Any]:
-        """The optional fields are omitted when unset, so a trace written without them is byte-identical to one
-        from before they existed. `expected_output_hash` keeps serialising its null: it is already in every
-        committed trace."""
+        """The record as a dict; unset optional fields are omitted, `expected_output_hash` is always written."""
         d = asdict(self)
         for k in ("expected_output_tokens", "expected_turn_output_tokens", "messages", "build_prompt_tokens", "regime"):
             if d[k] is None:
@@ -80,7 +70,7 @@ class WorkloadClass:
         return getattr(self, split)
 
     def within_slo(self, ttft_p95_ms: float, tpot_p95_ms: float | None) -> bool:
-        """The class SLO judges a run: p95 TTFT under its ceiling, and p95 TPOT when one is set."""
+        """Whether p95 TTFT is under the class's ceiling, and p95 TPOT when one is set."""
         if self.slo_ttft_ms is None:
             raise CorpusError(f"class {self.name} has no class SLO: judge each request by its regime")
         if ttft_p95_ms >= self.slo_ttft_ms:
@@ -99,13 +89,12 @@ class Manifest:
     notes: str = ""
     # relative path -> factor every real inter-arrival was stretched by; absent = not recorded
     dilation: dict[str, float] = field(default_factory=dict)
-    # the version before measured answer lengths were added (evals/regimes/lengths.py): the same prompts, so the held-out
-    # budget stays keyed to it; None = no lengths, `corpus_version` is that key
+    # the version before measured answer lengths were added; None = no lengths
     prompts_version: str | None = None
 
     @property
     def budget_key(self) -> str:
-        """The held-out budget's key: lengths change no prompt, so they do not start a new budget."""
+        """The held-out budget's key: `prompts_version` when set, else `corpus_version`."""
         return self.prompts_version or self.corpus_version
 
     def to_dict(self) -> dict[str, Any]:
@@ -132,9 +121,7 @@ def file_sha256(path: Path) -> str:
 
 def corpus_version(files: dict[str, str], classes: dict[str, WorkloadClass],
                    dilation: dict[str, float] | None = None) -> str:
-    """One hash over the sorted (path, sha256) pairs AND the class table, so a changed SLO or
-    rate moves the version as surely as a changed trace byte does. A recorded dilation is
-    hashed too; none recorded leaves the hash as it was before the field existed."""
+    """One hash over the sorted (path, sha256) pairs, the class table and any recorded dilation."""
     lines = [f"{p} {h}" for p, h in sorted(files.items())]
     lines += [json.dumps(asdict(c), sort_keys=True) for _, c in sorted(classes.items())]
     if dilation:
@@ -168,8 +155,7 @@ def build_manifest(classes: dict[str, WorkloadClass], corpus_dir: Path, notes: s
 
 
 def load_manifest(corpus_dir: Path = CORPUS_DIR) -> Manifest:
-    """Read `manifest.json` and verify the hash of every trace present; refuse the corpus on any mismatch. A missing
-    trace is refused only when it is loaded (`load_trace`): held-out traces are not in git (`store pull --corpus`)."""
+    """Read `manifest.json` and verify the hash of every trace present; raises CorpusError on any mismatch."""
     m = Manifest.from_dict(json.loads((corpus_dir / "manifest.json").read_text()))
     if m.schema_version != CORPUS_SCHEMA_VERSION:
         raise CorpusError(f"corpus schema_version {m.schema_version} != {CORPUS_SCHEMA_VERSION}")
