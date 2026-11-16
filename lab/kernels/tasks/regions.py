@@ -85,16 +85,24 @@ def functions(stations, first, last, live=(), constants: dict | None = None, ref
     return baseline, reference, ins, outs
 
 
-def bytes_moved(stations, first, last, ctx: dict, live=()) -> dict:
-    """{fused_bytes: the region's inputs and outputs; unfused_bytes: every station's reads and writes}, on `ctx`."""
+def bytes_moved(stations, first, last, ctx: dict, live=(), gathered: dict | None = None) -> dict:
+    """{fused_bytes: the region's inputs and outputs; unfused_bytes: every station's reads and writes}, on `ctx`.
+    `gathered` {weight: index entry}: of such a weight, only the rows the index names are counted."""
     region = span(stations, first, last)
     ins, outs = interface(stations, first, last, live)
     seen, unfused = dict(ctx), 0
+
+    def read(name) -> int:
+        x, ids = seen.get(name), seen.get((gathered or {}).get(name))
+        if not isinstance(x, torch.Tensor) or not isinstance(ids, torch.Tensor) or not x.shape[0]:
+            return _n(x)
+        rows = ids[(ids >= 0) & (ids < x.shape[0])].unique().numel()
+        return _n(x) * rows // x.shape[0]
     for s in region:
         got = s.fn(seen)
-        unfused += sum(_n(seen.get(r)) for r in s.reads) + sum(_n(v) for v in got.values())
+        unfused += sum(read(r) for r in s.reads) + sum(_n(v) for v in got.values())
         seen.update(got)
-    return {"fused_bytes": sum(_n(ctx.get(i)) for i in ins) + sum(_n(seen.get(o)) for o in outs),
+    return {"fused_bytes": sum(read(i) for i in ins) + sum(_n(seen.get(o)) for o in outs),
             "unfused_bytes": unfused}
 
 
@@ -105,7 +113,8 @@ def _n(x) -> int:
 def task(name: str, stations: tuple[Station, ...], first: str, last: str,
          make_ctx: Callable[[tuple, torch.dtype, str, torch.Generator], dict], shape_of: Callable,
          dtypes: tuple = (torch.bfloat16,), live: tuple[str, ...] = (), watch: tuple[str, ...] = (),
-         constants: dict | None = None, reference_stations=None, discrete: tuple[str, ...] = (), **kw) -> Task:
+         constants: dict | None = None, reference_stations=None, discrete: tuple[str, ...] = (),
+         gathered: dict | None = None, **kw) -> Task:
     """The region as a kernel task: inputs from `make_ctx(shape, dtype, device, generator)`, a dict of named tensors.
     The stations are the baseline, fp32 the reference; its cost is (0 FLOPs, the fused bytes)."""
     base, ref, ins, _ = functions(stations, first, last, live, constants, reference_stations, discrete)
@@ -117,7 +126,7 @@ def task(name: str, stations: tuple[Station, ...], first: str, last: str,
     def cost(shape, dtype, inputs=None):
         inputs = inputs or make_inputs(shape, dtype, "cpu", torch.Generator().manual_seed(0))
         ctx = {**(constants or {}), **dict(zip(ins, inputs))}      # the stations read `cfg` too
-        return 0.0, bytes_moved(stations, first, last, ctx, live)["fused_bytes"]
+        return 0.0, bytes_moved(stations, first, last, ctx, live, gathered)["fused_bytes"]
     watched = tuple(sorted({*watch, __name__, *(s.fn.__module__ for s in span(stations, first, last))}))
     return Task(name=name, entry=kw.pop("entry", None), reference=ref, make_inputs=make_inputs, shape_of=shape_of,
                 cost=cost, dtypes=dtypes, layouts=(), error_budget=ERROR_BUDGET, baseline_fn=base, watch=watched, **kw)
@@ -159,7 +168,7 @@ class Engine:
         return max(fits, key=lambda n: len(self.sets[n].prefix))
 
     def declared(self, name: str) -> tuple[str, ...]:
-        """The tuple `name` the stations module must declare (LIVE, IN_PLACE, STEP, DISCRETE, OPAQUE)."""
+        """The tuple `name` the stations module must declare (LIVE, IN_PLACE, STEP, DISCRETE, OPAQUE, GATHERED)."""
         st = self.module()
         if not hasattr(st, name):
             raise ValueError(f"{self.stations} declares no {name}: a region needs it (the stations contract)")
@@ -367,7 +376,7 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
     return task(fn, stations, first, last, make_ctx, shape_of, dtypes=dtypes, live=alive,
                 watch=(eng.stations, *_importable(eng.watch)), entry=f"{eng.stations}:{which}", capture_fn=fn,
                 seen_default=tuple(by_shape), constants=consts, reference_stations=reference_stations(eng, which),
-                discrete=eng.declared("DISCRETE"),
+                discrete=eng.declared("DISCRETE"), gathered=dict(zip(eng.declared("GATHERED"), eng.module().GATHERED.values())),
                 heldout_axes=tuple(a + int(multi) for a in _heldout_axes(eng, which, reads, ins)) if calls else (),
                 heldout_values=((0, (eng.heldout_layer,)),) if multi and eng.heldout_layer in layers else (),
                 start_program=start,

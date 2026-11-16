@@ -32,6 +32,7 @@ IN_PLACE = ("kv",)
 STEP = ()
 DISCRETE = ()
 OPAQUE = ("paged_ctx",)
+GATHERED = {}
 
 def _norm(c):
     x = c["h"].float()

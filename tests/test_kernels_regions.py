@@ -211,3 +211,11 @@ if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
             fn(*[Path(tempfile.mkdtemp()) for _ in inspect.signature(fn).parameters]); print("ok", name)
+
+
+def test_a_gathered_weight_counts_only_the_rows_its_index_names():
+    pick = Station("pick", ("x", "w", "ids"), ("o",), lambda c: {"o": c["x"] + c["w"][c["ids"].clamp(max=3)].sum()})
+    c = {"x": torch.zeros(2), "w": torch.zeros(4, 8), "ids": torch.tensor([1, 1, 3, 4])}       # 4: no row
+    whole = bytes_moved((pick,), "pick", "pick", c)["fused_bytes"]
+    part = bytes_moved((pick,), "pick", "pick", c, gathered={"w": "ids"})["fused_bytes"]
+    assert whole - part == 2 * 8 * 4

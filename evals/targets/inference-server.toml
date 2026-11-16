@@ -41,7 +41,7 @@ tolerances = { bfloat16 = [1e-2, 1e-2], float16 = [1e-3, 1e-3], float32 = [1e-5,
 capture_env = { CUSTOM_BACKEND_CUDA_GRAPH = "0" }   # a capture (`profile` with `capture`) sees only calls that reach Python
 
 [regions]                                    # the engine's steps (stations); a kernel search replaces a stretch of them
-stations = "inference_server.models.stations"   # its station sets, LIVE, IN_PLACE, STEP, DISCRETE, OPAQUE, functional,
+stations = "inference_server.models.stations"   # its station sets, LIVE, IN_PLACE, STEP, DISCRETE, OPAQUE, GATHERED, functional,
                                                 # reference, layer_weights, constants, load_model
 overrides = "inference_server.models.regions"   # the package the engine reads a region's replacement from
 watch = ["inference_server.models.fused", "inference_server.models.moe_kernel",
