@@ -16,7 +16,7 @@ ENTRY=$(python -c "from lab.kernels.tasks import load; print(load('$TASK').entry
 export LAB_TARGET="${LAB_TARGET:-evals/targets/inference-server.toml}"
 mkdir -p "$OUT"
 # The engine's serving env (BACKEND, MODEL_NAME, ...) from the target spec, as `serve` would set it.
-eval "$(python -c 'from lab import target; import shlex; print(" ".join(f"export {k}={shlex.quote(v)};" for k, v in target.load().engine.env.items()))')"
+eval "$(python -c 'from evals.targets import target; import shlex; print(" ".join(f"export {k}={shlex.quote(v)};" for k, v in target.load().engine.env.items()))')"
 ENGINE="${LAB_ENGINE_REPO:-$HOME/inference-server}"
 export PYTHONPATH="$PWD:$ENGINE/src${PYTHONPATH:+:$PYTHONPATH}"
 python -c "import openevolve" 2>/dev/null || "$HOME/.local/bin/uv" pip install -q --python "$(command -v python)" "openevolve==0.4.0"
