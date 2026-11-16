@@ -92,10 +92,26 @@ def write(setting: str, parent: Program, plan: dict, borrowed: list[Program]) ->
 
 
 def reflect(setting: str, population: list[Program], ideas: list[Idea], generation: int) -> tuple[str, str]:
-    """(system, user) for the call after the last generation: reflections on its ideas, and one on the run."""
-    return _system(setting, ideas, population), last(ideas, population, generation) + (
-        "\n\nReflect on each of these ideas, and on the run. Answer with one JSON object and nothing else: {"
-        + REFLECTIONS + ', "run": "<what the run gained and what limited it, max 60 words>"}')
+    """(system, user) for the call after the last generation: reflections on its ideas, and one on the whole run."""
+    return _system(setting, ideas, population), run(population) + "\n\n" + last(ideas, population, generation) + (
+        "\n\nReflect on each of the last generation's ideas, and on the whole run. Answer with one JSON object and "
+        "nothing else: {" + REFLECTIONS + ', "run": "<what the whole run gained and what limited it, max 60 words>"}')
+
+
+def run(population: list[Program]) -> str:
+    """The whole run: each generation's usable programs and their best score, and the best usable program's line of
+    descent with each change."""
+    usable = [p for p in population if p.usable]
+    rows = [json.dumps({"generation": g, "programs": sum(p.generation == g for p in population),
+                        "best_score": max((round(p.score, 4) for p in usable if p.generation == g), default=None)})
+            for g in sorted({p.generation for p in population})]
+    best = max(usable, key=lambda p: p.score, default=population[0])
+    path = [json.dumps({"program": n.id, "generation": n.generation, "score": round(n.score, 4),
+                        "change": short(n.plan) if n.plan else "the starting program"})
+            for n in lineage(best, population)]
+    return "\n".join(["# Each generation's programs and the best score among those still usable (generation 0: the "
+                      "start, the seeds and the ports)", *rows,
+                      "# The best usable program's line of descent, with the change that made each program", *path])
 
 
 def read(text: str) -> dict:
