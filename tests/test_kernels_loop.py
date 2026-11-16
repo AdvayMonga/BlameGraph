@@ -305,6 +305,21 @@ def test_parents_are_the_best_then_a_weighted_draw_without_replacement_of_usable
     assert diversity.pick([pop[6]], 3, random.Random(0)) == [] and len(diversity.pick(pop[:2], 8, random.Random(0))) == 2
 
 
+def test_a_parent_is_drawn_more_often_the_more_its_code_differs_from_those_already_picked():
+    body = [f"x{k} = {k}" for k in range(40)]
+    best = program(0, 1.5, code="\n".join(body))
+    tuned = [program(k, 1.4, code="\n".join([*body, f"tile = {k}"])) for k in range(1, 9)]       # the best, one line added
+    other = program(9, 0.7, code="\n".join(f"y{k} = {k}" for k in range(40)))                    # a rewrite, the lowest score
+    late = [program(100 + k, 1.3, code="\n".join([*body, f"late = {k}"])) for k in range(40)]    # more than 32 better
+    pop = [best, *tuned, other, *late]
+    drawn = [diversity.pick(pop, 3, random.Random(s)) for s in range(200)]
+    often = sum(other in d for d in drawn)
+    assert all(d[0] is best for d in drawn) and often > max(sum(t in d for d in drawn) for t in tuned)
+    assert any(p in d for d in drawn for p in sorted(pop, key=lambda p: -p.score)[32:])     # no cutoff at the best 32
+    assert diversity.differs(diversity._lines("a = 1\n  # c\n\nb = 2"), diversity._lines("b = 2\na = 1")) == 0
+    assert diversity.differs(frozenset("ab"), frozenset("bc")) == 1 - 1 / 3 and diversity.differs(frozenset(), frozenset()) == 0
+
+
 def test_only_an_identical_program_is_refused():
     n = diversity.Novelty()
     n.add(program(1, 1.0).code)
