@@ -1,6 +1,5 @@
-"""The `kernel_search` tool (lab/tools.py) and the pipeline it runs (lab/kernels/tasks/pipeline.py): the start program and the
-patch from the agent's engine tree, the ssh environment for a worker host, the tool's refusals, and one call end to end
-with the capture, search and gate faked (no GPU, no model)."""
+"""The `kernel_search` tool (lab/tools.py) and its pipeline: the start program and patch from the agent's engine tree,
+the worker's ssh env, the tool's refusals, and one call end to end with the capture, search and gate faked."""
 from __future__ import annotations
 
 import dataclasses

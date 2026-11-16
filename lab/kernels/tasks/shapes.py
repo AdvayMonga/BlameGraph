@@ -1,6 +1,5 @@
-"""Shape sets from captured calls: the distinct shapes a kernel saw, how often, and a split that holds out whole
-regions of shape space (the largest values on the task's held-out axes) rather than random samples, so a kernel
-tuned on the seen shapes is tested where it was never tuned."""
+"""Shape sets from captured calls: the distinct shapes a kernel saw, how often, and a seen / held-out split by a band
+of each of the task's held-out axes."""
 from __future__ import annotations
 
 import json
@@ -62,9 +61,8 @@ def sources_from_captures(task: Task, dirs: list[Path]) -> dict:
 
 
 def ints_from_captures(task: Task, dirs: list[Path]) -> dict:
-    """{json shape: the 1-D int args by value} from the first captured call of each shape (e.g. its real sequence
-    lengths), for `Task.with_ints`. Calls logged by shape only (inside a graph recording) carry none, and so does a
-    call with a 1-D int arg too long to be logged by value (capture.SMALL_INT): a part of its ints is not real ints."""
+    """{json shape: the 1-D int args by value} from the first captured call of each shape, for `Task.with_ints`; a
+    call with any 1-D int arg not logged by value is skipped."""
     out: dict = {}
     for d in dirs:
         for call in capture.load(d):
@@ -98,12 +96,8 @@ HELDOUT_BAND = (0.6, 0.8)     # held out: a band of each held-out axis, by calls
 
 
 def split(task: Task, counts: Counter) -> dict:
-    """Held out: a shape whose value on any held-out axis lies in that axis's `HELDOUT_BAND` (above its 60th and up to
-    its 80th percentile, by calls; by distinct values when that holds out nothing, i.e. most calls sit at a few values),
-    never the axis's largest value: the shapes a loaded regime runs most (the largest batches, the longest waves) stay
-    seen, and the band in between tests the program on sizes it was not selected on. By distinct values the
-    most-called shape always stays seen, and axes are added smallest band first while at most half of all calls are
-    held out. Seen: the rest. Each list is ordered by call count, most frequent first."""
+    """Held out: a shape whose value on any held-out axis lies in that axis's `HELDOUT_BAND` (percentiles by calls; by
+    distinct values when that holds out nothing), never the axis's largest. Seen: the rest. Both most-called first."""
     if not counts:
         return {"seen": list(task.seen_default), "heldout": list(task.heldout_default), "source": "defaults"}
     lo_q, hi_q = HELDOUT_BAND
@@ -116,7 +110,7 @@ def split(task: Task, counts: Counter) -> dict:
     cut = {ax: band(sorted(v for s, n in counts.items() for v in [s[ax]] * n)) for ax in task.heldout_axes}
     held = {s for s in counts if any(cut[ax][0] < s[ax] <= cut[ax][1] for ax in task.heldout_axes)}
     by = "calls"
-    if not held:                                 # calls pile up at a few values: a band over distinct values instead
+    if not held:                                 # bands over distinct values instead, smallest first
         by, top, total, cut = "distinct", max(counts, key=lambda s: counts[s]), sum(counts.values()), {}
         bands = {}
         for ax in task.heldout_axes:
@@ -134,9 +128,8 @@ def split(task: Task, counts: Counter) -> dict:
 
 
 def select(task: Task, sets: dict, k: int = 8, bins: int = 4) -> dict:
-    """At most `k` seen shapes for selection, chosen by calls: shapes are bucketed by the other axes plus a quantile bin
-    of each held-out axis, the most-called shape stands for its bucket, and it carries the bucket's calls as its weight.
-    The held-out set is untouched; `gate` still judges every held-out shape."""
+    """At most `k` seen shapes for selection: shapes are bucketed by the other axes plus a quantile bin of each
+    held-out axis; each bucket's most-called shape carries the bucket's calls as its weight."""
     seen, calls = sets["seen"], sets.get("calls") or {}
     if len(seen) <= k:
         return sets

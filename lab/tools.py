@@ -1,4 +1,4 @@
-"""The agent's metered tools. Each runs outside the jail, snapshots the workspace, and writes the ledger whether the agent likes it or not."""
+"""The agent's metered tools: each runs outside the jail, snapshots the workspace and writes the ledger."""
 
 from __future__ import annotations
 
@@ -19,9 +19,9 @@ from lab.evaltools import BENCH_TIER, EvalTools
 from lab.proftools import ProfTools
 from lab.infra.sandbox import grader
 
-# Tools that occupy the GPU: their wall time is charged at the venue's rate. The rest cost $0.
-QUERY_MAX_BYTES = 64_000           # a query's reply: whole rows up to this, so one call cannot flood the context
-AFTER_BENCH_TIMEOUT_S = 900          # the after-bench profile: 1-7 min measured; a hang costs at most this
+QUERY_MAX_BYTES = 64_000           # a query's or search's reply is cut to whole rows under this
+AFTER_BENCH_TIMEOUT_S = 900          # timeout of the profile taken after a bench
+# Tools that occupy the GPU: their wall time is charged at the venue's rate; the rest cost $0.
 GPU_TOOLS = frozenset({"profile", "trace", "kernel", "hostprof", "bench", "equiv", "submit", "baseline",
                        "kernel_search"})
 
@@ -92,7 +92,7 @@ class Toolbox(EvalTools, ProfTools):
                                                  (base or {}).get("result"))
 
     def _audited(self, tool: str, args: dict):
-        """Snapshot, and stop the run on a surface violation: integrity failures are the one hard rule."""
+        """Snapshot the workspace; record and raise on a write-surface violation."""
         self._t0 = time.monotonic()
         if tool in GPU_TOOLS and self.s.budget.remaining_usd <= 0 and gpu_rate()[0] > 0:
             raise BudgetExceeded(f"{tool}: no budget left for GPU time")
@@ -118,8 +118,7 @@ class Toolbox(EvalTools, ProfTools):
         return dest
 
     def _keep(self, src: Path) -> tuple[str, str]:
-        """`src` into the ledger as a blob, and a copy in the workspace: the ledger is outside the jail, so the agent
-        could not read it there. Returns (blob, workspace-relative copy)."""
+        """Store `src` as a ledger blob and copy it into the workspace; returns (blob, workspace-relative copy)."""
         _drop_links(src)
         blob = ledger.put_blob(src, self.s.ledger_root)
         visible = Path("lab") / "runs" / Path(blob).name
@@ -147,9 +146,7 @@ class Toolbox(EvalTools, ProfTools):
                f"{lint.output[-1500:]}\n{tests.output[-3000:]}"
 
     def _after_bench(self, tree: Path) -> dict:
-        """The profile a completed bench takes of the same tree right after its measurement: its own launch, the
-        general config and `profile`'s default workload (8 requests x 32 tokens), so its layer facts describe that load,
-        not the bench's. The layer facts a mechanism is checked against. Never costs the bench."""
+        """Profile `tree` in its own launch with `profile`'s defaults; skipped without budget, a failure is returned."""
         rate = gpu_rate()[0]
         if rate > 0 and self.s.budget.remaining_usd <= 0:
             return {"skipped": "no budget left for GPU time"}
@@ -164,9 +161,8 @@ class Toolbox(EvalTools, ProfTools):
 
 
     def kernel_search(self, args: dict) -> str:
-        """The kernel layer in one blocking call (lab/kernels/tasks/pipeline.py): capture the task's calls under real traffic,
-        search, gate the winner on the held-out shapes; the winner comes back as a patch of the engine module (a
-        region's: its override module), saved in the workspace (left out of your change) for you to apply."""
+        """Capture the task's calls, search, gate the winner on the held-out shapes (lab/kernels/tasks/pipeline.py); a
+        passing winner is saved in the workspace as a patch of the engine module (a region's: its override module)."""
         import argparse
         import contextlib
         from lab.kernels.tasks import pipeline
@@ -323,8 +319,7 @@ class Toolbox(EvalTools, ProfTools):
         return f"reflection {rec['id']} on {fields['record']}"
 
     def _measured(self, spec: ToolSpec) -> ToolSpec:
-        """A measured tool: refused without an open hypothesis and a prediction, or while the last result lacks a
-        reflection; its reply ends with the prediction, the measurement and the gap."""
+        """A measured tool: `experiments.check` gates it; the reply ends with the prediction, measurement and gap."""
         def call(args: dict) -> str:
             experiments.check(self.s.ledger_root, self.s.run_id, spec.name, args)
             before = {r["id"] for r in experiments.measured(self.s.ledger_root, self.s.run_id)}
@@ -353,7 +348,7 @@ class Toolbox(EvalTools, ProfTools):
         return ToolSpec(spec.name, spec.description + note, schema, call)
 
     def specs(self) -> list[ToolSpec]:
-        """What each tool does, returns and costs; never when or how to use it."""
+        """The tool specs: what each tool does, returns and costs."""
         from evals.loadgen import suite
         from lab.evaltools import HOLDOUT_BUDGET
         obj = {"type": "object", "properties": {}}
@@ -502,8 +497,7 @@ DEFAULT_CORPUS_CLASS = "steady_interactive"   # targets name no corpus class of 
 
 
 def stage_harness(tree: Path) -> Path:
-    """Copy just the profiling harness into the pristine tree: the jail must not open the environment repo (it holds
-    the ledger and .env), and the agent's own tree has no `lab` package."""
+    """Copy the profiling harness into the pristine tree, under HARNESS_DIR; returns that dir."""
     dest = tree / HARNESS_DIR / "lab" / "profile"
     dest.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(engine.ENV_ROOT / "lab" / "__init__.py", dest.parent / "__init__.py")
@@ -513,8 +507,8 @@ def stage_harness(tree: Path) -> Path:
 
 
 def workload_flags(args: dict, harness: Path, n: int) -> list[str]:
-    """lab.profile.profile's workload source: synthetic ids if asked, else `n` seen-split corpus requests sampled out here
-    (the jail holds no corpus, and the verified loader needs the held-out split too) and staged in the harness."""
+    """lab.profile.profile's workload flags: synthetic ids if asked, else `n` seen-split corpus requests staged in the
+    harness."""
     if args.get("synthetic"):
         return ["--synthetic", "--prompt-len", str(args.get("prompt_len", 64))]
     t = target.load()
@@ -524,8 +518,8 @@ def workload_flags(args: dict, harness: Path, n: int) -> list[str]:
 
 
 def task_shares(bundle: Path) -> dict:
-    """Each kernel task's share of the profiled window, the kernels it launches and the speedup bound if they took no
-    time (lab/kernels/tasks/share.py), plus the kernels no task covers; or why there is none."""
+    """Each kernel task's share of the profiled window (lab/kernels/tasks/share.py) and the kernels no task covers; or
+    why there is none."""
     try:
         from lab.kernels.tasks import share
         from lab.kernels.tasks import TASKS, load
@@ -544,8 +538,8 @@ def task_shares(bundle: Path) -> dict:
 
 def default_profile_runner(tree: Path, argv: list[str], read: list[Path] = (), env: dict | None = None,
                            timeout_s: int = 3600, on_start=None):
-    """lab.profile.profile in the pristine tree as agent code: jailed, with the target's engine env (and `env`: a launch
-    profile's), weights and `read` read-only, harness first on the path; `on_start` as `grader.jailed`'s."""
+    """Run lab.profile.profile jailed in the pristine tree: the target's engine env plus `env`, `read` read-only, the
+    harness first on the path; `on_start` as `grader.jailed`'s."""
     path = os.pathsep.join([str(tree / HARNESS_DIR), str(tree / "src"), str(tree)])
     return grader.jailed(tree, argv, timeout_s=timeout_s,
                          env_extra={**target.load().engine.env, **(env or {}), "PYTHONPATH": path}, read=read,

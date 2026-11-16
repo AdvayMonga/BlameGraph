@@ -10,19 +10,34 @@ import tokenize
 
 from lab.kernels.search.program import Idea, Program
 
-POOL = 32                    # the best usable programs parents are drawn from
-FLOOR = 0.05                 # added to each draw weight, so the weakest of the pool can still be picked
+FLOOR = 0.05                 # added to each draw weight, so the weakest program can still be picked
 CLOSE = 0.88                 # cosine of two ideas' texts at which they are close
 
 
 def pick(population: list[Program], n: int, rng: random.Random) -> list[Program]:
-    """The best usable program, then up to n - 1 more drawn without replacement, weighted by percentile score."""
-    pool = sorted((p for p in population if p.usable), key=lambda p: (-p.score, p.generation))[:POOL]
+    """The best usable program, then up to n - 1 more drawn without replacement, each weighted by its percentile
+    score times how much its code differs from the nearest program already picked."""
+    pool = sorted((p for p in population if p.usable), key=lambda p: (-p.score, p.generation))
     out, rest = pool[:1], pool[1:]
+    code = {p.id: _lines(p.code) for p in pool}
+    far = {p.id: differs(code[p.id], code[out[0].id]) for p in rest}
     while rest and len(out) < n:
-        weights = [sum(q.score < p.score for q in population) / len(population) + FLOOR for p in rest]
+        weights = [(sum(q.score < p.score for q in population) / len(population) + FLOOR) * max(far[p.id], 1e-9)
+                   for p in rest]
         out.append(rest.pop(rng.choices(range(len(rest)), weights=weights)[0]))
+        for p in rest:
+            far[p.id] = min(far[p.id], differs(code[p.id], code[out[-1].id]))
     return out
+
+
+def _lines(code: str) -> frozenset[str]:
+    """A program's distinct lines, without indentation, blank lines and comment lines."""
+    return frozenset(t for x in code.splitlines() if (t := x.strip()) and not t.startswith("#"))
+
+
+def differs(a: frozenset[str], b: frozenset[str]) -> float:
+    """The share of two programs' lines that only one of them has: 0 the same lines, 1 none in common."""
+    return 1 - len(a & b) / len(a | b) if a | b else 0.0
 
 
 def fingerprint(code: str) -> str:

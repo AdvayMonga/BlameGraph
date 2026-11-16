@@ -15,8 +15,7 @@ from lab.records.remote import DirRemote, S3Remote
 
 
 def _lab(root, runs):
-    """A ledger with a bench (client rows + device samples), a profile bundle, a submit, a noise record, a guard
-    state and one held-out serve under runs/."""
+    """A ledger with a bench, a profile bundle, a submit, a noise record, a guard state and one held-out serve."""
     rows = root.parent / "rows.jsonl"
     rows.write_text("".join(json.dumps({"id": i, "status": "ok", "ttft_s": 0.1 * i}) + "\n" for i in range(3)))
     dev = root.parent / "device"; dev.mkdir()

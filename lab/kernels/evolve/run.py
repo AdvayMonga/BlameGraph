@@ -6,10 +6,8 @@ lab kernels evolve share --profile BUNDLE [--profile ...] [--gate TASK=GATE.json
 lab kernels evolve initial --task T --engine REPO --ref REF --out P.py   (start from the kernel at an engine commit)
 lab kernels evolve ship --task T --program BEST.py --gate GATE.json --engine REPO [--base REF] [--budget USD]
 
-`run` replicates OpenEvolve (AlphaEvolve's open re-implementation) on one kernel task: the starting program is the
-engine's current kernel (its module's source, with `kernel` bound to the entry point), selection sees the seen shapes
-only, and every candidate is judged in its own process. `gate` judges a program on the held-out shapes, which
-selection never saw. Model calls cost money: the config names the models and the run's size."""
+`run` runs OpenEvolve on one kernel task, starting from the engine's current kernel and selecting on the seen shapes
+only; `gate` judges a program on the held-out shapes."""
 from __future__ import annotations
 
 import argparse
@@ -44,8 +42,8 @@ def initial_program(task) -> str:
 
 
 def _start(task, src: str, attr: str) -> str:
-    """The engine module as the starting program: the task's start edits applied (each must apply exactly once, so a
-    changed engine module is noticed), `kernel` bound to the entry point."""
+    """The engine module as the starting program: the task's start edits applied (each exactly once), `kernel` bound
+    to the entry point."""
     for old, new in task.start_edits:
         if src.count(old) != 1:
             raise ValueError(f"{task.name}: a start edit no longer matches the engine module: {old[:60]!r}")
@@ -54,8 +52,7 @@ def _start(task, src: str, attr: str) -> str:
 
 
 def initial_program_at(task, repo: Path, ref: str) -> str:
-    """The same starting program, from the engine module as it was at `ref` in the engine repo (e.g. the kernel before
-    a change, for an A/B with known headroom). The baseline stays the engine's current kernel."""
+    """The starting program from the engine module at `ref` in the engine repo."""
     from lab.kernels.eval.ship import _git, _module_path
     mod, _, attr = task.entry.partition(":")
     src = _git(repo, "show", f"{ref}:{_module_path(repo, _git(repo, 'rev-parse', ref), mod)}")
@@ -63,7 +60,7 @@ def initial_program_at(task, repo: Path, ref: str) -> str:
 
 
 def system_message(task) -> str:
-    """What the program is and how it is judged, from the evaluator's own constants: facts, never advice."""
+    """The system prompt: what the program is and how it is judged, from the evaluator's constants."""
     from lab.kernels.eval import core
     base = f"the engine's current `{task.entry}`" if task.entry else \
         "the problem's eager PyTorch `Model`" if task.name.startswith("kb:") else "the task's reference"
@@ -100,9 +97,8 @@ The goal is the highest score."""
 
 
 def setting(task, sets: dict, device: str, tol: dict) -> str:
-    """The facts a program is judged under, the same for every generator: the seen shapes with their calls, their
-    share of the score and the traffic they were captured under; one captured call's arguments; the GPU, its measured peaks and the toolchain; the
-    engine's launch settings; the tolerances. Never the held-out shapes."""
+    """The facts a program is judged under: the seen shapes with their calls, score share and capture traffic; one
+    captured call; the GPU, its peaks and the toolchain; the engine's launch settings; the tolerances."""
     from lab.kernels.eval.check import TOLERANCES
     calls, src = sets.get("calls") or {}, sets.get("sources") or {}
     seen = [json.dumps(list(x)) for x in sets["seen"]]
@@ -190,9 +186,8 @@ def task_args(p) -> None:
 
 
 def region_args(a) -> dict:
-    """A region task's `samples` and `shared_weights`, absolute, a KernelBench problem's `source`, or a FlashInfer-Bench
-    definition's dataset dir as `samples` (the jail mounts it): what `load` and the eval config take. With the
-    evaluator on a remote worker (KERNEL_EVAL_SSH) region paths are paths there, kept as given."""
+    """What `load` and the eval config take: a region's `samples` and `shared_weights` (absolute; as given with
+    KERNEL_EVAL_SSH), a KernelBench problem's `source`, or a FlashInfer-Bench dataset dir as `samples`."""
     if a.task.startswith("kb:"):
         from lab.kernels.tasks.kernelbench import problem_source
         return {"source": problem_source(a.task)}
@@ -207,8 +202,7 @@ def region_args(a) -> dict:
 
 
 def load_task(a):
-    """The task. A region judged on a remote worker loads only there: here it is described by its shapes file
-    (lab/kernels/tasks/hold.py wrote it, with the held-out axes) and starts from --initial."""
+    """The task; a region judged on a remote worker (KERNEL_EVAL_SSH) is built from its shapes file and --initial."""
     if a.task.startswith("region:") and os.environ.get("KERNEL_EVAL_SSH"):
         if not (a.shapes and a.initial):
             raise SystemExit("a region judged on a remote worker needs --shapes and --initial from where it loads "
@@ -349,8 +343,7 @@ def usage(log: Path) -> dict:
 
 def prepare(task, sets: dict, out: Path, device: str, tol: dict, timing_shapes: int, initial: str | None,
             region: dict | None = None):
-    """The run dir: selection's config (seen shapes only, their weights and captured ints; the held-out shapes never
-    enter it; a region's `samples` and `shared_weights`) as $KERNEL_EVAL_CONFIG, the shape sets, and the starting
+    """Write the run dir: selection's config (seen shapes only) as $KERNEL_EVAL_CONFIG, the shape sets and the starting
     program. Returns (sets, program path)."""
     out.mkdir(parents=True, exist_ok=True)
     sets = shapes_mod.select(task, sets, timing_shapes)
@@ -372,11 +365,8 @@ def prepare(task, sets: dict, out: Path, device: str, tol: dict, timing_shapes: 
 
 
 def retime(trace: Path, k: int, repeats: int = 3, exclude=None) -> tuple[str | None, dict | None, list]:
-    """The top `k` candidates by score re-judged `repeats` times through the evaluator (stage 2, local or remote);
-    the one with the highest median score is promoted. One timing of each is what selection saw, and one timing can
-    win by noise. `exclude(code, row) -> reason | None` passes over a candidate (e.g. flagged as gaming the
-    evaluator), the next-best taking its place. Returns (code, metrics of its median run, every re-timing, the
-    excluded ones included with their reason)."""
+    """Re-judge the top `k` candidates `repeats` times (stage 2) and promote the highest median score; `exclude(code,
+    row) -> reason | None` passes over one. Returns (code, metrics of its median run, every re-timing and exclusion)."""
     import statistics
     import tempfile
     from lab.kernels.eval import evaluator
@@ -419,8 +409,8 @@ def retime(trace: Path, k: int, repeats: int = 3, exclude=None) -> tuple[str | N
 def record(task, sets: dict, models: list[dict], iterations: int, device: str, trace: Path, best: Path,
            best_metrics: dict, root: Path | None = None, retimed: list | None = None, tool: str = "kernels.evolve.run",
            cost: dict | None = None, extra: dict | None = None) -> dict:
-    """One `kernels` ledger record per run: every evaluated candidate's seen-shape metrics and lineage, the trace and
-    the best program as blobs. Held-out shapes stay out (`gate` judges them; its output stays in the run dir)."""
+    """Append the run's `kernels` ledger record: every candidate's seen-shape metrics and lineage, the trace and the
+    best program as blobs."""
     import time
     from lab.records import ledger
     root = root or ledger.ROOT

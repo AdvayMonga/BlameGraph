@@ -1,14 +1,5 @@
-"""The idea archive: every distinct kernel idea with what became of it, built from the `kernels`
-ledger records' hypothesis logs and traces. Measurements only (the no-beliefs rule): an idea's text is the
-judge's, its outcomes are the evaluator's.
-
-One entry per distinct idea: an idea whose embedding is within `DISTINCT` cosine of an earlier one on the same task is
-folded into it, keeping every outcome (the user: every distinct idea, not every idea). It is read three ways: by
-similarity to a new idea (the funnel's past-failure check; the judge's archive slice), as the best outcome among
-similar ideas, and as a retry list (ideas that never beat their parent, tried only on parents that are no longer the
-task's best: the context that blocked them has changed).
-
-A search on the GPU host reads an exported file (`export`), since the ledger's history lives on the controller.
+"""The idea archive: every distinct kernel idea with its measured outcomes, built from the `kernels` ledger records'
+hypothesis logs and traces. Ideas within `DISTINCT` cosine on one task are one entry holding every outcome.
 
   lab kernels archive export --out FILE [--ledger ROOT]
   lab kernels archive query --archive FILE [--task T] [-k N] TEXT
@@ -24,7 +15,7 @@ from pathlib import Path
 from lab.records import ledger
 from lab.records.search import Cache, Embedder, _cosine, bm25
 
-DISTINCT = 0.92              # cosine above which two ideas on one task are one idea (bge-base: paraphrases ~0.9+)
+DISTINCT = 0.92              # cosine at or above which two ideas on one task are one idea
 FIELDS = ("bottleneck", "optimisation_method", "modification_plan")
 
 

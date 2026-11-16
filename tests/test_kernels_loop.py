@@ -185,7 +185,21 @@ def test_a_naming_call_reflects_on_the_last_generation_and_one_call_reflects_on_
     asks = [u.split(CACHE_SPLIT)[-1] for _, u in namer.calls]
     assert "last generation" not in asks[0] and "final list" in asks[1]
     assert "# The last generation's ideas" in asks[2] and '"prediction": {"speedup": 1.1}' in asks[2] and '"gain"' in asks[2]
-    assert asks[4].startswith("# The last generation's ideas") and "Reflect on each of these ideas" in asks[4]
+    assert "# The last generation's ideas" in asks[4] and "and on the whole run" in asks[4]
+    pop = [json.loads(x) for x in (tmp_path / "trace.jsonl").read_text().splitlines()]
+    best = max(pop, key=lambda p: p["child_metrics"]["combined_score"])
+    whole, descent = asks[4].split("# The best usable program's line of descent")
+    assert all(f'"generation": {g}, "programs": {sum(p["iteration"] == g for p in pop)}' in whole for g in (0, 1, 2))
+    assert descent.splitlines()[1].startswith(f'{{"program": "{pop[0]["child_id"]}"') and "the starting program" in descent
+    assert f'"program": "{best["child_id"]}"' in descent.split("# The last generation's ideas")[0]
+    a, b, c = program(0, 1.0), program(1, 3.0, parent="p0"), program(2, 1.2, parent="p0")
+    b.generation = c.generation = 1
+    b.metrics["correct"] = 0.0                                                    # dropped as a parent: not the best
+    text = context.run([a, b, c])
+    assert '"generation": 1, "programs": 2, "best_score": 1.2' in text and '"program": "p1"' not in text
+    assert text.splitlines()[-1].startswith('{"program": "p2"')
+    b.generation = 2
+    assert '"generation": 2, "programs": 1, "best_score": null' in context.run([a, b, c])
     ideas = lines(tmp_path / "ideas.jsonl")
     assert all(i["idea_id"] in asks[2] for i in ideas[:6]) and all(i["idea_id"] in asks[4] for i in ideas[6:])
     assert (tmp_path / "reflection.txt").read_text() == "the run"
@@ -306,6 +320,21 @@ def test_parents_are_the_best_then_a_weighted_draw_without_replacement_of_usable
     assert "p0" in seen and not seen & {"p2", "p9"}                               # the weakest can be drawn; unusable never
     assert sum(pop[4] in d for d in drawn) > sum(pop[0] in d for d in drawn)       # weighted by score
     assert diversity.pick([pop[6]], 3, random.Random(0)) == [] and len(diversity.pick(pop[:2], 8, random.Random(0))) == 2
+
+
+def test_a_parent_is_drawn_more_often_the_more_its_code_differs_from_those_already_picked():
+    body = [f"x{k} = {k}" for k in range(40)]
+    best = program(0, 1.5, code="\n".join(body))
+    tuned = [program(k, 1.4, code="\n".join([*body, f"tile = {k}"])) for k in range(1, 9)]       # the best, one line added
+    other = program(9, 0.7, code="\n".join(f"y{k} = {k}" for k in range(40)))                    # a rewrite, the lowest score
+    late = [program(100 + k, 1.3, code="\n".join([*body, f"late = {k}"])) for k in range(40)]    # more than 32 better
+    pop = [best, *tuned, other, *late]
+    drawn = [diversity.pick(pop, 3, random.Random(s)) for s in range(200)]
+    often = sum(other in d for d in drawn)
+    assert all(d[0] is best for d in drawn) and often > max(sum(t in d for d in drawn) for t in tuned)
+    assert any(p in d for d in drawn for p in sorted(pop, key=lambda p: -p.score)[32:])     # no cutoff at the best 32
+    assert diversity.differs(diversity._lines("a = 1\n  # c\n\nb = 2"), diversity._lines("b = 2\na = 1")) == 0
+    assert diversity.differs(frozenset("ab"), frozenset("bc")) == 1 - 1 / 3 and diversity.differs(frozenset(), frozenset()) == 0
 
 
 def test_only_an_identical_program_is_refused():
