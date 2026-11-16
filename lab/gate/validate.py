@@ -56,7 +56,7 @@ def validate(t: target.Target, noise_runs: int = 3, regimes: list[str] | None = 
     out.mkdir(parents=True, exist_ok=True)
     log_dir = log_dir or out
     enc = encoder or crun.HFEncoder(t.model, t.chat_kwargs)
-    th = Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio)
+    th = Thresholds(max_kl=t.max_kl, min_length_ratio=t.min_length_ratio)
     report: dict = {"target": t.name, "model": t.model, "candidates": {}, "noise": {}, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
     if t.reference is None or t.reference_dir is None:
         raise SystemExit("the target has no [reference] launch and dir")
@@ -71,7 +71,7 @@ def validate(t: target.Target, noise_runs: int = 3, regimes: list[str] | None = 
             spec = target.Server(launch, dict((v.get("env") or {}).get(name) or {}), t.reference.health, t.reference.api)
             with serve.Served(target.ENV_ROOT, spec, log=log_dir / f"serve-{name}.log", jailed=False) as srv:
                 res = crun.candidate(ref_dir, srv.url, t.model, out / f"{kind}_{name}.json", enc, th,
-                                     api=client.Api(spec.api, t.chat_kwargs), config={"tier": "dev", "validation": kind})
+                                     api=client.Api(spec.api, t.chat_kwargs), config={"validation": kind})
             report["candidates"][name] = {"kind": kind, "verdict": res["verdict"], "reasons": res["reasons"],
                                           "accuracy": res["metrics"].get("accuracy")}
     goods = [c for c in report["candidates"].values() if c["kind"] == "good"]

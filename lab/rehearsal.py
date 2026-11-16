@@ -126,7 +126,7 @@ conversational = {{ ttft_s = 2.0, tpot_s = 0.100 }}
 
 [correctness]
 tasks = ["mmlu_pro"]
-min_score_ratio = 0.99
+max_kl = 0.01
 min_length_ratio = 0.90
 
 [corpus]

@@ -61,26 +61,26 @@ def test_flip_test_counts_lost_and_gained():
 CONS = {"n": 1, "first_token_mismatch": 0, "token_count_mismatch": 0, "text_after_eos": 0, "consistent": True}
 
 
-def test_policy_gate_is_per_task_accuracy():
+def test_verdict_is_token_divergence_and_length():
     ln = length_ratio([100] * 10, [98] * 10)
-    good = {"math": flip_test(*_answers(20_000, 0.6, 0.02, 0.03, seed=7))}   # large n
-    ok = evaluate(_seqs(0.05, seed=7), good, ln, CONS)
-    assert ok["passed"], ok["reasons"]
-    no = evaluate(_seqs(0.05, seed=9), {"math": flip_test(*_answers(500, 0.6, 0.2, 0.02, seed=9))}, ln, CONS)
-    assert not no["passed"] and no["reasons"][0].startswith("accuracy: task score ratio < 0.99: math")
-    # large KL with intact answers passes and is reported
-    far = evaluate(_seqs(1.0, temp=1.5, seed=9), good, ln, CONS)
-    assert far["passed"] and far["metrics"]["divergence"]["kl_mean"] > ok["metrics"]["divergence"]["kl_mean"]
-    # a small task's loss is not hidden by a large intact one
+    near, far = {"kl_mean": 0.003, "kl_p99": 0.03}, {"kl_mean": 0.023, "kl_p99": 0.18}
     small = {"n": 100, "lost": 4, "gained": 0, "ref_accuracy": 0.5, "cand_accuracy": 0.46}
     big = {"n": 1000, "lost": 10, "gained": 10, "ref_accuracy": 0.7, "cand_accuracy": 0.7}
-    r = evaluate(None, {"code": small, "mmlu_pro": big}, ln, CONS)
-    assert not r["passed"] and "code 0.9200" in r["reasons"][0] and "mmlu_pro" not in r["reasons"][0]
-    assert r["gates"]["accuracy"]["evidence"]["tasks"]["mmlu_pro"] == {"n": 1000, "ref_correct": 700, "cand_correct": 700,
-                                                                     "score_ratio": 1.0}
+    flips = {"code": small, "mmlu_pro": big}
+    ok = evaluate(near, flips, ln, CONS)
+    assert ok["passed"] and set(ok["gates"]) == {"divergence", "answered", "length", "consistency"}
+    # a task's lower score is reported, not judged
+    assert ok["metrics"]["accuracy"]["tasks"]["code"]["score_ratio"] == 0.92
+    assert ok["metrics"]["accuracy"]["tasks"]["mmlu_pro"] == {"n": 1000, "ref_correct": 700, "cand_correct": 700,
+                                                              "score_ratio": 1.0}
+    no = evaluate(far, flips, ln, CONS)
+    assert not no["passed"] and no["reasons"] == ["divergence: mean KL per token 0.0230 > 0.01"]
+    # no token probabilities, or an unanswered item, is a fail
+    assert evaluate(None, flips, ln)["reasons"] == ["divergence: not run"]
+    assert evaluate(near, flips, ln, unanswered=2)["reasons"] == ["answered: 2 item(s) unanswered (shed or errored after retries)"]
     # length is bounded on both sides
-    assert not evaluate(None, {"mmlu_pro": big}, length_ratio([100] * 10, [115] * 10))["passed"]
-    assert evaluate(None, {"mmlu_pro": big}, length_ratio([100] * 10, [108] * 10))["passed"]
+    assert not evaluate(near, flips, length_ratio([100] * 10, [115] * 10))["passed"]
+    assert evaluate(near, flips, length_ratio([100] * 10, [108] * 10))["passed"]
 
 
 def test_truncation_and_fake_first_token_fail():
@@ -98,7 +98,8 @@ def test_truncation_and_fake_first_token_fail():
 
 def test_scorers():
     assert extract_choice("Let's think. The answer is (C).") == "C"
-    assert extract_choice("Answer: J") == "J"
+    assert extract_choice("Answer: J") == "J" and extract_choice("(D) cannot be compared") == "D"
+    assert extract_choice("The correct answer is **(J)") == "J" and extract_choice("The question asks which I") is None
     assert extract_math("so the result is \\boxed{\\dfrac{3}{4}}.") == "\\frac{3}{4}"
     assert score("math", "\\boxed{12.0}", "12") and score("math", "x = \\boxed{x=5}", "5")
     assert not score("mmlu_pro", "The answer is (B)", "D")
@@ -232,13 +233,13 @@ def test_verdict_file_rejudges_saved_result():
     import tempfile
     from lab.gate.correctness.run import verdict_file
     flips = {"math": {"n": 1000, "lost": 20, "gained": 12, "ref_accuracy": 0.700, "cand_accuracy": 0.692}}
-    saved = evaluate({"kl_mean": 0.01, "kl_p99": 0.1}, flips, length_ratio([10], [10]), CONS, Thresholds(min_score_ratio=0.98))
-    assert saved["passed"]                                   # 692 / 700 = 0.9886
+    saved = evaluate({"kl_mean": 0.02, "kl_p99": 0.1}, flips, length_ratio([10], [10]), CONS, Thresholds(max_kl=0.05))
+    assert saved["passed"]
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"result": saved}, f)
-    assert verdict_file(f.name, Thresholds(min_score_ratio=0.98))["passed"]
+    assert verdict_file(f.name, Thresholds(max_kl=0.05))["passed"]
     strict = verdict_file(f.name, Thresholds())
-    assert strict["verdict"] == "fail" and strict["reasons"][0].startswith("accuracy: task score ratio < 0.99: math 0.9886")
+    assert strict["verdict"] == "fail" and strict["reasons"] == ["divergence: mean KL per token 0.0200 > 0.01"]
 
 
 def test_stream_role_chunk_is_not_a_first_token():

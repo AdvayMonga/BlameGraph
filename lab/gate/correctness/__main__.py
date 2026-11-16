@@ -25,7 +25,7 @@ def main():
     t = target.load(a.target)
     from lab.gate.correctness import client, run, tasks
     from lab.gate.correctness.gate import Thresholds
-    th = Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio)
+    th = Thresholds(max_kl=t.max_kl, min_length_ratio=t.min_length_ratio)
     enc = lambda: run.HFEncoder(t.model, t.chat_kwargs)
     if a.step == "reference":
         from lab.gate.correctness import hf

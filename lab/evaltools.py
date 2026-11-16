@@ -149,7 +149,7 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
         "latency_limits": {"interactive": t.interactive.__dict__, "conversational": t.conversational.__dict__},
         "goodput_attainment": 0.99,
         "tiers": {k: dict(v) for k, v in suite.TIERS.items()},
-        "correctness": {"policy": f"each task's score >= {t.min_score_ratio} of the reference's, output length "
+        "correctness": {"policy": f"mean KL per token from the reference <= {t.max_kl} on the reference's own answers, output length "
                         f"{t.min_length_ratio}..{Thresholds.max_length_ratio} of the reference's",
                         "reference": "the model's weights run greedy in transformers",
                         "tasks": list(t.tasks)},
@@ -305,9 +305,8 @@ class EvalTools:
     def equiv(self, args: dict) -> str:
         snap = self._audited("equiv", args)
         t = target.load()
-        tier = args.get("tier") or "dev"
         profile = args.get("profile") or None
-        config = {"split": "seen", "tier": tier, **({"profile": profile} if profile else {})}
+        config = {"split": "seen", **({"profile": profile} if profile else {})}
         ref = t.reference_dir
         if not target.reference_complete(ref):
             self._record("equiv", "equiv", args, {"verdict": "refused", "reason": "no reference outputs; "
@@ -318,7 +317,7 @@ class EvalTools:
         if why:
             self._record("equiv", "equiv", args, {"verdict": "refused", "reason": why}, snap, config=config)
             return f"equiv refused: {why}"
-        out = self.s.run_dir / "equiv" / f"{snap.id}-{tier}{'-' + profile if profile else ''}.json"
+        out = self.s.run_dir / "equiv" / f"{snap.id}{'-' + profile if profile else ''}.json"
         work = self._work("equiv")
         # answers already collected for this snapshot are reused
         prior = Path(tempfile.mkdtemp(prefix="equiv-prior-", dir=self.s.run_dir))
@@ -326,18 +325,17 @@ class EvalTools:
             shutil.copyfile(out.with_suffix(".outputs.jsonl"), prior / "equiv.outputs.jsonl")
         try:
             res = self.worker.call("equiv", {"tree": tree, "reference": ref, "prior": prior},
-                                   {"tier": tier, "concurrency": self.equiv_concurrency, "jailed": self.serve_jailed,
+                                   {"concurrency": self.equiv_concurrency, "jailed": self.serve_jailed,
                                     "profile": profile, "workbench": getattr(self.s, "workbench", None)}, work)
         except Exception as e:
             result = {**_failed(e), "artifacts": self._equiv_store(work, out, prior)}
             self._record("equiv", "equiv", args, result, snap, config=config)
             return _said("equiv", result)
-        passed = {"pass": True, "fail": False}.get(res["verdict"])     # None: tier quick has no verdict
-        record = {"verdict": res["verdict"], "passed": passed, "reasons": res["reasons"], "gates": res["gates"],
-                  "metrics": res["metrics"], "thresholds": res["thresholds"], "tier": tier,
+        record = {"verdict": res["verdict"], "passed": res["passed"], "reasons": res["reasons"], "gates": res["gates"],
+                  "metrics": res["metrics"], "thresholds": res["thresholds"],
                   "artifacts": self._equiv_store(work, out, prior), **_killed(res)}
         self._record("equiv", "equiv", args, record, snap, config=config)
-        return json.dumps({"snapshot": snap.id, "tier": tier, **({"profile": profile} if profile else {}),
+        return json.dumps({"snapshot": snap.id, **({"profile": profile} if profile else {}),
                            "verdict": res["verdict"], "reasons": res["reasons"], "metrics": res["metrics"],
                            **_killed(res)}, indent=1, default=str)
 
@@ -347,13 +345,12 @@ class EvalTools:
         mine = [r for r in ledger.records(self.s.ledger_root, run=self.s.run_id, snapshot=snap.id)]
 
         def judged_equiv(profile: str | None) -> dict | None:
-            """The latest judged (dev-tier) equiv of one profile's launch (None = general) on this snapshot."""
+            """The latest judged equiv of one profile's launch (None = general) on this snapshot."""
             return next((r for r in reversed(mine) if r["kind"] == "equiv"
-                         and (r.get("result") or {}).get("tier") == "dev"
                          and (r.get("config") or {}).get("profile") == profile), None)
         eq = judged_equiv(None)
         if not eq or eq["result"].get("verdict") != "pass":
-            why = "no dev-tier equiv on this snapshot" if not eq else f"latest dev-tier equiv is {eq['result'].get('verdict')}"
+            why = "no equiv on this snapshot" if not eq else f"latest equiv is {eq['result'].get('verdict')}"
             self._record("submit", "submit", args, {"verdict": "refused", "reason": f"{why}; run equiv first"}, snap)
             return f"submit refused: {why}"
         benches = [r for r in mine if r["kind"] == "bench" and (r.get("result") or {}).get("verdict") == "ok"
@@ -371,7 +368,7 @@ class EvalTools:
             own = [n for n in names if n in profiles.overrides(tree, t)]
             short = [n for n in own if ((judged_equiv(n) or {}).get("result") or {}).get("verdict") != "pass"]
             if short:
-                why = f"no passing dev-tier equiv for profile(s) {short}; run equiv with that profile first"
+                why = f"no passing equiv for profile(s) {short}; run equiv with that profile first"
                 self._record("submit", "submit", args, {"verdict": "refused", "reason": why}, snap)
                 return f"submit refused: {why}"
             base = self.base_heldout(t, names)

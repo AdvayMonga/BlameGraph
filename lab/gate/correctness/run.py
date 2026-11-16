@@ -152,19 +152,6 @@ def _divergence(ref: Path, url: str, model: str, top_k: int, api: client.Api, wo
     return div, unscored
 
 
-def quick(ref_dir: str | Path, url: str, model: str, out_path: str | Path, api: client.Api = client.DEFAULT) -> dict:
-    """Score the reference's own answers teacher-forced on the candidate and report the divergence; no verdict."""
-    ref = Path(ref_dir)
-    meta = json.loads((ref / "meta.json").read_text())
-    div, unscored = _divergence(ref, url, model, meta["top_k"], api, CANDIDATE_SCORE_MAX)
-    metrics = {**(div or {}), **({"divergence_unscored": unscored[:5]} if unscored else {})}
-    result = {"verdict": "facts", "passed": None, "reasons": [] if div else ["no divergence: " + "; ".join(unscored[:1])],
-              "gates": {}, "metrics": metrics, "thresholds": {}}
-    out_path = Path(out_path); out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps({"result": result}, indent=1, default=str))
-    return result
-
-
 def candidate(ref_dir: str | Path, url: str, model: str, out_path: str | Path, encoder: Encoder,
               thresholds: Thresholds | None = None, concurrency: int = 128,
               score_item: Callable | None = None, config: dict | None = None,
@@ -193,7 +180,10 @@ def candidate(ref_dir: str | Path, url: str, model: str, out_path: str | Path, e
     ids = [it["id"] for it in items if it["id"] in ref_out and it["id"] in answered]
     length = length_ratio([len(encoder.encode(ref_out[i].get("text") or "")) for i in ids],
                           [len(encoder.encode(answered[i].get("text") or "")) for i in ids])
-    result = evaluate(None, flips, length, None, th, unanswered=len(unanswered))
+    div, unscored = _divergence(ref, url, model, meta["top_k"], api, CANDIDATE_SCORE_MAX)
+    result = evaluate(div, flips, length, None, th, unanswered=len(unanswered))
+    if unscored:
+        result["metrics"]["divergence_unscored"] = unscored[:5]
     result["metrics"]["unanswered"] = {"n": len(unanswered), "of": len(items),
                                        "examples": dict(list(unanswered.items())[:5])}
     record = to_ledger_record(result, {"split": "seen", "model": model, **(config or {})}, base=meta["model"])

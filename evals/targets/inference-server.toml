@@ -46,8 +46,8 @@ conversational = { ttft_s = 2.0, tpot_s = 0.100 }
 
 [correctness]
 tasks = ["mmlu_pro", "math", "code", "needle"]
-min_score_ratio = 0.99                       # MLPerf: each task's score >= 99% of the reference's
-min_length_ratio = 0.90
+max_kl = 0.01                                # mean KL per token from the reference, on the reference's own answers
+min_length_ratio = 0.90                      # MLPerf: output length within 90..110% of the reference's
 
 [layers]                                     # which engine files make up each layer: the agent's map (lab/prompts/objective.md)
 kernels = ["src/inference_server/models/*kernel*.py", "src/inference_server/models/megakernel/*",

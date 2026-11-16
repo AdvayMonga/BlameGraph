@@ -59,9 +59,9 @@ def _headline(r: dict) -> dict:
     if r["kind"] == "submit":
         return {"metrics": r.get("metrics")}
     if r["kind"] == "equiv":
-        acc = ((res.get("gates") or {}).get("accuracy") or {}).get("evidence") or {}
-        return {"tier": (r.get("config") or {}).get("tier"),
-                "tasks": {t: a.get("score_ratio") for t, a in (acc.get("tasks") or {}).items()}}
+        m = res.get("metrics") or {}
+        return {"kl_mean": (m.get("divergence") or {}).get("kl_mean"),
+                "tasks": {t: a.get("score_ratio") for t, a in ((m.get("accuracy") or {}).get("tasks") or {}).items()}}
     if r["kind"] == "test":
         return {"lint": res.get("lint"), "tests": res.get("tests")}
     return {}

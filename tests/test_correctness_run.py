@@ -107,19 +107,14 @@ def test_gate_flow():
             good = run.candidate(d / "ref", servers["good"][1], "m", d / "good.json", enc, Thresholds(), concurrency=8)
             bad = run.candidate(d / "ref", servers["bad"][1], "m", d / "bad2.json", enc, Thresholds(), concurrency=8)
             assert good["passed"], good["reasons"]
-            assert not bad["passed"] and any(r.startswith("accuracy:") for r in bad["reasons"]), bad["reasons"]
+            assert not bad["passed"] and any(r.startswith("divergence:") for r in bad["reasons"]), bad["reasons"]
+            assert bad["metrics"]["divergence"]["kl_mean"] > good["metrics"]["divergence"]["kl_mean"]
             same = run.candidate(d / "ref", servers["ref"][1], "m", d / "same.json", enc, Thresholds(), concurrency=8)
             assert same["passed"] and same["metrics"]["unanswered"] == {"n": 0, "of": 3000, "examples": {}}
             assert all(a["score_ratio"] == 1.0 for a in same["metrics"]["accuracy"]["tasks"].values())
             rec = json.loads((d / "bad2.json").read_text())["ledger_record"]
-            assert rec["kind"] == "equiv" and set(rec["gates"]) == {"accuracy", "length"}   # these gates only
-            assert "divergence" not in good["metrics"]
-            # the quick check: divergence facts, no answers, no verdict
-            qg = run.quick(d / "ref", servers["good"][1], "m", d / "qgood.json")
-            qb = run.quick(d / "ref", servers["bad"][1], "m", d / "qbad.json")
-            assert qg["verdict"] == "facts" and qg["passed"] is None and qg["metrics"]["n_sequences"] == 60
-            assert qb["metrics"]["kl_mean"] > qg["metrics"]["kl_mean"]
-            assert not (d / "qgood.outputs.jsonl").exists()          # nothing was generated
+            assert rec["kind"] == "equiv" and set(rec["gates"]) == {"divergence", "answered", "length"}   # these gates only
+            assert good["metrics"]["divergence"]["n_sequences"] == 60
     finally:
         for s, _ in servers.values():
             s.shutdown()

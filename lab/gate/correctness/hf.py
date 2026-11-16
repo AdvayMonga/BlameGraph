@@ -1,5 +1,5 @@
-"""The reference: the model's published weights run greedy in transformers. Writes the files `candidate` and `quick`
-read: items.jsonl, outputs.jsonl, sequences.jsonl, meta.json."""
+"""The reference: the model's published weights run greedy in transformers. Writes the files `candidate`
+reads: items.jsonl, outputs.jsonl, sequences.jsonl, meta.json."""
 from __future__ import annotations
 
 import json
@@ -30,6 +30,7 @@ def reference(model: str, out_dir: str | Path, items: list[dict], chat_kwargs: d
     import torch
     import transformers
     from transformers import AutoModelForCausalLM
+    from transformers.utils import cached_file
     out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
     _jsonl_write(out / "items.jsonl", items)
     enc = HFEncoder(model, chat_kwargs)
@@ -72,7 +73,7 @@ def reference(model: str, out_dir: str | Path, items: list[dict], chat_kwargs: d
             rows.append({**s, "ref": ref})
     _jsonl_write(out / "sequences.jsonl", rows)
     meta = {"model": model, "source": "transformers", "transformers": transformers.__version__,
-            "torch": torch.__version__, "revision": getattr(lm.config, "_commit_hash", None), "dtype": str(lm.dtype),
+            "torch": torch.__version__, "revision": Path(cached_file(model, "config.json")).parent.name, "dtype": str(lm.dtype),
             "top_k": top_k, "n_items": len(items), "n_sequences": len(rows)}
     (out / "meta.json").write_text(json.dumps(meta, indent=1))
     return meta

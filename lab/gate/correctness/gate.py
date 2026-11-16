@@ -1,4 +1,4 @@
-"""Combine the checks into one pass/fail verdict under the MLPerf accuracy policy."""
+"""Combine the checks into one pass/fail verdict: token divergence from the reference and output length."""
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
@@ -6,10 +6,9 @@ from dataclasses import asdict, dataclass
 
 @dataclass
 class Thresholds:
-    min_score_ratio: float = 0.99    # candidate score / reference score, each task
+    max_kl: float = 0.01             # mean KL per token, reference to candidate, on the reference's own answers
     min_length_ratio: float = 0.90   # candidate output length / reference
     max_length_ratio: float = 1.10
-    policy: str = "MLPerf 99%"
 
 
 def task_accuracy(flips: dict[str, dict]) -> dict:
@@ -24,7 +23,8 @@ def task_accuracy(flips: dict[str, dict]) -> dict:
 
 def evaluate(divergence: dict | None = None, flips: dict[str, dict] | None = None, length: dict | None = None,
              consistency: dict | None = None, th: Thresholds | None = None, unanswered: int = 0) -> dict:
-    """Judge the gates (accuracy, length, consistency when given); `passed` is True only if every gate passed.
+    """Judge the gates (divergence, answered, length, consistency when given); `passed` is True only if every gate
+    passed. Per-task accuracy is reported in `metrics`, not judged.
     Returns {verdict: pass|fail, passed, reasons, gates: {name: {passed, reason, evidence}}, metrics, thresholds}."""
     th = th or Thresholds()
     gates: dict[str, dict] = {}
@@ -32,19 +32,14 @@ def evaluate(divergence: dict | None = None, flips: dict[str, dict] | None = Non
     def gate(name, ok, reason, evidence):
         gates[name] = {"passed": ok, "reason": reason, "evidence": evidence}
 
-    if not flips:
-        gate("accuracy", None, "not run", None)
+    if divergence is None:
+        gate("divergence", None, "not run", None)
     else:
-        tasks = task_accuracy(flips)
-        acc = {"tasks": tasks, "unanswered": unanswered}
-        low = [f"{t} {a['score_ratio']:.4f} ({a['cand_correct']} vs {a['ref_correct']} correct of {a['n']})"
-               for t, a in tasks.items() if not a["score_ratio"] >= th.min_score_ratio]
-        if unanswered:
-            gate("accuracy", False, f"{unanswered} item(s) unanswered (shed or errored after retries)", acc)
-        elif low:
-            gate("accuracy", False, f"task score ratio < {th.min_score_ratio}: " + "; ".join(low), acc)
-        else:
-            gate("accuracy", True, "ok", acc)
+        ok = divergence["kl_mean"] <= th.max_kl
+        gate("divergence", ok, "ok" if ok else f"mean KL per token {divergence['kl_mean']:.4f} > {th.max_kl}", divergence)
+    if flips is not None:
+        gate("answered", not unanswered, "ok" if not unanswered else
+             f"{unanswered} item(s) unanswered (shed or errored after retries)", None)
     if length is None:
         gate("length", None, "not run", None)
     else:
@@ -57,8 +52,8 @@ def evaluate(divergence: dict | None = None, flips: dict[str, dict] | None = Non
              f"{consistency['token_count_mismatch']}, text after EOS {consistency['text_after_eos']}", consistency)
     reasons = [f"{k}: {g['reason']}" for k, g in gates.items() if g["passed"] is not True]
     metrics = {k: g["evidence"] for k, g in gates.items() if g["evidence"] is not None}
-    if divergence is not None:
-        metrics["divergence"] = divergence
+    if flips is not None:
+        metrics["accuracy"] = {"tasks": task_accuracy(flips), "unanswered": unanswered}
     metrics.update({f"flips:{t}": f for t, f in (flips or {}).items()})
     verdict = "pass" if all(g["passed"] is True for g in gates.values()) else "fail"
     return {"verdict": verdict, "passed": verdict == "pass", "reasons": reasons, "gates": gates,

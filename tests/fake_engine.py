@@ -19,7 +19,7 @@ def fast_arrivals():
 
 def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, queue_limit: int | None = None,
                 port: int = 0, wrong_every: int = 0, ignore_eos: bool = True) -> ThreadingHTTPServer:
-    """`wrong_every` = N: every Nth multiple-choice answer is wrong; `ignore_eos` False: the field is ignored."""
+    """`wrong_every` = N: every Nth multiple-choice answer is wrong and token scores are shifted; `ignore_eos` False: the field is ignored."""
     counter = [0]
     sem, lock, waiting = threading.Semaphore(slots), threading.Lock(), [0]
 
@@ -46,7 +46,9 @@ def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, qu
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             if self.path.endswith("/v1/completions"):        # teacher-forced scoring, deterministic
                 ids = body["prompt"]
-                plp = [None] + [{str(t): {"logprob": -0.1 - (t % 7) / 100}, str(t + 1): {"logprob": -2.0}} for t in ids[1:]]
+                off = 1.5 if wrong_every else 0.0      # a server that answers wrong also scores the tokens differently
+                plp = [None] + [{str(t): {"logprob": -0.1 - (t % 7) / 100 - off}, str(t + 1): {"logprob": -2.0 + off}}
+                                for t in ids[1:]]
                 return self._json({"choices": [{"text": "", "prompt_logprobs": plp}]})
             if not body.get("stream"):
                 last = body["messages"][-1]["content"]

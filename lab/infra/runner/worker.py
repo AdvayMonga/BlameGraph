@@ -121,7 +121,7 @@ def job_measure(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
 
 
 def job_equiv(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
-    """`args`: tier, concurrency, jailed, profile (None = general). The gate's outputs land in `out` as equiv.json and
+    """`args`: concurrency, jailed, profile (None = general). The gate's outputs land in `out` as equiv.json and
     equiv.outputs.jsonl; answers already in `prior`'s equiv.outputs.jsonl are reused, not asked again."""
     from lab.gate.correctness import client, run as crun
     from lab.gate.correctness.gate import Thresholds
@@ -135,10 +135,9 @@ def job_equiv(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
             serve.Served(inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"], artifacts=out,
                          env_extra=profiles.env(t, args.get("profile"))) as srv:
         api = client.Api(t.engine.api, t.chat_kwargs)
-        res = (crun.quick(inputs["reference"], srv.url, t.model, out / "equiv.json", api=api) if args["tier"] == "quick"
-               else crun.candidate(inputs["reference"], srv.url, t.model, out / "equiv.json", enc,
-                                   Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio),
-                                   concurrency=args["concurrency"], api=api, config={"tier": args["tier"]}))
+        res = crun.candidate(inputs["reference"], srv.url, t.model, out / "equiv.json", enc,
+                             Thresholds(max_kl=t.max_kl, min_length_ratio=t.min_length_ratio),
+                             concurrency=args["concurrency"], api=api)
         srv.exclusive()
     return {**res, "killed": killed}
 

@@ -113,7 +113,7 @@ def system_prompt(t: target.Target, spec: agent.AgentSpec) -> str:
         interactive_tpot_ms=t.interactive.tpot_s * 1e3, conversational_ttft_ms=t.conversational.ttft_s * 1e3,
         conversational_tpot_ms=t.conversational.tpot_s * 1e3, bench_tier=BENCH_TIER,
         tiers="; ".join(f"{k} = {v['probe_s']:g} s probes and a {v['final_s']:g} s measurement window per regime"
-                        for k, v in suite.TIERS.items()), min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio,
+                        for k, v in suite.TIERS.items()), max_kl=t.max_kl, min_length_ratio=t.min_length_ratio,
         max_length_ratio=Thresholds.max_length_ratio,
         workbench=workbench, write=globs(t.write), add_only=globs(t.add_only), deny=globs(ALWAYS_DENY),
         tools="\n".join(f"- `{x.name}`: {x.description}" for x in spec.tools),

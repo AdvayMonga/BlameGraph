@@ -14,7 +14,7 @@ How results are scored
 - Latency limits, checked at p99: interactive TTFT <= {interactive_ttft_ms:g} ms and TPOT <= {interactive_tpot_ms:g} ms; conversational TTFT <= {conversational_ttft_ms:g} ms and TPOT <= {conversational_tpot_ms:g} ms.
 - Tiers: {tiers}.
 - A submit reports, per regime, the change against the base commit measured the same way, and a verdict: `improved` or `regressed` when the change exceeds the regime's noise band (its run-to-run spread on the base engine), `within_band` when it does not, `unknown_band` when no band was measured for this target on this corpus version.
-- Correctness (`equiv`): the engine's answers to a fixed question set (MMLU-Pro, MATH, unit-tested code, long-context retrieval) against the model's own answers (its weights run greedy in transformers): on each task, score >= {min_score_ratio:g} of the reference's; answer length within {min_length_ratio:g}..{max_length_ratio:g} of its. The verdict is pass or fail; an unanswered item fails.
+- Correctness (`equiv`): the engine's answers to a fixed question set (MMLU-Pro, MATH, unit-tested code, long-context retrieval) against the model's own answers (its weights run greedy in transformers): the engine's token probabilities on the reference's answers, mean KL per token from the reference's <= {max_kl:g}; answer length within {min_length_ratio:g}..{max_length_ratio:g} of its. The verdict is pass or fail; an unanswered item fails. Each task's score against the reference's is reported, not judged.
 
 Environment
 - Your shell runs in a sandbox with the engine's Python on PATH{workbench}.
@@ -37,7 +37,7 @@ Budget
 
 Win
 - The task in the brief defines the objective, the constraints and what counts as a win. Only `submit` produces a result that can count.
-- The referee rules a run valid iff a completed `submit` exists whose snapshot also has a completed seen-split `bench`, a passing `test`, a passing dev-tier `equiv` and no failing `equiv`, and no record reports a write-surface violation.
+- The referee rules a run valid iff a completed `submit` exists whose snapshot also has a completed seen-split `bench`, a passing `test`, a passing `equiv` and no failing `equiv`, and no record reports a write-surface violation.
 
 Sessions
 - Each session starts with a fresh context and a brief: the task, the budget, the referee's verdict on this run so far with the facts it measures against (limits, noise bands, ceilings, each layer's latest share of time and distance from its ceiling), the baseline (the base commit measured by the default `bench`), the last session record of this run, and this run's hypotheses. Every other record is readable with `ledger`, `query` and `search`.

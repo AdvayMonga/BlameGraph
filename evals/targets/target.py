@@ -53,7 +53,7 @@ class Target:
     interactive: Limits
     conversational: Limits
     tasks: tuple[str, ...]
-    min_score_ratio: float
+    max_kl: float
     min_length_ratio: float
     corpus_dir: Path
     raw: dict
@@ -96,7 +96,7 @@ def parse(path: Path) -> Target:
         interactive=Limits(**lim.get("interactive", {"ttft_s": 0.5, "tpot_s": 0.030})),
         conversational=Limits(**lim.get("conversational", {"ttft_s": 2.0, "tpot_s": 0.100})),
         tasks=tuple(c.get("tasks") or ("mmlu_pro", "math", "code", "needle")),
-        min_score_ratio=float(c.get("min_score_ratio", 0.99)), min_length_ratio=float(c.get("min_length_ratio", 0.90)),
+        max_kl=float(c.get("max_kl", 0.01)), min_length_ratio=float(c.get("min_length_ratio", 0.90)),
         layers={k: tuple(v) for k, v in (raw.get("layers") or {}).items()},
         corpus_dir=ENV_ROOT / raw.get("corpus", {}).get("dir", "evals/regimes"), raw=raw)
 
