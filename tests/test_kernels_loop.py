@@ -301,6 +301,7 @@ def test_a_parent_is_drawn_more_often_the_more_its_code_differs_from_those_alrea
     drawn = [diversity.pick(pop, 3, random.Random(s)) for s in range(200)]
     often = sum(other in d for d in drawn)
     assert all(d[0] is best for d in drawn) and often > max(sum(t in d for d in drawn) for t in tuned)
+    assert any(p in d for d in drawn for p in sorted(pop, key=lambda p: -p.score)[32:])     # no cutoff at the best 32
     assert diversity.differs(diversity._lines("a = 1\n  # c\n\nb = 2"), diversity._lines("b = 2\na = 1")) == 0
     assert diversity.differs(frozenset("ab"), frozenset("bc")) == 1 - 1 / 3 and diversity.differs(frozenset(), frozenset()) == 0
 
