@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from lab import agent
-from measure.sandbox import container
+from lab.infra.sandbox import container
 
 
 def spec(tmp_path: Path) -> agent.AgentSpec:

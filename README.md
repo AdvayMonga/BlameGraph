@@ -22,7 +22,7 @@ The environment for autoresearch loops that optimize LLM inference. The engine l
 ```sh
 git clone https://github.com/AdvayMonga/BlameGraph && cd BlameGraph
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"    # extras: store, correctness, kernel-search, agents, ...
-export LAB_TARGET=targets/inference-server.toml                  # the engine to optimize
+export LAB_TARGET=lab/targets/inference-server.toml                  # the engine to optimize
 ```
 
 `pip install -e .` puts `lab` on your PATH; without installing, use `bin/lab`.

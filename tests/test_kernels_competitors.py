@@ -1,4 +1,4 @@
-"""The competitor timings' and the crossover's host-side logic (generate/kernels/library/competitors.py, measure/profile/crossover.py): a wrong
+"""The competitor timings' and the crossover's host-side logic (lab/kernels/library/competitors.py, lab/profile/crossover.py): a wrong
 competitor is reported and never timed, and so is one whose timed outputs differ; SASS and PTX are filtered to the
 kernels that matter; adapters' per-call work; step times by batch from a timeline; the faster path per batch and prompt
 length, and when a run is reused. The GPU parts run on the GPU host."""
@@ -14,9 +14,9 @@ import types  # noqa: E402
 
 import torch  # noqa: E402
 
-from generate.kernels.library import competitors
-from measure.profile import crossover  # noqa: E402
-from generate.kernels.tasks import load  # noqa: E402
+from lab.kernels.library import competitors
+from lab.profile import crossover  # noqa: E402
+from lab.kernels.tasks import load  # noqa: E402
 
 
 def test_a_wrong_competitor_is_reported_not_timed():
@@ -188,7 +188,7 @@ def test_timed_outputs_are_checked_and_each_shape_keeps_its_spread_and_config(mo
 
 def test_our_moe_routing_in_vllms_layout_reads_the_same_rows_and_experts():
     import torch
-    from generate.kernels.tasks.moe_gemm import _routing
+    from lab.kernels.tasks.moe_gemm import _routing
     g = torch.Generator().manual_seed(0)
     T, E, k, M = 6, 8, 2, 12
     experts = torch.stack([torch.randperm(E, generator=g)[:k] for _ in range(T)])           # real routing: k per token
@@ -276,8 +276,8 @@ def test_the_fused_moe_port_applies_every_edit_once_or_refuses():
 def test_the_topk_softmax_port_builds_vllms_kernel_at_import_and_passes_the_screen(monkeypatch):
     import re
 
-    from evals.kernels import core
-    from generate.kernels.evolve import run
+    from lab.kernels.eval import core
+    from lab.kernels.evolve import run
     engine = ("import torch\n\n\ndef rmsnorm(x, w):\n    return x\n\n\n"
               "def topk_softmax(logits, k, renorm, fp32=False):\n    return logits, logits\n")
     monkeypatch.setattr(run, "initial_program",
@@ -311,8 +311,8 @@ def test_step_times_by_batch_and_the_faster_path(tmp_path):
 
 
 def test_crossover_reruns_on_a_changed_setting_and_marks_a_megakernel_that_never_ran(tmp_path, monkeypatch):
-    import targets.target
-    monkeypatch.setattr(targets.target, "load", lambda: types.SimpleNamespace(engine=types.SimpleNamespace(env={"W": "1"})))
+    import lab.targets.target
+    monkeypatch.setattr(lab.targets.target, "load", lambda: types.SimpleNamespace(engine=types.SimpleNamespace(env={"W": "1"})))
     ran = []
 
     def run(argv, env, **k):
@@ -363,7 +363,7 @@ PORTED = {"rmsnorm": "vllm.rms_norm", "add_rmsnorm": "vllm.fused_add_rms_norm", 
 
 def _program(task, src=None):
     """The search's starting program for `task` (its entry bound to `kernel`) from the fake engine module or `src`."""
-    from generate.kernels.evolve import run
+    from lab.kernels.evolve import run
     mod, _, attr = task.entry.partition(":")
     if src is None:
         return run._start(types.SimpleNamespace(start_edits=()), FAKE_ENGINE[mod.rsplit(".", 1)[1]], attr)
@@ -377,7 +377,7 @@ def _signature(program, name):
 
 
 def _check_ports(task, program):
-    from evals.kernels import core
+    from lab.kernels.eval import core
     attr = task.entry.partition(":")[2]
     got = competitors.starts(task.name, program)
     assert list(got) == [PORTED[task.name]], task.name
@@ -390,8 +390,8 @@ def _check_ports(task, program):
 
 
 def test_every_ported_task_starts_from_its_competitor_with_the_engines_signature_and_passes_the_screen():
-    from generate.kernels.library import vllm_sources
-    from generate.kernels.tasks import TASKS
+    from lab.kernels.library import vllm_sources
+    from lab.kernels.tasks import TASKS
     for name in TASKS:
         t = load(name)
         if name in PORTED:
@@ -405,7 +405,7 @@ def test_every_ported_task_starts_from_its_competitor_with_the_engines_signature
 
 
 def test_the_ports_apply_to_the_engines_own_modules_when_it_is_here():
-    from targets import engine, target
+    from lab.targets import engine, target
     try:
         src = engine.repo() / "src"
     except target.NoTarget:

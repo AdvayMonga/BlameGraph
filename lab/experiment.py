@@ -17,11 +17,11 @@ import time
 import uuid
 from pathlib import Path
 
-from targets import engine
+from lab.targets import engine
 from lab import experiments
-from data.knowledge import ledger
+from lab.records import ledger
 from lab.budget import Budget
-from measure.sandbox.surfaces import may_write
+from lab.infra.sandbox.surfaces import may_write
 from lab.workspace import Workspace
 
 RUNS = engine.ENV_ROOT / "local" / "runs"

@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from measure.context import calibrate
-from targets import target
+from lab.infra.context import calibrate
+from lab.targets import target
 from tests.test_validity_ceiling import QWEN3_30B_A3B
 
 GPU = {"name": "NVIDIA H200", "driver_version": "580.1", "clocks.sm": "1980"}
@@ -157,7 +157,7 @@ def test_uncached_prompt_tokens_come_from_the_server_or_not_at_all():
 
 
 def test_heldout_aggregate_context_uses_the_seen_ceiling_only():
-    from data.knowledge import ledger
+    from lab.records import ledger
     from lab.evaltools import aggregate, heldout_context
     seen = {"ceiling": 20.0}
     m = {**aggregate({"value": 5.0}, 10.0, "higher", 3.0), **heldout_context(seen, {"value": 5.0}, 10.0, "higher")}
@@ -172,7 +172,7 @@ def test_heldout_aggregate_context_uses_the_seen_ceiling_only():
 
 
 def test_brief_ceilings_need_a_measured_gpu(t, tmp_path):
-    from data.knowledge import ledger
+    from lab.records import ledger
     from lab.evaltools import _ceiling_facts
     assert "no measurement" in _ceiling_facts(t, tmp_path)["missing"]
     ledger.append({"kind": "bench", "run": "r", "result": {"gpu": GPU}}, tmp_path)
