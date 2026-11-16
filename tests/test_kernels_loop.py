@@ -376,13 +376,18 @@ def test_the_naming_and_review_calls_read_the_setting_every_idea_and_the_parents
     shown, asked = user.split(CACHE_SPLIT)
     assert shown.startswith("The best score in the search is 2.0000.") and "# Program p1 (score 1.5000)" in shown
     assert "# Program p3 (score 2.0000)" in shown and "p0 (1.0000) -> p1 (1.5000)" in shown
-    assert "# The starting program p0" in shown and "40.0% of its roofline bound" in shown and "REPORT" in shown
+    assert "# The starting program" not in shown and "40.0% of its roofline bound" in shown and "REPORT" in shown
+    assert "# Program p1 (score 1.5000)\n```python\na = 1\n\n```" in shown                 # the first parent whole
+    assert ("# Program p3 (score 2.0000), as its differences from program p1\n```diff\n--- p1\n+++ p3\n"
+            "@@ -1 +1 @@\n-a = 1\n+a = 3\n```") in shown                                  # the others as diffs
+    same = Program("p4", "p0", "a = 1\n", {"correct": 1.0, "combined_score": 1.2}, {}, 1)
+    assert "(the same code)" in context.programs([mid, same], [*pop, same])
     assert "no ncu" in shown and "secret" not in shown
     assert '{"id": "i1", "idea": "fuse", "prediction": {"speedup": 1.3}, "gain": 1.5}' in asked
     assert "Name 5 changes" in asked and '"reflections"' in asked
     first = context.name("S", [root], [root], [], 1, 5)
     assert first[0] == "S" + CACHE_SPLIT + "\n\n" + context.NAMER
-    assert not any(t in first[1] for t in ("# The starting program", "reflections", "last generation"))
+    assert not any(t in first[1] for t in ("differences from", "reflections", "last generation"))
 
     named = [{"parent": "p1", "optimisation_method": "a"}, {"parent": "p3", "optimisation_method": "b"}]
     matches = [{"named": 1, "like": 0, "where": "this list", "cosine": 0.95},

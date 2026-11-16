@@ -30,11 +30,6 @@ DETECTOR = "claude-opus-5-5"
 EFFORT = "high"
 TIMING_SHAPES = 8
 RETIME = 4                   # top programs re-judged 3x; the highest median is promoted
-JUDGED = ("In this search stage 1 is not run. Every program is built and timed, and its timed run checks one seed of "
-          "every seen shape and every timed output. The rest of stage 2's checks are taken by a program picked to be "
-          "built on (one that fails is not built on) and, on 20 seeds, by the programs that may be promoted.")
-
-
 def _exclude(evaluator: Evaluator, gaming):
     """`exclude` for retime: why a program is passed over at promotion (it fails the full check on 20 seeds, or the
     detector flags it), or None."""
@@ -97,7 +92,7 @@ def main(argv: list[str] | None = None, namer: str = NAMER, writer: str = WRITER
     tol = tolerances(_target_tolerances(task))
     sets, program = prepare(task, _shapes(task, a), out, a.device, tol, TIMING_SHAPES, a.initial, region_args(a))
     start = program.read_text()
-    facts = [system_message(task), JUDGED, setting(task, sets, a.device, tol), Path(a.facts).read_text().strip() if a.facts else "",
+    facts = [system_message(task), setting(task, sets, a.device, tol), Path(a.facts).read_text().strip() if a.facts else "",
              other_implementations(task.name, stations=_stations(task, sets))]
     root = Path(a.ledger) if a.ledger else ledger.ROOT
     embedder, cfg = _embedder(ledger.ROOT), Config(seed=a.seed)

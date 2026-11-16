@@ -60,40 +60,49 @@ def initial_program_at(task, repo: Path, ref: str) -> str:
 
 
 def system_message(task) -> str:
-    """The system prompt: what the program is and how it is judged, from the evaluator's constants."""
+    """The system prompt: the goal, what the program is and how it is judged, from the evaluator's constants."""
     from lab.kernels.eval import core
-    base = f"the engine's current `{task.entry}`" if task.entry else \
+    from lab.kernels.eval.jailed import TIMEOUT_S
+    region = task.name.startswith("region:")
+    base = f"the engine's stations {' to '.join(task.name.split(':')[1:3])}" if region else \
+        f"the engine's current `{task.entry}`" if task.entry else \
         "the problem's eager PyTorch `Model`" if task.name.startswith("kb:") else "the task's reference"
     scales = core.SCALES if task.scales is None else task.scales
     none = task.name.startswith(("kb:", "fib:", "region:"))   # inputs from the problem or captures only: no edge shapes
     cases = ", ".join(["three seeds"] + ([] if none else ["edge shapes"])
                       + (["NaN/Inf inputs"] if task.nonfinite else [])
                       + ([f"inputs scaled by {', '.join(f'{k:g}' for k in scales)}"] if scales else []))
-    not_allowed = "; ".join(core.NOT_ALLOWED)
-    graphs = (", both captured in CUDA graphs and timed as graph replays, as the engine runs them (a kernel that "
-              "cannot be captured scores 0)") if task.graphs else ""
-    from lab.kernels.eval.jailed import TIMEOUT_S
-    cuda = ("\n- A program may build CUDA C++ when it is imported, with `torch.utils.cpp_extension.load_inline` (the "
-            "evaluation host's CUDA toolkit at $CUDA_HOME, ninja on PATH, the GPU's own architecture unless the program "
-            f"passes flags). The build is not timed; it counts against each stage's {TIMEOUT_S:.0f} s limit and is kept "
-            "per program source across its stages and re-timings.") \
+    dtypes = ", ".join(str(d).removeprefix("torch.") for d in task.dtypes)
+    budget = (f", or within {task.error_budget:g}x the engine's own error against the reference where that is larger"
+              if task.error_budget else "")
+    graphs = ", both replayed from CUDA graphs as the engine runs them" if task.graphs else ""
+    uncaptured = "; a kernel that cannot be captured in a CUDA graph" if task.graphs else ""
+    cuda = ("; CUDA C++ built when the program is imported, with `torch.utils.cpp_extension.load_inline` (the "
+            "evaluation host's toolkit at $CUDA_HOME, ninja on PATH, the GPU's own architecture unless the program "
+            f"passes flags; the build counts against each stage's {TIMEOUT_S:.0f} s limit and is kept per program source)") \
         if task.entry or task.start_program else ""
-    return f"""The program defines `kernel`, a replacement for {base}. It must compute what the task's reference \
-computes, on the same inputs, within dtype tolerance ({', '.join(str(d).removeprefix('torch.') for d in task.dtypes)}).
+    return f"""Goal: the highest score.
 
-How a program is judged:
-- Stage 1: correctness on the two most-called seen shapes, one seed. Stage 2: correctness on every seen shape \
-({cases}), inputs left unchanged, no output aliasing, no answers kept across calls; then peak memory at most {core.MEMORY_FACTOR}x the \
-baseline's + {core.MEMORY_SLACK // 2**20} MiB; then timing against {base}{graphs}.
-- Score: the call-weighted geometric mean of the speedup over the seen shapes, the program and the baseline timed \
-in pairs on the same inputs; a shape where the middle half of the paired ratios includes 1 counts as 1.0. A failed gate scores 0; so does a time at which the kernel would run at \
-over {core.PHYSICS_MARGIN_PCT}% of its roofline bound. Nothing before a shape's timed window is timed: the correctness checks and warm-up calls run first, so tuning a program does at run time (e.g. `triton.autotune`) is done by then. Held-out shapes are judged separately and are not part of the score.
-- Not allowed: {not_allowed}. A program read doing any of them is not built on and not promoted. Scores 0: anything the \
-evaluator uses found patched.
-- Lower precision inside the kernel is allowed while the output stays within tolerance; each result reports its \
-error against the reference beside the baseline's.{cuda}
+The program defines `kernel`, replacing {base}: on the same inputs it returns what the task's reference computes, \
+within dtype tolerance ({dtypes}){budget}.
 
-The goal is the highest score."""
+Score: the speedup over {base}, the two timed in pairs on the same inputs{graphs}; the geometric mean over the seen \
+shapes, weighted by their calls. A shape whose speedup is within noise (the middle half of the paired ratios \
+includes 1) counts as 1.0. Held-out shapes are judged separately and are not part of the score.
+
+Scores 0:
+- a wrong output on a seen shape. Every program's timed run checks one seed of every seen shape and each timed \
+output; a program takes the full check ({cases}) before it is built on or promoted, and is dropped if it fails;
+- inputs changed, an output that aliases an input, or answers kept across calls;
+- peak memory over {core.MEMORY_FACTOR}x the baseline's + {core.MEMORY_SLACK // 2**20} MiB;
+- a time at which the kernel would run at over {core.PHYSICS_MARGIN_PCT}% of its roofline bound;
+- anything the evaluator uses left patched{uncaptured}.
+
+Not timed: anything before a shape's timed window (builds, the correctness checks, warm-up calls, and tuning a \
+program does at run time, e.g. `triton.autotune`).
+Allowed: lower precision inside the kernel while the output stays within tolerance (each result reports its error \
+against the reference beside the baseline's){cuda}.
+Not allowed: {"; ".join(core.NOT_ALLOWED)}. A program read doing any of them is not built on and not promoted."""
 
 
 def setting(task, sets: dict, device: str, tol: dict) -> str:
@@ -111,8 +120,7 @@ def setting(task, sets: dict, device: str, tol: dict) -> str:
                    + (f" (captured under: {by})" if by else ""))
     example = next(((k, c) for k in seen if (c := (sets.get("example_calls") or {}).get(k))), None)
     if example:
-        out.append(f"A captured call of the engine's entry point at shape {example[0]} (each tensor argument by "
-                   f"shape and dtype): {json.dumps(example[1])}")
+        out.append(f"A captured call at shape {example[0]} (each tensor by shape and dtype): {json.dumps(example[1])}")
     out.append(_hardware(device))
     try:
         from lab.targets import target
@@ -127,6 +135,8 @@ def setting(task, sets: dict, device: str, tol: dict) -> str:
     eff = {str(d).removeprefix("torch."): list(TOLERANCES.get(d, ())) for d in task.dtypes}
     eff.update({k: v for k, v in tol.items() if k in eff})
     out.append(f"Tolerances (atol, rtol) per dtype: {json.dumps(eff)}")
+    if sets.get("code"):
+        out.append("\n" + sets["code"])
     return "\n".join(out)
 
 
@@ -227,6 +237,10 @@ def _shapes(task, a) -> dict:
         raise SystemExit(f"the captures hold no call of {task.entry} (calls replayed from a CUDA graph never reach "
                          "Python: capture with the engine's graphs off, the target's [kernels] capture_env)")
     sets = shapes_mod.split(task, counts)
+    from lab.profile.capture import STEP
+    if a.task.startswith("region:") and a.task != STEP:      # a region loaded here: the engine's code it replaces
+        from lab.kernels.tasks import regions
+        sets["code"] = regions.code(regions.load_engine(), *a.task.split(":")[1:3])
     return {**sets, "ints": shapes_mod.ints_from_captures(task, dirs),
             "sources": shapes_mod.sources_from_captures(task, dirs),
             "example_calls": shapes_mod.calls_from_captures(task, dirs, sets["seen"])} if dirs else sets

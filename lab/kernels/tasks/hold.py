@@ -40,9 +40,11 @@ def describe(name: str, samples: Path, holder: Path) -> dict:
     eng = regions.load_engine()
     whole = regions.engine_stations(eng, eng.step if name == STEP else eng.which(name.split(":")[1]))
     names = [s.name for s in (whole if name == STEP else regions.span(whole, *name.split(":")[1:3]))]
-    sets = {**shapes.split(task, counts), "ints": shapes.ints_from_captures(task, caps),
+    sets = shapes.split(task, counts)
+    sets = {**sets, "ints": shapes.ints_from_captures(task, caps),
             "sources": shapes.sources_from_captures(task, caps), "heldout_axes": list(task.heldout_axes),
-            "stations": names}
+            "example_calls": shapes.calls_from_captures(task, caps, sets["seen"]), "stations": names,
+            **({} if name == STEP else {"code": regions.code(eng, *name.split(":")[1:3])})}
     return {"holder": str(holder), "samples": str(samples), "start": initial_program(task),
             "shapes": {k: [list(s) for s in v] if k in ("seen", "heldout") else v for k, v in sets.items()},
             "stations": names, "set": [s.name for s in whole]}

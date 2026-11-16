@@ -112,6 +112,33 @@ def test_the_lab_names_nothing_of_the_engine_and_the_target_declares_it():
     assert light.entry == "inference_server.models.stations:PREFILL" and dict(light.capture_env) == {"CAPTURE_REGION_LAYERS": "0,16,32,47"}
 
 
+def test_a_regions_code_is_its_stations_and_what_they_reach_in_the_watched_modules(tmp_path, monkeypatch):
+    from lab.kernels.evolve.run import setting
+    from lab.kernels.tasks import regions
+    (tmp_path / "code_helper.py").write_text(
+        "import functools\n\nK = 3\nUNUSED = 9\n\n\ndef _inner(x):\n    return x * K\n\n\n"
+        "@functools.cache\ndef scale(x):\n    return _inner(x)\n\n\ndef never(x):\n    return UNUSED\n")
+    (tmp_path / "code_stations.py").write_text(
+        "from dataclasses import dataclass\nimport code_helper\n\n\n@dataclass(frozen=True)\nclass Station:\n"
+        "    name: str\n    reads: tuple\n    writes: tuple\n    fn: object\n\n\nEPS = 1e-6\nLIVE = ('h',)\n\n\n"
+        "def _a(c):\n    return {'x': code_helper.scale(c['h']) + EPS}\n\n\n"
+        "def _c(c):\n    return {'h': c['y']}\n\n\n"
+        "DECODE = (Station('a', ('h',), ('x',), _a), Station('b', ('x',), ('y',), lambda c: {'y': c['x']}),\n"
+        "          Station('c', ('y',), ('h',), _c))\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    eng = declared(monkeypatch, "code_stations", watch=("code_helper", "no_such_module"))
+    text = regions.code(eng, "a", "b")
+    assert text.startswith("# The engine's code for stations a to b\n") and "- a: reads h; writes x\n- b: reads x; writes y" in text
+    assert "## code_stations\n```python\n" in text and "def _a(c):" in text and "EPS = 1e-6" in text
+    assert "lambda c: {'y': c['x']}" in text and "def _c(c):" not in text            # b's own line; c is outside the region
+    helper = text.split("## code_helper\n")[1]
+    assert "@functools.cache\ndef scale(x):" in helper and "def _inner(x):" in helper and "K = 3" in helper
+    assert "never" not in helper and "UNUSED" not in helper                         # only what the stations reach
+    sets = {"seen": [(4, 64)], "code": text, "example_calls": {"[4, 64]": {"reads": {"h": {"shape": [4, 64], "dtype": "bfloat16"}}}}}
+    shown = setting(regions.light("region:a:b"), sets, "cpu", {})
+    assert shown.endswith(text) and 'A captured call at shape [4, 64] (each tensor by shape and dtype): {"reads": {"h"' in shown
+
+
 def captures(tmp, calls):
     """A CAPTURE_REGION dir of region:norm:add calls, (rows, hidden, layer, sampled) each."""
     d = tmp / "caps"

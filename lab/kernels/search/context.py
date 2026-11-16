@@ -2,6 +2,7 @@
 `review`, `write` and `reflect`; `name` and `review` share their system prompt and programs, so the second is cached."""
 from __future__ import annotations
 
+import difflib
 import json
 import re
 
@@ -9,7 +10,7 @@ from lab.kernels.search.llm import CACHE_SPLIT
 from lab.kernels.search.program import Idea, Program
 
 NAMER = ("You are directing a search for a faster GPU kernel program. You are shown the programs this generation "
-         "builds on, each with its measurements, the starting program and every idea tried so far.")
+         "builds on, each with its measurements, and every idea tried so far.")
 PORTER = ("You are choosing starting programs for a search for a faster GPU kernel program. You are shown the program "
           "the search starts from and its measurements.")
 WRITER = ("You are making one change to a GPU kernel program in a search. You are shown the program, its measurements "
@@ -197,17 +198,24 @@ def lineage(node: Program, population: list[Program]) -> list[Program]:
 
 
 def programs(parents: list[Program], population: list[Program]) -> str:
-    """The generation's parents, each with its measurements, lineage and children, and the starting program."""
-    root, best = population[0], max(p.score for p in population)
+    """The generation's parents, each with its measurements, lineage and children: the first as its code, the others
+    as their differences from it."""
+    best, whole = max(p.score for p in population), parents[0]
 
     def one(node: Program) -> str:
         path = " -> ".join(f"{n.id} ({n.score:.4f})" for n in lineage(node, population))
         kids = "\n".join(f"- {c.id}: score {c.score:.4f}" for c in population if c.parent == node.id) or "none"
-        return (f"{program(node)}\n\n# Its lineage (program, score)\n{path}\n\n"
-                f"# Programs already derived from it\n{kids}")
-    start = "" if root in parents else \
-        f"\n\n# The starting program {root.id} (score {root.score:.4f})\n```python\n{root.code}\n```"
-    return f"The best score in the search is {best:.4f}.\n\n" + "\n\n".join(one(p) for p in parents) + start
+        shown = program(node) if node is whole else (
+            f"# Program {node.id} (score {node.score:.4f}), as its differences from program {whole.id}\n"
+            f"```diff\n{differences(whole, node)}```\n\n# Its measurements\n{facts(node)}")
+        return f"{shown}\n\n# Its lineage (program, score)\n{path}\n\n# Programs already derived from it\n{kids}"
+    return f"The best score in the search is {best:.4f}.\n\n" + "\n\n".join(one(p) for p in parents)
+
+
+def differences(a: Program, b: Program) -> str:
+    """`b`'s code as a unified diff against `a`'s."""
+    return "".join(difflib.unified_diff(a.code.splitlines(True), b.code.splitlines(True), a.id, b.id)) \
+        or "(the same code)\n"
 
 
 def program(node: Program) -> str:

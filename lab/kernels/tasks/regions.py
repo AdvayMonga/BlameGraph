@@ -366,6 +366,67 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
                 edge_shapes=lambda shape: [])     # no synthetic edge shapes
 
 
+def _definitions(module: str) -> dict[str, str] | None:
+    """{name: source} of the top-level functions, classes and assignments (decorators included) of the module named
+    `module`, read from its file without importing it; None when it is not found."""
+    import ast
+    import importlib.util
+    try:
+        spec = importlib.util.find_spec(module)
+    except (ImportError, ValueError):
+        spec = None
+    if spec is None or not spec.origin or not Path(spec.origin).is_file():
+        return None
+    src = Path(spec.origin).read_text()
+    lines, out = src.splitlines(keepends=True), {}
+    for n in ast.parse(src).body:
+        names = [n.name] if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) else \
+            [t.id for t in n.targets if isinstance(t, ast.Name)] if isinstance(n, ast.Assign) else \
+            [n.target.id] if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) else []
+        top = min([n.lineno, *(d.lineno for d in getattr(n, "decorator_list", ()))])
+        for name in names:
+            out[name] = "".join(lines[top - 1:n.end_lineno])
+    return out
+
+
+def code(eng: Engine, first: str, last: str) -> str:
+    """What the engine runs for the region, as text: each station's reads and writes, then the source of the stations'
+    functions and of everything they reach in the stations module and the watched modules, by module."""
+    import inspect
+    import re
+    st = eng.module()
+    region = span(tuple(getattr(st, eng.which(first))), first, last)
+    defs = {m: d for m in (eng.stations, *eng.watch) if (d := _definitions(m)) is not None}
+    mods = {m.rsplit(".", 1)[-1]: m for m in defs}       # as the code names a module -> the module
+    defs = {alias: defs[m] for alias, m in mods.items()}
+    home = eng.stations.rsplit(".", 1)[-1]
+    found: dict[str, list[str]] = {alias: [] for alias in mods}
+    seen, queue = set(), [(home, s.fn.__name__) for s in region]
+    for s in region:                                 # a station that is no top-level function: its own source
+        if s.fn.__name__ not in defs[home]:
+            try:
+                found[home].append(inspect.getsource(s.fn).strip() + "\n")
+            except (OSError, TypeError):
+                pass
+    while queue:
+        alias, name = queue.pop(0)
+        if (alias, name) in seen or name not in defs[alias]:
+            continue
+        seen.add((alias, name))
+        src = defs[alias][name]
+        found[alias].append(src)
+        words = set(re.findall(r"[A-Za-z_]\w*", src))
+        queue += [(alias, n) for n in defs[alias] if n in words]
+        queue += [(a, n) for a in mods if a != alias for n in re.findall(rf"\b{re.escape(a)}\.(\w+)", src)]
+    out = [f"# The engine's code for stations {first} to {last}",
+           "The stations run in this order; each reads and writes named entries:"]
+    out += [f"- {s.name}: reads {', '.join(s.reads)}; writes {', '.join(s.writes)}" for s in region]
+    for alias, parts in found.items():
+        if parts:
+            out.append(f"## {mods[alias]}\n```python\n" + "\n".join(p.rstrip("\n") + "\n" for p in parts) + "```")
+    return "\n".join(out)
+
+
 def start_program(eng: Engine, first: str, last: str, constants: dict | None = None,
                   shared_weights: str | None = None) -> str:
     """The region's starting program: the engine's stations called in order, its constants written in as values."""
