@@ -16,7 +16,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from lab.targets import engine, target
+from evals.targets import target
+from lab.targets import engine
 from lab.profile import gpu
 from lab.infra.sandbox import grader
 

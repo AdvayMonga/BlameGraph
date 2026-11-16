@@ -144,7 +144,7 @@ def run(out: Path, engines: list[str], precisions: list[str], stages: list[str],
         tol: float, spec: dict | None = None, first_repeat: int = 0) -> None:
     spec = spec or load()
     c = spec["common"]
-    from lab.targets import target
+    from evals.targets import target
     t = target.load()
     out.mkdir(parents=True, exist_ok=True)
     if "clientcheck" in stages and not (out / "clientcheck.json").exists():

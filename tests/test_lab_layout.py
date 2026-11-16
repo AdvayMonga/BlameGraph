@@ -86,3 +86,17 @@ def test_the_held_out_split_is_named_where_the_corpus_is():
     assert held in (ROOT / ".gitignore").read_text().split()
     assert held in _assigned("lab/infra/sandbox/surfaces.py", "HIDDEN")
     assert f"--include={held}" in (ROOT / "lab/infra/cloud/vm.py").read_text()
+
+
+def test_evals_never_imports_lab():
+    out = subprocess.run(["git", "ls-files", "evals"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
+    bad = set()
+    for f in out:
+        if not f.endswith(".py"):
+            continue
+        for n in ast.walk(ast.parse((ROOT / f).read_text())):
+            names = [a.name for a in n.names] if isinstance(n, ast.Import) else \
+                [n.module or ""] if isinstance(n, ast.ImportFrom) and not n.level else []
+            if any(m.split(".")[0] == "lab" for m in names):
+                bad.add((f, n.lineno))
+    assert not bad, sorted(bad)

@@ -6,7 +6,7 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-from lab.targets import target
+from evals.targets import target
 
 
 def overrides(tree: Path, t: target.Target) -> dict[str, dict]:

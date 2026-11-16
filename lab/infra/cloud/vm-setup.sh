@@ -18,7 +18,7 @@ export PATH="$HOME/.local/bin:$PATH"
 # The engine's venv is built by the target spec's `[engine] build` command (the one recipe lab/infra/sandbox/build.py also runs for a
 # changed dependency set), with the project installed on top; nothing engine-specific lives in this script. Skipped
 # when the venv already has a CUDA torch; never run a bare `uv sync` on this box afterwards (the lock pins CPU torch).
-target="$here/../../../${LAB_TARGET:-lab/targets/inference-server.toml}"
+target="$here/../../../${LAB_TARGET:-evals/targets/inference-server.toml}"
 if ! .venv/bin/python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
   build=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["engine"]["build"])' "$target")
   UV_PROJECT_ENVIRONMENT="$PWD/.venv" bash -euo pipefail -c "$build"
@@ -140,7 +140,7 @@ ENV_DIR="${LAB_VM_ENV_DIR:-$HOME/BlameGraph}"; ENGINE_DIR="$PWD"
 
 echo "== model cache: the target's model and the Hub repos its tests read (every jail is offline)"
 mkdir -p "$HOME/.cache/huggingface"
-.venv/bin/python - "$here/../../../${LAB_TARGET:-lab/targets/inference-server.toml}" <<'PY' \
+.venv/bin/python - "$here/../../../${LAB_TARGET:-evals/targets/inference-server.toml}" <<'PY' \
   || echo "model cache: download failed (finding, not failure)"
 import sys, tomllib
 from huggingface_hub import snapshot_download

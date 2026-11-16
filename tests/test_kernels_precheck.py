@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-__import__("os").environ.setdefault("LAB_TARGET", str(Path(__file__).resolve().parents[1] / "lab" / "targets" / "inference-server.toml"))
+__import__("os").environ.setdefault("LAB_TARGET", str(Path(__file__).resolve().parents[1] / "evals" / "targets" / "inference-server.toml"))
 
 import json  # noqa: E402
 import os  # noqa: E402

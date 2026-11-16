@@ -24,7 +24,8 @@ from lab.targets import engine
 from lab.infra.sandbox import container, grader
 
 ROOT = Path(__file__).resolve().parents[3]
-HARNESS = {"lab": ("__init__.py",), "lab/kernels": None, "lab/targets": ("__init__.py", "target.py"), "lab/infra": ("__init__.py",),
+HARNESS = {"lab": ("__init__.py",), "lab/kernels": None, "lab/infra": ("__init__.py",),
+           "evals": ("__init__.py",), "evals/targets": ("__init__.py", "target.py"),
            "lab/infra/context": ("__init__.py", "peaks.py"),
            "lab/profile": ("__init__.py", "capture.py")}   # capture: a region reads its samples (regions.from_engine)
 TIMEOUT_S = float(os.environ.get("KERNEL_EVAL_TIMEOUT_S", "600"))

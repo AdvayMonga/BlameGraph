@@ -11,7 +11,7 @@ from pathlib import Path
 
 from lab.infra.context import calibrate, layers
 from lab.infra.runner import profiles, serve
-from lab.targets import target
+from evals.targets import target
 from lab.agent import ToolSpec
 from lab.evaltools import _failed, _killed
 

@@ -10,7 +10,8 @@ from pathlib import Path
 import pytest
 
 from lab.infra.sandbox import build
-from lab.targets import engine, target
+from evals.targets import target
+from lab.targets import engine
 from lab.infra.sandbox import container, jail
 
 

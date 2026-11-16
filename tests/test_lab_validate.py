@@ -9,7 +9,7 @@ import pytest
 
 from lab.records import ledger
 from lab.gate import validate
-from lab.targets import target
+from evals.targets import target
 from evals.loadgen import suite
 
 FAKE = Path(__file__).resolve().parent / "fake_engine.py"
