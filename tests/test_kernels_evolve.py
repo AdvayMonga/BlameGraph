@@ -67,7 +67,17 @@ def test_the_screen_refuses_exploit_routes_and_passes_real_kernels():
     assert screen(SEED.read_text()) == [] and screen(ev.read_text()) == []
     assert screen("x = os.environ.get('A', '0')\n") == []
     assert screen("import torch\nclass A:\n    def f(self, x):\n        self.a = 1\n        x.b = 2\n") == []
-    assert screen("import torch\nx = torch.empty(3)\nx.tag = 1\n")             # bound to a call: refused
+    td = "from triton.tools.tensor_descriptor import TensorDescriptor as _TD\n"
+    assert screen("import torch\nx = torch.empty(3)\nx.tag = 1\n" + td + "d = _TD(w, [4, 4])\nd.block_shape = [1, 2]\n") == []
+    assert screen('"""Stream-K."""\nimport torch\n# Stream-K, import time\ndef k(x):\n    """An Event."""\n    return x\n') == []
+    assert screen("import torch\ns = torch.cuda.Stream()\n") and screen('SRC = "cudaStreamCreate(&s);"\n')   # code and C++ text
+    assert screen("def hook(nargs):\n    d = nargs.get('W_DESC')\n    d.block_shape = [1, 2]\n") == []
+    for bad in ("x = torch.empty(1)\nx.__class__.zero_ = None\n", "T = torch.empty(1).__class__\nT.zero_ = None\n",
+                "t = type\nT = t(x)\nT.zero_ = None\n", "f.__globals__['torch'] = 1\n",
+                "z = 1\x0c\ns = torch.cuda.Stream()\n# " + "a" * 44 + "\n", 'z = "\u2028"\ns = torch.cuda.Stream()\n# ' + "a" * 44 + "\n",
+                'b"Stream"\n', '"Stream" "x"\n', 'def f(): "Stream"\n', 'class K:\n    "Stream"\nK.__doc__\n',
+                "def k(h):\n    return getattr(h, 'shared', 0)\n"):
+        assert screen("import torch\n" + bad), bad
     assert screen("import torch\nm = torch.cuda\nm.synchronize = None\n") and screen("def k(x):\n    type(x).f = 1\n")
     assert screen("def k(x):\n    T = type(x)\n    T.zero_ = None\n") and screen("from torch.cuda import Stream\n")
     t = load("toy_rmsnorm")

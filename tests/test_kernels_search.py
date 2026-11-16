@@ -385,6 +385,7 @@ def test_a_flagged_candidate_is_passed_over_at_promotion():
                                    else '{"gaming": false, "evidence": ""}'), 0.003), spent)
     assert flag("x = 1  # SPECIAL\n", {}) == "flagged as gaming: if x.shape[0] == 64"
     assert flag("x = 1\n", {}) is None and spent == [0.003, 0.003]
+    assert flag("x = 1  # SPECIAL\n", {}) and flag("x = 1\n", {}) is None and len(spent) == 2     # each program read once
     t = load("toy_rmsnorm")
     fast = SEED.read_text().replace(LOOP, "    xf = x.float()\n    return (xf * torch.rsqrt(xf.pow(2).mean(-1, "
                                          "keepdim=True) + 1e-6) * w.float()).to(x.dtype)")

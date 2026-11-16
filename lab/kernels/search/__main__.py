@@ -101,12 +101,12 @@ def main(argv: list[str] | None = None, namer: str = NAMER, writer: str = WRITER
              other_implementations(task.name, stations=_stations(task, sets))]
     root = Path(a.ledger) if a.ledger else ledger.ROOT
     embedder, cfg = _embedder(ledger.ROOT), Config(seed=a.seed)
-    evaluator = Evaluator(counters=a.device.startswith("cuda"))
+    evaluator, spent = Evaluator(counters=a.device.startswith("cuda")), []
+    gaming = detect.detector(Claude(detector, EFFORT), spent) if detector else None
     population, cost = search(start, competitors.starts(task.name, start), "\n\n".join(f for f in facts if f),
                               Claude(namer, EFFORT, tools=True), Claude(writer, EFFORT), evaluator, Novelty(),
-                              Similar(embedder, _past(root, task.name, embedder)), out, cfg)
-    spent: list = []
-    exclude = _exclude(evaluator, detect.detector(Claude(detector, EFFORT), spent) if detector else None)
+                              Similar(embedder, _past(root, task.name, embedder)), out, cfg, gaming)
+    exclude = _exclude(evaluator, gaming)
     code, metrics, retimed = retime(out / "trace.jsonl", retime_k, exclude=exclude)
     cost["usd"] = round(cost["usd"] + sum(spent), 4)
     cost["model_calls"] += len(spent)

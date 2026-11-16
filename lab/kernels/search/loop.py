@@ -4,7 +4,7 @@ Before the first generation the start and the seeds are judged, and one call nam
 as further starting programs (context.ports), each made by a writer call and judged beside them.
 
 A generation picks its parents (diversity.pick) and drops the ones that fail the full correctness check
-(evaluate.Evaluator.check). One naming call reflects on the last generation's ideas and names `ideas` changes
+(evaluate.Evaluator.check) or that the gaming detector flags (detect.detector). One naming call reflects on the last generation's ideas and names `ideas` changes
 (context.name). The ones whose text is close to another idea's are found (diversity.Similar) and one review call
 writes the final list, the same change merged and combinations added (context.review). A writer call makes each
 change (context.write). Programs that repeat one already written are dropped (diversity.Novelty), the rest are built
@@ -22,6 +22,7 @@ import random
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Callable
 
 from lab.kernels.search import context, diff, diversity
 from lab.kernels.search.calls import Calls, Model
@@ -79,6 +80,18 @@ def reflected(ideas: list[Idea], answer: dict) -> None:
             by[r["id"]].reflection = str(r.get("reflection") or "")
 
 
+def flagged(programs: list[Program], detect: Callable, workers: int) -> dict[str, str]:
+    """{id: why} for the programs the gaming detector flags; each is read once, and one flagged can no longer be a
+    parent."""
+    new = [p for p in programs if "gaming" not in p.artifacts]
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for p, why in zip(new, ex.map(lambda p: detect(p.code, {"child_metrics": p.metrics}), new)):
+            p.artifacts["gaming"] = why or "none"
+            if why:
+                p.metrics["correct"] = 0.0
+    return {p.id: p.artifacts["gaming"] for p in programs if p.artifacts["gaming"] != "none"}
+
+
 def write(calls: Calls, writer: Model, setting: str, idea: Idea, by: dict[str, Program]) -> None:
     """One writer call: the program its change makes of the idea's parent, or why it could not be applied."""
     parent = by[idea.parent]
@@ -95,10 +108,11 @@ def write(calls: Calls, writer: Model, setting: str, idea: Idea, by: dict[str, P
 
 def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer: Model, evaluator: Evaluator,
            novelty: diversity.Novelty, similar: diversity.Similar, out: Path,
-           cfg: Config = Config()) -> tuple[list[Program], dict]:
+           cfg: Config = Config(), detect: Callable | None = None) -> tuple[list[Program], dict]:
     """The population (the start first) and the run's cost {usd, model_calls, evals, generations}. `seeds`: name ->
     program, judged beside the start. `namer` names the ports and names and reviews a generation's changes, and
-    writes the ports (it can read their sources); `writer` makes each change."""
+    writes the ports (it can read their sources); `writer` makes each change; `detect(code, row)` says why a picked
+    parent games the evaluation, or None."""
     out.mkdir(parents=True, exist_ok=True)
     rng, population, ideas, ran = random.Random(cfg.seed), [], [], 0
     calls = Calls(out)
@@ -161,9 +175,13 @@ def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer
             if not picked:
                 break
             spent, dropped = calls.usd, evaluator.check(picked)
+            gaming = flagged([p for p in picked if p.id not in dropped], detect, cfg.workers) if detect else {}
             for i in ideas:
                 if i.child and i.child.id in dropped:
                     i.fate = f"failed the full check as a parent: {dropped[i.child.id]}"
+                elif i.child and i.child.id in gaming:
+                    i.fate = f"as a parent, {gaming[i.child.id]}"
+            dropped = {**dropped, **gaming}
             parents = [p for p in picked if p.id not in dropped]
             for p in parents:
                 evaluator.profile(p)
