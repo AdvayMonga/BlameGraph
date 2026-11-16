@@ -140,10 +140,10 @@ class Engine:
     """The target's `[regions]`: where the engine's stations are and what a region of them needs."""
     stations: str                                    # the module holding the station sets and their helpers
     overrides: str                                   # the package the engine reads a region's replacement from
+    weights: str                                     # context entries with this prefix are weights
     watch: tuple[str, ...] = ()                      # the modules the stations call into
     layers: tuple[int, ...] = ()                     # the layers a region is captured at and held for
     heldout_layer: int | None = None                 # its calls are held out
-    weights: str = "w."                              # context entries with this prefix are weights
     hold_env: dict = field(default_factory=dict)     # what the hold process sets before the engine loads
     step: str = ""                                   # the set a whole decode step runs
     sets: dict = field(default_factory=dict)         # name -> StationSet
@@ -153,7 +153,17 @@ class Engine:
 
     def which(self, first: str) -> str:
         """The name of the station set the station `first` belongs to: the longest matching prefix's."""
-        return max((n for n, s in self.sets.items() if first.startswith(s.prefix)), key=lambda n: len(self.sets[n].prefix))
+        fits = [n for n, s in self.sets.items() if first.startswith(s.prefix)]
+        if not fits:
+            raise ValueError(f"the station {first} is in none of the declared sets {list(self.sets)}")
+        return max(fits, key=lambda n: len(self.sets[n].prefix))
+
+    def declared(self, name: str) -> tuple[str, ...]:
+        """The tuple `name` the stations module must declare (LIVE, IN_PLACE, STEP, DISCRETE, OPAQUE)."""
+        st = self.module()
+        if not hasattr(st, name):
+            raise ValueError(f"{self.stations} declares no {name}: a region needs it (the stations contract)")
+        return tuple(getattr(st, name))
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -186,7 +196,8 @@ def light(name: str, heldout_axes: tuple[int, ...] = (), eng: Engine | None = No
                            *eng.sets[which].capture_env.items())
     return Task(name=name, entry=STEP_ENTRY if step else f"{eng.stations}:{which}", reference=_needs_worker,
                 make_inputs=_needs_worker, shape_of=lambda call: None, cost=_needs_worker, layouts=(),
-                heldout_axes=tuple(heldout_axes), error_budget=ERROR_BUDGET, capture_fn=name, capture_env=env)
+                heldout_axes=tuple(heldout_axes), error_budget=ERROR_BUDGET, capture_fn=name, capture_env=env,
+                graphs=bool(eng) and eng.sets[which].graphs)
 
 
 def _importable(names: tuple[str, ...]) -> tuple[str, ...]:
@@ -220,12 +231,12 @@ def reference_stations(eng: Engine, which: str) -> tuple[Station, ...] | None:
 
 def live(eng: Engine) -> tuple[str, ...]:
     """The entries that outlive a layer's stations."""
-    return tuple(eng.module().LIVE)
+    return eng.declared("LIVE")
 
 
 def _in_place(eng: Engine) -> tuple[str, ...]:
     """The entries the engine writes in place."""
-    return tuple(getattr(eng.module(), "IN_PLACE", ()))
+    return eng.declared("IN_PLACE")
 
 
 def _shaped(eng: Engine, reads: dict) -> list[str]:
@@ -266,7 +277,7 @@ def _region(eng: Engine, first: str, last: str) -> tuple[tuple[Station, ...], tu
     stations = engine_stations(eng, which)
     region = span(stations, first, last)
     inplace = tuple(sorted({w for s in region for w in s.writes} & set(_in_place(eng))))
-    opaque = sorted({r for s in region for r in s.reads} & set(getattr(eng.module(), "OPAQUE", ())))
+    opaque = sorted({r for s in region for r in s.reads} & set(eng.declared("OPAQUE")))
     if opaque:
         raise ValueError(f"region {first}..{last} reads {opaque}, which the engine cannot hand to a region: it must "
                          "start after the station that reads it")
@@ -298,14 +309,13 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
     `engine`: an `Engine.as_dict()`, where no target is set."""
     from lab.kernels.tasks.shared_weights import attach
     eng = load_engine(engine)
-    st = eng.module()
     stations, inplace = _region(eng, first, last)
     held = attach(Path(shared_weights), copy_ok=True) if shared_weights else {}
     consts = _consts(held, constants)
     alive = live(eng)
     ins = tuple(i for i in interface(stations, first, last, alive)[0] if i not in consts)
     fn, which = f"region:{first}:{last}", eng.which(first)
-    fixed = {*getattr(st, "STEP", ()), *_in_place(eng)}      # step inputs and the entries written in place
+    fixed = {*eng.declared("STEP"), *_in_place(eng)}         # step inputs and the entries written in place
     layers = consts.get("layers") or ([consts["layer"]] if consts.get("layer") is not None else None)
     multi = bool(layers) and len(layers) > 1     # a call's shape starts with its layer
     calls = []
@@ -357,7 +367,7 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
     return task(fn, stations, first, last, make_ctx, shape_of, dtypes=dtypes, live=alive,
                 watch=(eng.stations, *_importable(eng.watch)), entry=f"{eng.stations}:{which}", capture_fn=fn,
                 seen_default=tuple(by_shape), constants=consts, reference_stations=reference_stations(eng, which),
-                discrete=tuple(getattr(st, "DISCRETE", ())),
+                discrete=eng.declared("DISCRETE"),
                 heldout_axes=tuple(a + int(multi) for a in _heldout_axes(eng, which, reads, ins)) if calls else (),
                 heldout_values=((0, (eng.heldout_layer,)),) if multi and eng.heldout_layer in layers else (),
                 start_program=start,
@@ -366,64 +376,123 @@ def from_engine(first: str, last: str, samples: str | None = None, shared_weight
                 edge_shapes=lambda shape: [])     # no synthetic edge shapes
 
 
-def _definitions(module: str) -> dict[str, str] | None:
-    """{name: source} of the top-level functions, classes and assignments (decorators included) of the module named
-    `module`, read from its file without importing it; None when it is not found."""
+def _module(name: str) -> dict | None:
+    """A module read from its file without importing it: {defs: {name: source} of its top-level functions, classes
+    and assignments (decorators included), assigned: the names that are assignments, binds: what its imports bind,
+    name -> ("module", module) or ("name", module, attribute)}; None when its file is not found."""
     import ast
     import importlib.util
-    try:
-        spec = importlib.util.find_spec(module)
-    except (ImportError, ValueError):
-        spec = None
-    if spec is None or not spec.origin or not Path(spec.origin).is_file():
+
+    def found(mod: str) -> str | None:
+        try:
+            spec = importlib.util.find_spec(mod)
+        except (ImportError, ValueError):
+            return None
+        return spec.origin if spec and spec.origin and Path(spec.origin).is_file() else None
+    origin = found(name)
+    if origin is None:
         return None
-    src = Path(spec.origin).read_text()
-    lines, out = src.splitlines(keepends=True), {}
-    for n in ast.parse(src).body:
+    src = Path(origin).read_text()
+    tree, lines = ast.parse(src), src.splitlines(keepends=True)
+    defs, assigned, binds = {}, set(), {}
+    for n in tree.body:
         names = [n.name] if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) else \
             [t.id for t in n.targets if isinstance(t, ast.Name)] if isinstance(n, ast.Assign) else \
             [n.target.id] if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) else []
         top = min([n.lineno, *(d.lineno for d in getattr(n, "decorator_list", ()))])
-        for name in names:
-            out[name] = "".join(lines[top - 1:n.end_lineno])
-    return out
+        for x in names:
+            defs[x] = "".join(lines[top - 1:n.end_lineno])
+        assigned.update(names if isinstance(n, (ast.Assign, ast.AnnAssign)) else ())
+    package = name if origin.endswith("__init__.py") else name.rpartition(".")[0]
+    for n in ast.walk(tree):                         # imports at any depth: a function's own too
+        if isinstance(n, ast.Import):
+            binds.update({a.asname: ("module", a.name) for a in n.names if a.asname})
+        elif isinstance(n, ast.ImportFrom):
+            base = ".".join(filter(None, [".".join(package.split(".")[:len(package.split(".")) - n.level + 1])
+                                           if n.level else "", n.module or ""]))
+            for a in n.names:
+                binds[a.asname or a.name] = ("module", f"{base}.{a.name}") if found(f"{base}.{a.name}") else \
+                    ("name", base, a.name)
+    return {"defs": defs, "assigned": assigned, "binds": binds}
+
+
+def _uses(source: str) -> tuple[set[str], list[tuple[str, str]]]:
+    """(the names a definition's code uses, its `name.attribute` pairs); strings and comments are not code."""
+    import ast
+    try:
+        nodes = list(ast.walk(ast.parse(source)))
+    except SyntaxError:
+        return set(), []
+    return ({n.id for n in nodes if isinstance(n, ast.Name)},
+            [(n.value.id, n.attr) for n in nodes if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)])
 
 
 def code(eng: Engine, first: str, last: str) -> str:
     """What the engine runs for the region, as text: each station's reads and writes, then the source of the stations'
-    functions and of everything they reach in the stations module and the watched modules, by module."""
+    functions and of every definition they reach in the engine's package, by module. An import is followed where it
+    is used; `obj.name` on a module-level object is looked up in the modules that object's definition imports."""
     import inspect
-    import re
-    st = eng.module()
-    region = span(tuple(getattr(st, eng.which(first))), first, last)
-    defs = {m: d for m in (eng.stations, *eng.watch) if (d := _definitions(m)) is not None}
-    mods = {m.rsplit(".", 1)[-1]: m for m in defs}       # as the code names a module -> the module
-    defs = {alias: defs[m] for alias, m in mods.items()}
-    home = eng.stations.rsplit(".", 1)[-1]
-    found: dict[str, list[str]] = {alias: [] for alias in mods}
-    seen, queue = set(), [(home, s.fn.__name__) for s in region]
-    for s in region:                                 # a station that is no top-level function: its own source
-        if s.fn.__name__ not in defs[home]:
+    root = eng.stations.split(".")[0]
+    mods: dict[str, dict | None] = {}
+
+    def module(name: str) -> dict | None:
+        if name not in mods:
+            mods[name] = _module(name) if name.split(".")[0] == root else None
+        return mods[name]
+    home = module(eng.stations)
+    if home is None:
+        raise ValueError(f"the source of the stations module {eng.stations} is not found")
+    region = span(tuple(getattr(eng.module(), eng.which(first))), first, last)
+    found: dict[str, list[str]] = {eng.stations: []}
+    seen, queue = set(), []
+    for s in region:
+        name = getattr(s.fn, "__name__", None)
+        if name in home["defs"]:
+            queue.append((eng.stations, name))
+        else:                                        # no top-level function (a lambda, a partial): its own source
             try:
-                found[home].append(inspect.getsource(s.fn).strip() + "\n")
+                found[eng.stations].append(inspect.getsource(s.fn).strip() + "\n")
             except (OSError, TypeError):
                 pass
+
+    def behind(mod: str, obj: str) -> list[str]:
+        """The modules the definition of the module-level object `obj` imports, through what it names in `mod`."""
+        m, todo, done, out = module(mod), [obj], set(), []
+        while todo:
+            x = todo.pop()
+            if x in done or x not in m["defs"]:
+                continue
+            done.add(x)
+            names = _uses(m["defs"][x])[0]
+            out += [m["binds"][n][1] for n in sorted(names) if m["binds"].get(n, ("",))[0] == "module"]
+            todo += sorted(n for n in names if n in m["defs"])
+        return out
     while queue:
-        alias, name = queue.pop(0)
-        if (alias, name) in seen or name not in defs[alias]:
+        mod, name = queue.pop(0)
+        m = module(mod)
+        if (mod, name) in seen or m is None or name not in m["defs"]:
             continue
-        seen.add((alias, name))
-        src = defs[alias][name]
-        found[alias].append(src)
-        words = set(re.findall(r"[A-Za-z_]\w*", src))
-        queue += [(alias, n) for n in defs[alias] if n in words]
-        queue += [(a, n) for a in mods if a != alias for n in re.findall(rf"\b{re.escape(a)}\.(\w+)", src)]
+        seen.add((mod, name))
+        found.setdefault(mod, []).append(m["defs"][name])
+        names, pairs = _uses(m["defs"][name])
+        for n in sorted(names):
+            bound = m["binds"].get(n)
+            if n in m["defs"]:
+                queue.append((mod, n))
+            elif bound and bound[0] == "name":
+                queue.append((bound[1], bound[2]))
+        for obj, attr in pairs:
+            bound = m["binds"].get(obj)
+            if bound and bound[0] == "module":
+                queue.append((bound[1], attr))
+            elif obj in m["assigned"]:
+                queue += [(other, attr) for other in behind(mod, obj)]
     out = [f"# The engine's code for stations {first} to {last}",
            "The stations run in this order; each reads and writes named entries:"]
     out += [f"- {s.name}: reads {', '.join(s.reads)}; writes {', '.join(s.writes)}" for s in region]
-    for alias, parts in found.items():
+    for mod, parts in found.items():
         if parts:
-            out.append(f"## {mods[alias]}\n```python\n" + "\n".join(p.rstrip("\n") + "\n" for p in parts) + "```")
+            out.append(f"## {mod}\n```python\n" + "\n".join(x.rstrip("\n") + "\n" for x in parts) + "```")
     return "\n".join(out)
 
 

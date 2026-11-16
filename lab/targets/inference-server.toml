@@ -42,7 +42,7 @@ capture_env = { CUSTOM_BACKEND_CUDA_GRAPH = "0" }   # a capture (`profile` with 
 
 [regions]                                    # the engine's steps (stations); a kernel search replaces a stretch of them
 stations = "inference_server.models.stations"   # its station sets, LIVE, IN_PLACE, STEP, DISCRETE, OPAQUE, functional,
-                                                # reference, layer_weights, layer_config, load_model
+                                                # reference, layer_weights, constants, load_model
 overrides = "inference_server.models.regions"   # the package the engine reads a region's replacement from
 watch = ["inference_server.models.fused", "inference_server.models.moe_kernel",
          "inference_server.models.paged_attention_kernel", "inference_server.models.paged_kv_cache",

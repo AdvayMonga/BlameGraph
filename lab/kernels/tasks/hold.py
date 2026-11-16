@@ -22,7 +22,7 @@ def held(name: str, model) -> tuple[dict, dict]:
     for i in eng.layers:
         for k, v in st.layer_weights(model, i).items():
             tensors.update({f"L{i}.{k}": v} if v is not None else {k: None})     # a None (bf16 scale) is every layer's
-    return tensors, {"cfg": st.layer_config(model), "layers": list(eng.layers)}
+    return tensors, {**st.constants(model), "layers": list(eng.layers)}
 
 
 def describe(name: str, samples: Path, holder: Path) -> dict:

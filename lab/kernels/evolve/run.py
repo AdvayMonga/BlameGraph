@@ -63,7 +63,8 @@ def system_message(task) -> str:
     """The system prompt: the goal, what the program is and how it is judged, from the evaluator's constants."""
     from lab.kernels.eval import core
     from lab.kernels.eval.jailed import TIMEOUT_S
-    region = task.name.startswith("region:")
+    from lab.profile.capture import STEP
+    region = task.name.startswith("region:") and task.name != STEP
     base = f"the engine's stations {' to '.join(task.name.split(':')[1:3])}" if region else \
         f"the engine's current `{task.entry}`" if task.entry else \
         "the problem's eager PyTorch `Model`" if task.name.startswith("kb:") else "the task's reference"
@@ -73,7 +74,7 @@ def system_message(task) -> str:
                       + (["NaN/Inf inputs"] if task.nonfinite else [])
                       + ([f"inputs scaled by {', '.join(f'{k:g}' for k in scales)}"] if scales else []))
     dtypes = ", ".join(str(d).removeprefix("torch.") for d in task.dtypes)
-    budget = (f", or within {task.error_budget:g}x the engine's own error against the reference where that is larger"
+    budget = (f" plus {task.error_budget:g}x the engine's own error against the reference on numbers of that size"
               if task.error_budget else "")
     graphs = ", both replayed from CUDA graphs as the engine runs them" if task.graphs else ""
     uncaptured = "; a kernel that cannot be captured in a CUDA graph" if task.graphs else ""
@@ -91,10 +92,10 @@ shapes, weighted by their calls. A shape whose speedup is within noise (the midd
 includes 1) counts as 1.0. Held-out shapes are judged separately and are not part of the score.
 
 Scores 0:
-- a wrong output on a seen shape. Every program's timed run checks one seed of every seen shape and each timed \
-output; a program takes the full check ({cases}) before it is built on or promoted, and is dropped if it fails;
+- a wrong output on a seen shape: in a program's timed run, which checks one seed of every seen shape and each \
+timed output, or in the full check ({cases}), which a program takes at the latest before it is promoted;
 - inputs changed, an output that aliases an input, or answers kept across calls;
-- peak memory over {core.MEMORY_FACTOR}x the baseline's + {core.MEMORY_SLACK // 2**20} MiB;
+- peak memory over {core.MEMORY_FACTOR}x the baseline's + {core.MEMORY_SLACK // 2**20} MiB, measured before promotion;
 - a time at which the kernel would run at over {core.PHYSICS_MARGIN_PCT}% of its roofline bound;
 - anything the evaluator uses left patched{uncaptured}.
 

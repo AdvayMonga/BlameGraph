@@ -205,17 +205,18 @@ def programs(parents: list[Program], population: list[Program]) -> str:
     def one(node: Program) -> str:
         path = " -> ".join(f"{n.id} ({n.score:.4f})" for n in lineage(node, population))
         kids = "\n".join(f"- {c.id}: score {c.score:.4f}" for c in population if c.parent == node.id) or "none"
-        shown = program(node) if node is whole else (
+        diff = "" if node is whole else differences(whole, node)
+        shown = program(node) if len(diff) >= len(node.code) or node is whole else (     # a diff only when shorter
             f"# Program {node.id} (score {node.score:.4f}), as its differences from program {whole.id}\n"
-            f"```diff\n{differences(whole, node)}```\n\n# Its measurements\n{facts(node)}")
+            f"```diff\n{diff}```\n\n# Its measurements\n{facts(node)}")
         return f"{shown}\n\n# Its lineage (program, score)\n{path}\n\n# Programs already derived from it\n{kids}"
     return f"The best score in the search is {best:.4f}.\n\n" + "\n\n".join(one(p) for p in parents)
 
 
 def differences(a: Program, b: Program) -> str:
     """`b`'s code as a unified diff against `a`'s."""
-    return "".join(difflib.unified_diff(a.code.splitlines(True), b.code.splitlines(True), a.id, b.id)) \
-        or "(the same code)\n"
+    lines = difflib.unified_diff(a.code.splitlines(True), b.code.splitlines(True), a.id, b.id)
+    return "".join(x if x.endswith("\n") else x + "\n" for x in lines) or "(the same code)\n"
 
 
 def program(node: Program) -> str:

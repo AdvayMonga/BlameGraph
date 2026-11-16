@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import json  # noqa: E402
 
+import pytest  # noqa: E402
 import torch  # noqa: E402
 
 FAKE = """
@@ -28,6 +29,8 @@ class LayerConfig:
 
 LIVE = ("h", "kv")
 IN_PLACE = ("kv",)
+STEP = ()
+DISCRETE = ()
 OPAQUE = ("paged_ctx",)
 
 def _norm(c):
@@ -78,7 +81,7 @@ def reference(stations=DECODE):
 def declared(monkeypatch, stations="fake_stations_mod", overrides="fake_stations_mod_regions", **kw):
     """The target's [regions] for the fake engine, as `regions.load_engine` returns it from here on."""
     from lab.kernels.tasks import regions
-    eng = regions.Engine(stations, overrides, **{"layers": (0, 16, 32, 47), "heldout_layer": 32, "step": "DECODE", "sets": {
+    eng = regions.Engine(stations, overrides, "w.", **{"layers": (0, 16, 32, 47), "heldout_layer": 32, "step": "DECODE", "sets": {
         "DECODE": regions.StationSet(graphs=True, capture_env={"MEGAKERNEL": "0"}, tables={"attn_block_tables": 1}),
         "PREFILL": regions.StationSet(prefix="p_", rows=1, instead={"fi_kv_indices": 0})}, **kw})
     monkeypatch.setattr(regions, "load_engine", lambda d=None: eng)
@@ -106,34 +109,65 @@ def test_the_lab_names_nothing_of_the_engine_and_the_target_declares_it():
     assert eng.which("p_attention") == "PREFILL" and eng.which("attention") == "DECODE" and eng.step == "DECODE"
     assert eng.sets["DECODE"].graphs and not eng.sets["PREFILL"].graphs and eng.layers == (0, 16, 32, 47)
     assert regions.load_engine(eng.as_dict()) == eng                         # as an eval config carries it
+    with pytest.raises(ValueError, match="in none of the declared sets"):
+        regions.Engine("m", "o", "w.", sets={"A": regions.StationSet(prefix="a_")}).which("b")
     from lab.kernels.tasks import load
     import json
     light = load("region:p_attention:p_attention", engine=json.loads(json.dumps(eng.as_dict())))   # no target, no engine import
     assert light.entry == "inference_server.models.stations:PREFILL" and dict(light.capture_env) == {"CAPTURE_REGION_LAYERS": "0,16,32,47"}
 
 
-def test_a_regions_code_is_its_stations_and_what_they_reach_in_the_watched_modules(tmp_path, monkeypatch):
+def test_a_region_loads_from_the_engine_its_eval_config_carries_where_no_target_is_set(tmp_path, monkeypatch):
+    from lab.kernels.tasks import regions
+    from lab.targets import target
+    real = regions.load_engine
+    engine(tmp_path, monkeypatch)
+    carried = json.loads(json.dumps(regions.load_engine().as_dict()))
+    h, caps = held(tmp_path, regions), captures(tmp_path, [(4, 64, 0, True)])
+    monkeypatch.setattr(regions, "load_engine", real)                       # the real loader, and no target
+    monkeypatch.delenv("LAB_TARGET", raising=False)
+    with pytest.raises(target.NoTarget):
+        regions.from_engine("norm", "add", str(caps), str(h.path), dtypes=(torch.float32,))
+    t = regions.from_engine("norm", "add", str(caps), str(h.path), dtypes=(torch.float32,), engine=carried)
+    assert t.entry == "fake_stations_mod:DECODE" and t.graphs and set(t.seen_default) == {(4, 64)}
+    monkeypatch.delattr(regions.load_engine(carried).module(), "DISCRETE")
+    with pytest.raises(ValueError, match="declares no DISCRETE"):
+        regions.from_engine("norm", "add", str(caps), str(h.path), dtypes=(torch.float32,), engine=carried)
+
+
+def test_a_regions_code_is_its_stations_and_what_they_reach_in_the_engines_package(tmp_path, monkeypatch):
     from lab.kernels.evolve.run import setting
     from lab.kernels.tasks import regions
-    (tmp_path / "code_helper.py").write_text(
+    pkg = tmp_path / "code_eng"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "helper.py").write_text(
         "import functools\n\nK = 3\nUNUSED = 9\n\n\ndef _inner(x):\n    return x * K\n\n\n"
-        "@functools.cache\ndef scale(x):\n    return _inner(x)\n\n\ndef never(x):\n    return UNUSED\n")
-    (tmp_path / "code_stations.py").write_text(
-        "from dataclasses import dataclass\nimport code_helper\n\n\n@dataclass(frozen=True)\nclass Station:\n"
+        "@functools.cache\ndef scale(x):\n    return _inner(x)\n\n\ndef never(x):\n    return UNUSED\n\n\n"
+        "def shift(x):\n    return x + 1\n")
+    (pkg / "kernels.py").write_text("def _k(x):\n    return x\n\n\ndef _other(x):\n    return x\n")
+    (pkg / "stations.py").write_text(
+        "from dataclasses import dataclass\nfrom code_eng import helper as hp\nfrom code_eng.helper import shift\n\n\n"
+        "@dataclass(frozen=True)\nclass Station:\n"
         "    name: str\n    reads: tuple\n    writes: tuple\n    fn: object\n\n\nEPS = 1e-6\nLIVE = ('h',)\n\n\n"
-        "def _a(c):\n    return {'x': code_helper.scale(c['h']) + EPS}\n\n\n"
+        "class _Lazy:\n    def __getattr__(self, name):\n        from code_eng import kernels\n"
+        "        return getattr(kernels, name)\n\n\nKERNELS = _Lazy()\n\n\n"
+        "def _a(c):\n    \"\"\"Runs before never and _c.\"\"\"\n    return {'x': shift(hp.scale(KERNELS._k(c['h']))) + EPS}\n\n\n"
         "def _c(c):\n    return {'h': c['y']}\n\n\n"
         "DECODE = (Station('a', ('h',), ('x',), _a), Station('b', ('x',), ('y',), lambda c: {'y': c['x']}),\n"
         "          Station('c', ('y',), ('h',), _c))\n")
     monkeypatch.syspath_prepend(str(tmp_path))
-    eng = declared(monkeypatch, "code_stations", watch=("code_helper", "no_such_module"))
+    eng = declared(monkeypatch, "code_eng.stations")
     text = regions.code(eng, "a", "b")
+    assert text == regions.code(eng, "a", "b")                                      # the same text every time
     assert text.startswith("# The engine's code for stations a to b\n") and "- a: reads h; writes x\n- b: reads x; writes y" in text
-    assert "## code_stations\n```python\n" in text and "def _a(c):" in text and "EPS = 1e-6" in text
-    assert "lambda c: {'y': c['x']}" in text and "def _c(c):" not in text            # b's own line; c is outside the region
-    helper = text.split("## code_helper\n")[1]
+    assert "## code_eng.stations\n```python\n" in text and "def _a(c):" in text and "EPS = 1e-6" in text
+    assert "lambda c: {'y': c['x']}" in text and "def _c(c):" not in text            # b's own line; c only in a docstring
+    helper = text.split("## code_eng.helper\n")[1].split("## ")[0]                   # `import as` and `from import`
     assert "@functools.cache\ndef scale(x):" in helper and "def _inner(x):" in helper and "K = 3" in helper
-    assert "never" not in helper and "UNUSED" not in helper                         # only what the stations reach
+    assert "def shift(x):" in helper and "never" not in helper and "UNUSED" not in helper   # only what is reached
+    lazy = text.split("## code_eng.kernels\n")[1]                                    # through the module-level object
+    assert "def _k(x):" in lazy and "_other" not in lazy
     sets = {"seen": [(4, 64)], "code": text, "example_calls": {"[4, 64]": {"reads": {"h": {"shape": [4, 64], "dtype": "bfloat16"}}}}}
     shown = setting(regions.light("region:a:b"), sets, "cpu", {})
     assert shown.endswith(text) and 'A captured call at shape [4, 64] (each tensor by shape and dtype): {"reads": {"h"' in shown
