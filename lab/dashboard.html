@@ -142,7 +142,7 @@ function render(s) {
     if (m.reason) return `<span class="muted">${esc(m.reason)}</span>`;
     if (m.metrics) return Object.entries(m.metrics).map(([k, v]) => v && typeof v === "object" && "value" in v
       ? `${esc(k)} <b>${sig(v.value)}</b>${v.valid === false ? ` <span class="bad">invalid</span>` : ""}` : `${esc(k)} ${esc(JSON.stringify(v))}`).join("<br>");
-    if (m.kind === "equiv") return `tier ${esc(m.tier)} · score ratio <b>${sig(m.score_ratio)}</b> · n ${num(m.n, 0)}`;
+    if (m.kind === "equiv") return `tier ${esc(m.tier)} · ` + Object.entries(m.tasks || {}).map(([t, r]) => `${esc(t)} <b>${sig(r)}</b>`).join(" · ");
     if (m.kind === "test") return `lint ${m.lint ? "pass" : "fail"} · tests ${m.tests ? "pass" : "fail"}`;
     return "";
   };

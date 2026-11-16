@@ -34,7 +34,7 @@ def reference(model: str, out_dir: str | Path, items: list[dict], chat_kwargs: d
     _jsonl_write(out / "items.jsonl", items)
     enc = HFEncoder(model, chat_kwargs)
     tok = enc.tok
-    lm = AutoModelForCausalLM.from_pretrained(model, torch_dtype="auto", device_map="cuda").eval()
+    lm = AutoModelForCausalLM.from_pretrained(model, torch_dtype="auto").cuda().eval()
     eos = lm.generation_config.eos_token_id
     eos = set(eos if isinstance(eos, list) else [eos])
     pad = tok.pad_token_id if tok.pad_token_id is not None else min(eos)

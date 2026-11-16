@@ -60,7 +60,7 @@ def _retrying(fn, *args, **kw):
             time.sleep(min(60.0, 2.0 ** attempt))
 
 
-def collect(url: str, model: str, items: list[dict], out: Path, concurrency: int = 16,
+def collect(url: str, model: str, items: list[dict], out: Path, concurrency: int = 128,
             api: client.Api = client.DEFAULT) -> dict[str, dict]:
     """Greedy answers for every item, resumable; an item that fails after retries is recorded with `error`."""
     done = {r["id"]: r for r in _jsonl_read(out) if not r.get("error")}
@@ -97,7 +97,7 @@ def sequences(items: list[dict], outputs: dict[str, dict], encoder: Encoder, div
 
 
 def reference(url: str, model: str, out_dir: str | Path, items: list[dict], encoder: Encoder, top_k: int = 20,
-              div_n: int = 400, concurrency: int = 16, api: client.Api = client.DEFAULT) -> dict:
+              div_n: int = 400, concurrency: int = 128, api: client.Api = client.DEFAULT) -> dict:
     out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
     _jsonl_write(out / "items.jsonl", items)
     outputs = collect(url, model, items, out / "outputs.jsonl", concurrency, api)
@@ -166,7 +166,7 @@ def quick(ref_dir: str | Path, url: str, model: str, out_path: str | Path, api: 
 
 
 def candidate(ref_dir: str | Path, url: str, model: str, out_path: str | Path, encoder: Encoder,
-              thresholds: Thresholds | None = None, concurrency: int = 16,
+              thresholds: Thresholds | None = None, concurrency: int = 128,
               score_item: Callable | None = None, config: dict | None = None,
               api: client.Api = client.DEFAULT) -> dict:
     from .tasks import score_item as default_score

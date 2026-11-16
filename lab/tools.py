@@ -441,7 +441,7 @@ class Toolbox(EvalTools, ProfTools):
                      "submit requires a passing dev-tier equiv on the snapshot"
                      + (", and one for each regime it measures under its own profile (`profile`: that regime's name; "
                         "default the general launch)" if tg.profiles else "") + ". Takes one engine start plus "
-                     "generating the task set, 32 requests in flight." + gpu("10 min at tier dev on unmodified vLLM and ~95 min on the example engine (about 17 items/min, measured at 16 requests in flight, H200)"),
+                     "generating the task set, 128 requests in flight." + gpu("10 min at tier dev on unmodified vLLM and ~95 min on the example engine (about 17 items/min, measured at 16 requests in flight, H200)"),
                      {"type": "object", "properties": {"tier": {"type": "string", "enum": ["quick", "dev"]},
                                                        **({"profile": {"type": "string"}} if tg.profiles else {})}},
                      self.equiv),

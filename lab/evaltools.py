@@ -332,7 +332,7 @@ class EvalTools:
             result = {**_failed(e), "artifacts": self._equiv_store(work, out, prior)}
             self._record("equiv", "equiv", args, result, snap, config=config)
             return _said("equiv", result)
-        passed = {"pass": True, "fail": False}.get(res["verdict"])     # None: neither pass nor fail
+        passed = {"pass": True, "fail": False}.get(res["verdict"])     # None: tier quick has no verdict
         record = {"verdict": res["verdict"], "passed": passed, "reasons": res["reasons"], "gates": res["gates"],
                   "metrics": res["metrics"], "thresholds": res["thresholds"], "tier": tier,
                   "artifacts": self._equiv_store(work, out, prior), **_killed(res)}
@@ -418,7 +418,7 @@ class EvalTools:
         extra = (*task.regimes, *task.constraints) if task else ()
         return tuple(dict.fromkeys((*self.bench_default_regimes, *extra)))
     seed = 0
-    equiv_concurrency = 32       # requests in flight; sheds are retried
+    equiv_concurrency = 128      # requests in flight; sheds are retried
     serve_jailed = True
 
     def _bands(self, names: list[str]) -> dict:

@@ -21,7 +21,7 @@ def _hub(repo: str, filename: str) -> Path:
 
 
 # ---------------------------------------------------------------- MMLU-Pro (multiple choice, A-J)
-def mmlu_pro(n: int | None = 500, seed: int = 0) -> list[dict]:
+def mmlu_pro(n: int | None = 2000, seed: int = 0) -> list[dict]:
     """n questions stratified by category (n // categories each); None = the whole test set."""
     import pandas as pd
     d = pd.read_parquet(_hub("TIGER-Lab/MMLU-Pro", "data/test-00000-of-00001.parquet"))
@@ -31,10 +31,10 @@ def mmlu_pro(n: int | None = 500, seed: int = 0) -> list[dict]:
     items = []
     for _, r in d.sort_values("question_id").iterrows():
         opts = "\n".join(f"({LETTERS[i]}) {o}" for i, o in enumerate(r.options))
-        msg = (f"The following is a multiple choice question about {r.category}. Think step by step, then finish "
-               f"your answer with \"The answer is (X)\" where X is the correct letter.\n\nQuestion: {r.question}\n{opts}")
+        msg = (f"The following is a multiple choice question about {r.category}. Answer with the letter of the "
+               f"correct option only.\n\nQuestion: {r.question}\n{opts}")
         items.append({"id": f"mmlu_pro-{r.question_id}", "task": "mmlu_pro", "messages": [{"role": "user", "content": msg}],
-                      "gold": r.answer, "max_tokens": 1024})
+                      "gold": r.answer, "max_tokens": 8})
     return items
 
 

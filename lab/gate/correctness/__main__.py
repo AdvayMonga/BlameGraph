@@ -19,7 +19,7 @@ def main():
     c = sub.add_parser("candidate"); c.add_argument("--url", required=True); c.add_argument("--out", required=True)
     c.add_argument("--ref", help="reference outputs dir (default: the target's reference.dir)")
     c.add_argument("--api", choices=("vllm", "sglang", "none"), help="logprobs API (default: the target's engine.api)")
-    c.add_argument("--concurrency", type=int, default=16)
+    c.add_argument("--concurrency", type=int, default=128)
     v = sub.add_parser("verdict"); v.add_argument("results", nargs="+")
     a = ap.parse_args()
     t = target.load(a.target)

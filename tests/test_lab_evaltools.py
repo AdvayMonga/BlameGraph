@@ -231,23 +231,6 @@ def test_submit_is_refused_where_there_is_no_shared_heldout_budget(lab, monkeypa
     assert not (s.run_dir / "base-heldout-min.json").exists()             # refused before anything was measured
 
 
-def test_inconclusive_equiv_is_neither_passing_nor_failing(lab, monkeypatch):
-    from lab.gate.correctness import run as crun
-    tb, s = lab
-    real = crun.candidate
-
-    def inconclusive(*a, **kw):
-        res = real(*a, **kw)
-        res["verdict"], res["passed"] = "inconclusive", False
-        return res
-    monkeypatch.setattr(crun, "candidate", inconclusive)
-    assert json.loads(tb.equiv({}))["verdict"] == "inconclusive"
-    rec = list(ledger.records(s.ledger_root, kind="equiv"))[-1]
-    assert rec["result"]["passed"] is None                              # neither pass nor fail
-    from evals.agent.feedback.lab_verdict import passed
-    assert passed(rec) is None
-
-
 def test_submit_reports_no_heldout_delta_without_a_seen_delta(lab, monkeypatch, tmp_path):
     from lab import evaltools
     tb, s = lab

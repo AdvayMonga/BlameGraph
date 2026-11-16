@@ -60,7 +60,8 @@ def _headline(r: dict) -> dict:
         return {"metrics": r.get("metrics")}
     if r["kind"] == "equiv":
         acc = ((res.get("gates") or {}).get("accuracy") or {}).get("evidence") or {}
-        return {"tier": (r.get("config") or {}).get("tier"), "score_ratio": acc.get("score_ratio"), "n": acc.get("n")}
+        return {"tier": (r.get("config") or {}).get("tier"),
+                "tasks": {t: a.get("score_ratio") for t, a in (acc.get("tasks") or {}).items()}}
     if r["kind"] == "test":
         return {"lint": res.get("lint"), "tests": res.get("tests")}
     return {}
