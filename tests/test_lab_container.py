@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from measure.sandbox import container, grader, jail
+from lab.infra.sandbox import container, grader, jail
 from tests.lab_fixtures import make_repo
 
 

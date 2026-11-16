@@ -16,8 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from targets import engine
-from measure.cloud import providers
-from measure.cloud.providers import ProviderError, Record, env_field, pricing
+from lab.infra.cloud import providers
+from lab.infra.cloud.providers import ProviderError, Record, env_field, pricing
 
 KNOWN_HOSTS_DIR = Path.home() / ".cache" / "inference-server-lab"
 POLL_S = 5.0             # between state and ssh probes
@@ -100,14 +100,14 @@ def arm(vm: VM, record: Record, minutes: int = MAX_MINUTES) -> None:
     deadline = time.time() + minutes * 60
     KNOWN_HOSTS_DIR.mkdir(parents=True, exist_ok=True)
     with open(KNOWN_HOSTS_DIR / f"{vm.name}.watchdog.log", "a") as log:
-        pid = _spawn_watchdog([sys.executable, "-m", "measure.cloud.vm", "watchdog", "--deadline", f"{deadline:.0f}"], log)
+        pid = _spawn_watchdog([sys.executable, "-m", "lab.infra.cloud.vm", "watchdog", "--deadline", f"{deadline:.0f}"], log)
     _watchdog_file(vm).write_text(f"{pid} {deadline:.0f}\n")
     try:
         ssh(vm, record, f"sudo shutdown -c >/dev/null 2>&1; sudo shutdown -h +{minutes} >/dev/null 2>&1 || true",
             check=False, capture=True, timeout_s=30)
     except subprocess.TimeoutExpired:
         pass
-    print(f"[measure.cloud.vm] {vm.name} will be stopped by {time.strftime('%H:%M', time.localtime(deadline))} "
+    print(f"[lab.infra.cloud.vm] {vm.name} will be stopped by {time.strftime('%H:%M', time.localtime(deadline))} "
           f"({minutes} min) unless re-armed or stopped first", file=sys.stderr)
 
 
@@ -136,7 +136,7 @@ def watchdog(deadline: float) -> int:
     vm = VM()
     record = vm.provider.get(vm.name)
     if record is not None and record.state == "running":
-        print(f"[measure.cloud.vm watchdog] deadline reached: stopping {vm.name}", file=sys.stderr)
+        print(f"[lab.infra.cloud.vm watchdog] deadline reached: stopping {vm.name}", file=sys.stderr)
         stop(vm)
     _watchdog_file(vm).unlink(missing_ok=True)
     return 0
@@ -223,7 +223,7 @@ def collect(vm: VM, record: Record) -> None:
     staging = Path(tempfile.mkdtemp(prefix="vm-ledger-"))
     try:
         fetch(vm, record, "local/ledger", staging, vm.env_dir, "--exclude=index/")
-        print(f"[measure.cloud.vm] merged {ledger.merge(staging, ledger.ROOT)} ledger records", file=sys.stderr)
+        print(f"[lab.infra.cloud.vm] merged {ledger.merge(staging, ledger.ROOT)} ledger records", file=sys.stderr)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     fetch(vm, record, "local/runs", engine.ENV_ROOT / "local" / "runs", vm.env_dir,
@@ -231,7 +231,7 @@ def collect(vm: VM, record: Record) -> None:
     if os.environ.get("LAB_STORE"):
         from data.knowledge import sync
         from data.knowledge.remote import open_remote
-        print(f"[measure.cloud.vm] stored {sync.push(ledger.ROOT, open_remote(), runs=engine.ENV_ROOT / 'lab' / 'runs')}",
+        print(f"[lab.infra.cloud.vm] stored {sync.push(ledger.ROOT, open_remote(), runs=engine.ENV_ROOT / 'lab' / 'runs')}",
               file=sys.stderr)
 
 
@@ -251,7 +251,7 @@ def _lost(vm: VM) -> bool:
         try:
             record = vm.provider.get(vm.name)
         except ProviderError as e:
-            print(f"[measure.cloud.vm] state after the dropped session unknown: {e}", file=sys.stderr)
+            print(f"[lab.infra.cloud.vm] state after the dropped session unknown: {e}", file=sys.stderr)
             return False
         if record is None or record.state in ("stopped", "stopping"):
             return True
@@ -285,29 +285,29 @@ def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | Non
         code = out.returncode
     except subprocess.TimeoutExpired:
         code = 124
-    print(f"[measure.cloud.vm] exit {code} after {time.monotonic() - t0:.0f}s on {vm.name}"
+    print(f"[lab.infra.cloud.vm] exit {code} after {time.monotonic() - t0:.0f}s on {vm.name}"
           + (" (hit the wall-clock cap)" if code == 124 else ""), file=sys.stderr)
     lost = code == 255 and _lost(vm)
     if lost:
         spot = "LAB_VM_SPOT=1 " if getattr(vm.provider, "spot", False) else ""
         again = f"run --no-push --fetch {fetch_dir} true" if fetch_dir and where != "env" else "run --env --no-push true"
-        print(f"[measure.cloud.vm] {vm.name} stopped under the command (preempted, or stopped from outside); its disk is kept: "
+        print(f"[lab.infra.cloud.vm] {vm.name} stopped under the command (preempted, or stopped from outside); its disk is kept: "
               f"`{spot}lab vm {again}` restarts it and brings the results home", file=sys.stderr)
     if fetch_dir and not lost:
         try:
             fetch(vm, record, fetch_dir, local or engine.ENV_ROOT / "local" / "runs", base=cwd)
         except ProviderError as e:
-            print(f"[measure.cloud.vm] fetch failed: {e}", file=sys.stderr)
+            print(f"[lab.infra.cloud.vm] fetch failed: {e}", file=sys.stderr)
     if where == "env" and not lost:
         try:
             collect(vm, record)
         except Exception as e:                  # never skip the stop below over a failed copy
-            print(f"[measure.cloud.vm] collect failed: {e}", file=sys.stderr)
+            print(f"[lab.infra.cloud.vm] collect failed: {e}", file=sys.stderr)
     if keep and not lost:
         arm(vm, record, minutes)
     else:
         stop(vm)
-        print(f"[measure.cloud.vm] {vm.name} stopped (GPU billing ended; --keep leaves it running)", file=sys.stderr)
+        print(f"[lab.infra.cloud.vm] {vm.name} stopped (GPU billing ended; --keep leaves it running)", file=sys.stderr)
     return code
 
 
@@ -321,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
     wd.add_argument("--deadline", type=float, required=True)
     sub.add_parser("stop", help="end GPU billing; disk kept")
     sub.add_parser("types", help="what the account can rent right now")
-    sub.add_parser("setup", help="run measure/cloud/vm-setup.sh on the VM (builds the engine's venv)")
+    sub.add_parser("setup", help="run lab/infra/cloud/vm-setup.sh on the VM (builds the engine's venv)")
     r = sub.add_parser("run", help="push both trees, run a command under a wall-clock cap, fetch an output dir, stop")
     r.add_argument("--keep", dest="keep", action="store_true", default=None,
                    help="leave the VM running afterwards (watchdog stays armed); the default where stop deletes the disk")
@@ -359,11 +359,11 @@ def main(argv: list[str] | None = None) -> int:
         print(p.types(), end="")
         return 0
     if args.cmd == "setup":
-        code = run(vm, f"bash {vm.env_dir}/measure/cloud/vm-setup.sh {vm.remote_dir}", keep=True)
+        code = run(vm, f"bash {vm.env_dir}/lab/infra/cloud/vm-setup.sh {vm.remote_dir}", keep=True)
         try:                                   # the measured peaks come home: every ceiling is computed from them
             fetch(vm, p.get(vm.name), "data/calibration/peaks", engine.ENV_ROOT / "data" / "calibration" / "peaks", base=vm.env_dir)
         except ProviderError as e:
-            print(f"[measure.cloud.vm] peaks not fetched: {e}", file=sys.stderr)
+            print(f"[lab.infra.cloud.vm] peaks not fetched: {e}", file=sys.stderr)
         return code
     words = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not words:

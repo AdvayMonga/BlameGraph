@@ -21,7 +21,7 @@ import threading
 from pathlib import Path
 
 from targets import engine, target
-from measure.sandbox import container
+from lab.infra.sandbox import container
 
 # PyPI, plus the wheel hosts that CUDA builds of torch pull from (its nvidia-* dependencies live on NVIDIA's index);
 # every https host the dependency files and the build command name is added per build.

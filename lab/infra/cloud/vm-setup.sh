@@ -2,7 +2,7 @@
 # One-time bootstrap of a fresh GPU VM for the lab. Idempotent; run via `lab vm setup`.
 # Arg: the engine tree on the VM (default ~/inference-server).
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)           # this environment's measure/cloud/
+here=$(cd "$(dirname "$0")" && pwd)           # this environment's lab/infra/cloud/
 cd "${1:-$HOME/inference-server}"            # the engine tree: its venv is the one every GPU command runs with
 SUDO=$([ "$(id -u)" = 0 ] && echo "" || echo sudo)   # Verda images log in as root
 
@@ -15,10 +15,10 @@ $SUDO apt-get update -qq >/dev/null   # a fresh image has no package lists
 $SUDO apt-get install -y -qq python3-dev >/dev/null
 command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
-# The engine's venv is built by the target spec's `[engine] build` command (the one recipe measure/sandbox/build.py also runs for a
+# The engine's venv is built by the target spec's `[engine] build` command (the one recipe lab/infra/sandbox/build.py also runs for a
 # changed dependency set), with the project installed on top; nothing engine-specific lives in this script. Skipped
 # when the venv already has a CUDA torch; never run a bare `uv sync` on this box afterwards (the lock pins CPU torch).
-target="$here/../../${LAB_TARGET:-targets/inference-server.toml}"
+target="$here/../../../${LAB_TARGET:-targets/inference-server.toml}"
 if ! .venv/bin/python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
   build=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["engine"]["build"])' "$target")
   UV_PROJECT_ENVIRONMENT="$PWD/.venv" bash -euo pipefail -c "$build"
@@ -70,7 +70,7 @@ fi
 $SUDO sysctl -qw kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null || true
 srt -c true >/dev/null 2>&1 && echo "srt: ok" || echo "srt: cannot start"
 
-echo "== jail: docker + NVIDIA Container Toolkit + the lab-jail image (measure/sandbox/container.py)"
+echo "== jail: docker + NVIDIA Container Toolkit + the lab-jail image (lab/infra/sandbox/container.py)"
 command -v docker >/dev/null || $SUDO apt-get install -y -qq docker.io socat >/dev/null
 command -v socat >/dev/null || $SUDO apt-get install -y -qq socat >/dev/null
 if ! command -v nvidia-ctk >/dev/null; then
@@ -141,7 +141,7 @@ ENV_DIR="${LAB_VM_ENV_DIR:-$HOME/BlameGraph}"; ENGINE_DIR="$PWD"
 
 echo "== model cache: the target's model and the Hub repos its tests read (every jail is offline)"
 mkdir -p "$HOME/.cache/huggingface"
-.venv/bin/python - "$here/../../${LAB_TARGET:-targets/inference-server.toml}" <<'PY' \
+.venv/bin/python - "$here/../../../${LAB_TARGET:-targets/inference-server.toml}" <<'PY' \
   || echo "model cache: download failed (finding, not failure)"
 import sys, tomllib
 from huggingface_hub import snapshot_download

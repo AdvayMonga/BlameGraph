@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from measure.sandbox.surfaces import may_write
+from lab.infra.sandbox.surfaces import may_write
 
 WRITE_TOOLS = "Write|Edit|MultiEdit|NotebookEdit"
 

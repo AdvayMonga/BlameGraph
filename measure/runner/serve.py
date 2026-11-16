@@ -21,7 +21,7 @@ from pathlib import Path
 
 from targets import engine, target
 from measure.profile import gpu
-from measure.sandbox import grader
+from lab.infra.sandbox import grader
 
 TELEMETRY_SUBDIR = "lab-telemetry"        # inside the served tree, the one place a jailed engine may write
 POLL_S = 1.0                              # how often the GPU's processes are checked while an engine is served

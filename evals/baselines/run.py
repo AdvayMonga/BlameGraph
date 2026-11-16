@@ -184,7 +184,7 @@ def run(out: Path, engines: list[str], precisions: list[str], stages: list[str],
                                     "--out", str(d / f"regimes-{rep}.json"))
                             (d / f"facts-{rep}.json").write_text(json.dumps(facts()) + "\n")
                         if "equiv" in todo:
-                            _python("evals.agent.correctness", "candidate", "--url", url, "--api", spec["engines"][engine]["api"],
+                            _python("lab.gate.correctness", "candidate", "--url", url, "--api", spec["engines"][engine]["api"],
                                     "--concurrency", "32", "--out", str(d / "equiv.json"))
                 except RuntimeError as err:
                     (d / f"error-{rep}.txt").write_text(f"{err}\n")

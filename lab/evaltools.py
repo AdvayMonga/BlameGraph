@@ -28,7 +28,7 @@ from measure.context import calibrate
 from evals.researcher import live
 from data.knowledge import ledger
 from targets import target
-from evals.agent.holdout import HoldoutGuard, Refused
+from lab.gate.holdout import HoldoutGuard, Refused
 
 HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT = 100, 2.0, 0.5
 BENCH_TIER = "min"            # bench's default tier, which submit compares against (base is measured at the same tier)
@@ -157,7 +157,7 @@ def heldout_context(seen_cal: dict, base: dict, delta: float | None, better: str
 
 def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
     """What the referee measures against: the parameters the agent cannot read off its ledger. Facts, not advice."""
-    from evals.agent import validate                        # validate imports this module
+    from lab.gate import validate                        # validate imports this module
 
     from evals.loadgen import suite
     from evals.loadgen.workload import corpus_version
@@ -171,7 +171,7 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
                         "tasks": list(t.tasks)},
         "noise_bands_pct": {n: noise_band_pct(n, t, ledger_root or ledger.ROOT) for n in suite.REGIMES},
         "noise_bands_measured_on": "the base commit's engine with its general config, repeated unchanged runs "
-                                   "(evals.agent.validate, the latest at any engine commit on this corpus version; a searched regime's band is at "
+                                   "(lab.gate.validate, the latest at any engine commit on this corpus version; a searched regime's band is at "
                                    f"least the search's resolution, {validate.RESOLUTION_PCT}%); submit applies them "
                                    "to every candidate and "
                                    "every launch profile; None where no band was measured for this target",
@@ -499,7 +499,7 @@ class EvalTools:
         missing = [n for n in names if n not in have]
         if missing:
             tree = self.s.run_dir / f"base-tree-{split}"
-            from measure.sandbox import grader
+            from lab.infra.sandbox import grader
             grader.export(self.s.workspace.repo, self.s.workspace.base, tree)
             work = self._work("base")
             try:                                # a contaminated base raises: never cached, every later submit reads it
@@ -534,7 +534,7 @@ class EvalTools:
         except Exception as e:                      # no GPU or a base that will not serve is itself the fact
             result = _failed(e)
         else:                                       # profiled like every bench, for change_pct mechanism predictions
-            from measure.sandbox import grader
+            from lab.infra.sandbox import grader
             tree = self.s.run_dir / "base-tree-profile"
             shutil.rmtree(tree, ignore_errors=True)
             try:

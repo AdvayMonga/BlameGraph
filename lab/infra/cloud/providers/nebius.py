@@ -8,7 +8,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from measure.cloud.providers import ProviderError, Record, env_field, pricing
+from lab.infra.cloud.providers import ProviderError, Record, env_field, pricing
 
 USER = "lab"   # created by cloud-init; Nebius refuses root and admin as login names
 
@@ -107,7 +107,7 @@ class Nebius:
         self._cli("compute", "instance", "stop", self._id(name))
 
     def delete(self, name: str) -> None:
-        """Instance and its managed boot disk; `measure.cloud.vm` never calls this, it is for ending for good."""
+        """Instance and its managed boot disk; `lab.infra.cloud.vm` never calls this, it is for ending for good."""
         self._cli("compute", "instance", "delete", self._id(name))
 
     def types(self) -> str:

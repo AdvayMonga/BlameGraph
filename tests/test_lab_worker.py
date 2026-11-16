@@ -12,7 +12,7 @@ import pytest
 
 from targets import engine, target
 from measure.runner import serve, worker
-from measure.sandbox import grader
+from lab.infra.sandbox import grader
 from tests.lab_fixtures import make_repo
 from tests.test_lab_evaltools import _target
 

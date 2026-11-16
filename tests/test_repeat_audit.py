@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from evals.agent.repeat_audit import repeat_audit  # noqa: E402
+from lab.gate.repeat_audit import repeat_audit  # noqa: E402
 from evals.researcher.canaries.cheat_proxy import serve  # noqa: E402
 
 PROMPTS = ["a", "b", "c"]

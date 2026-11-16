@@ -1,5 +1,5 @@
 """Hardware peaks the ceilings are computed against: HBM bandwidth and bf16 tensor-core throughput, measured once
-per GPU + driver (`lab peaks`, run by measure/cloud/vm-setup.sh) into data/calibration/peaks/<gpu>-<driver>.json. Spec-sheet
+per GPU + driver (`lab peaks`, run by lab/infra/cloud/vm-setup.sh) into data/calibration/peaks/<gpu>-<driver>.json. Spec-sheet
 numbers are the fallback, labelled `source: spec`; a ceiling from them says so."""
 from __future__ import annotations
 

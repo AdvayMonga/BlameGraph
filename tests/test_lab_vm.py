@@ -1,4 +1,4 @@
-"""measure.cloud.vm against a fake `crusoe` CLI, ssh and rsync on PATH: the lifecycle it drives, not the cloud."""
+"""lab.infra.cloud.vm against a fake `crusoe` CLI, ssh and rsync on PATH: the lifecycle it drives, not the cloud."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ import stat
 
 import pytest
 
-from measure.cloud import vm as labvm
-from measure.cloud.providers import ProviderError, crusoe
+from lab.infra.cloud import vm as labvm
+from lab.infra.cloud.providers import ProviderError, crusoe
 
 FAKE_CRUSOE = r'''#!/usr/bin/env python3
 """Fake crusoe CLI: state lives in $FAKE_STATE, every call is appended to $FAKE_LOG."""
@@ -268,7 +268,7 @@ def test_run_reports_a_vm_stopped_under_the_command(fake, monkeypatch, capsys):
 
 
 def _nebius(monkeypatch, instances, spot):
-    from measure.cloud.providers import nebius
+    from lab.infra.cloud.providers import nebius
     monkeypatch.setenv("LAB_VM_SPOT", "1" if spot else "0")
     seen = []
 
@@ -306,7 +306,7 @@ def test_start_refuses_the_other_pricing_running_or_not(monkeypatch):
 
 
 def test_spot_flag_refuses_other_spellings(monkeypatch):
-    from measure.cloud.providers import nebius
+    from lab.infra.cloud.providers import nebius
     monkeypatch.setenv("LAB_VM_SPOT", "true")
     with pytest.raises(ProviderError, match="use 1 or 0"):
         nebius.Nebius()

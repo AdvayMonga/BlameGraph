@@ -1,4 +1,4 @@
-"""Cloud adapters for measure.cloud.vm: each exposes get/create/start/stop/types over one provider's API."""
+"""Cloud adapters for lab.infra.cloud.vm: each exposes get/create/start/stop/types over one provider's API."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class Record:
-    """What measure.cloud.vm needs to know about a VM, whichever cloud it is on."""
+    """What lab.infra.cloud.vm needs to know about a VM, whichever cloud it is on."""
     name: str
     state: str          # running | stopped | absent | anything else = transitional
     ip: str | None
@@ -39,12 +39,12 @@ def as_list(payload, what: str) -> list:
 
 def load(name: str):
     if name == "verda":
-        from measure.cloud.providers import verda
+        from lab.infra.cloud.providers import verda
         return verda.Verda()
     if name == "crusoe":
-        from measure.cloud.providers import crusoe
+        from lab.infra.cloud.providers import crusoe
         return crusoe.Crusoe()
     if name == "nebius":
-        from measure.cloud.providers import nebius
+        from lab.infra.cloud.providers import nebius
         return nebius.Nebius()
     raise ProviderError(f"unknown provider {name!r}; LAB_VM_PROVIDER is verda, nebius or crusoe")

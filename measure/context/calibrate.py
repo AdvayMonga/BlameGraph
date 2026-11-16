@@ -23,7 +23,7 @@ DETERMINISM_FLAGS = ("--enable-deterministic-inference",)
 # -- model config -----------------------------------------------------------------------
 def model_config(model: str) -> dict | None:
     """The model's HF config.json from the local hub cache, else the Hub; None offline without a cache."""
-    from measure.sandbox.grader import HF_HUB
+    from lab.infra.sandbox.grader import HF_HUB
     cached = sorted((HF_HUB / f"models--{model.replace('/', '--')}" / "snapshots").glob("*/config.json"))
     if cached:
         return json.loads(cached[-1].read_text())

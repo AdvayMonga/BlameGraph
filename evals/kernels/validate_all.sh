@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The layer-1 validation session, on the GPU VM from this environment's dir (~/BlameGraph) after `measure.cloud.vm setup`:
-#   scp SHIPPED.py VM:~/shipped.py        # outside both trees: measure.cloud.vm's push deletes what it does not know
+# The layer-1 validation session, on the GPU VM from this environment's dir (~/BlameGraph) after `lab.infra.cloud.vm setup`:
+#   scp SHIPPED.py VM:~/shipped.py        # outside both trees: lab.infra.cloud.vm's push deletes what it does not know
 #   ssh VM 'cd ~/BlameGraph && PATH=$HOME/inference-server/.venv/bin:$PATH setsid nohup \
 #           bash evals/kernels/validate_all.sh ~/shipped.py > ~/va.log 2>&1 < /dev/null &'   # then poll ~/va.log
 # 0. what the jails need: GPU counters open, a CUDA C++ extension built and judged, ncu counters reaching the judge

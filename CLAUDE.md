@@ -40,19 +40,19 @@ A merge of an engine change is a seen-split `bench` and a passing `equiv`; `subm
 the guard's query budget.
 
 ## Layout
-- `lab/` — the loop: `session`, `agent` (+ `agent_openai`, `apiproxy`), `tools`/`evaltools`/`proftools`,
-  `experiments` (hypothesis/expect/reflection rules), `experiment` (a person's run), `task`, `workspace`, `budget`,
-  `rehearsal`, `cli`, `prompts/`.
+- `lab/` — the optimization system. The loop: `session`, `agent` (+ `agent_openai`, `apiproxy`),
+  `tools`/`evaltools`/`proftools`, `experiments` (hypothesis/expect/reflection rules), `experiment` (a person's run),
+  `task`, `workspace`, `budget`, `rehearsal`, `cli`, `prompts/`. `gate/` (correctness gate, holdout guard, repeat
+  audit, validate), `infra/` (`cloud/`: vm, providers, gpucheck; `sandbox/`: jail, container, write surfaces, grader,
+  dependency build).
 - `targets/` — the target spec (`<name>.toml`, `target.py`, selected by `LAB_TARGET`) and `engine.py`.
-- `measure/` — `runner/` (worker, serve, launch profiles, passive artifacts, trace contract), `cloud/` (vm, providers,
-  gpucheck), `sandbox/` (jail, container, write surfaces, grader, dependency build), `profile/` (profilers, capture),
-  `sim/` (scheduler simulator), `context/` (calibration, layer facts, ceiling, peaks).
+- `measure/` — `runner/` (worker, serve, launch profiles, passive artifacts, trace contract), `profile/` (profilers,
+  capture), `sim/` (scheduler simulator), `context/` (calibration, layer facts, ceiling, peaks).
 - `evals/` — the benchmarking suite: `public/` (frontier benchmark loaders, researcher-only), `regimes/` (the corpus:
   frozen traces; held-out split in the store), `loadgen/` (the regimes: client, runner, suite, workload, synth,
-  arrivals, clientcheck), `baselines/` (engine comparison); and, until they move, `agent/` (correctness gate, holdout
-  guard, repeat audit, validate), `researcher/` (feedback and verdict, process evals, canaries, tier agreement,
-  dashboard), `kernels/` (the kernel evaluator: check, timing, core, jailed, verify, ncu, precheck, sanitize, freeze,
-  ship).
+  arrivals, clientcheck), `baselines/` (engine comparison); and, until they move, `researcher/` (feedback and verdict,
+  process evals, canaries, tier agreement, dashboard), `kernels/` (the kernel evaluator: check, timing, core, jailed,
+  verify, ncu, precheck, sanitize, freeze, ship).
 - `generate/kernels/` — `search/` (the kernel search; `METHOD.md` maps each part to its source), `evolve/` (OpenEvolve
   arm), `tasks/` (kernel tasks, regions, shapes, pipeline, KernelBench, FlashInfer-Bench), `library/` (other
   implementations and PTX cards), `archive.py` (idea archive).

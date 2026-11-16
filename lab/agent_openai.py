@@ -20,7 +20,7 @@ from urllib.parse import urlsplit
 
 from evals.researcher import live
 from lab.agent import OUTPUT_SCHEMA, AgentReply, AgentSpec
-from measure.sandbox import grader
+from lab.infra.sandbox import grader
 from lab.hooks import allowed
 
 BASE_URL = "https://api.openai.com/v1"
