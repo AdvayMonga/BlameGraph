@@ -3,10 +3,15 @@ bundles whose hypotheses were never measured apart, and reflections checked agai
 from __future__ import annotations
 
 from evals.agent.feedback.claim_facts import claim_facts
-from lab.experiments import involved
 
 CASES = {(True, True): "worked as intended", (True, False): "outcome held, mechanism did not",
          (False, True): "mechanism held, outcome did not", (False, False): "neither held"}
+
+
+def involved(rec: dict) -> set[str]:
+    """The hypotheses a measured record measured: its own and its bundle's."""
+    x = rec.get("experiment") or {}
+    return {x.get("hypothesis"), *(x.get("bundle") or [])} - {None}
 
 
 def _sign(x: float) -> int:

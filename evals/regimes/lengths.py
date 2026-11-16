@@ -113,7 +113,7 @@ def measure(url: str, model: str, chat_kwargs: dict, corpus_dir: Path = CORPUS_D
 
 
 if __name__ == "__main__":
-    from lab.targets import target
+    from evals.targets import target
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--url", required=True, help="the target's reference, served")
     ap.add_argument("--target")

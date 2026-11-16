@@ -115,7 +115,7 @@ def setting(task, sets: dict, device: str, tol: dict) -> str:
                    f"shape and dtype): {json.dumps(example[1])}")
     out.append(_hardware(device))
     try:
-        from lab.targets import target
+        from evals.targets import target
         out.append(f"The engine's launch settings: {json.dumps(target.load().engine.env, sort_keys=True)}")
     except Exception:                           # noqa: BLE001  no target: nothing to state
         pass
@@ -438,7 +438,7 @@ def _target_tolerances(task=None) -> dict | None:
     if task is not None and task.tolerances:     # a public benchmark's own, never the engine target's
         return task.tolerances
     try:
-        from lab.targets import target
+        from evals.targets import target
         return (target.load().raw.get("kernels") or {}).get("tolerances")
     except Exception:                           # noqa: BLE001  no target: the checker's defaults
         return None

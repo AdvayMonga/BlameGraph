@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from lab.targets import target
+from evals.targets import target
 
 
 def main():

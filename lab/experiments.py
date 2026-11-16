@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+from evals.agent.lab_process import involved
 from lab.records import ledger
 
 MEASURED = ("bench", "equiv", "submit", "profile", "trace", "kernel", "hostprof", "kernel_search")
@@ -82,12 +83,6 @@ def unreflected(root: Path, run: str) -> list[dict]:
     """Every measured record of the run that has no reflection yet, in write order."""
     done = reflected(root, run)
     return [r for r in measured(root, run) if r["id"] not in done]
-
-
-def involved(rec: dict) -> set[str]:
-    """The hypotheses a measured record measured: its own and its bundle's."""
-    x = rec.get("experiment") or {}
-    return {x.get("hypothesis"), *(x.get("bundle") or [])} - {None}
 
 
 def open_batch(root: Path, run: str) -> None:

@@ -11,9 +11,9 @@ from pathlib import Path
 
 from lab.infra.runner import artifacts, profiles, serve, worker
 from lab.infra.context import calibrate
-from evals.agent import live
+from lab import live
 from lab.records import ledger
-from lab.targets import target
+from evals.targets import target
 from lab.gate.holdout import HoldoutGuard, Refused
 
 HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT = 100, 2.0, 0.5

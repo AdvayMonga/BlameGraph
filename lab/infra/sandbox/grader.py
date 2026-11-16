@@ -14,7 +14,8 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
 
-from lab.targets import engine, target
+from evals.targets import target
+from lab.targets import engine
 from lab.profile import gpu
 from lab.infra.sandbox import container, jail
 from lab.infra.sandbox.surfaces import ALWAYS_DENY, HIDDEN, deps_only, may_write

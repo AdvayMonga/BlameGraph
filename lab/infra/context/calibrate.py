@@ -9,7 +9,7 @@ import re
 import statistics
 from pathlib import Path
 
-from lab.targets import target
+from evals.targets import target
 from lab.infra.context import ceiling, peaks
 from lab.infra.context.ceiling import ModelSpec, Shape
 

@@ -41,7 +41,7 @@ def specs(regimes: tuple[str, ...] = ()) -> tuple[tuple[str, int], ...]:
 def capture_env(task) -> dict:
     """The launch env a capture of `task` runs under: the target's [kernels] capture_env, then the task's own."""
     try:
-        from lab.targets import target
+        from evals.targets import target
         env = dict((target.load().raw.get("kernels") or {}).get("capture_env") or {})
     except Exception:                            # noqa: BLE001  no target: the task's own only
         env = {}

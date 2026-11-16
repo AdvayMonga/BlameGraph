@@ -79,7 +79,7 @@ def repeat_audit(base_url: str, model: str, requests: list[str], repeats: int = 
 
 
 def main():
-    from lab.targets import target
+    from evals.targets import target
     ap = argparse.ArgumentParser(prog="lab repeat-audit",
                                  description="the repeated-request audit against a live server")
     target.add_argument(ap)
