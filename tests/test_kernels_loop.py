@@ -185,7 +185,13 @@ def test_a_naming_call_reflects_on_the_last_generation_and_one_call_reflects_on_
     asks = [u.split(CACHE_SPLIT)[-1] for _, u in namer.calls]
     assert "last generation" not in asks[0] and "final list" in asks[1]
     assert "# The last generation's ideas" in asks[2] and '"prediction": {"speedup": 1.1}' in asks[2] and '"gain"' in asks[2]
-    assert asks[4].startswith("# The last generation's ideas") and "Reflect on each of these ideas" in asks[4]
+    assert "# The last generation's ideas" in asks[4] and "and on the whole run" in asks[4]
+    pop = [json.loads(x) for x in (tmp_path / "trace.jsonl").read_text().splitlines()]
+    best = max(pop, key=lambda p: p["child_metrics"]["combined_score"])
+    whole, descent = asks[4].split("# The best program's line of descent")
+    assert all(f'"generation": {g}, "programs": {sum(p["iteration"] == g for p in pop)}' in whole for g in (0, 1, 2))
+    assert descent.splitlines()[1].startswith(f'{{"program": "{pop[0]["child_id"]}"') and "the starting program" in descent
+    assert f'"program": "{best["child_id"]}"' in descent.split("# The last generation's ideas")[0]
     ideas = lines(tmp_path / "ideas.jsonl")
     assert all(i["idea_id"] in asks[2] for i in ideas[:6]) and all(i["idea_id"] in asks[4] for i in ideas[6:])
     assert (tmp_path / "reflection.txt").read_text() == "the run"
