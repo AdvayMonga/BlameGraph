@@ -10,7 +10,7 @@ import pytest
 
 from lab.records import ledger
 from lab.infra.runner import serve
-from lab.targets import target
+from evals.targets import target
 from lab.budget import Budget
 from lab.session import Session
 from lab.tools import Toolbox

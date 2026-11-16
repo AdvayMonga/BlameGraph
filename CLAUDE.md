@@ -52,7 +52,7 @@ the guard's query budget.
 ## Layout
 - `lab/` — the optimization system. The loop: `session`, `agent` (+ `agent_openai`, `apiproxy`),
   `tools`/`evaltools`/`proftools`, `experiments` (hypothesis/expect/reflection rules), `experiment` (a person's run),
-  `task`, `workspace`, `budget`, `rehearsal`, `cli`, `prompts/`.
+  `task`, `workspace`, `budget`, `rehearsal`, `dashboard` (+ `live`), `cli`, `prompts/`.
   - `kernels/` — `search/` (the kernel search; `METHOD.md` maps each part to its source), `evolve/` (OpenEvolve arm),
     `tasks/` (kernel tasks, regions, shapes, pipeline, KernelBench, FlashInfer-Bench), `library/` (other
     implementations and PTX cards), `archive.py` (idea archive), `eval/` (the kernel evaluator: check, timing, core,
@@ -63,16 +63,17 @@ the guard's query budget.
   - `infra/` — `cloud/` (vm, providers, gpucheck), `sandbox/` (jail, container, write surfaces, grader, dependency
     build), `runner/` (worker, serve, launch profiles, passive artifacts, trace contract), `context/` (calibration,
     layer facts, ceiling, peaks), `calibration/` (peaks, performance references).
-  - `targets/` — the target spec (`<name>.toml`, `target.py`, selected by `LAB_TARGET`) and `engine.py`.
+  - `targets/` — `engine.py`: the engine's repo and interpreter, per the target spec.
 - `evals/` — the benchmarking suite: `public/` (frontier benchmark loaders, researcher-only), `regimes/` (the corpus:
   frozen traces; held-out split in the store), `loadgen/` (the regimes: client, runner, suite, workload, synth,
-  arrivals, clientcheck), `sim/` (scheduler simulator), `baselines/` (engine comparison), `agent/` (evals of the
-  optimizing agent: feedback and verdict, process evals, canaries, tier agreement, dashboard).
+  arrivals, clientcheck), `sim/` (scheduler simulator), `baselines/` (engine comparison), `targets/` (the target spec:
+  `<name>.toml`, `target.py`, selected by `LAB_TARGET`), `agent/` (evals of the optimizing agent: feedback and
+  verdict, process evals, canaries, tier agreement). `evals` never imports `lab`.
 - `local/` — gitignored: the ledger (`local/ledger`), run outputs (`local/runs`), task sets, downloads, notes.
 - `tests/` — pytest, all synthetic, no GPU. Old design docs and `RUNS.md` are at tag `archive/docs`.
 
 ## Checks
 `ruff check .`; `LAB_NO_JAIL=1 pytest -q` (tests that drive engine code skip unless its deps import); every
 `tests/test_*.py` other than `test_lab_*` also runs as a script (`python tests/test_x.py`), as CI does. CI runs
-`test_regimes.py` (~4 min) only when a PR touches `evals/loadgen/`, the canaries, the corpus, `lab/targets/target.py`
+`test_regimes.py` (~4 min) only when a PR touches `evals/loadgen/`, the canaries, the corpus, `evals/targets/target.py`
 or the workflows. Merge only on green CI.

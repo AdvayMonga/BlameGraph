@@ -19,7 +19,8 @@ from lab.infra.context import calibrate
 from lab.profile import gpu
 from lab.infra.runner import serve
 from lab.records import ledger
-from lab.targets import engine, target
+from evals.targets import target
+from lab.targets import engine
 from lab.evaltools import BENCH_TIER
 
 

@@ -6,7 +6,7 @@ import json
 import pytest
 
 from lab.infra.context import calibrate
-from lab.targets import target
+from evals.targets import target
 from tests.test_validity_ceiling import QWEN3_30B_A3B
 
 GPU = {"name": "NVIDIA H200", "driver_version": "580.1", "clocks.sm": "1980"}

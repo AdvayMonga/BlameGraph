@@ -12,7 +12,8 @@ from typing import Any
 from evals import regimes as corpus
 from lab import experiments
 from lab.records import ledger
-from lab.targets import engine, target
+from evals.targets import target
+from lab.targets import engine
 from lab.agent import ToolSpec
 from lab.budget import Budget, BudgetExceeded, gpu_rate
 from lab.evaltools import BENCH_TIER, EvalTools

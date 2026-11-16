@@ -172,7 +172,7 @@ class Engine:
 def load_engine(d: dict | None = None) -> Engine:
     """The engine from `d` (an `Engine.as_dict()`, or a target's `[regions]` table), else from the target."""
     if d is None:
-        from lab.targets import target
+        from evals.targets import target
         d = target.load().raw.get("regions")
         if not d:
             raise ValueError("the target declares no [regions]: its engine has no stations to search a region of")

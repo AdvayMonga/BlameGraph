@@ -1,5 +1,5 @@
 # The target: what is being optimized, how to run it, and what it is judged against.
-# Select with LAB_TARGET=lab/targets/inference-server.toml (or --target). Nothing defaults to this file.
+# Select with LAB_TARGET=evals/targets/inference-server.toml (or --target). Nothing defaults to this file.
 
 [model]
 name = "Qwen/Qwen3-30B-A3B"                 # served model name, and the reference tokenizer

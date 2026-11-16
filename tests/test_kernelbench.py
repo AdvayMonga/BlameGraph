@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("LAB_NO_JAIL", "1")
-os.environ.setdefault("LAB_TARGET", str(ROOT / "lab" / "targets" / "inference-server.toml"))
+os.environ.setdefault("LAB_TARGET", str(ROOT / "evals" / "targets" / "inference-server.toml"))
 
 import torch  # noqa: E402
 

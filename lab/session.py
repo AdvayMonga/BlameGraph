@@ -13,10 +13,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from lab import agent, experiments
-from evals.agent import live
+from lab import live
 from lab.infra.runner import worker
 from lab.records import ledger
-from lab.targets import engine, target
+from evals.targets import target
+from lab.targets import engine
 from lab.budget import Budget, BudgetExceeded
 from lab.evaltools import BENCH_TIER
 from lab.infra.sandbox import grader

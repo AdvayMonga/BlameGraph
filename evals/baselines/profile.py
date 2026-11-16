@@ -65,7 +65,7 @@ def _server_pid(engine: str, srv) -> int:
 
 
 def profile(out: Path, engines: list[str], precision: str, points: list[str], plain: bool = False) -> None:
-    from lab.targets import target
+    from evals.targets import target
     from evals.loadgen import runner, suite
     from evals.loadgen.__main__ import _cpus
     spec, t = R.load(), target.load()

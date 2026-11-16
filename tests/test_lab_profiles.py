@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from lab.infra.runner import profiles
-from lab.targets import target
+from evals.targets import target
 
 SPEC = '''
 [model]
