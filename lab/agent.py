@@ -13,7 +13,7 @@ from typing import Any, Callable, Protocol
 from urllib.parse import urlsplit
 
 from lab import apiproxy
-from evals.agent import live
+from lab import live
 from lab.targets import engine
 from lab.infra.sandbox import container, jail
 from lab.infra.sandbox.grader import HF_HUB

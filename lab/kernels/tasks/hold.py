@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--samples", required=True)
     ap.add_argument("--out", required=True, help="the holder file to write (its dir is made)")
     a = ap.parse_args(argv)
-    from lab.targets import target
+    from evals.targets import target
     from lab.infra.sandbox import container
     for k, v in target.load().engine.env.items():
         os.environ.setdefault(k, v)

@@ -13,7 +13,7 @@ ITER="${1:-10}"
 TASK="${2:-paged_decode}"
 OUT=local/runs/kernels-validate$([ "$TASK" = paged_decode ] || echo "-$TASK")
 ENTRY=$(python -c "from lab.kernels.tasks import load; print(load('$TASK').entry)")
-export LAB_TARGET="${LAB_TARGET:-lab/targets/inference-server.toml}"
+export LAB_TARGET="${LAB_TARGET:-evals/targets/inference-server.toml}"
 mkdir -p "$OUT"
 # The engine's serving env (BACKEND, MODEL_NAME, ...) from the target spec, as `serve` would set it.
 eval "$(python -c 'from lab import target; import shlex; print(" ".join(f"export {k}={shlex.quote(v)};" for k, v in target.load().engine.env.items()))')"

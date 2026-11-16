@@ -2,7 +2,7 @@
 Each check prints PASS or FAIL with its evidence; the exit status is the number of failures.
 
     sudo -n env HOME="$HOME" PATH="$HOME/inference-server/.venv/bin:$PATH" LAB_ENGINE_REPO="$HOME/inference-server" \\
-        LAB_TARGET=lab/targets/inference-server.toml lab gpucheck
+        LAB_TARGET=evals/targets/inference-server.toml lab gpucheck
 """
 
 from __future__ import annotations

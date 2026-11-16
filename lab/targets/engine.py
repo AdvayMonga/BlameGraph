@@ -12,7 +12,7 @@ ENV_ROOT = Path(__file__).resolve().parents[2]
 
 def repo() -> Path:
     """The target's engine repo (LAB_ENGINE_REPO overrides)."""
-    from lab.targets import target
+    from evals.targets import target
     return target.load().engine_repo
 
 
@@ -33,7 +33,7 @@ def python() -> str:
     """The target's engine interpreter (LAB_ENGINE_PYTHON overrides); this interpreter if that file does not exist."""
     if _using:
         return _using[-1]
-    from lab.targets import target
+    from evals.targets import target
     py = target.load().engine_python
     return py if Path(py).exists() else sys.executable
 

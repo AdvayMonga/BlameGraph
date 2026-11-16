@@ -74,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
         ap.error(f"--batches above {MAX_ROWS}: the megakernel path takes at most {MAX_ROWS} rows")
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    from lab.targets import target
+    from evals.targets import target
     served = target.load().engine.env
     runs, not_on = {}, set()
     for plen in (int(x) for x in a.prompt_lens.split(",")):

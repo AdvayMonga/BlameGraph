@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-os.environ.setdefault("LAB_TARGET", str(ROOT / "lab" / "targets" / "inference-server.toml"))
+os.environ.setdefault("LAB_TARGET", str(ROOT / "evals" / "targets" / "inference-server.toml"))
 os.environ.setdefault("LAB_ENGINE_PYTHON", sys.executable)
 os.environ.setdefault("LAB_NO_JAIL", "1")          # no srt or container jail
 
@@ -783,7 +783,7 @@ def test_the_jail_sees_a_fresh_tree_and_a_copied_harness_never_this_repo():
     with tempfile.TemporaryDirectory() as d:
         h = jailed.stage_harness(Path(d) / "h")
         names = {p.relative_to(h).as_posix() for p in h.rglob("*") if p.is_file()}
-        assert "lab/kernels/eval/core.py" in names and "lab/targets/target.py" in names and "lab/infra/context/peaks.py" in names
+        assert "lab/kernels/eval/core.py" in names and "evals/targets/target.py" in names and "lab/infra/context/peaks.py" in names
         assert not any(n.startswith(("local", "evals/regimes", "lab/records", "evals/public")) or n.endswith(".env") for n in names)
     seen, saved = {}, (jail.backend, container.available, container._docker, grader.subprocess.run)
 

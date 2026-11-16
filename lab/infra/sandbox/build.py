@@ -16,7 +16,8 @@ import tempfile
 import threading
 from pathlib import Path
 
-from lab.targets import engine, target
+from evals.targets import target
+from lab.targets import engine
 from lab.infra.sandbox import container
 
 # Index hosts every build may reach; https hosts the dependency files and build command name are added per build.

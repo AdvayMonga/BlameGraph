@@ -29,8 +29,9 @@ import tarfile
 import tempfile
 from pathlib import Path
 
-from lab.targets import engine, target
-from evals.agent import live
+from evals.targets import target
+from lab.targets import engine
+from lab import live
 from lab.infra.runner import serve
 from lab.infra.sandbox import container
 

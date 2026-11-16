@@ -5,10 +5,10 @@ import json
 
 import pytest
 
-from evals.agent import dashboard, live
+from lab import dashboard, live
 from lab import evaltools, session
 from lab.records import ledger
-from lab.targets import target
+from evals.targets import target
 from lab.agent import AgentReply
 from evals.loadgen import suite
 from evals.loadgen.client import Row
