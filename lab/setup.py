@@ -2,7 +2,7 @@
 
   lab setup [--target T]
 
-Each step is skipped where its output exists.
+The corpus and the reference are skipped where they exist.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def steps(t: target.Target) -> list[list[str]]:
     todo = []
     if not t.corpus_dir.is_dir() or not any(t.corpus_dir.glob("*/heldout.jsonl")):
         todo.append(["store", "pull", "--corpus"])
-    if not target.reference_complete(t.reference_dir):
+    if t.reference_dir is not None and not target.reference_complete(t.reference_dir):
         todo.append(["correctness", "reference", "--out", str(t.reference_dir)])
     return [*todo, ["validate"]]
 

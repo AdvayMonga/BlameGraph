@@ -347,6 +347,7 @@ class EvalTools:
         def judged_equiv(profile: str | None) -> dict | None:
             """The latest judged equiv of one profile's launch (None = general) on this snapshot."""
             return next((r for r in reversed(mine) if r["kind"] == "equiv"
+                         and (r.get("result") or {}).get("verdict") in ("pass", "fail")
                          and (r.get("config") or {}).get("profile") == profile), None)
         eq = judged_equiv(None)
         if not eq or eq["result"].get("verdict") != "pass":

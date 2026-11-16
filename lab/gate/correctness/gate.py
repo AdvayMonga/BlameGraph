@@ -17,7 +17,7 @@ def task_accuracy(flips: dict[str, dict]) -> dict:
     for task, f in flips.items():
         ref, cand = round(f["ref_accuracy"] * f["n"]), round(f["cand_accuracy"] * f["n"])
         out[task] = {"n": f["n"], "ref_correct": ref, "cand_correct": cand,
-                     "score_ratio": cand / ref if ref else float("nan")}
+                     "score_ratio": cand / ref if ref else None}
     return out
 
 
@@ -35,8 +35,10 @@ def evaluate(divergence: dict | None = None, flips: dict[str, dict] | None = Non
     if divergence is None:
         gate("divergence", None, "not run", None)
     else:
-        ok = divergence["kl_mean"] <= th.max_kl
-        gate("divergence", ok, "ok" if ok else f"mean KL per token {divergence['kl_mean']:.4f} > {th.max_kl}", divergence)
+        missing = divergence.get("sequences_unscored", 0)
+        ok = not missing and divergence["kl_mean"] <= th.max_kl
+        gate("divergence", ok, "ok" if ok else f"{missing} sequence(s) not scored" if missing else
+             f"mean KL per token {divergence['kl_mean']:.4f} > {th.max_kl}", divergence)
     if flips is not None:
         gate("answered", not unanswered, "ok" if not unanswered else
              f"{unanswered} item(s) unanswered (shed or errored after retries)", None)

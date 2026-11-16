@@ -91,14 +91,14 @@ def test_truncation_and_fake_first_token_fail():
     r = evaluate(_seqs(0.0), None, trunc, fake)
     assert not r["passed"]
     assert r["gates"]["length"]["passed"] is False and r["gates"]["consistency"]["passed"] is False
-    assert r["gates"]["accuracy"]["passed"] is None       # not run: None
+    assert "answered" not in r["gates"] and "accuracy" not in r["metrics"]       # no answers were scored
     rec = to_ledger_record(r, {"split": "seen"}, base="abc123")
     assert rec["kind"] == "equiv" and "gates" in rec and "id" not in rec
 
 
 def test_scorers():
     assert extract_choice("Let's think. The answer is (C).") == "C"
-    assert extract_choice("Answer: J") == "J" and extract_choice("(D) cannot be compared") == "D"
+    assert extract_choice("Answer: J") == "J" and extract_choice("(D) cannot be compared") == "D" and extract_choice("B. Paris") == "B"
     assert extract_choice("The correct answer is **(J)") == "J" and extract_choice("The question asks which I") is None
     assert extract_math("so the result is \\boxed{\\dfrac{3}{4}}.") == "\\frac{3}{4}"
     assert score("math", "\\boxed{12.0}", "12") and score("math", "x = \\boxed{x=5}", "5")
@@ -147,17 +147,21 @@ def test_client_contract_against_fake_server():
 
 def test_verdict_is_pass_or_fail():
     ln = length_ratio([10], [10])
-    under = {"math": {"n": 1000, "lost": 40, "gained": 32, "ref_accuracy": 0.700, "cand_accuracy": 0.692}}
-    r = evaluate(None, under, ln, CONS)
-    assert r["verdict"] == "fail" and r["passed"] is False and r["gates"]["accuracy"]["passed"] is False
-    # unanswered items fail even a good ratio
+    near = {"kl_mean": 0.003, "sequences_unscored": 0}
     good = {"math": {"n": 1000, "lost": 10, "gained": 10, "ref_accuracy": 0.7, "cand_accuracy": 0.7}}
-    r = evaluate(None, good, ln, CONS, unanswered=3)
+    r = evaluate({"kl_mean": 0.02, "sequences_unscored": 0}, good, ln, CONS)
+    assert r["verdict"] == "fail" and r["passed"] is False and r["gates"]["divergence"]["passed"] is False
+    # an unanswered item or an unscored sequence fails a close engine
+    r = evaluate(near, good, ln, CONS, unanswered=3)
     assert r["verdict"] == "fail" and "3 item(s) unanswered" in r["reasons"][0]
-    assert evaluate(None, good, ln, CONS)["verdict"] == "pass"
-    # divergence is not a gate; consistency gates only when given
-    assert "divergence" not in evaluate(None, good, ln, CONS)["metrics"]
-    assert set(evaluate(None, good, ln)["gates"]) == {"accuracy", "length"} and evaluate(None, good, ln)["passed"]
+    r = evaluate({"kl_mean": 0.003, "sequences_unscored": 2}, good, ln, CONS)
+    assert r["verdict"] == "fail" and r["reasons"] == ["divergence: 2 sequence(s) not scored"]
+    assert evaluate(near, good, ln, CONS)["verdict"] == "pass"
+    # a task the reference got nothing right on has no ratio
+    none = {"math": {"n": 10, "lost": 0, "gained": 0, "ref_accuracy": 0.0, "cand_accuracy": 0.0}}
+    assert evaluate(near, none, ln)["metrics"]["accuracy"]["tasks"]["math"]["score_ratio"] is None
+    # consistency gates only when given
+    assert set(evaluate(near, good, ln)["gates"]) == {"divergence", "answered", "length"} and evaluate(near, good, ln)["passed"]
 
 
 def test_sglang_adapter_scores_tokens():
@@ -238,6 +242,9 @@ def test_verdict_file_rejudges_saved_result():
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"result": saved}, f)
     assert verdict_file(f.name, Thresholds(max_kl=0.05))["passed"]
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as u:      # an unanswered item stays a fail
+        json.dump({"result": evaluate({"kl_mean": 0.001}, flips, length_ratio([10], [10]), unanswered=3)}, u)
+    assert verdict_file(u.name, Thresholds())["reasons"] == ["answered: 3 item(s) unanswered (shed or errored after retries)"]
     strict = verdict_file(f.name, Thresholds())
     assert strict["verdict"] == "fail" and strict["reasons"] == ["divergence: mean KL per token 0.0200 > 0.01"]
 

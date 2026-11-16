@@ -1,5 +1,5 @@
 """Correctness gate: is the optimized server still the same model as the reference?
-Checks: accuracy, divergence, length, consistency; `gate.evaluate()` combines them into one verdict."""
+Checks: divergence, length, consistency, and per-task accuracy as a fact; `gate.evaluate()` gives the verdict."""
 from .checks import consistency, length_ratio
 from .divergence import Position, compare_positions, divergence_summary
 from .flips import flip_test

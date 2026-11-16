@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 _CHOICE_PATTERNS = [
-    r"^\s*\(?([A-J])\)",                      # a reply that opens with "(X)" or "X)"
+    r"^\s*\(?([A-J])[).:]",                   # a reply that opens with "(X)", "X)", "X." or "X:"
     r"^\s*([A-J])[.:]?\s*$",                  # a reply that is only the letter
     r"[Aa]nswer(?: is)?\s*[:：]?\W*([A-J])\b",  # "The answer is (X)", "Answer: X", "The correct answer is **(X"
 ]

@@ -510,7 +510,7 @@ def test_equiv_serves_a_profile_only_when_the_file_has_it(lab, launches):
     assert (s.run_dir / "equiv" / f"{rec['snapshot']}-single_stream.json").exists()
 
 
-def test_submit_needs_a_passing_full_equiv_for_each_profile_it_measures(lab):
+def test_submit_needs_a_passing_equiv_for_each_profile_it_measures(lab):
     tb, s = lab
     _profile(s, "[single_stream]\nMAX_BATCH_SIZE = 1\n")
     tb.equiv({}); tb.bench({"regimes": ["single_stream"]})
