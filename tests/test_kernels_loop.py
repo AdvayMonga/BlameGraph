@@ -188,10 +188,18 @@ def test_a_naming_call_reflects_on_the_last_generation_and_one_call_reflects_on_
     assert "# The last generation's ideas" in asks[4] and "and on the whole run" in asks[4]
     pop = [json.loads(x) for x in (tmp_path / "trace.jsonl").read_text().splitlines()]
     best = max(pop, key=lambda p: p["child_metrics"]["combined_score"])
-    whole, descent = asks[4].split("# The best program's line of descent")
+    whole, descent = asks[4].split("# The best usable program's line of descent")
     assert all(f'"generation": {g}, "programs": {sum(p["iteration"] == g for p in pop)}' in whole for g in (0, 1, 2))
     assert descent.splitlines()[1].startswith(f'{{"program": "{pop[0]["child_id"]}"') and "the starting program" in descent
     assert f'"program": "{best["child_id"]}"' in descent.split("# The last generation's ideas")[0]
+    a, b, c = program(0, 1.0), program(1, 3.0, parent="p0"), program(2, 1.2, parent="p0")
+    b.generation = c.generation = 1
+    b.metrics["correct"] = 0.0                                                    # dropped as a parent: not the best
+    text = context.run([a, b, c])
+    assert '"generation": 1, "programs": 2, "best_score": 1.2' in text and '"program": "p1"' not in text
+    assert text.splitlines()[-1].startswith('{"program": "p2"')
+    b.generation = 2
+    assert '"generation": 2, "programs": 1, "best_score": null' in context.run([a, b, c])
     ideas = lines(tmp_path / "ideas.jsonl")
     assert all(i["idea_id"] in asks[2] for i in ideas[:6]) and all(i["idea_id"] in asks[4] for i in ideas[6:])
     assert (tmp_path / "reflection.txt").read_text() == "the run"
