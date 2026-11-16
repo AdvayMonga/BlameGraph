@@ -28,6 +28,7 @@ class LayerConfig:
 
 LIVE = ("h", "kv")
 IN_PLACE = ("kv",)
+OPAQUE = ("paged_ctx",)
 
 def _norm(c):
     x = c["h"].float()
@@ -74,12 +75,41 @@ def reference(stations=DECODE):
 """
 
 
+def declared(monkeypatch, stations="fake_stations_mod", overrides="fake_stations_mod_regions", **kw):
+    """The target's [regions] for the fake engine, as `regions.load_engine` returns it from here on."""
+    from lab.kernels.tasks import regions
+    eng = regions.Engine(stations, overrides, **{"layers": (0, 16, 32, 47), "heldout_layer": 32, "step": "DECODE", "sets": {
+        "DECODE": regions.StationSet(graphs=True, capture_env={"MEGAKERNEL": "0"}, tables={"attn_block_tables": 1}),
+        "PREFILL": regions.StationSet(prefix="p_", rows=1, instead={"fi_kv_indices": 0})}, **kw})
+    monkeypatch.setattr(regions, "load_engine", lambda d=None: eng)
+    return eng
+
+
 def engine(tmp, monkeypatch):
     from lab.kernels.tasks import regions
     (tmp / "fake_stations_mod.py").write_text(FAKE)
     monkeypatch.syspath_prepend(str(tmp))
-    monkeypatch.setattr(regions, "ENGINE", "fake_stations_mod")
+    declared(monkeypatch)
     return regions
+
+
+def test_the_lab_names_nothing_of_the_engine_and_the_target_declares_it():
+    import re
+    from lab.kernels.tasks import regions
+    from lab.targets import target
+    root = Path(__file__).resolve().parents[1]
+    for f in ("lab/kernels/tasks/regions.py", "lab/kernels/tasks/hold.py", "lab/kernels/eval/ship.py"):
+        found = re.findall(r"inference_server|k_cache|fi_kv|attn_block_tables|sorted_ids|MEGAKERNEL|paged_ctx|DECODE|PREFILL",
+                           (root / f).read_text())
+        assert not found, (f, found)
+    eng = regions.load_engine(target.parse(root / "lab/targets/inference-server.toml").raw["regions"])
+    assert eng.which("p_attention") == "PREFILL" and eng.which("attention") == "DECODE" and eng.step == "DECODE"
+    assert eng.sets["DECODE"].graphs and not eng.sets["PREFILL"].graphs and eng.layers == (0, 16, 32, 47)
+    assert regions.load_engine(eng.as_dict()) == eng                         # as an eval config carries it
+    from lab.kernels.tasks import load
+    import json
+    light = load("region:p_attention:p_attention", engine=json.loads(json.dumps(eng.as_dict())))   # no target, no engine import
+    assert light.entry == "inference_server.models.stations:PREFILL" and dict(light.capture_env) == {"CAPTURE_REGION_LAYERS": "0,16,32,47"}
 
 
 def captures(tmp, calls):
@@ -104,7 +134,7 @@ def captures(tmp, calls):
 def held(tmp, regions, layer=0):
     from lab.kernels.tasks.shared_weights import Holder
     return Holder({"w.mm": torch.randn(64, 64) / 8, "w.mm_scale": None}, tmp / "w.pkl",
-                  {"cfg": regions._engine().LayerConfig(1e-6), "layer": layer})
+                  {"cfg": regions.load_engine().module().LayerConfig(1e-6), "layer": layer})
 
 
 def test_a_region_of_the_engines_stations_is_judged_end_to_end(tmp_path, monkeypatch):
@@ -118,7 +148,7 @@ def test_a_region_of_the_engines_stations_is_judged_end_to_end(tmp_path, monkeyp
     xs = t.make_inputs((4, 64), torch.float32, "cpu", torch.Generator().manual_seed(0))
     assert len(xs) == 2 and xs[1].shape == (64, 64)                  # h, then the weight; its None scale bound
     start = tmp_path / "start.py"
-    start.write_text(regions.start_program("norm", "add", shared_weights=str(h.path)))
+    start.write_text(regions.start_program(regions.load_engine(), "norm", "add", shared_weights=str(h.path)))
     assert "_INPUTS = ['h', 'w.mm']" in start.read_text() and "_CONST['w.mm_scale'] = None" in start.read_text()
     r = core.judge(t, start, [(4, 64), (16, 64)], [], None, "cpu", None, 2, iters=3)
     assert r["metrics"]["correct"] == 1.0, r["artifacts"]
@@ -168,9 +198,9 @@ def test_a_region_writing_in_place_runs_on_a_copy_and_a_program_must_write_in_pl
     xs = t.make_inputs((4, 64), torch.float32, "cpu", torch.Generator().manual_seed(0))
     with pytest.raises(ValueError, match="in place"):
         t.bind(lambda hh, kv: (torch.full_like(kv, hh.sum().item()),))(*xs)        # a new pool: refused
-    with pytest.raises(ValueError, match="context"):
+    with pytest.raises(ValueError, match="cannot hand to a region"):
         monkeypatch.setattr(regions, "span", lambda st, a, b: (regions.Station("p", ("paged_ctx",), ("x",), None),))
-        regions._region("kv", "kv")
+        regions._region(regions.load_engine(), "kv", "kv")
 
 
 def test_captured_shapes_split_with_a_heldout_region_from_the_holders_layer_only(tmp_path, monkeypatch):
@@ -203,18 +233,18 @@ def test_the_pools_block_count_is_not_part_of_a_calls_shape(tmp_path, monkeypatc
     small = {"h": {"shape": [4, 64]}, "kv": {"shape": [100, 2, 16, 8]}, "attn_block_tables": {"shape": [4, 7]},
              "w.mm": {"shape": [64, 64]}}
     large = {**small, "kv": {"shape": [4000, 2, 16, 8]}}
-    assert regions._signature(small) == regions._signature(large) == (4, 7, 4, 64)
-    assert regions._heldout_axes(small, ("h", "kv", "attn_block_tables")) == (2, 1)
+    eng = regions.load_engine()
+    assert regions._signature(eng, small) == regions._signature(eng, large) == (4, 7, 4, 64)
+    assert regions._heldout_axes(eng, "DECODE", small, ("h", "kv", "attn_block_tables")) == (2, 1)   # rows, table width
     wave = {"q": {"shape": [1, 32, 2048, 128]}, "fi_kv_indices": {"shape": [142]}, "fi_qo_indptr": {"shape": [2]}}
-    assert regions._heldout_axes(wave, ("q", "fi_qo_indptr", "fi_kv_indices"), prefill=True) == (0,)   # the context
-    monkeypatch.delattr(regions._engine(), "IN_PLACE")                      # no IN_PLACE: the engine's pool names
-    assert regions._signature({"h": {"shape": [4, 64]}, "k_cache": {"shape": [9, 2, 16, 8]}}) == (4, 64)
+    assert regions._heldout_axes(eng, "PREFILL", wave, ("q", "fi_qo_indptr", "fi_kv_indices")) == (0,)   # in place of the tokens
+    assert regions._heldout_axes(eng, "PREFILL", wave, ("q", "fi_qo_indptr")) == (3,)                # the tokens
 
 
 def test_the_stations_callees_are_watched_when_they_import(tmp_path, monkeypatch):
     regions = engine(tmp_path, monkeypatch)
     (tmp_path / "fake_fused_mod.py").write_text("def f(x):\n    return x\n")
-    monkeypatch.setattr(regions, "STATION_MODULES", ("fake_fused_mod", "no_such_pkg.models.fused"))
+    declared(monkeypatch, watch=("fake_fused_mod", "no_such_pkg.models.fused"))
     t = regions.from_engine("norm", "add", shared_weights=str(held(tmp_path, regions).path))
     assert "fake_fused_mod" in t.watch and "fake_stations_mod" in t.watch and "no_such_pkg.models.fused" not in t.watch
 
@@ -234,8 +264,7 @@ def _engine_repo(tmp, monkeypatch):
     git("add", ".")
     git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "engine")
     monkeypatch.syspath_prepend(str(repo / "src"))
-    monkeypatch.setattr(regions, "ENGINE", "fake_engine.models.stations")
-    monkeypatch.setattr(regions, "OVERRIDES_PACKAGE", "fake_engine.models.regions")
+    declared(monkeypatch, "fake_engine.models.stations", "fake_engine.models.regions")
     for k in ("GIT_COMMITTER_NAME", "GIT_AUTHOR_NAME"):
         monkeypatch.setenv(k, "t")
     for k in ("GIT_COMMITTER_EMAIL", "GIT_AUTHOR_EMAIL"):
@@ -252,7 +281,7 @@ def test_a_region_ships_as_an_override_module_never_through_the_entry_path(tmp_p
     h = held(tmp_path, regions)
     t = regions.from_engine("norm", "add", shared_weights=str(h.path))
     program = initial_program(t)
-    assert program == regions.start_program("norm", "add", shared_weights=str(h.path))
+    assert program == regions.start_program(regions.load_engine(), "norm", "add", shared_weights=str(h.path))
     with pytest.raises(ValueError, match="holder"):
         initial_program(regions.from_engine("norm", "add"))
     for f in (pipeline.module_file, lambda t, d: pipeline.start_program(t, d)):    # the patch: its override module
@@ -271,7 +300,7 @@ def test_a_region_ships_as_an_override_module_never_through_the_entry_path(tmp_p
     ns: dict = {}
     exec(compile(src, path, "exec"), ns)
     hh = torch.randn(4, 64)
-    st = regions._engine()
+    st = regions.load_engine().module()
     c = {"h": hh.clone(), "cfg": st.LayerConfig(1e-6), "w.mm": h.tensors["w.mm"], "w.mm_scale": None, "kv": torch.zeros(2)}
     got = ns["OVERRIDES"][("norm", "add")](c)
     want = t.baseline()(hh.clone(), h.tensors["w.mm"])
@@ -333,8 +362,7 @@ def test_the_search_cli_takes_a_region_with_its_samples_and_holder(tmp_path, mon
 def test_a_region_judged_on_a_remote_worker_is_described_here_from_its_shapes_file(tmp_path, monkeypatch):
     import pytest
     from lab.kernels.search import __main__ as cli
-    from lab.kernels.tasks import regions
-    monkeypatch.setattr(regions, "ENGINE", "no_engine_here.stations")       # nothing of the engine loads here
+    declared(monkeypatch, "no_engine_here.stations")                        # nothing of the engine loads here
     monkeypatch.setenv("KERNEL_EVAL_SSH", '["ssh", "gpu"]')
     for k in ("KERNEL_EVAL_CONFIG", "KERNELS_EVAL_LOG"):
         monkeypatch.setenv(k, "")
@@ -373,7 +401,8 @@ def test_a_prefill_region_binds_the_prefill_stations_and_a_none_read_becomes_a_c
             torch.save({"reads": {"h": torch.randn(1, t, 64), "cfg": {"eps": 1e-6},
                                   **({"tokens": torch.arange(t - 2)} if padded else {})}, "writes": {}},
                        d / "samples" / f"{i}.pt")
-    assert regions.station_set("p_norm") == "PREFILL" and regions.light("region:p_norm:p_scale").entry.endswith(":PREFILL")
+    assert regions.load_engine().which("p_norm") == "PREFILL" and regions.light("region:p_norm:p_scale").entry.endswith(":PREFILL")
+    assert dict(regions.light("region:norm:add").capture_env)["MEGAKERNEL"] == "0"       # the decode set's capture env
     assert dict(regions.light("region:p_norm:p_scale").capture_env) == {"CAPTURE_REGION_LAYERS": "0,16,32,47"}
     t = regions.from_engine("p_norm", "p_scale", str(d), str(h.path), dtypes=(torch.float32,))
     assert set(t.seen_default) == {(1, 8, 64), (1, 24, 64)} and t.heldout_axes == (1,)    # the tokens axis
@@ -384,10 +413,10 @@ def test_a_prefill_region_binds_the_prefill_stations_and_a_none_read_becomes_a_c
     r = core.judge(t, start, [(1, 8, 64), (1, 24, 64)], [], None, "cpu", None, 2, iters=3)
     assert r["metrics"]["correct"] == 1.0, r["artifacts"]
     ns: dict = {}
-    exec(compile(regions.override_module(start.read_text(), "p_norm", "p_scale"), "o.py", "exec"), ns)
-    c = {"h": torch.randn(1, 6, 64), "cfg": regions._engine().LayerConfig(1e-6), "tokens": torch.tensor([0, 2])}
+    exec(compile(regions.override_module(regions.load_engine(), start.read_text(), "p_norm", "p_scale"), "o.py", "exec"), ns)
+    c = {"h": torch.randn(1, 6, 64), "cfg": regions.load_engine().module().LayerConfig(1e-6), "tokens": torch.tensor([0, 2])}
     got = ns["OVERRIDES"][("p_norm", "p_scale")](c)["h"]                # a padded wave: the engine's own stations
-    st = regions._engine()
+    st = regions.load_engine().module()
     want = st.PREFILL[1].fn({**c, **st.PREFILL[0].fn(c)})["h"]
     assert torch.equal(got, want)
 
@@ -399,8 +428,7 @@ def test_a_region_held_for_several_layers_keys_shapes_by_layer_and_holds_one_lay
     regions = engine(tmp_path, monkeypatch)
     w = {i: torch.randn(64, 64) / 8 for i in (0, 32)}
     h = Holder({"L0.w.mm": w[0], "L32.w.mm": w[32], "w.mm_scale": None}, tmp_path / "w.pkl",
-               {"cfg": regions._engine().LayerConfig(1e-6), "layers": [0, 32]})
-    monkeypatch.setattr(regions, "HELDOUT_LAYER", 32)
+               {"cfg": regions.load_engine().module().LayerConfig(1e-6), "layers": [0, 32]})
     caps = captures(tmp_path, [(4, 64, 0, True), (16, 64, 0, True), (4, 64, 32, True), (8, 64, 7, True)])
     t = regions.from_engine("norm", "add", str(caps), str(h.path), dtypes=(torch.float32,))
     assert set(t.seen_default) == {(0, 4, 64), (0, 16, 64), (32, 4, 64)}           # layer 7 is not held

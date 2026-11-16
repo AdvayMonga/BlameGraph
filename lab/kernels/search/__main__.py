@@ -54,10 +54,11 @@ def _stations(task, sets: dict) -> list[str] | None:
     from lab.kernels.tasks import regions
     from lab.profile.capture import STEP
     try:
+        eng = regions.load_engine()
         if task.name == STEP:
-            return [s.name for s in regions.engine_stations()]
+            return [s.name for s in regions.engine_stations(eng, eng.step)]
         first, last = task.name.split(":")[1:3]
-        return [s.name for s in regions.span(regions.engine_stations(regions.station_set(first)), first, last)]
+        return [s.name for s in regions.span(regions.engine_stations(eng, eng.which(first)), first, last)]
     except Exception:                            # noqa: BLE001  no engine here: the block shows what it can, nothing
         return None
 

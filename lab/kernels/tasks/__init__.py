@@ -84,7 +84,8 @@ def randn(size, g, device, dtype, scale: float = 1.0) -> torch.Tensor:
 
 def load(name: str, **region) -> Task:
     """The task `name`: a module here, `region:FIRST:LAST`, `kb:LEVEL:ID` or `fib:NAME`.
-    `region` keywords: `samples`, `shared_weights`, `source`; a region given none is `regions.light`."""
+    `region` keywords: `samples`, `shared_weights`, `source`, `engine`; a region given neither samples nor a holder
+    is `regions.light`."""
     if name.startswith("fib:"):
         from lab.kernels.tasks.flashinfer_bench import task
         return task(name, region.get("samples"))
@@ -94,11 +95,11 @@ def load(name: str, **region) -> Task:
     if name.startswith("region:"):
         from lab.kernels.tasks import regions
         from lab.profile.capture import STEP
-        if not region:
-            return regions.light(name)
+        if not region.keys() - {"engine"}:
+            return regions.light(name, eng=regions.load_engine(region["engine"]) if region.get("engine") else None)
         if name == STEP:
             from lab.kernels.tasks import step
-            return step.task(**region)
+            return step.task(**{k: v for k, v in region.items() if k != "engine"})
         _, first, last = name.split(":")
         return regions.from_engine(first, last, **region)
     return importlib.import_module(f"lab.kernels.tasks.{name}").TASK
@@ -110,7 +111,7 @@ TASKS = ("toy_rmsnorm", "paged_decode", "paged_decode_fp8", "moe_gemm", "moe_gem
 
 def from_config(cfg: dict) -> Task:
     """The task an evaluation config names, with its deployment options and captured ints."""
-    region = {k: cfg[k] for k in ("samples", "shared_weights", "source") if cfg.get(k)} \
+    region = {k: cfg[k] for k in ("samples", "shared_weights", "source", "engine") if cfg.get(k)} \
         if cfg["task"].startswith(("region:", "kb:", "fib:")) else {}
     return load(cfg["task"], **region).with_options(cfg.get("options")).with_ints(cfg.get("ints"))
 

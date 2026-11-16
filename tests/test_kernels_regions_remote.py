@@ -18,7 +18,7 @@ torch = pytest.importorskip("torch")
 pytest_plugins = ["tests.test_lab_proftools"]   # its `tb` fixture: a Toolbox with fake instruments
 
 from lab.kernels.tasks import pipeline  # noqa: E402
-from tests.test_kernels_region_engine import captures, engine, held  # noqa: E402
+from tests.test_kernels_region_engine import captures, declared, engine, held  # noqa: E402
 
 EXPECT = {"metric": "speedup", "value": 1.1, "unit": "absolute", "why": "fused"}
 FAKE_HOLD = """
@@ -96,14 +96,14 @@ def test_the_hold_process_runs_where_the_evaluator_does_and_ends_with_the_block(
 
 def test_a_region_winner_is_a_patch_adding_its_override_module(tmp_path, monkeypatch):
     regions = engine(tmp_path, monkeypatch)
-    monkeypatch.setattr(regions, "OVERRIDES_PACKAGE", "fake_engine.models.regions")
+    declared(monkeypatch, overrides="fake_engine.models.regions")
     tree = tmp_path / "tree"
     pkg = tree / "src" / "fake_engine" / "models" / "regions"
     pkg.mkdir(parents=True)
     (pkg / "__init__.py").write_text("")
     h = held(tmp_path, regions)
     t = regions.from_engine("norm", "add", shared_weights=str(h.path))
-    program = regions.start_program("norm", "add", shared_weights=str(h.path))
+    program = regions.start_program(regions.load_engine(), "norm", "add", shared_weights=str(h.path))
     names = {"stations": ["norm", "mm", "act", "add", "kv"]}
     diff = pipeline.patch(t, tree, program, names)
     assert diff.startswith("--- /dev/null\n+++ b/src/fake_engine/models/regions/norm_add.py")
@@ -146,12 +146,8 @@ def test_kernel_search_runs_a_region_and_hands_back_its_override_module(tb, monk
     assert "+++ b/src/inference_server/models/regions/norm_add.py" in patch and "OVERRIDES = {('norm', 'add')" in patch
 
 
-FAKE_ENGINE = {                      # the engine as lab.kernels.tasks.hold loads it: settings, a backend with a model, stations
+FAKE_ENGINE = {                      # the engine as lab.kernels.tasks.hold loads it: its stations module
     "inference_server/__init__.py": "",
-    "inference_server/config.py": "def load_settings():\n    return None\n",
-    "inference_server/server.py": "import torch\n\nclass _M:\n    w = torch.randn(64, 64, generator=torch.Generator()"
-                                  ".manual_seed(0)) / 8\n\nclass _B:\n    model = _M()\n\ndef build_backend(settings):"
-                                  "\n    return _B()\n",
     "inference_server/models/__init__.py": "",
     "inference_server/models/regions/__init__.py": "",
 }
@@ -162,6 +158,12 @@ def layer_weights(model, i):
 
 def layer_config(model):
     return LayerConfig(1e-6)
+
+class _Model:
+    w = torch.randn(64, 64, generator=torch.Generator().manual_seed(0)) / 8
+
+def load_model():
+    return _Model()
 """
 # python -m lab.kernels.search runs in its own process: its model is faked where every process starts (sitecustomize).
 FAKE_MODEL = """

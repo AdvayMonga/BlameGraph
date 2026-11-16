@@ -187,7 +187,8 @@ def task_args(p) -> None:
 
 def region_args(a) -> dict:
     """What `load` and the eval config take: a region's `samples` and `shared_weights` (absolute; as given with
-    KERNEL_EVAL_SSH), a KernelBench problem's `source`, or a FlashInfer-Bench dataset dir as `samples`."""
+    KERNEL_EVAL_SSH) and its `engine` (the target's), a KernelBench problem's `source`, or a FlashInfer-Bench
+    dataset dir as `samples`."""
     if a.task.startswith("kb:"):
         from lab.kernels.tasks.kernelbench import problem_source
         return {"source": problem_source(a.task)}
@@ -197,8 +198,13 @@ def region_args(a) -> dict:
     if not a.task.startswith("region:"):
         return {}
     there = bool(os.environ.get("KERNEL_EVAL_SSH"))
-    return {k: v if there else str(Path(v).resolve()) for k, v in (("samples", getattr(a, "samples", None)),
-                                                                 ("shared_weights", getattr(a, "shared_weights", None))) if v}
+    got = {k: v if there else str(Path(v).resolve()) for k, v in (("samples", getattr(a, "samples", None)),
+                                                                ("shared_weights", getattr(a, "shared_weights", None))) if v}
+    from lab.profile.capture import STEP
+    if got and a.task != STEP:                   # where it is judged there may be no target
+        from lab.kernels.tasks import regions
+        got["engine"] = regions.load_engine().as_dict()
+    return got
 
 
 def load_task(a):
