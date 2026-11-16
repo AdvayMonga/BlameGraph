@@ -119,7 +119,7 @@ def test_the_lab_names_nothing_of_the_engine_and_the_target_declares_it():
 
 def test_a_region_loads_from_the_engine_its_eval_config_carries_where_no_target_is_set(tmp_path, monkeypatch):
     from lab.kernels.tasks import regions
-    from lab.targets import target
+    from evals.targets import target
     real = regions.load_engine
     engine(tmp_path, monkeypatch)
     carried = json.loads(json.dumps(regions.load_engine().as_dict()))
