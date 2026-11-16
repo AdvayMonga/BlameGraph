@@ -3,7 +3,7 @@ Checks: accuracy, divergence, length, consistency; `gate.evaluate()` combines th
 from .checks import consistency, length_ratio
 from .divergence import Position, compare_positions, divergence_summary
 from .flips import flip_test
-from .gate import Thresholds, evaluate, pooled_accuracy
+from .gate import Thresholds, evaluate, task_accuracy
 
 __all__ = ["Position", "compare_positions", "divergence_summary", "flip_test", "length_ratio", "consistency",
-           "Thresholds", "evaluate", "pooled_accuracy"]
+           "Thresholds", "evaluate", "task_accuracy"]

@@ -14,6 +14,7 @@ from lab.infra.context import calibrate
 from lab import live
 from lab.records import ledger
 from evals.targets import target
+from lab.gate.correctness.gate import Thresholds
 from lab.gate.holdout import HoldoutGuard, Refused
 
 HOLDOUT_BUDGET, HOLDOUT_THRESHOLD_PCT, HOLDOUT_SIGMA_PCT = 100, 2.0, 0.5
@@ -148,8 +149,9 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
         "latency_limits": {"interactive": t.interactive.__dict__, "conversational": t.conversational.__dict__},
         "goodput_attainment": 0.99,
         "tiers": {k: dict(v) for k, v in suite.TIERS.items()},
-        "correctness": {"policy": f"pooled task score >= {t.min_score_ratio} of the reference, length >= {t.min_length_ratio}; "
-                        f"under the line fails only when the net loss is significant",
+        "correctness": {"policy": f"each task's score >= {t.min_score_ratio} of the reference's, output length "
+                        f"{t.min_length_ratio}..{Thresholds.max_length_ratio} of the reference's",
+                        "reference": "the model's weights run greedy in transformers",
                         "tasks": list(t.tasks)},
         "noise_bands_pct": {n: noise_band_pct(n, t, ledger_root or ledger.ROOT) for n in suite.REGIMES},
         "noise_bands_measured_on": "the base commit's engine with its general config, repeated unchanged runs "
@@ -306,9 +308,9 @@ class EvalTools:
         tier = args.get("tier") or "dev"
         profile = args.get("profile") or None
         config = {"split": "seen", "tier": tier, **({"profile": profile} if profile else {})}
-        ref = t.reference_dir_for("dev" if tier == "quick" else tier)
+        ref = t.reference_dir
         if not target.reference_complete(ref):
-            self._record("equiv", "equiv", args, {"verdict": "refused", "reason": f"no {tier}-tier reference outputs; "
+            self._record("equiv", "equiv", args, {"verdict": "refused", "reason": "no reference outputs; "
                          "run `lab correctness reference` for this target first"}, snap, config=config)
             return "equiv refused: no reference outputs for this target"
         tree = self._pristine()
@@ -344,18 +346,15 @@ class EvalTools:
         t = target.load()
         mine = [r for r in ledger.records(self.s.ledger_root, run=self.s.run_id, snapshot=snap.id)]
 
-        need = t.submit_tier
-
-        def full_equiv(profile: str | None) -> dict | None:
-            """The latest equiv at the target's submit tier of one profile's launch (None = general) on this snapshot."""
+        def judged_equiv(profile: str | None) -> dict | None:
+            """The latest judged (dev-tier) equiv of one profile's launch (None = general) on this snapshot."""
             return next((r for r in reversed(mine) if r["kind"] == "equiv"
-                         and (r.get("result") or {}).get("tier") == need
+                         and (r.get("result") or {}).get("tier") == "dev"
                          and (r.get("config") or {}).get("profile") == profile), None)
-        eq = full_equiv(None)
+        eq = judged_equiv(None)
         if not eq or eq["result"].get("verdict") != "pass":
-            why = (f"no {need}-tier equiv on this snapshot" if not eq else
-                   f"latest {need}-tier equiv is {eq['result'].get('verdict')}")
-            self._record("submit", "submit", args, {"verdict": "refused", "reason": f"{why}; run equiv with tier={need} first"}, snap)
+            why = "no dev-tier equiv on this snapshot" if not eq else f"latest dev-tier equiv is {eq['result'].get('verdict')}"
+            self._record("submit", "submit", args, {"verdict": "refused", "reason": f"{why}; run equiv first"}, snap)
             return f"submit refused: {why}"
         benches = [r for r in mine if r["kind"] == "bench" and (r.get("result") or {}).get("verdict") == "ok"
                    and (r.get("config") or {}).get("split") == "seen" and (r.get("config") or {}).get("tier") == BENCH_TIER]
@@ -370,9 +369,9 @@ class EvalTools:
             tree = self._pristine()
             # every profile to be measured needs its own passing equiv
             own = [n for n in names if n in profiles.overrides(tree, t)]
-            short = [n for n in own if ((full_equiv(n) or {}).get("result") or {}).get("verdict") != "pass"]
+            short = [n for n in own if ((judged_equiv(n) or {}).get("result") or {}).get("verdict") != "pass"]
             if short:
-                why = f"no passing {need}-tier equiv for profile(s) {short}; run equiv with tier={need} and that profile first"
+                why = f"no passing dev-tier equiv for profile(s) {short}; run equiv with that profile first"
                 self._record("submit", "submit", args, {"verdict": "refused", "reason": why}, snap)
                 return f"submit refused: {why}"
             base = self.base_heldout(t, names)

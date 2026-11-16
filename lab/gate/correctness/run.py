@@ -2,11 +2,8 @@
 `reference` saves the reference's answers, `candidate` judges a server against them, `verdict` re-judges results."""
 from __future__ import annotations
 
-import hashlib
 import json
-import math
 from concurrent.futures import ThreadPoolExecutor
-from statistics import NormalDist
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -14,34 +11,7 @@ from . import client
 from .checks import length_ratio
 from .divergence import Position, compare_positions, divergence_summary
 from .flips import flip_test
-from .gate import Thresholds, evaluate, pooled_accuracy, to_ledger_record
-
-FIRST_LOOK = 200
-
-
-def _ordered(items: list[dict]) -> list[dict]:
-    """Items in a fixed order independent of the candidate."""
-    return sorted(items, key=lambda it: hashlib.sha256(it["id"].encode()).hexdigest())
-
-
-def _looks(n: int) -> list[int]:
-    """Sample sizes the gate looks at: FIRST_LOOK, doubling, then all n."""
-    sizes, k = [], FIRST_LOOK
-    while k < n:
-        sizes.append(k)
-        k *= 2
-    return sizes + [n]
-
-
-def _decided(flips: dict, unanswered: int, th: Thresholds, looks: int) -> bool:
-    """True when the sample's accuracy is clear of the line (Bonferroni over `looks`) and nothing is unanswered."""
-    acc = pooled_accuracy(flips)
-    if unanswered or not acc["ref_correct"]:
-        return False
-    z = NormalDist().inv_cdf(1 - 0.05 / (2 * looks))
-    low = acc["score_ratio"] - z * math.sqrt(acc["lost"] + acc["gained"]) / acc["ref_correct"]
-    return low >= th.min_score_ratio or (acc["score_ratio"] < th.min_score_ratio and acc["p_degraded"] < th.alpha / looks)
-
+from .gate import Thresholds, evaluate, to_ledger_record
 
 class Encoder(Protocol):
     def chat_ids(self, messages: list[dict]) -> list[int]: ...
@@ -114,6 +84,18 @@ def _positions(rows) -> list[Position]:
     return [Position(token=p[0], logprob=p[1], top={int(k): v for k, v in p[2].items()}) for p in rows]
 
 
+def sequences(items: list[dict], outputs: dict[str, dict], encoder: Encoder, div_n: int) -> list[dict]:
+    """The divergence set: prompt + the reference's own answer as token ids, spread across tasks."""
+    pick = [it for k, it in enumerate(items) if k % max(1, len(items) // div_n) == 0][:div_n]
+    seqs = []
+    for it in pick:
+        text = outputs[it["id"]].get("text") or ""
+        if text:
+            p = encoder.chat_ids(it["messages"])
+            seqs.append({"id": it["id"], "ids": p + encoder.encode(text), "start": len(p)})
+    return seqs
+
+
 def reference(url: str, model: str, out_dir: str | Path, items: list[dict], encoder: Encoder, top_k: int = 20,
               div_n: int = 400, concurrency: int = 16, api: client.Api = client.DEFAULT) -> dict:
     out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
@@ -123,14 +105,7 @@ def reference(url: str, model: str, out_dir: str | Path, items: list[dict], enco
     if unanswered:
         raise RuntimeError(f"the reference left {len(unanswered)} item(s) unanswered (e.g. {unanswered[0]}: "
                            f"{outputs[unanswered[0]]['error']}); a reference must answer everything")
-    # divergence set: prompt + the reference's own answer, spread across tasks
-    pick = [it for k, it in enumerate(items) if k % max(1, len(items) // div_n) == 0][:div_n]
-    seqs = []
-    for it in pick:
-        text = outputs[it["id"]].get("text") or ""
-        if text:
-            p = encoder.chat_ids(it["messages"])
-            seqs.append({"id": it["id"], "ids": p + encoder.encode(text), "start": len(p)})
+    seqs = sequences(items, outputs, encoder, div_n)
 
     def score(s):
         pos = _retrying(client.score_tokens, url, model, s["ids"], s["start"], top_k, api)
@@ -198,34 +173,22 @@ def candidate(ref_dir: str | Path, url: str, model: str, out_path: str | Path, e
     score_item = score_item or default_score
     th = thresholds or Thresholds()
     ref = Path(ref_dir)
-    every = _ordered(_jsonl_read(ref / "items.jsonl"))
+    items = _jsonl_read(ref / "items.jsonl")
     ref_out = {r["id"]: r for r in _jsonl_read(ref / "outputs.jsonl")}
     meta = json.loads((ref / "meta.json").read_text())
     out_path = Path(out_path); out_path.parent.mkdir(parents=True, exist_ok=True)
-    scored: dict[tuple[str, str], bool] = {}
-
-    def score(it, side, text):
-        if (it["id"], side) not in scored:
-            scored[it["id"], side] = score_item(it, text or "")
-        return scored[it["id"], side]
-    looks = _looks(len(every))
-    for n in looks:
-        items = every[:n]
-        cand_out = collect(url, model, items, out_path.with_suffix(".outputs.jsonl"), concurrency, api)
-        ids = {it["id"] for it in items}
-        answered = {i: r for i, r in cand_out.items() if i in ids and not r.get("error")}
-        unanswered = {i: r["error"] for i, r in cand_out.items() if i in ids and r.get("error")}
-        # flips per task, over the items the candidate answered
-        by_task: dict[str, tuple[list, list]] = {}
-        for it in items:
-            r, c = ref_out.get(it["id"]), answered.get(it["id"])
-            if r is None or c is None:
-                continue
-            a, b = by_task.setdefault(it["task"], ([], []))
-            a.append(score(it, "ref", r.get("text"))); b.append(score(it, "cand", c.get("text")))
-        flips = {t: flip_test(a, b) for t, (a, b) in by_task.items()}
-        if n < len(every) and flips and _decided(flips, len(unanswered), th, len(looks)):
-            break
+    cand_out = collect(url, model, items, out_path.with_suffix(".outputs.jsonl"), concurrency, api)
+    answered = {i: r for i, r in cand_out.items() if not r.get("error")}
+    unanswered = {i: r["error"] for i, r in cand_out.items() if r.get("error")}
+    # flips per task, over the items the candidate answered
+    by_task: dict[str, tuple[list, list]] = {}
+    for it in items:
+        r, c = ref_out.get(it["id"]), answered.get(it["id"])
+        if r is None or c is None:
+            continue
+        a, b = by_task.setdefault(it["task"], ([], []))
+        a.append(score_item(it, r.get("text") or "")); b.append(score_item(it, c.get("text") or ""))
+    flips = {t: flip_test(a, b) for t, (a, b) in by_task.items()}
     # length, counted with the reference tokenizer on both sides
     ids = [it["id"] for it in items if it["id"] in ref_out and it["id"] in answered]
     length = length_ratio([len(encoder.encode(ref_out[i].get("text") or "")) for i in ids],
@@ -233,7 +196,6 @@ def candidate(ref_dir: str | Path, url: str, model: str, out_path: str | Path, e
     result = evaluate(None, flips, length, None, th, unanswered=len(unanswered))
     result["metrics"]["unanswered"] = {"n": len(unanswered), "of": len(items),
                                        "examples": dict(list(unanswered.items())[:5])}
-    result["metrics"]["sample"] = {"items": len(items), "of": len(every), "looks": looks[:looks.index(len(items)) + 1]}
     record = to_ledger_record(result, {"split": "seen", "model": model, **(config or {})}, base=meta["model"])
     out_path.write_text(json.dumps({"result": result, "ledger_record": record}, indent=1, default=str))
     return result

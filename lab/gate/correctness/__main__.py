@@ -1,4 +1,4 @@
-"""lab correctness reference --url URL --out DIR [--tier dev|full] [--tasks a,b] [--target T]
+"""lab correctness reference --out DIR [--tasks a,b] [--target T]   (the model in transformers; needs a GPU)
 lab correctness candidate --url URL --out FILE.json [--ref DIR] [--api vllm|sglang|none] [--target T]
 lab correctness verdict A.json [B.json ...] [--target T]   (re-judge saved results, no server)"""
 from __future__ import annotations
@@ -13,10 +13,9 @@ def main():
     ap = argparse.ArgumentParser(prog="lab correctness", description="correctness gate against live servers")
     target.add_argument(ap)
     sub = ap.add_subparsers(dest="step", required=True)
-    r = sub.add_parser("reference"); r.add_argument("--url", required=True); r.add_argument("--out", required=True)
+    r = sub.add_parser("reference"); r.add_argument("--out", required=True)
     r.add_argument("--tasks", help="comma-separated (default: the target's)")
-    r.add_argument("--tier", choices=("dev", "full"), default="dev", help="dev: ~1.6k items; full: ~18.6k, for final tests")
-    r.add_argument("--div-n", type=int, default=400); r.add_argument("--concurrency", type=int, default=16)
+    r.add_argument("--div-n", type=int, default=400)
     c = sub.add_parser("candidate"); c.add_argument("--url", required=True); c.add_argument("--out", required=True)
     c.add_argument("--ref", help="reference outputs dir (default: the target's reference.dir)")
     c.add_argument("--api", choices=("vllm", "sglang", "none"), help="logprobs API (default: the target's engine.api)")
@@ -29,10 +28,9 @@ def main():
     th = Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio)
     enc = lambda: run.HFEncoder(t.model, t.chat_kwargs)
     if a.step == "reference":
-        api = client.Api.from_target(t.reference, t) if t.reference else client.Api("vllm", t.chat_kwargs)
+        from lab.gate.correctness import hf
         names = tuple(a.tasks.split(",")) if a.tasks else t.tasks
-        meta = run.reference(a.url, t.model, a.out, tasks.load(names, tier=a.tier), enc(), div_n=a.div_n,
-                             concurrency=a.concurrency, api=api)
+        meta = hf.reference(t.model, a.out, tasks.load(names), t.chat_kwargs, div_n=a.div_n)
         print(json.dumps(meta, indent=1))
     elif a.step == "candidate":
         ref = a.ref or (str(t.reference_dir) if t.reference_dir else None)

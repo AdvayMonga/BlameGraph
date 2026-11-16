@@ -432,22 +432,21 @@ class Toolbox(EvalTools, ProfTools):
                                                        "seed": {"type": "integer"},
                                                        "profile": {"type": "boolean"}}}, self.bench),
             ToolSpec("equiv", "Serve your current workspace and run the correctness gate against the reference "
-                     "model's outputs at `tier` dev (default) or full. Returns pass, fail or inconclusive with every "
-                     "metric. Items are answered in one fixed order and the gate stops at 200, 400, 800, ... items once "
-                     "the pooled score ratio's CI is above the line or the net loss is significant (Bonferroni over the "
-                     "looks), else after the whole tier; `metrics.sample` says where. `tier` quick generates nothing: the engine scores the dev reference's own answers "
+                     "model's outputs at `tier` dev (default). Returns pass or fail with every metric: per task, the "
+                     "engine's score against the reference's, and the answers that changed. "
+                     "`tier` quick generates nothing: the engine scores the reference's own answers "
                      "teacher-forced (its sequences.jsonl, a few hundred) and returns the divergence (KL mean, p99 and "
                      "worst sequence, top-1 agreement, reference-token logprob shift) as facts, with no verdict; "
                      "measured cost not yet known. "
-                     f"submit requires a passing {tg.submit_tier}-tier equiv on the snapshot"
+                     "submit requires a passing dev-tier equiv on the snapshot"
                      + (", and one for each regime it measures under its own profile (`profile`: that regime's name; "
                         "default the general launch)" if tg.profiles else "") + ". Takes one engine start plus "
-                     "generating the tier's task set, 32 requests in flight." + gpu("10 min at tier dev on unmodified vLLM and ~95 min on the example engine (about 17 items/min, measured at 16 requests in flight, H200); the full tier is about 12x the items"),
-                     {"type": "object", "properties": {"tier": {"type": "string", "enum": ["quick", "dev", "full"]},
+                     "generating the task set, 32 requests in flight." + gpu("10 min at tier dev on unmodified vLLM and ~95 min on the example engine (about 17 items/min, measured at 16 requests in flight, H200)"),
+                     {"type": "object", "properties": {"tier": {"type": "string", "enum": ["quick", "dev"]},
                                                        **({"profile": {"type": "string"}} if tg.profiles else {})}},
                      self.equiv),
             ToolSpec("submit", "Measure your current workspace on the held-out split at the short tier and compare it "
-                     f"with the base commit measured the same way. Needs a passing {tg.submit_tier}-tier equiv and a completed "
+                     "with the base commit measured the same way. Needs a passing dev-tier equiv and a completed "
                      "short-tier seen bench on this snapshot. `regimes`: default those of that bench. The only thing "
                      "that can produce a win. Returns one aggregate per regime (base, new, delta %, noise band % (measured on "
                      "the base engine's general config), "

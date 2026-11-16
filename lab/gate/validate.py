@@ -1,6 +1,6 @@
-"""Validate the harness on one target: reference outputs, gate separation on known-good and -bad launches, noise bands.
+"""Validate the harness on one target: gate separation on known-good and -bad launches, noise bands.
 
-  lab validate --target T [--tier dev] [--noise-runs 3] [--regimes a,b] [--out DIR]
+  lab validate --target T [--noise-runs 3] [--regimes a,b] [--out DIR]
 
 The launches come from the target's [validation] `good` and `bad` tables; exit status 0 only if the gate separated
 them and every band was measured.
@@ -46,10 +46,10 @@ def write_noise(regime: str, values: list[float], t: target.Target, extra: dict 
     return d
 
 
-def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: list[str] | None = None,
+def validate(t: target.Target, noise_runs: int = 3, regimes: list[str] | None = None,
              out: Path | None = None, encoder=None, log_dir: Path | None = None,
              reference_regimes: bool = True, root: Path = ledger.ROOT) -> dict:
-    from lab.gate.correctness import client, run as crun, tasks
+    from lab.gate.correctness import client, run as crun
     from lab.gate.correctness.gate import Thresholds
     from evals.loadgen import suite
     out = out or (target.ENV_ROOT / "local" / "validate" / t.name)
@@ -57,31 +57,28 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
     log_dir = log_dir or out
     enc = encoder or crun.HFEncoder(t.model, t.chat_kwargs)
     th = Thresholds(min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio)
-    report: dict = {"target": t.name, "model": t.model, "tier": tier, "candidates": {}, "noise": {}, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    report: dict = {"target": t.name, "model": t.model, "candidates": {}, "noise": {}, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
     if t.reference is None or t.reference_dir is None:
         raise SystemExit("the target has no [reference] launch and dir")
-    ref_dir = t.reference_dir_for(tier)
-    # 1. reference
+    ref_dir = t.reference_dir
     if not target.reference_complete(ref_dir):
-        with serve.Served(target.ENV_ROOT, t.reference, log=log_dir / "serve-reference.log", jailed=False) as srv:
-            api = client.Api.from_target(t.reference, t)
-            crun.reference(srv.url, t.model, ref_dir, tasks.load(t.tasks, tier=tier), enc, api=api)
+        raise SystemExit(f"no reference outputs in {ref_dir}: run `lab correctness reference --out {ref_dir}` first")
     report["reference_dir"] = str(ref_dir)
-    # 2. known-good and known-bad candidates
+    # 1. known-good and known-bad candidates
     v = t.raw.get("validation") or {}
     for kind in ("good", "bad"):
         for name, launch in (v.get(kind) or {}).items():
             spec = target.Server(launch, dict((v.get("env") or {}).get(name) or {}), t.reference.health, t.reference.api)
             with serve.Served(target.ENV_ROOT, spec, log=log_dir / f"serve-{name}.log", jailed=False) as srv:
                 res = crun.candidate(ref_dir, srv.url, t.model, out / f"{kind}_{name}.json", enc, th,
-                                     api=client.Api(spec.api, t.chat_kwargs), config={"tier": tier, "validation": kind})
+                                     api=client.Api(spec.api, t.chat_kwargs), config={"tier": "dev", "validation": kind})
             report["candidates"][name] = {"kind": kind, "verdict": res["verdict"], "reasons": res["reasons"],
                                           "accuracy": res["metrics"].get("accuracy")}
     goods = [c for c in report["candidates"].values() if c["kind"] == "good"]
     bads = [c for c in report["candidates"].values() if c["kind"] == "bad"]
     report["gate_separates"] = (bool(goods) and bool(bads) and all(c["verdict"] == "pass" for c in goods)
                                 and all(c["verdict"] == "fail" for c in bads))
-    # 3. noise bands from repeated runs of the engine
+    # 2. noise bands from repeated runs of the engine
     names = regimes or list(suite.REGIMES)
     if noise_runs > 0 and names:
         with serve.Served(t.engine_repo, t.engine, log=log_dir / "serve-noise.log", jailed=False) as srv:
@@ -100,7 +97,7 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
                                                                 "engine_commit": engine.commit(t.engine_repo, clean=True)}, root,
                                              RESOLUTION_PCT if n in searched else 0.0)
     report["bands_measured"] = all(d["band_pct"] is not None for d in report["noise"].values()) if names and noise_runs else None
-    # 4. the reference engine under the same regimes, once
+    # 3. the reference engine under the same regimes, once
     if reference_regimes and names:
         with serve.Served(target.ENV_ROOT, calibrate.perf_reference(t), log=log_dir / "serve-reference-regimes.log",
                           jailed=False) as srv:
@@ -120,14 +117,13 @@ def validate(t: target.Target, tier: str = "dev", noise_runs: int = 3, regimes: 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="lab validate", description=__doc__.split("\n")[0])
     target.add_argument(ap)
-    ap.add_argument("--tier", choices=("dev", "full"), default="dev")
     ap.add_argument("--noise-runs", type=int, default=3)
     ap.add_argument("--no-reference-regimes", action="store_true", help="skip measuring the reference under the regimes")
     ap.add_argument("--regimes", help="comma-separated (default: all)")
     ap.add_argument("--out")
     a = ap.parse_args(argv)
     t = target.load(a.target)
-    rep = validate(t, a.tier, a.noise_runs, a.regimes.split(",") if a.regimes else None, Path(a.out) if a.out else None,
+    rep = validate(t, a.noise_runs, a.regimes.split(",") if a.regimes else None, Path(a.out) if a.out else None,
                    reference_regimes=not a.no_reference_regimes)
     for name, c in rep["candidates"].items():
         print(f"{c['kind']:4s} {name}: {c['verdict'].upper()}" + (f"  {c['reasons']}" if c["reasons"] else ""))

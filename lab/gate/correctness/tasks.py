@@ -48,41 +48,20 @@ def math500(n: int | None = None, seed: int = 0) -> list[dict]:
                                                                        "answer within \\boxed{}."}]} for r in rows]
 
 
-_MATH_SUBJECTS = ("algebra", "counting_and_probability", "geometry", "intermediate_algebra", "number_theory",
-                  "prealgebra", "precalculus")
-
-
-def math_full() -> list[dict]:
-    r"""The full MATH test set; gold = the last \boxed{} of the reference solution."""
-    import pandas as pd
-    from .scoring import extract_math
-    items = []
-    for sub in _MATH_SUBJECTS:
-        d = pd.read_parquet(_hub("EleutherAI/hendrycks_math", f"{sub}/test-00000-of-00001.parquet"))
-        for k, r in enumerate(d.itertuples()):
-            items.append({"id": f"math-{sub}-{k}", "task": "math", "gold": extract_math(r.solution), "max_tokens": 2048,
-                          "messages": [{"role": "user", "content": r.problem + "\n\nPlease reason step by step, and put "
-                                                                              "your final answer within \\boxed{}."}]})
-    return items
-
-
 # ---------------------------------------------------------------- MBPP (code, scored by unit tests)
-def mbpp(seed: int = 0, full: bool = False) -> list[dict]:
-    """Sanitized MBPP or the full set, all splits."""
+def mbpp() -> list[dict]:
+    """Sanitized MBPP, all splits."""
     import pandas as pd
-    cfg = "full" if full else "sanitized"
-    parts = [pd.read_parquet(_hub("google-research-datasets/mbpp", f"{cfg}/{s}-00000-of-00001.parquet"))
+    parts = [pd.read_parquet(_hub("google-research-datasets/mbpp", f"sanitized/{s}-00000-of-00001.parquet"))
              for s in ("test", "validation", "train", "prompt")]
     d = pd.concat(parts).drop_duplicates("task_id").sort_values("task_id")
     items = []
     for _, r in d.iterrows():
         tests = list(r.test_list)
-        prompt = r.text if full else r.prompt
-        imports = [l for l in (r.test_setup_code or "").splitlines() if l.strip()] if full else list(r.test_imports)
-        msg = (f"You are an expert Python programmer. {prompt}\nYour code should pass these tests:\n\n"
+        msg = (f"You are an expert Python programmer. {r.prompt}\nYour code should pass these tests:\n\n"
                + "\n".join(tests) + "\n\nReturn only the code in a single ```python block.")
         items.append({"id": f"mbpp-{r.task_id}", "task": "code", "messages": [{"role": "user", "content": msg}],
-                      "gold": {"imports": imports, "tests": tests}, "max_tokens": 1024})
+                      "gold": {"imports": list(r.test_imports), "tests": tests}, "max_tokens": 1024})
     return items
 
 
@@ -156,11 +135,8 @@ def score_item(item: dict, text: str) -> bool:
     return score(t, text, item["gold"])
 
 
-def load(tasks: tuple[str, ...] = ("mmlu_pro", "math", "code", "needle"), seed: int = 0, tier: str = "dev") -> list[dict]:
-    """The task items of a tier: `dev` (subsets) or `full` (the whole sets)."""
-    full = tier == "full"
-    makers = {"mmlu_pro": lambda: mmlu_pro(n=None if full else 500, seed=seed),
-              "math": lambda: math_full() if full else math500(seed=seed),
-              "code": lambda: mbpp(seed=seed, full=full),
-              "needle": lambda: needle(per_length=200 if full else 60, seed=seed)}
+def load(tasks: tuple[str, ...] = ("mmlu_pro", "math", "code", "needle"), seed: int = 0) -> list[dict]:
+    """The gate's items for the named tasks."""
+    makers = {"mmlu_pro": lambda: mmlu_pro(seed=seed), "math": lambda: math500(seed=seed), "code": mbpp,
+              "needle": lambda: needle(seed=seed)}
     return [it for t in tasks for it in makers[t]()]
