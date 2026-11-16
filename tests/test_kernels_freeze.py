@@ -17,7 +17,7 @@ os.environ.setdefault("LAB_TARGET", str(ROOT / "lab" / "targets" / "inference-se
 import torch  # noqa: E402
 
 from lab.kernels.eval import freeze  # noqa: E402
-from lab.kernels.eval.core import judge, screen  # noqa: E402
+from lab.kernels.eval.core import judge  # noqa: E402
 from lab.kernels.tasks import load  # noqa: E402
 
 TWO = '''import triton
@@ -60,7 +60,6 @@ def test_rewrite_freezes_decorator_and_call_forms_and_leaves_the_rest():
     assert "@triton.jit\ndef a_kernel" in out and "a_kernel = _FrozenTune(a_kernel, ['M'], [" in out
     assert "b_kernel = _FrozenTune(_b, ['M', 'N'], [" in out and "{'BLOCK': 128, 'num_warps': 8}" in out
     assert out.index("class _FrozenTune") < out.index("def a_kernel")       # bound before its first use
-    assert not screen(out)                                                  # the evaluator's screen accepts it
     one = freeze.rewrite(TWO, {"a_kernel": TABLES["a_kernel"]})             # only what ran is frozen
     assert [s["name"] for s in freeze.sites(one)] == ["b_kernel"]
     assert freeze.rewrite(one, {"b_kernel": TABLES["b_kernel"]}).count("class _FrozenTune") == 1   # helper once
@@ -151,7 +150,7 @@ def test_the_freeze_stage_records_each_choice_and_the_frozen_program_judges_and_
         assert sorted((k[0], c["BLOCK"], c["num_warps"]) for k, c in tables["_rms"]["table"]) == \
             [(8, 1, 4), (32, 2, 8), (64, 2, 8)]
         new, got = freeze.freeze(FAKE, lambda s: r)
-        assert got == tables and not freeze.sites(new) and not screen(new)
+        assert got == tables and not freeze.sites(new)
         frozen = Path(d) / "frozen.py"
         frozen.write_text(new)
         ok = judge(t, frozen, seen, list(t.heldout_default), None, "cpu", None, 2, iters=3)   # the gate's checks

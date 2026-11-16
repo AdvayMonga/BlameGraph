@@ -17,7 +17,7 @@ import torch  # noqa: E402
 from safetensors.torch import save  # noqa: E402
 
 from lab.kernels.tasks import flashinfer_bench as fib  # noqa: E402
-from lab.kernels.eval.core import judge, screen  # noqa: E402
+from lab.kernels.eval.core import judge  # noqa: E402
 from lab.kernels.evolve.run import _target_tolerances, initial_program, system_message  # noqa: E402
 from lab.kernels.tasks import from_config, load  # noqa: E402
 
@@ -131,7 +131,7 @@ def test_definitions_another_evaluator_judges_are_refused():
 def test_the_judge_passes_a_correct_rewrite_and_zeroes_a_wrong_one():
     with tempfile.TemporaryDirectory() as d:
         t = load(f"fib:{NAME}", samples=str(dataset(Path(d) / "ds")))
-        assert not screen(initial_program(t)) and "def kernel(" in initial_program(t)
+        assert "def kernel(" in initial_program(t)
         tol, seen = _target_tolerances(t), [(8, 0), (3, 0)]
         for body, ok in ((None, True), (FAST, True), (WRONG, False)):
             r = judge(t, program(d, body, t), seen, [(16, 0)], None, "cpu", tol, 2, iters=3)

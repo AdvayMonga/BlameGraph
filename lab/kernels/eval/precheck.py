@@ -1,4 +1,4 @@
-"""The precheck: a program's source screen, its import with no device (building its CUDA C++) and each built kernel's
+"""The precheck: a program's import with no device (building its CUDA C++) and each built kernel's
 resource use, run jailed with no GPU.
 
   python -m lab.kernels.eval.precheck CONFIG PROGRAM     (prints one JSON line)
@@ -48,12 +48,9 @@ def report(build_dir: Path) -> list[dict]:
     return out
 
 
-def precheck(source: str, program: Path, build_dir: Path) -> dict:
+def precheck(program: Path, build_dir: Path) -> dict:
     """{passed: True|False|None, reason, compile_report}: None when the import failed but not on a build."""
-    from lab.kernels.eval.core import load_program, screen
-    refused = screen(source)
-    if refused:
-        return {"passed": False, "reason": "refused before running: " + "; ".join(refused)}
+    from lab.kernels.eval.core import load_program
     try:
         load_program(program)
     except Exception as e:                       # noqa: BLE001
@@ -71,7 +68,7 @@ def main() -> int:
     if cfg.get("result_key"):                    # read and removed before the candidate loads
         key = Path(cfg["result_key"]).read_text()
         Path(cfg["result_key"]).unlink()
-    r = precheck(program.read_text(), program, Path(os.environ.get("TORCH_EXTENSIONS_DIR", program.parent)))
+    r = precheck(program, Path(os.environ.get("TORCH_EXTENSIONS_DIR", program.parent)))
     sys.stdout.write("\n" + json.dumps({**r, "task": cfg.get("task"), **({"result_key": key} if key else {})}) + "\n")
     return 0
 

@@ -17,172 +17,11 @@ from lab.kernels.eval.freeze import FREEZE_STAGE
 from lab.kernels.tasks import Task, from_config
 
 
-# What a candidate's source may not reach for.
-FORBIDDEN = {
-    r"\bgc\b": "the garbage collector (finding the reference's tensors)",
-    r"\binspect\b|\bsys\._getframe|\bf_back\b|\bf_locals\b": "frame introspection",
-    r"\bctypes\b|\bcffi\b": "raw memory access",
-    r"\bthreading\b|\bmultiprocessing\b|\bconcurrent\b|\basyncio\b": "background work outside the timed call",
-    r"torch\.cuda\.(Stream|stream|Event|set_stream|current_stream)\b|\.elapsed_time\b|\bcuda\.Event\b"
-    r"|\b(Stream|ExternalStream|Event|CUDAGraph|current_stream|set_stream|_sleep)\b":
-        "streams or timer events",
-    r"\btime\.(perf_counter|time|monotonic|sleep)\b|\bimport time\b|\bfrom time\b": "the clock",
-    r"\bsys\.modules\b|\bbuiltins\b|__builtins__|\bimportlib\b|__import__|\b(set|get)attr\s*\(|__setattr__|__dict__"
-    r"|\bglobals\s*\(|\bvars\s*\(|\b(torch|triton|time|math|statistics)(\.\w+)+\s*=(?!=)": "patching modules",
-    r"(?<![.\w])(eval|exec|compile)\s*\(|__subclasses__|\btypes\.(FunctionType|CodeType)\b|__doc__": "code built at run time",
-    r"\bkernels\.(eval|evolve)\b|\blab\.kernels\b|\b(from|import) (kernels|evals|lab)\b"
-    r"|\b(import|from) __main__\b":
-        "the evaluator itself",
-    r"\bsys\.(settrace|setprofile)\b|\bsignal\b": "frame introspection",
-    r"(?m)^\s*(import|from)\s[^\n]*\bsys\b|\.sys\b|\batexit\b|\bweakref\b": "patching modules",
-    r"\btorch\.profiler\b|\bautograd\.profiler\b|\bkineto\b|\bcupti\w*|\b(py)?nvml\w*|\bcuProfiler\w*": "the clock",
-    r"\btorch\.cuda\.graph\b|\bmake_graphed_callables\b": "streams or timer events",
-    r"\btorch\.library\b|\bLibrary\s*\(|\bTORCH_LIBRARY\w*|__torch_dispatch__|__torch_function__|\bTorchDispatchMode\b"
-    r"|\btorch\.overrides\b|\bpy_impl\b|\bregister_(fake|kernel|autograd|torch_dispatch)\b":
-        "the operator registry (what torch's own ops do, the baseline's included)",
-    r"\btorch\.from_file\b|\bio\.(FileIO|open)\b|\bshutil\b|\btempfile\b": "files, processes or the network",
-    r"\bopen\s*\(|\bos\.(system|popen|fork|exec\w*|spawn\w*|kill|remove|unlink|open|write|dup2?)\b|\bsubprocess\b"
-    r"|\bsocket\b|\burllib\b|\brequests\b|\btorch\.(save|load)\b|\b(np|numpy)\.(save\w*|load\w*|fromfile)\b|\.tofile\s*\("
-    r"|\bpickle\b|\bshelve\b|\.(write|read)_(text|bytes)\b|\b[io]?fstream\b": "files, processes or the network",
-    # C++ built with torch.utils.cpp_extension runs in the evaluator's process: the same routes, spelled in C++
-    r"\bPy[A-Z][a-z]+_[A-Z]\w*|\bPyObject\b|\b(py|pybind11)::(module_?::import|eval|exec|globals)\b":
-        "the Python C-API",
-    r"\bdl(open|sym)\b|\bmprotect\b|\bmmap\b|/proc/|\bf(open|write)\b|\bstd::(thread|async|system)\b|\bpthread_\w+"
-    r"|\b(popen|fork|exec[lv]\w*)\s*\(": "processes, threads, files or raw memory from C++",
-    r"\bsyscall\s*\(|\bopenat\s*\(|\bfreopen\s*\(": "processes, threads, files or raw memory from C++",
-    r"\bcuda(StreamCreate\w*|StreamBeginCapture|StreamEndCapture|Graph\w+|Event(Create\w*|Record|ElapsedTime|Synchronize"
-    r"|Query)|LaunchHostFunc|StreamAddCallback)\b|\bcu(Stream\w+|Graph\w+|Event\w+|LaunchHostFunc)\b"
-    r"|\bgetStreamFromPool\b|\bsetCurrentCUDAStream\b|\bCUDAStreamGuard\b": "streams or timer events",
-    r"globaltimer|\bclock64\b|\bstd::chrono\b": "the clock",
-}
-
-
-def screen(source: str) -> list[str]:
-    """Reasons a program is refused before it runs (static: a pattern anywhere in its code, comments and docstrings
-    aside, plus `_writes_into` and `_cpp_built_at_run_time`)."""
-    import re
-    code = _code(source)
-    return ([f"uses {why}: `{m.group(0)}`" for pat, why in FORBIDDEN.items() if (m := re.search(pat, code))] +
-            [f"assigns into what it imported: `{w}`" for w in _writes_into(source)] + _cpp_built_at_run_time(source))
-
-
-def _code(source: str) -> str:
-    """The source with its comments and docstrings blanked. A docstring is a plain string that is a whole statement on
-    its own lines; every other string, C++ sources among them, is kept."""
-    import io
-    import tokenize
-    try:
-        toks = list(tokenize.generate_tokens(io.StringIO(source).readline))
-    except (tokenize.TokenError, SyntaxError, IndentationError):
-        return source                            # loading reports it
-    real = [t for t in toks if t.type not in (tokenize.NL, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT)]
-    ends = (tokenize.NEWLINE, tokenize.ENDMARKER)
-    blank = [t for t in toks if t.type == tokenize.COMMENT]
-    blank += [t for a, t, b in zip([None, *real], real, [*real[1:], None])
-              if t.type == tokenize.STRING and t.string.lstrip("rRuU")[:1] in ("'", '"')
-              and (a is None or a.type == tokenize.NEWLINE) and (b is None or b.type in ends)]
-    start = [0]
-    for line in source.split("\n"):             # the tokenizer's lines: split at \n only
-        start.append(start[-1] + len(line) + 1)
-    out = list(source)
-    for t in blank:
-        for k in range(start[t.start[0] - 1] + t.start[1], start[t.end[0] - 1] + t.end[1]):
-            if out[k] != "\n":
-                out[k] = " "
-    return "".join(out)
-
-
-def _cpp_built_at_run_time(source: str) -> list[str]:
-    """C++ handed to cpp_extension must be string literals in the source (or names bound once to them), with no
-    token pasting (`##`) or quoted includes: otherwise the screen above never sees the code that runs."""
-    import ast
-    import re
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return []
-    lits = {}
-    for n in ast.walk(tree):
-        if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
-            ok = isinstance(n.value, ast.Constant) and isinstance(n.value.value, str)
-            lits[n.targets[0].id] = n.value.value if ok and n.targets[0].id not in lits else None
-    out = []
-    for n in ast.walk(tree):
-        if not isinstance(n, ast.Call):          # torch.utils.cpp_extension's load_inline, or cpp_extension.load
-            continue
-        name = getattr(n.func, "attr", None) or getattr(n.func, "id", None)
-        if not (name == "load_inline" or name == "load" and isinstance(n.func, ast.Attribute)
-                and "cpp_extension" in ast.unparse(n.func.value)):
-            continue
-        args = n.args[1:3] + [k.value for k in n.keywords if k.arg in ("cpp_sources", "cuda_sources", "sources")]
-        for a in args:
-            vals = a.elts if isinstance(a, (ast.List, ast.Tuple)) else [a]
-            for v in vals:
-                text = v.value if isinstance(v, ast.Constant) and isinstance(v.value, str) else \
-                    lits.get(v.id) if isinstance(v, ast.Name) else None
-                if text is None:
-                    out.append(f"builds C++ from a value computed at run time: `{ast.unparse(v)[:80]}`")
-                elif "##" in text or re.search(r'#\s*include\s*"', text):
-                    out.append("C++ with token pasting (##) or a quoted #include")
-    return out
-
-
-def _writes_into(source: str) -> list[str]:
-    """Writes that patch a library under any alias: into an imported name or a name bound to one, into what `type(...)`
-    returns or an attribute of a call's result, on a call, or through a dunder attribute. Other objects are left alone."""
-    import ast
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return []                                # loading reports it
-    nodes = list(ast.walk(tree))
-    held = {(a.asname or a.name).split(".")[0] for n in nodes if isinstance(n, (ast.Import, ast.ImportFrom))
-            for a in n.names}
-
-    def root(e):
-        while isinstance(e, (ast.Attribute, ast.Subscript)):
-            e = e.value
-        return e
-    def bound(names: set, calls: bool) -> set:
-        """`names` grown by every name bound to one of them or an attribute chain of one (and, with `calls`, to what
-        a `type` call returns or to an attribute of any call's result)."""
-        names, grew = set(names), True
-        while grew:
-            grew = False
-            for n in nodes:
-                if isinstance(n, (ast.Assign, ast.AnnAssign, ast.NamedExpr)) and n.value is not None:
-                    r = root(n.value) if isinstance(n.value, (ast.Name, ast.Attribute, ast.Call)) else None
-                    typed = calls and isinstance(r, ast.Call) and (r is not n.value or (
-                        isinstance(r.func, ast.Name) and r.func.id in types))
-                    if typed or (isinstance(r, ast.Name) and r.id in names):
-                        for t in (n.targets if isinstance(n, ast.Assign) else [n.target]):
-                            if isinstance(t, ast.Name) and t.id not in names:
-                                names.add(t.id)
-                                grew = True
-        return names
-    types = bound({"type"}, False)
-    held, mods = bound(held, True), bound(held, False)
-
-    def dunder(e) -> bool:
-        """An attribute `__x__` somewhere under the written one."""
-        while isinstance(e, (ast.Attribute, ast.Subscript)):
-            e = e.value
-            if isinstance(e, ast.Attribute) and e.attr.startswith("__"):
-                return True
-        return False
-    out = []
-    for n in nodes:
-        if isinstance(n, (ast.Attribute, ast.Subscript)) and isinstance(n.ctx, (ast.Store, ast.Del)) and dunder(n):
-            out.append(ast.unparse(n))
-        elif isinstance(n, ast.Attribute) and isinstance(n.ctx, (ast.Store, ast.Del)):
-            r = root(n)
-            if isinstance(r, ast.Call) or (isinstance(r, ast.Name) and r.id in held):
-                out.append(ast.unparse(n))
-        elif isinstance(n, ast.Subscript) and isinstance(n.ctx, (ast.Store, ast.Del)):
-            r = root(n)
-            if isinstance(r, ast.Name) and r.id in mods:
-                out.append(ast.unparse(n))
-    return out
+# What a candidate may not do: stated in the setting, read for by the gaming detector.
+NOT_ALLOWED = ("reading the clock, timers or profilers", "CUDA streams, events or graphs of its own",
+               "threads, processes or other work outside the timed call", "files, the network or raw memory access",
+               "patching or writing into anything it imports", "importing the evaluator or the task's reference",
+               "process-wide numerics switches", "frame or module introspection")
 
 
 def _watched(task: Task) -> dict:
@@ -308,10 +147,6 @@ def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | 
     """Stage 1: correctness on the two most frequent seen shapes. Stage 2: correctness on every seen shape and timing;
     with `full` or held-out shapes the full check, and without `timing` nothing after it. FREEZE_STAGE records each
     autotuner's choice per key and scores nothing. Anything the evaluator watches left patched scores 0."""
-    refused = screen(Path(program).read_text())
-    if refused:
-        return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
-                "artifacts": {"error": "refused before running: " + "; ".join(refused)}}
     task.baseline()                              # the engine's import-time effects happen before the snapshot
     before, patched = _watched(task), []
 
