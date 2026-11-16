@@ -1,7 +1,5 @@
-"""One candidate kernel, judged: load its program file, check it against the task's reference, time it against the
-baseline, and return metrics plus raw facts for the next prompt. Selection sees only the seen shapes; the held-out
-shapes are judged by `gate` alone. Runs in its own process (see evaluator.py), so a crash, a hung kernel or a patched
-timer cannot outlive one evaluation."""
+"""One candidate kernel, judged in its own process: its program loaded, checked against the task's reference and timed
+against the baseline; returns metrics and raw facts. Selection sees only the seen shapes; `gate` judges the held-out."""
 from __future__ import annotations
 
 import importlib.util
@@ -19,8 +17,7 @@ from lab.kernels.eval.freeze import FREEZE_STAGE
 from lab.kernels.tasks import Task, from_config
 
 
-# What the published exploits used (Sakana's reused buffers, CUDA-L1's extra streams, METR's timer overwrite, KernelBot's
-# patched elapsed_time and background launches): a candidate's source may not reach for any of it.
+# What a candidate's source may not reach for.
 FORBIDDEN = {
     r"\bgc\b": "the garbage collector (finding the reference's tensors)",
     r"\binspect\b|\bsys\._getframe|\bf_back\b|\bf_locals\b": "frame introspection",
@@ -131,11 +128,8 @@ def _cpp_built_at_run_time(source: str) -> list[str]:
 
 
 def _writes_into(source: str) -> list[str]:
-    """Attribute writes or deletes whose root is an imported name, a name bound to one (`m = torch.cuda`) or to a call
-    (`T = type(x)`), or a call (`type(x).abs = f`); item writes or deletes into an imported name or a name bound to
-    one (`M = os.environ; M[k] = v`); and any write through a dunder attribute (`x.__class__.f = g`): patching a
-    library under any alias. Writes on other objects are left alone: `self.x = 1`, a parameter's attribute, and an
-    object another call returned (`d = TensorDescriptor(w); d.block_shape = s`)."""
+    """Writes that patch a library under any alias: into an imported name or a name bound to one, into what `type(...)`
+    returns or an attribute of a call's result, on a call, or through a dunder attribute. Other objects are left alone."""
     import ast
     try:
         tree = ast.parse(source)
@@ -247,9 +241,8 @@ def _peaks(device: str):
 
 
 def _roofline(task: Task, shape, dtype, ms: float, hw, inputs: list) -> dict:
-    """For the very inputs the timer rotated through (averaged): % of the roofline bound, which term binds (memory:
-    bytes over HBM bandwidth; compute: FLOPs over peak), and the achieved fraction of each peak. Facts, from the
-    task's FLOPs and bytes and the measured peaks."""
+    """For the inputs the timer rotated through (averaged): % of the roofline bound, which term binds (memory or
+    compute) and the achieved fraction of each peak."""
     if hw is None or not ms:
         return {"pct_of_roofline": None}
     costs = [task.cost(shape, dtype, x) for x in inputs]
@@ -312,12 +305,9 @@ def _shown(ratio: dict) -> bool:
 def judge(task: Task, program: Path, seen: list, heldout: list, weights: dict | None, device: str,
           tolerances: dict | None, stage: int, iters: int = 30, full: bool = False, seeds: int = 3,
           timing: bool = True) -> dict:
-    """stage 1: correctness on the two most frequent seen shapes, one seed. stage 2: correctness on every seen shape and
-    timing against the baseline; with `full` or held-out shapes (the gate, never selection) the full check on them and
-    the seen shapes: `seeds` seeds, repeats, edge cases and layouts, other value scales, the baseline's error, peak memory; without
-    `timing` it ends after the check (a program picked as a parent, or about to be promoted). A candidate that
-    leaves any function the evaluator watches patched scores 0, whatever it measured. FREEZE_STAGE: the program run
-    once on every seen shape, the config each of its autotuners chose for each key recorded; it scores nothing."""
+    """Stage 1: correctness on the two most frequent seen shapes. Stage 2: correctness on every seen shape and timing;
+    with `full` or held-out shapes the full check, and without `timing` nothing after it. FREEZE_STAGE records each
+    autotuner's choice per key and scores nothing. Anything the evaluator watches left patched scores 0."""
     refused = screen(Path(program).read_text())
     if refused:
         return {"metrics": {"combined_score": 0.0, "correct": 0.0, "stage": stage},
@@ -462,8 +452,7 @@ def _freeze(task: Task, program: Path, seen: list, device: str, checkpoint) -> d
 
 def _timed(task, cand, base, shapes, weights, dtype, device, iters, hw, tolerances=None) -> tuple[list, float, float]:
     """Per-shape paired timings against the baseline, and the call-weighted geometric-mean speedup with gains inside
-    the noise counted as 1.0 (and without that rule). Raises if the timed calls' output differs from the reference:
-    a kernel that does less only when timed (e.g. while a CUDA graph captures it) is caught here."""
+    the noise counted as 1.0 (and without that rule). Raises if a timed call's output differs from the reference."""
     atol, rtol = {**TOLERANCES, **(tolerances or {})}[dtype]
     rows, logs, raw = [], 0.0, 0.0
     total = sum((weights or {}).get(json.dumps(list(s)), 1) for s in shapes)

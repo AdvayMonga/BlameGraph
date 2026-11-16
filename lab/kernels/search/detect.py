@@ -1,10 +1,5 @@
-"""A model-read check for gaming, before promotion (MANTIS: without its game detector, GPT-5.2's reported speedup
-inflated from 2.85x to 5.34x; KernelGuard: such finds, turned into deterministic rules, cut hacked submissions from
-3.45% to 0.37%). It reads the program and its facts and says whether the program computes the full result for every
-input its caller may pass, or depends on the evaluation instead (special-casing the seen shapes or values, keeping
-answers across calls, skipping or deferring work, reading the timer). A flag keeps the program from promotion and is
-recorded with its evidence for a person to turn into a rule; it never changes a score. MANTIS's library-only filter
-is not copied: here the goal is the engine's speed, and a faster library call is a real gain."""
+"""A model reads a program and its measurements and says whether it computes the full result for every input or
+depends on the evaluation instead. A flag keeps the program from being a parent or promoted; it never changes a score."""
 from __future__ import annotations
 
 import json

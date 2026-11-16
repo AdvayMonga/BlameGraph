@@ -1,17 +1,5 @@
-"""The one place lab.kernels.search calls a model: Claude through the Anthropic SDK, streamed (a diff can be long), each
-call priced from its usage at lab.apiproxy's rates (web searches at $10 per 1,000). Opus/Sonnet 5.5 think adaptively
-(always on) at an explicit effort, with server-side refusal fallbacks; Haiku 4.5 takes neither.
-
-With `tools=True` the model may use two tools, its own choice when: Anthropic's web search (server-side), and
-`query`, read-only SQL over the agent's view of the ledger index (lab/records/index.py: every run's records, kernel-loop
-runs and their candidates included; never held-out rows or a person's runs). The harness pastes no research or
-advice into a prompt; what the model reads it chose to read.
-
-Prompt caching (2026-10-27): a prompt marks where its stable part ends with `CACHE_SPLIT` (the task's setting before
-a role's instructions in the system prompt; a parent's program and measurements before one idea's plan in the user
-message). The client sends each part as its own text block, the marker removed, with a cache breakpoint on every
-system part and on every user part but the last, so the calls of one round on one parent read their shared prefix
-from the cache (`lab.apiproxy.cost_usd` prices reads and writes)."""
+"""The search's model client: Claude through the Anthropic SDK, streamed and priced per call; with `tools=True` it may
+use web search and `query` (read-only SQL over the ledger index). `CACHE_SPLIT` in a prompt ends its cached part."""
 from __future__ import annotations
 
 import json

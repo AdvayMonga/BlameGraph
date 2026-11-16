@@ -1,19 +1,5 @@
-"""The search: each generation names its changes in one call, reviews them in a second, and has a writer make each.
-
-Before the first generation the start and the seeds are judged, and one call names public implementations to port
-as further starting programs (context.ports), each made by a writer call and judged beside them.
-
-A generation picks its parents (diversity.pick) and drops the ones that fail the full correctness check
-(evaluate.Evaluator.check) or that the gaming detector flags (detect.detector). One naming call reflects on the last generation's ideas and names `ideas` changes
-(context.name). The ones whose text is close to another idea's are found (diversity.Similar) and one review call
-writes the final list, the same change merged and combinations added (context.review). A writer call makes each
-change (context.write). Programs that repeat one already written are dropped (diversity.Novelty), the rest are built
-and timed (evaluate.Evaluator.evaluate) and join the population. It runs every generation whatever they score.
-
-`<out>/trace.jsonl` holds every judged program, `<out>/hypotheses.jsonl` every generation's ideas and their fates,
-`<out>/ideas.jsonl` one row per idea (plan, prediction, program, outcome, reflection), rewritten after every
-generation, `<out>/reflection.txt` the model's closing reflection on the run, and `<out>/calls.jsonl` with
-`<out>/texts.jsonl` every model call whole (calls.py)."""
+"""The search: the start, the seeds and the ports are judged, then each generation picks parents, names and reviews its
+changes, has a writer make each and judges the programs. Its records go under `<out>` (trace, hypotheses, ideas, calls)."""
 from __future__ import annotations
 
 import difflib
@@ -110,9 +96,7 @@ def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer
            novelty: diversity.Novelty, similar: diversity.Similar, out: Path,
            cfg: Config = Config(), detect: Callable | None = None) -> tuple[list[Program], dict]:
     """The population (the start first) and the run's cost {usd, model_calls, evals, generations}. `seeds`: name ->
-    program, judged beside the start. `namer` names the ports and names and reviews a generation's changes, and
-    writes the ports (it can read their sources); `writer` makes each change; `detect(code, row)` says why a picked
-    parent games the evaluation, or None."""
+    program; `namer` names, reviews and writes the ports; `writer` makes each change; `detect(code, row)` flags a parent."""
     out.mkdir(parents=True, exist_ok=True)
     rng, population, ideas, ran = random.Random(cfg.seed), [], [], 0
     calls = Calls(out)

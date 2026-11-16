@@ -2,9 +2,8 @@
                           [--samples DIR --shared-weights FILE]   (T = region:FIRST:LAST: its captures, its holder)
                           [--facts FILE] [--device cuda] [--seed N] [--ledger ROOT]
 
-The kernel search on one task and one set of shapes (lab/kernels/search/loop.py), judged by the jailed
-evaluator. After it, the top programs take the full check on 20 seeds, are read for gaming and are re-timed; the
-winner and the run go to the ledger as one `kernels` record with its ideas and model calls as blobs."""
+The kernel search on one task (loop.py), then promotion: the top programs take the full check, are read for gaming
+and are re-timed; the winner and the run go to the ledger as one `kernels` record."""
 from __future__ import annotations
 
 import argparse

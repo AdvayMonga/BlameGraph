@@ -1,13 +1,8 @@
 """lab kernels ab --task T --shapes SHAPES.json --out DIR [--initial PROGRAM.py] [--evals N]
                              [--model M] [--seeds K] [--device cuda] [--arms A,B]
 
-OpenEvolve against the kernel search on one task: the same shapes, starting program, evaluator and model (each arm
-given the one model), and the same promotion: the top 3 re-timed 3x, highest median promoted, no gaming detector.
-OpenEvolve judges `--evals` programs; the search runs its generations. Each arm and seed runs in its own dir; each
-winner then goes through `gate` (all seen shapes plus the held-out ones, jailed). The summary, per arm: re-timed seen
-score, held-out speedup, whether every gate passed, model $ and calls, programs judged; written to <out>/ab.json. An
-arm dir holding a result.json is reused, so an interrupted A/B resumes. With $KERNEL_EVAL_SSH the gate runs on that
-host, like the evaluator. Model calls and GPU time cost money."""
+OpenEvolve against the kernel search on one task, with the same shapes, start, evaluator, model and promotion; each
+winner goes through `gate` and the per-arm summary is written to <out>/ab.json. An arm dir with a result.json is reused."""
 from __future__ import annotations
 
 import argparse
