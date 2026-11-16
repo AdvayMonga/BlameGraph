@@ -9,7 +9,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from lab.targets import target
+from evals.targets import target
 
 PEAKS_DIR = target.ENV_ROOT / "lab" / "infra" / "calibration" / "peaks"
 

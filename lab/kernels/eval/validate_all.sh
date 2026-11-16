@@ -19,7 +19,7 @@ set -euo pipefail
 SHIPPED="${1:?the shipped program to re-gate}"
 TASKS="${TASKS:-paged_decode moe_gemm_fp8 moe_gemm_scatter_fp8 rmsnorm add_rmsnorm rmsnorm_rope silu_mul topk_softmax}"
 OUT=local/runs/kernels-validate-all
-export LAB_TARGET="${LAB_TARGET:-lab/targets/inference-server.toml}"
+export LAB_TARGET="${LAB_TARGET:-evals/targets/inference-server.toml}"
 eval "$(python -c 'from lab import target; import shlex; print(" ".join(f"export {k}={shlex.quote(v)};" for k, v in target.load().engine.env.items()))')"
 ENGINE="${LAB_ENGINE_REPO:-$HOME/inference-server}"
 export PYTHONPATH="$PWD:$ENGINE/src${PYTHONPATH:+:$PYTHONPATH}"

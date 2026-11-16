@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ENV_ROOT = Path(__file__).resolve().parents[2]
-TARGETS_DIR = ENV_ROOT / "lab" / "targets"
+TARGETS_DIR = ENV_ROOT / "evals" / "targets"
 class NoTarget(RuntimeError):
     pass
 
@@ -123,8 +123,8 @@ def load(path: str | Path | None = None) -> Target:
     p = path or os.environ.get("LAB_TARGET")
     if not p:
         have = sorted(x.name for x in TARGETS_DIR.glob("*.toml"))
-        raise NoTarget("no target: set LAB_TARGET=lab/targets/<name>.toml (or pass --target). "
-                       + (f"Available: {', '.join(have)}" if have else "lab/targets/ is empty"))
+        raise NoTarget("no target: set LAB_TARGET=evals/targets/<name>.toml (or pass --target). "
+                       + (f"Available: {', '.join(have)}" if have else "evals/targets/ is empty"))
     p = Path(p).expanduser()
     if not p.is_absolute():
         p = (Path.cwd() / p) if (Path.cwd() / p).exists() else (ENV_ROOT / p)

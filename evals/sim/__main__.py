@@ -6,7 +6,7 @@ import argparse
 import json
 import sys
 
-from lab.targets import target
+from evals.targets import target
 
 
 def main(argv: list[str] | None = None) -> int:

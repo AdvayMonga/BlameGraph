@@ -9,7 +9,7 @@ import sys
 import pytest
 
 # Every lab test runs against the example target unless the caller chose one.
-os.environ.setdefault("LAB_TARGET", str(pathlib.Path(__file__).resolve().parents[1] / "lab" / "targets" / "inference-server.toml"))
+os.environ.setdefault("LAB_TARGET", str(pathlib.Path(__file__).resolve().parents[1] / "evals" / "targets" / "inference-server.toml"))
 
 from lab.targets import engine  # noqa: E402
 

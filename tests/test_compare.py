@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from evals.baselines import report, run as R  # noqa: E402
 
 FAKE = Path(__file__).resolve().parent / "fake_engine.py"
-os.environ.setdefault("LAB_TARGET", str(FAKE.parent.parent / "lab" / "targets" / "inference-server.toml"))
+os.environ.setdefault("LAB_TARGET", str(FAKE.parent.parent / "evals" / "targets" / "inference-server.toml"))
 
 
 def _spec(slots: dict[str, int]) -> dict:

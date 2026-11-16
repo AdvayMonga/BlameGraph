@@ -242,7 +242,7 @@ ADVICE = re.compile(r"\b(should|try|tries|recommend\w*|consider\w*|best|first|ch
 
 
 def test_system_prompt_is_generated_from_the_target_and_tools_and_advises_nothing(cfg):
-    from lab.targets import target
+    from evals.targets import target
 
     def script(n, ws: Path):
         yield ("reply", AgentReply({"status": "stop", "note": None}, 0.1, 1, None))
