@@ -1,6 +1,5 @@
-"""Regions bound to the engine's stations (kernels/regions.from_engine), with a fake stations module shaped as
-local/notes/handoff-engine-stations.md asks: inputs from a CAPTURE_REGION dir, weights attached from a shared holder,
-the generated start program judged end to end by the evaluator on the CPU, and `region:` names through the loader."""
+"""Regions bound to the engine's stations (regions.from_engine) on a fake stations module: inputs from a CAPTURE_REGION
+dir, weights from a shared holder, the start program judged on the CPU, and `region:` names through the loader."""
 from __future__ import annotations
 
 import sys
@@ -146,8 +145,7 @@ def test_a_config_read_with_no_holder_is_refused_clearly(tmp_path, monkeypatch):
 
 
 def test_a_region_writing_in_place_runs_on_a_copy_and_a_program_must_write_in_place(tmp_path, monkeypatch):
-    """A region with the K/V writer: the engine's stations as they run, each call on a copy of the pool (baseline and
-    program alike, inputs left unchanged); the start program passes; a program returning a new pool is refused."""
+    """A region with the K/V writer runs each call on a copy of the pool; a program returning a new pool is refused."""
     import pytest
     from lab.kernels.eval import core
     regions = engine(tmp_path, monkeypatch)
@@ -360,9 +358,8 @@ def test_a_region_judged_on_a_remote_worker_is_described_here_from_its_shapes_fi
 
 
 def test_a_prefill_region_binds_the_prefill_stations_and_a_none_read_becomes_a_constant(tmp_path, monkeypatch):
-    """A "p_" region is the engine's PREFILL; a read the engine passes as None (packed waves' `tokens`) is a constant
-    None, the calls where it is a tensor (padded waves) left out; a shipped override runs the engine's own stations
-    for a padded wave."""
+    """A "p_" region is the engine's PREFILL; a read passed as None is a constant None, the calls where it is a tensor
+    left out; a shipped override runs the engine's own stations for those."""
     from lab.kernels.eval import core
     regions = engine(tmp_path, monkeypatch)
     h = held(tmp_path, regions)

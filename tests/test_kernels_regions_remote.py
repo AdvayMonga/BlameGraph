@@ -1,8 +1,5 @@
-"""Regions through the kernel layer's pipeline (lab/kernels/tasks/pipeline.py, lab/kernels/tasks/hold.py) with the controller unable to
-load them: captures packed into one samples dir, the hold process's protocol (local and over a stand-in for ssh), its
-description of a region on the fake stations, the winner as an override-module patch of the agent's tree, and the
-`kernel_search` tool on a region end to end: once with the capture, hold, search and gate faked, and once for real on
-the CPU with a fake engine held by `lab.kernels.tasks.hold` and a fake model answering `python -m lab.kernels.search` (no GPU)."""
+"""Regions through the kernel pipeline (pipeline.py, hold.py) with the controller unable to load them: packed captures,
+the hold protocol, the override-module patch, and `kernel_search` on a region end to end, faked and on the CPU."""
 from __future__ import annotations
 
 import json
@@ -11,7 +8,7 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 
-if __name__ == "__main__":          # CI's referee job runs each test file as a script: these need pytest's fixtures
+if __name__ == "__main__":          # run as a script: these need pytest's fixtures
     import pytest
     raise SystemExit(pytest.main(["-q", __file__]))
 
@@ -195,9 +192,8 @@ if llm is not None:
 
 
 def test_kernel_search_runs_a_region_through_hold_search_and_gate_on_the_cpu(tb, monkeypatch, tmp_path):
-    """The real pipeline with only the capture and the model faked: `lab.kernels.tasks.hold` loads a fake engine and shares its
-    weights, `python -m lab.kernels.search` evolves the region's start program (every call answering one change) with the
-    jailed evaluator on the CPU, the held-out gate judges the winner there too, and the override module comes back."""
+    """The real pipeline with only the capture and the model faked: hold, search and the held-out gate on the CPU, and
+    the override module comes back."""
     from tests.test_kernels_region_engine import FAKE as STATIONS
     from lab.records import ledger
     fake = tmp_path / "fake"

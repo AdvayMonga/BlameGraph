@@ -1,7 +1,5 @@
-"""Other implementations of our kernel tasks, in one place: the index (lab/kernels/library/index.toml) names each library's
-kernel for a task and the upstream source it is (downloaded at its library's version when a prompt first shows it,
-kept under local/library, never in git), and `block` is what every search prompt shows of them: their source and,
-when built on a GPU host, their compiled code's PTX/SASS card. No timings.
+"""Other implementations of the kernel tasks: index.toml names each library's kernel and its upstream source (downloaded
+to local/library on first read); `block` is the search prompt's part on them: their source and PTX/SASS cards.
 
   lab kernels library cards --task T --out lab/kernels/library/ptx/T.txt [--dump DIR]   (on the GPU host: each entry's card
       from its library's .so (`sass` in the index) or from DIR, a `lab.kernels.library.competitors` dump (<name>.ptx|.sass,
@@ -108,9 +106,8 @@ def cards(task: str, cards_dir: Path = CARDS) -> dict[str, list[str]]:
 
 
 def block(task: str, path: Path = INDEX, src: Path = SRC, cards_dir: Path = CARDS, stations=None) -> str:
-    """The prompt's part on other implementations: each one's upstream source and, where built, its card, and the
-    starting program's card; empty when the task has neither. A region (`stations`: its station names) gets every entry
-    implementing one of its stations, each with its card from its own tasks' card files."""
+    """The prompt's part on other implementations: each one's upstream source and card, and the starting program's
+    card; empty when the task has neither. `stations` (a region's): every entry implementing one of them."""
     if stations:
         ks = for_stations(stations, path)
         cs = {}
@@ -142,8 +139,7 @@ def _dump(so: str) -> str:
 
 
 def _names(so: Path, pattern: str) -> bool:
-    """Whether a kernel matching `pattern` can be in `so`: host code registers every kernel by its mangled name, a
-    plain string in the file, so a file without a match holds none (and is never disassembled)."""
+    """Whether `so`'s bytes hold a match of `pattern` (a kernel's mangled name is a plain string in the file)."""
     import mmap
     if not so.stat().st_size:
         return False

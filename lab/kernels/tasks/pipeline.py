@@ -1,10 +1,5 @@
-"""The kernel layer as one call (the central agent's `kernel_search` tool): capture the task's
-calls under real traffic, split them seen / held-out, search, gate the winner on the held-out shapes, and hand the
-engine module back as a patch the agent applies itself. It runs on the controller: the search's model calls stay
-here, and its evaluator runs where the GPU is (`remote_env` for a worker host, lab/kernels/eval/evaluator.py's ssh mode).
-A region (`region:FIRST:LAST`, or the whole step) loads only where the GPU is: its captures are packed and sent there,
-a hold process there shares its weights and describes it (`hold`, lab/kernels/tasks/hold.py), and the controller searches and
-gates it from that description. A blocking call for now; a parallel job on its own GPU host comes later."""
+"""The `kernel_search` tool's pipeline, run on the controller: capture the task's calls, split them seen / held-out,
+search, gate the winner on the held-out shapes, return it as a patch. A region is held and judged where the GPU is."""
 from __future__ import annotations
 
 import contextlib
@@ -18,9 +13,7 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-# The capture traffic (lab/kernels/eval/validate_gpu.sh's CAPTURE_SPECS): corpus classes at real concurrencies, for a
-# run without a task; with one, each scored regime's traffic from REGIME_CAPTURE (its corpus class, evals/loadgen/suite.py,
-# at a concurrency like the regime's load: the profile job sends that many requests at once).
+# Capture traffic as (corpus class, concurrency): the default, and each scored regime's.
 CAPTURE_SPECS = (("mixed_1", 256), ("mixed_3", 64), ("long_context", 60))
 REGIME_CAPTURE = {"single_stream": ("steady_interactive", 1), "saturated": ("mixed_1", 256), "bursty": ("mixed_3", 64),
                   "long_prompt_short_output": ("long_context", 60), "short_prompt_long_output": ("steady_interactive", 64),
@@ -31,9 +24,8 @@ CAPTURE_TOKENS = 256          # each capture request's answer length
 
 
 def steady(cls: str, n: int) -> tuple[int, int]:
-    """(requests, in flight) for a capture of corpus class `cls` at load `n`: closed loop at `n` in flight over 3x as
-    many requests, so most of the window is the regime's steady state; a class with fewer seen requests runs them all
-    at a third as many in flight."""
+    """(requests, in flight) for a capture of corpus class `cls` at load `n`: 3x `n` requests at `n` in flight; a class
+    with fewer seen requests runs them all at a third as many in flight."""
     from evals import regimes as corpus
     have = len(corpus.load_trace(cls, "seen")[1])
     total = min(3 * n, have)
@@ -47,8 +39,7 @@ def specs(regimes: tuple[str, ...] = ()) -> tuple[tuple[str, int], ...]:
 
 
 def capture_env(task) -> dict:
-    """The launch env a capture of `task` runs under (the target's [kernels] capture_env, then the task's own): part
-    of what a capture depends on."""
+    """The launch env a capture of `task` runs under: the target's [kernels] capture_env, then the task's own."""
     try:
         from lab.targets import target
         env = dict((target.load().raw.get("kernels") or {}).get("capture_env") or {})
@@ -67,7 +58,7 @@ def tree_key(task, tree: Path, spec: tuple) -> str:
         h.update(f.relative_to(tree).as_posix().encode() + b"\0" + f.read_bytes())
     return h.hexdigest()
 ROOT = Path(__file__).resolve().parents[3]
-GATE_TIMEOUT_S = 3600        # as `lab.kernels.evolve gate`: the held-out shapes on top of the seen ones
+GATE_TIMEOUT_S = 3600        # seconds for a gate judgment: every seen and held-out shape
 HOLD = "lab.kernels.tasks.hold"        # the module a region's hold process runs
 
 
@@ -88,8 +79,8 @@ def start_program(task, tree: Path) -> str:
 
 def captures(task, tree: Path, profile: Callable[[Path, dict], Path | None], regimes: tuple[str, ...] = (),
              cache: Path | None = None) -> list[Path]:
-    """Each capture traffic's `captures/` dir, from `profile(tree, args) -> bundle dir` (the `profile` job); one
-    already made for the same engine outside the task's module and the same traffic is reused (`cache`: a JSON map)."""
+    """Each capture traffic's `captures/` dir, from `profile(tree, args) -> bundle dir`; `cache` (a JSON map) reuses
+    a bundle with an equal `tree_key`."""
     known = json.loads(cache.read_text()) if cache and cache.exists() else {}
     out = []
     env = capture_env(task)
@@ -110,9 +101,8 @@ def captures(task, tree: Path, profile: Callable[[Path, dict], Path | None], reg
 
 
 def pack(caps: list[Path], dest: Path) -> Path:
-    """One samples dir of a region's captures, what its task loads (`samples`): every call in calls.jsonl, its samples
-    under samples/ renamed per capture, and each capture's calls again in traffic<i>/profile-<source>/captures/, so the
-    shapes are counted per traffic (each weighing the same) and keep their source."""
+    """One samples dir of a region's captures: every call in calls.jsonl, its samples under samples/ renamed per
+    capture, and each capture's calls again in traffic<i>/profile-<source>/captures/."""
     from lab.kernels.tasks import shapes
     from lab.profile import capture
     (dest / "samples").mkdir(parents=True, exist_ok=True)
@@ -137,9 +127,8 @@ def pack(caps: list[Path], dest: Path) -> Path:
 
 @contextlib.contextmanager
 def hold(task, caps: list[Path], out: Path, env: dict, worker=None):
-    """A region held where the evaluator runs, for the block: its captures packed (and pushed to `worker`, a
-    lab.infra.runner.worker.Remote), `python -m lab.kernels.tasks.hold` started there, and its description yielded: {holder, samples (paths
-    there), shapes, start, stations}. The hold process exits when its stdin closes, here or over ssh."""
+    """Hold a region where the evaluator runs, for the block: pack its captures (pushed to `worker`), start the hold
+    process there and yield its description: {holder, samples (paths there), shapes, start, stations}."""
     local = pack(caps, Path(out) / "samples")
     there = f"{worker.root()}/local/runs/remote/kernel_search/{Path(out).name}" if worker else str(Path(out).resolve())
     samples = f"{there}/samples"
@@ -171,8 +160,8 @@ def hold(task, caps: list[Path], out: Path, env: dict, worker=None):
 
 
 def remote_env(prefix: list[str], env_dir: str, python: str, env: dict, sudo: bool = False) -> dict:
-    """The evaluator's ssh mode for a worker host: each judgment runs there, config and source on stdin. Quoted as
-    `lab.infra.runner.worker.Remote._run` quotes (paths raw, so `~` and `$HOME` expand there; values in double quotes)."""
+    """The evaluator's ssh-mode env for a worker host, quoted as `lab.infra.runner.worker.Remote._run` quotes: paths
+    raw (`~` and `$HOME` expand there), values in double quotes."""
     for v in env.values():
         if any(c in v for c in '"`\\'):
             raise ValueError(f"unsafe value in the worker's env: {v!r}")
@@ -183,7 +172,7 @@ def remote_env(prefix: list[str], env_dir: str, python: str, env: dict, sudo: bo
 
 
 def spent(out: Path) -> float:
-    """Model dollars a search spent so far, from its logs (a search that died never printed its cost)."""
+    """Model dollars a search has spent, summed from its logs."""
     usd = 0.0
     for name, key in (("trace.jsonl", "cost_usd"), ("hypotheses.jsonl", "usd")):
         f = Path(out) / name
@@ -197,9 +186,8 @@ def spent(out: Path) -> float:
 
 
 def facts(task, kernel_tasks: dict | None, regimes: tuple[str, ...] = ()) -> str:
-    """The bigger picture as facts for every prompt of the search: the regimes the kernel's engine is scored under,
-    and from the latest profile (`kernel_tasks`, lab/evaltools.harness_facts) the task's share of the engine's
-    profiled window and the window's speedup if its kernels took no time; or that no profile has them."""
+    """Facts for every prompt of the search: the scored regimes and, from the latest profile (`kernel_tasks`), the
+    task's share of the profiled window and the window's speedup if its kernels took no time."""
     out = ["# The engine this kernel runs in"]
     if regimes:
         out.append(f"Scored regimes of the task the engine is optimized for: {', '.join(regimes)}.")
@@ -238,9 +226,8 @@ def search(task, caps: list[Path], start: Path, out: Path, ledger_root: Path, en
 
 
 def freeze(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict | None, device: str) -> Path:
-    """The winner with its autotune frozen into a table by key (lab/kernels/eval/freeze.py), from the freeze stage run on
-    the gate's seen shapes where the evaluator runs, on `device`: what the gate judges and the patch holds (`program`
-    itself when nothing in it autotunes)."""
+    """The winner with its autotune frozen into a table by key (lab/kernels/eval/freeze.py); `program` itself when
+    nothing in it autotunes."""
     from lab.kernels.eval import freeze as frozen_by
     src = Path(program).read_text()
     new, _ = frozen_by.freeze(src, lambda s: _judged(task, caps, program, out, env, held, frozen_by.FREEZE_STAGE, device))
@@ -252,8 +239,7 @@ def freeze(task, caps: list[Path], program: Path, out: Path, env: dict, held: di
 
 
 def gate(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict | None, device: str) -> dict:
-    """The held-out gate on the winner, judged where the evaluator runs (here, or the worker over ssh) on `device`; a
-    region on the shapes, samples and holder `hold` described."""
+    """The held-out gate on the winner, judged where the evaluator runs, on `device`."""
     return _judged(task, caps, program, out, env, held, 2, device)
 
 
@@ -288,9 +274,8 @@ def _judged(task, caps: list[Path], program: Path, out: Path, env: dict, held: d
 
 
 def patch(task, tree: Path, program: str, held: dict | None = None) -> str:
-    """The winner as a unified diff of the engine module in `tree`, the task's start edits undone; a region's as the
-    override module `lab.kernels.evolve ship` would commit (the overlap checked against the overrides in `tree`, with the
-    station names `hold` read from the engine)."""
+    """The winner as a unified diff of the engine module in `tree`, the task's start edits undone; a region's as its
+    override module, checked for overlap with the overrides in `tree`."""
     from lab.kernels.eval.ship import module_source, no_live_autotune, override_keys, region_files, unstart
     if task.name.startswith("region:"):
         from lab.kernels.tasks import regions
