@@ -27,7 +27,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from targets import engine
+from lab.targets import engine
 from lab import rehearsal_server
 
 MODEL = "Qwen/Qwen3-30B-A3B"       # its tokenizer only: nothing loads the weights
@@ -103,7 +103,7 @@ def items(n: int) -> list[dict]:
 
 
 def make_reference(script: Path, out: Path, n: int, encoder) -> dict:
-    from evals.agent.correctness import run as crun
+    from lab.gate.correctness import run as crun
     proc, url = _serve(script)
     try:
         return crun.reference(url, MODEL, out, items(n), encoder, top_k=5, div_n=min(n, 60), concurrency=8)
@@ -146,7 +146,7 @@ min_length_ratio = 0.90
 submit_tier = "dev"
 
 [corpus]
-dir = "{engine.ENV_ROOT / "data" / "corpus"}"
+dir = "{engine.ENV_ROOT / "evals" / "regimes"}"
 
 [validation]                                 # the gate must pass the unmodified server and fail a wrong one
 good = {{ same = "{python} {ref} --port {{port}}" }}
@@ -162,7 +162,7 @@ regimes = ["single_stream"]
 
 
 def setup(d: Path, python: str = sys.executable, n_dev: int = 200, n_full: int = 400, encoder=None) -> dict:
-    from evals.agent.correctness import run as crun
+    from lab.gate.correctness import run as crun
     d = d.resolve()
     if (d / "engine").exists():
         raise SystemExit(f"{d / 'engine'} exists: set up a fresh directory")

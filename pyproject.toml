@@ -11,17 +11,17 @@ correctness = ["huggingface_hub", "pandas", "pyarrow", "transformers"]   # task 
 workloads = ["huggingface_hub", "pandas", "pyarrow"]                # lab workloads fetch
 corpus = ["pyarrow>=17", "transformers", "jinja2"]            # WildChat shards; build_corpus tokenizes
 kernels = ["torch>=2.4"]
-evolve = ["torch>=2.4", "openevolve==0.4.0"]           # generate/kernels/evolve: OpenEvolve, the A/B baseline
-kernel-search = ["torch>=2.4", "anthropic>=1.15", "fastembed==0.9.0"]       # generate/kernels/search: our layer-1 generator
-store = ["boto3", "duckdb>=1.1", "pytz", "zstandard"]                # data/knowledge/: R2 sync, the SQL index, the query tool
-search = ["fastembed==0.9.0"]                                # data/knowledge/search.py: local embeddings for `search`
+evolve = ["torch>=2.4", "openevolve==0.4.0"]           # lab/kernels/evolve: OpenEvolve, the A/B baseline
+kernel-search = ["torch>=2.4", "anthropic>=1.15", "fastembed==0.9.0"]       # lab/kernels/search: our layer-1 generator
+store = ["boto3", "duckdb>=1.1", "pytz", "zstandard"]                # lab/records/: R2 sync, the SQL index, the query tool
+search = ["fastembed==0.9.0"]                                # lab/records/search.py: local embeddings for `search`
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.16.9", "moto>=5"]
 
 [project.scripts]
 lab = "lab.cli:main"         # `pip install -e .` puts `lab` on PATH (bin/lab works without installing)
 
 [tool.setuptools.packages.find]
-include = ["lab*", "targets*", "measure*", "evals*", "generate*", "data*"]
+include = ["lab*", "evals*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

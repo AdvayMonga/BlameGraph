@@ -11,12 +11,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from generate.kernels import archive  # noqa: E402
-from generate.kernels.search import context, diversity  # noqa: E402
-from generate.kernels.search.evaluate import EXAM, REFUSED, Evaluator  # noqa: E402
-from generate.kernels.search.llm import CACHE_SPLIT  # noqa: E402
-from generate.kernels.search.loop import search  # noqa: E402
-from generate.kernels.search.program import Config, Idea, Program  # noqa: E402
+from lab.kernels import archive  # noqa: E402
+from lab.kernels.search import context, diversity  # noqa: E402
+from lab.kernels.search.evaluate import EXAM, REFUSED, Evaluator  # noqa: E402
+from lab.kernels.search.llm import CACHE_SPLIT  # noqa: E402
+from lab.kernels.search.loop import search  # noqa: E402
+from lab.kernels.search.program import Config, Idea, Program  # noqa: E402
 
 START = "a = 1\n"
 
@@ -138,7 +138,7 @@ def test_every_idea_and_every_model_call_is_kept_whole(tmp_path):
 
 
 def test_the_archive_reads_a_run_back(tmp_path):
-    from data.knowledge import ledger
+    from lab.records import ledger
     run(tmp_path)
     root = tmp_path / "ledger"
     root.mkdir()

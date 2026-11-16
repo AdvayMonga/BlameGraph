@@ -7,7 +7,7 @@ import json
 import pytest
 
 from lab import experiments
-from data.knowledge import ledger
+from lab.records import ledger
 pytest_plugins = ["tests.test_lab_proftools"]   # its `tb` fixture: a Toolbox with fake instruments
 
 EXPECT = {"metric": "single_stream", "value": 0.02, "unit": "absolute", "why": "fewer bytes per step"}

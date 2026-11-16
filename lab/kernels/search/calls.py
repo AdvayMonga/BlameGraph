@@ -1,0 +1,49 @@
+"""Every model call of a search, kept whole: its prompt parts and its answer, each distinct text stored once.
+
+`<out>/calls.jsonl`: one row per call {id, role, generation, model, system, user, answer, usd, stop}; `system`, `user` and
+`answer` are keys into `<out>/texts.jsonl` ({key, text} rows), which also holds every program a writer made."""
+from __future__ import annotations
+
+import hashlib
+import json
+import threading
+from pathlib import Path
+from typing import Callable
+
+from lab.kernels.search.llm import CACHE_SPLIT
+
+Model = Callable[[str, str], tuple[str, float]]  # (system, user) -> (text, $)
+
+
+class Calls:
+    def __init__(self, out: Path):
+        self.calls, self.texts = open(out / "calls.jsonl", "w"), open(out / "texts.jsonl", "w")
+        self.seen, self.n, self.usd, self.lock = set(), 0, 0.0, threading.Lock()
+
+    def put(self, text: str) -> str:
+        """The key `text` is stored under."""
+        key = hashlib.sha256(text.encode()).hexdigest()[:16]
+        with self.lock:
+            if key not in self.seen:
+                self.seen.add(key)
+                self.texts.write(json.dumps({"key": key, "text": text}) + "\n")
+                self.texts.flush()
+        return key
+
+    def __call__(self, model: Model, role: str, generation: int, system: str, user: str) -> tuple[str, str]:
+        """(the answer, the call's id)."""
+        text, usd = model(system, user)
+        parts = {k: [self.put(t) for t in v.split(CACHE_SPLIT) if t] for k, v in (("system", system), ("user", user))}
+        answer = self.put(text or "")
+        with self.lock:
+            self.n, self.usd = self.n + 1, self.usd + usd
+            row = {"id": f"c{self.n}", "role": role, "generation": generation, "model": getattr(model, "model", None),
+                   **parts, "answer": answer, "usd": usd,
+                   "stop": getattr(getattr(model, "last", None), "stop", None)}
+            self.calls.write(json.dumps(row) + "\n")
+            self.calls.flush()
+        return text, row["id"]
+
+    def close(self) -> None:
+        self.calls.close()
+        self.texts.close()

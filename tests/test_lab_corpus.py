@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from data.corpus import CORPUS_DIR, SPLITS, CorpusError, TraceRequest, WorkloadClass, build_manifest, corpus_version, load_manifest, load_trace, read_trace, sample, write_trace
+from evals.regimes import CORPUS_DIR, SPLITS, CorpusError, TraceRequest, WorkloadClass, build_manifest, corpus_version, load_manifest, load_trace, read_trace, sample, write_trace
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "data" / "corpus"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "evals" / "regimes"))
 import build_corpus as bc  # noqa: E402
 import lengths  # noqa: E402
 
@@ -29,7 +29,7 @@ HAVE_RAW = all(os.path.exists(RAW / f)
 # CI's corpus lane sets CORPUS_REQUIRE_RAW=1: there a missing cache must fail, never skip.
 REQUIRE_RAW = os.environ.get("CORPUS_REQUIRE_RAW") == "1"
 needs_raw = pytest.mark.skipif(not HAVE_RAW and not REQUIRE_RAW, reason=f"raw traces absent "
-                               f"from {RAW}; run data/corpus/fetch_traces.py")
+                               f"from {RAW}; run evals/regimes/fetch_traces.py")
 # held-out traces are not in git (`lab store pull --corpus`); tests that read them skip without them
 HAVE_HELDOUT = all(os.path.exists(CORPUS_DIR / name / "heldout.jsonl") for name in CLASSES)
 needs_heldout = pytest.mark.skipif(not HAVE_HELDOUT, reason="held-out traces absent; lab store pull --corpus")
@@ -75,11 +75,11 @@ def test_committed_corpus_verifies_and_every_class_is_non_empty():
 @needs_raw
 @pytest.mark.needs_host
 def test_committed_corpus_is_what_the_builder_produces(tmp_path):
-    """Provenance: the data on disk came from build_corpus.py at the secret seed (data/corpus/.seed) from the
-    pinned raw inputs, byte for byte, plus the measured reference lengths (data/corpus/lengths.py) when they are set.
+    """Provenance: the data on disk came from build_corpus.py at the secret seed (evals/regimes/.seed) from the
+    pinned raw inputs, byte for byte, plus the measured reference lengths (evals/regimes/lengths.py) when they are set.
     A changed input or class table is a new version."""
     if not (CORPUS_DIR / ".seed").exists():
-        pytest.skip("no data/corpus/.seed: pull it with `lab store pull --corpus`")
+        pytest.skip("no evals/regimes/.seed: pull it with `lab store pull --corpus`")
     rebuilt = bc.build_corpus(tmp_path, int((CORPUS_DIR / ".seed").read_text()))
     measured = lengths.read(CORPUS_DIR)
     if any(n is not None for ns in measured.values() for n in ns):
@@ -164,7 +164,7 @@ def test_no_oracle_is_set_and_lengths_are_all_or_nothing():
             turns = r.expected_turn_output_tokens
             assert turns and len(turns) == len([m for m in r.messages if m["role"] == "user"])
             assert turns[-1] == r.expected_output_tokens
-    assert len({r.expected_output_tokens is None for r in every}) == 1, "data/corpus/lengths.py measures every record"
+    assert len({r.expected_output_tokens is None for r in every}) == 1, "evals/regimes/lengths.py measures every record"
 
 
 @pytest.mark.needs_host
@@ -220,7 +220,7 @@ def _multi_turn_corpus(d: Path):
 
 
 def _fake_reference(monkeypatch, fail=lambda req: False):
-    from measure.loadgen import client
+    from evals.loadgen import client
     sent = []
 
     def fake_send(url, model, req, scheduled, clock, chat_kwargs=None, **k):

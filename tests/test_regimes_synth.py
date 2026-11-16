@@ -1,4 +1,4 @@
-"""measure.loadgen.synth: traffic generated fresh from a corpus's seen split. Keeps the seen shapes (sizes exactly per pass,
+"""evals.loadgen.synth: traffic generated fresh from a corpus's seen split. Keeps the seen shapes (sizes exactly per pass,
 the timing pattern), repeats no prompt, never reads the real held-out split, writes nothing, and the seed regenerates
 it. Run: python tests/test_regimes_synth.py"""
 from __future__ import annotations
@@ -10,8 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from data.corpus import TraceRequest, WorkloadClass, build_manifest, load_trace, write_trace  # noqa: E402
-from measure.loadgen import synth  # noqa: E402
+from evals.regimes import TraceRequest, WorkloadClass, build_manifest, load_trace, write_trace  # noqa: E402
+from evals.loadgen import synth  # noqa: E402
 
 
 def _real(d: Path) -> Path:
@@ -63,7 +63,7 @@ def test_a_generated_trace_keeps_the_seen_shapes_and_repeats_no_prompt():
 
 
 def test_regimes_draw_generated_pools_with_synthetic():
-    from measure.loadgen import suite
+    from evals.loadgen import suite
     with tempfile.TemporaryDirectory() as tmp:
         real = _real(Path(tmp) / "real")
         ctx = suite.Ctx("http://x", "m", corpus=str(real), synthetic=True, seed=3)

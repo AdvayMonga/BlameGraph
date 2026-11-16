@@ -1,4 +1,4 @@
-"""measure.profile.gpu against a fake nvidia-smi: field fallbacks, unsupported fields as None, epoch column on the samples."""
+"""lab.profile.gpu against a fake nvidia-smi: field fallbacks, unsupported fields as None, epoch column on the samples."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from datetime import datetime
 
 import pytest
 
-from measure.profile import gpu
+from lab.profile import gpu
 
 FAKE = """#!{python}
 import sys, time

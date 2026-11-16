@@ -10,8 +10,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from evals.researcher.canaries.cheat_proxy import serve  # noqa: E402
-from evals.agent.correctness import consistency, length_ratio  # noqa: E402
+from evals.agent.canaries.cheat_proxy import serve  # noqa: E402
+from lab.gate.correctness import consistency, length_ratio  # noqa: E402
 
 WORDS = [f"w{i}" for i in range(64)]
 
