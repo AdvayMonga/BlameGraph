@@ -1,5 +1,4 @@
-"""SQL over every run: DuckDB tables rebuilt from the ledger and its blobs. Derived and disposable; the ledger and
-blobs are the data, so a new table or column is a rebuild, never a migration.
+"""SQL over every run: DuckDB tables rebuilt from the ledger and its blobs.
 
   records             one row per ledger record (args, config, result, metrics, claim as JSON)
   regimes             one row per regime result of a bench or baseline
@@ -180,9 +179,8 @@ def _heldout_rows(runs: Path) -> Iterator[dict]:
 
 
 def build(root: Path, db: Path, heldout_runs: Path | None = None, agent: bool = False) -> dict:
-    """Rebuild `db` from the ledger at `root`; with `heldout_runs`, add heldout_rows from its run dirs; `agent` leaves
-    out researcher runs. Returns the row count per table and the blobs that were not on disk (pull them to index
-    their rows)."""
+    """Rebuild `db` from the ledger at `root`; `heldout_runs` adds heldout_rows from its run dirs, `agent` leaves out
+    researcher runs. Returns the row count per table and the blobs that were not on disk."""
     recs = [r for r in ledger.records(root) if not (agent and experiments.researcher(r.get("run")))]
     missing: list[str] = []
     db = Path(db)

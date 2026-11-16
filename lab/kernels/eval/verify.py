@@ -1,8 +1,5 @@
-"""Correctness checked outside the candidate's process: the jailed judge (lab.kernels.eval.core) records the outputs of
-every plain check case and every timed call; this process, which never loads the candidate, regenerates each input
-from its seed, runs the reference itself and compares. A candidate that patches the checker inside its own process
-(and restores it before anything there notices) still has its outputs judged here. The record is loaded with
-`weights_only=True`: tensors and plain values only, no code."""
+"""Correctness checked outside the candidate's process: each output the jailed judge (lab.kernels.eval.core) recorded
+is compared with the reference run here on inputs regenerated from the seed; the record loads `weights_only=True`."""
 from __future__ import annotations
 
 import json
@@ -13,10 +10,9 @@ MAX_BYTES = 32 * 2**30
 
 
 def expected(cfg: dict, task, timed: bool) -> set:
-    """The records a stage-2 judgment under `cfg` keeps (lab.kernels.eval.core.judge): every seen shape x dtype at seed
-    0, and with `full` or held-out shapes (the gate) every seen and held-out shape x dtype x each of `seeds` seeds (3) and the two most-called
-    seen shapes at each value scale (seed 7); with `timed` the four timed buffers of every timed shape. A candidate
-    cannot drop or swap any of them unnoticed."""
+    """The record keys a stage-2 judgment under `cfg` keeps: every seen shape x dtype at seed 0; with `full` or held-out
+    shapes, every shape x dtype x seed and the two most-called seen shapes at each scale (seed 7); with `timed`, each
+    timed buffer of every shape."""
     import inspect
     from lab.kernels.eval.core import SCALES
     from lab.kernels.eval.timing import time_pair

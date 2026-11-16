@@ -1,9 +1,7 @@
 """python -m lab.kernels.eval.jailed CONFIG.json PROGRAM|- STAGE (1, 2, 3: ncu counters, 4: quick, 5: precheck, 6: sanitizer, 7: freeze, 8: full check, 9: winner's check)  (or `- - STAGE`: {config, source} as JSON on stdin)  ->  lab.kernels.eval.core's JSON, judged in the jail.
 
-The candidate runs as agent code (lab/infra/sandbox/grader.jailed: a container with no network on Linux, srt elsewhere;
-LAB_NO_JAIL=1 waives it). The jail sees a fresh tree holding only the candidate and its config, a read-only copy of
-the harness core needs (lab/kernels/eval/, lab/kernels/, lab.infra.context.peaks, lab.targets.target, the measured peaks), and the engine's source read-only
-when the task's baseline lives there; never this repo, which holds the held-out shapes, the ledger and .env."""
+The candidate runs jailed (lab/infra/sandbox/grader.jailed; LAB_NO_JAIL=1 waives it) in a fresh tree holding only itself
+and its config, with a read-only copy of the harness and, when the task's baseline lives there, the engine's source."""
 from __future__ import annotations
 
 import contextlib
@@ -39,12 +37,11 @@ WINNER_STAGE = 9                 # CHECK_STAGE on WINNER_SEEDS seeds: a program 
 WINNER_SEEDS = 20
 EVAL_DIRS = Path(os.environ.get("KERNEL_EVAL_DIRS") or Path(tempfile.gettempdir()) / "kernel-eval")
 CUDA = Path("/usr/local/cuda")
-MEMORY = os.environ.get("KERNEL_EVAL_MEMORY", "32g")   # host RAM a judgment may use: a program cannot starve the host
+MEMORY = os.environ.get("KERNEL_EVAL_MEMORY", "32g")   # host RAM a judgment may use
 
 
 def cuda_home() -> Path | None:
-    """The toolkit for the CUDA torch was built with (an extension linked against another runtime does not load:
-    Verda's image is CUDA 12.8 beside torch cu130), else /usr/local/cuda; None without nvcc."""
+    """The toolkit for the CUDA torch was built with, else /usr/local/cuda; None without nvcc."""
     import torch
     v = torch.version.cuda
     for p in ([Path(f"/usr/local/cuda-{v}")] if v else []) + [CUDA]:
@@ -75,8 +72,7 @@ def _rm(p: Path) -> None:
 
 
 def _keep_builds_only(tree: Path) -> None:
-    """After a judgment: in each extension's build dir keep torch's build files and its .so, nothing else, so no other
-    file a program wrote outlives its judgment (e.g. answers kept for the next one)."""
+    """In each extension's build dir keep torch's build files and its .so; remove everything else."""
     ext = tree / "torch_extensions"
     if not ext.is_dir() or ext.is_symlink():
         return
@@ -94,8 +90,7 @@ def _keep_builds_only(tree: Path) -> None:
 
 
 def _result(stdout: str, key: str) -> tuple[dict | None, str]:
-    """The one result line carrying this judgment's key (core reads the key and removes it before the candidate loads,
-    so a line the candidate prints cannot carry it), or None and why."""
+    """The one result line carrying this judgment's key, or None and why."""
     found = []
     for x in stdout.splitlines():
         if x.startswith("{"):
@@ -112,10 +107,8 @@ def _result(stdout: str, key: str) -> tuple[dict | None, str]:
 
 
 def _eval_dir(source: str, toolkit: Path | None, purpose: str = "") -> tuple[Path, Path]:
-    """(the dir, its tree) where this program is judged, the same path every time: torch reuses a C++ build only at
-    the absolute path it was built in, so a program's build serves all its stages and re-timings. Keyed by the source
-    and the toolkit; everything in the tree but the build dir is removed (links unlinked, never followed) before each
-    judgment. A program cannot keep answers there: file reads and writes are refused by the screen."""
+    """(the dir, its tree) where this program is judged, keyed by source, toolkit and `purpose` so torch reuses its
+    C++ build; everything in the tree but the build dir is removed first."""
     d = EVAL_DIRS / hashlib.sha256(f"{toolkit}\0{purpose}\0{source}".encode()).hexdigest()[:24]
     tree = d / "tree"
     tree.mkdir(parents=True, exist_ok=True)
@@ -161,9 +154,7 @@ def _refuse_writable(holder: Path) -> None:
 
 def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_S) -> dict:
     """core's result for `source` under `cfg`, from a jailed process; a crash or timeout scores 0 with its output.
-    Stage 3 (ncu) profiles the smallest and the largest seen shape (by their first axis), each in its own jail:
-    a batch of 1 and a batch of 512 rarely share a bottleneck. The held-out gate (stage 2 with held-out shapes) also
-    runs stage 6 on a program that passed it: each sanitizer tool in its own jail, any error failing the gate."""
+    Stage 3 profiles the smallest and largest seen shape; the held-out gate also runs stage 6 on a passing program."""
     if stage == 2 and cfg.get("heldout") and not cfg.get("_unsanitized"):
         return _sanitized(cfg, source, judge_jailed({**cfg, "_unsanitized": True}, source, 2, timeout_s), timeout_s)
     if stage == SANITIZE_STAGE and not cfg.get("_sanitizer_tool"):
@@ -306,9 +297,8 @@ def sanitizer() -> str | None:
 
 
 def _sanitized(cfg: dict, source: str, r: dict, timeout_s: float) -> dict:
-    """The gate's result with the sanitizer's verdict added as gate `sanitizer` (an error zeroes the program); not
-    run when the program already failed; a host without the sanitizer, or weights attached over CUDA IPC from the
-    holder's process (which the sanitizer does not instrument), say so as a fact, never a failure."""
+    """The gate's result with the sanitizer's verdict added as gate `sanitizer` (an error zeroes the program); not run
+    on a failed program; a host without the sanitizer, or shared weights, is stated in the artifacts, not failed."""
     if r["metrics"].get("correct") != 1.0:
         return r
     if cfg.get("shared_weights"):

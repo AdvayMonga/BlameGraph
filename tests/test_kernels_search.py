@@ -1,6 +1,5 @@
-"""lab.kernels.search on CPU with no model calls: the SEARCH/REPLACE parser, a whole search
-on the toy task with a scripted model and the real (jailed) evaluator, and the Claude client's request against a fake
-SDK client. Run: python tests/test_kernels_search.py"""
+"""lab.kernels.search on CPU with no model calls: the SEARCH/REPLACE parser, a whole search on the toy task with a
+scripted model and the jailed evaluator, and the Claude client's request against a fake SDK client."""
 from __future__ import annotations
 
 import json
