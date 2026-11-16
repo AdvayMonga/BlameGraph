@@ -126,9 +126,8 @@ conversational = {{ ttft_s = 2.0, tpot_s = 0.100 }}
 
 [correctness]
 tasks = ["mmlu_pro"]
-min_score_ratio = 0.99
+max_kl = 0.01
 min_length_ratio = 0.90
-submit_tier = "dev"
 
 [corpus]
 dir = "{engine.ENV_ROOT / "evals" / "regimes"}"
@@ -146,7 +145,7 @@ regimes = ["single_stream"]
 '''
 
 
-def setup(d: Path, python: str = sys.executable, n_dev: int = 200, n_full: int = 400, encoder=None) -> dict:
+def setup(d: Path, python: str = sys.executable, n: int = 200, encoder=None) -> dict:
     from lab.gate.correctness import run as crun
     d = d.resolve()
     if (d / "engine").exists():
@@ -161,10 +160,9 @@ def setup(d: Path, python: str = sys.executable, n_dev: int = 200, n_full: int =
     (d / "store").mkdir(exist_ok=True)
     (d / "target.toml").write_text(target_toml(d, python))
     (d / "task.toml").write_text(TASK)
-    refs = {"dev": make_reference(d / "reference.py", d / "ref", n_dev, enc),
-            "full": make_reference(d / "reference.py", d / "ref-full", n_full, enc)}
+    ref = make_reference(d / "reference.py", d / "ref", n, enc)
     return {"dir": str(d), "engine": str(d / "engine"), "target": str(d / "target.toml"), "task": str(d / "task.toml"),
-            "store": str(d / "store"), "references": refs}
+            "store": str(d / "store"), "reference": ref}
 
 
 def main(argv: list[str] | None = None) -> int:

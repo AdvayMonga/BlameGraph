@@ -4,19 +4,19 @@ from __future__ import annotations
 import re
 
 _CHOICE_PATTERNS = [
-    r"answer is \(?([A-J])\)?",          # "The answer is (X)"
-    r"[Aa]nswer\s*[:：]\s*\(?([A-J])\)?",
-    r"^\s*\(?([A-J])\)?[.)]?\s*$",       # a reply that is only the letter
+    r"^\s*\(?([A-J])[).:]",                   # a reply that opens with "(X)", "X)", "X." or "X:"
+    r"^\s*([A-J])[.:]?\s*$",                  # a reply that is only the letter
+    r"[Aa]nswer(?: is)?\s*[:：]?\W*([A-J])\b",  # "The answer is (X)", "Answer: X", "The correct answer is **(X"
 ]
 
 
 def extract_choice(text: str) -> str | None:
+    """The chosen letter, or None where the reply names none."""
     for pat in _CHOICE_PATTERNS:
-        m = re.findall(pat, text, flags=re.M)
+        m = re.search(pat, text)
         if m:
-            return m[-1]
-    m = re.findall(r"\b([A-J])\b", text)   # fallback: the last standalone letter
-    return m[-1] if m else None
+            return m[1]
+    return None
 
 
 def _last_boxed(text: str) -> str | None:
