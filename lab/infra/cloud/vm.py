@@ -324,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--stop", dest="keep", action="store_false", help="stop afterwards even where that deletes the disk")
     r.add_argument("--minutes", type=int, default=MAX_MINUTES, help=f"wall-clock cap for the command and the VM (default {MAX_MINUTES})")
     r.add_argument("--fetch", help="remote dir, relative to the repo, to bring back")
-    r.add_argument("--local", help="where to put it (default lab/runs)")
+    r.add_argument("--local", help="where to put it (default local/runs)")
     r.add_argument("--no-push", action="store_true")
     r.add_argument("--env", action="store_true", help="run in this environment's dir instead of the engine's")
     r.add_argument("command", nargs=argparse.REMAINDER)

@@ -38,6 +38,10 @@ jobs:
   referee:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [compare, regimes, rest]      # the two slow scripts each run alone, beside the rest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -45,7 +49,7 @@ jobs:
           python-version: "3.11"
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pip install pandas pyarrow huggingface_hub safetensors pytest
-      # test_regimes.py takes ~4 of the job's 5 min: on PRs it runs only when the PR touches what it drives.
+      # On PRs test_regimes.py runs only when the PR touches what it drives.
       - name: Does this PR touch the regimes?
         id: regimes
         if: github.event_name == 'pull_request'
@@ -61,10 +65,16 @@ jobs:
       - name: Script tests
         env:
           SKIP_REGIMES: ${{ steps.regimes.outputs.skip }}
+          PART: ${{ matrix.part }}
         run: |
           set -e
           for t in tests/test_*.py; do
-            case "$t" in tests/test_lab_*) continue ;; esac
+            case "$t" in
+              tests/test_lab_*) continue ;;
+              tests/test_compare.py) [ "$PART" = compare ] || continue ;;
+              tests/test_regimes.py) [ "$PART" = regimes ] || continue ;;
+              *) [ "$PART" = rest ] || continue ;;
+            esac
             if [ "$t" = tests/test_regimes.py ] && [ "$SKIP_REGIMES" = true ]; then echo "== $t skipped (PR doesn't touch it)"; continue; fi
             echo "== $t"; python "$t"
           done
