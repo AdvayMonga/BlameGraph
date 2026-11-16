@@ -33,7 +33,7 @@ FORBIDDEN = {
     r"\bsys\.modules\b|\bbuiltins\b|__builtins__|\bimportlib\b|__import__|\b(set|get)attr\s*\(|__setattr__|__dict__"
     r"|\bglobals\s*\(|\bvars\s*\(|\b(torch|triton|time|math|statistics)(\.\w+)+\s*=(?!=)": "patching modules",
     r"(?<![.\w])(eval|exec|compile)\s*\(|__subclasses__|\btypes\.(FunctionType|CodeType)\b": "code built at run time",
-    r"\bkernels\.(check|timing|evolve)\b|\b(evals|generate)\.kernels\b|\b(from|import) (kernels|evals|generate)\b"
+    r"\bkernels\.(eval|evolve)\b|\blab\.kernels\b|\b(from|import) (kernels|evals|lab)\b"
     r"|\b(import|from) __main__\b":
         "the evaluator itself",
     r"\bsys\.(settrace|setprofile)\b|\bsignal\b": "frame introspection",
