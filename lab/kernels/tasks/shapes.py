@@ -79,6 +79,21 @@ def ints_from_captures(task: Task, dirs: list[Path]) -> dict:
     return out
 
 
+def calls_from_captures(task: Task, dirs: list[Path], shapes) -> dict:
+    """{json shape: {args, kwargs}} for each of `shapes`: its first captured call, tensors by shape and dtype."""
+    def bare(a):
+        return {k: v for k, v in a.items() if k != "values"} if isinstance(a, dict) else a
+    want, out = {json.dumps(list(s)) for s in shapes}, {}
+    for d in dirs:
+        for call in capture.load(d):
+            s = task.shape_of(call) if _ours(task, call) else None
+            k = json.dumps(list(s)) if s is not None else None
+            if k in want and k not in out:
+                out[k] = {"args": [bare(a) for a in call.get("args") or ()],
+                          "kwargs": {n: bare(v) for n, v in (call.get("kwargs") or {}).items()}}
+    return out
+
+
 HELDOUT_BAND = (0.6, 0.8)     # held out: a band of each held-out axis, by calls; the largest values stay seen
 
 

@@ -79,7 +79,7 @@ def ideas(root: Path) -> list[tuple[str, dict, Outcome]]:
                 row = json.loads(line)
             except ValueError:
                 continue
-            if "ideas" in row:                   # a funnel round: each idea with how far it got
+            if "ideas" in row:                   # a generation: each idea with how far it got
                 scores = {p["id"]: p["score"] for p in row.get("parents") or [] if isinstance(p, dict)}
                 for x in row["ideas"]:
                     h, c = x.get("idea") or {}, children.get(x.get("child_id"), {})

@@ -1,8 +1,8 @@
 """Other implementations of our kernel tasks, in one place: the index (lab/kernels/library/index.toml) names each library's
-kernel for a task and the upstream source it is (files kept verbatim under src/), and `block` is what every search
-prompt shows of them: their source and, when built on a GPU host, their compiled code's PTX/SASS card. No timings.
+kernel for a task and the upstream source it is (downloaded at its library's version when a prompt first shows it,
+kept under local/library, never in git), and `block` is what every search prompt shows of them: their source and,
+when built on a GPU host, their compiled code's PTX/SASS card. No timings.
 
-  lab kernels library fetch                       (re-download every indexed file at its library's version)
   lab kernels library cards --task T --out lab/kernels/library/ptx/T.txt [--dump DIR]   (on the GPU host: each entry's card
       from its library's .so (`sass` in the index) or from DIR, a `lab.kernels.library.competitors` dump (<name>.ptx|.sass,
       ours.ptx for the engine's kernel))
@@ -21,7 +21,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 INDEX = HERE / "index.toml"
-SRC = HERE / "src"
+SRC = HERE.parents[2] / "local" / "library"   # <library>/<version>/<path>: each indexed file as downloaded
 CARDS = HERE / "ptx"         # the cards, one file per task (lab/kernels/library/ptx.py's format)
 ENGINE = "engine"                                       # the starting program's card in a task's card file
 
@@ -71,12 +71,23 @@ def url(k: Kernel, part: str) -> str:
     return f"https://github.com/{k.repo}/blob/{k.version}/{p}" + (f"#L{r[0]}-L{r[1]}" if r else "")
 
 
+def _file(k: Kernel, path: str, src: Path) -> Path:
+    """The upstream file at the library's version, downloaded the first time it is read."""
+    dest = src / k.library / k.version / path
+    if not dest.exists():
+        with urllib.request.urlopen(f"https://raw.githubusercontent.com/{k.repo}/{k.version}/{path}", timeout=60) as r:
+            data = r.read()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+    return dest
+
+
 def text(k: Kernel, src: Path = SRC) -> str:
-    """The entry's source: each part's lines from the vendored file."""
+    """The entry's source: each part's lines of its upstream file."""
     out = []
     for part in k.source:
         p, r = _part(part)
-        lines = (src / k.library / p).read_text().splitlines()
+        lines = _file(k, p, src).read_text().splitlines()
         out.append("\n".join(lines[r[0] - 1:r[1]] if r else lines))
     return "\n\n".join(out)
 
@@ -121,23 +132,6 @@ def block(task: str, path: Path = INDEX, src: Path = SRC, cards_dir: Path = CARD
     if ENGINE in cs:
         out.append("## The starting program's card\n" + "\n".join(cs[ENGINE]))
     return "\n\n".join(out)
-
-
-def fetch(path: Path = INDEX, src: Path = SRC) -> list[Path]:
-    """Download every indexed file at its library's version into src/ (whole files: ranges are applied when read)."""
-    got = []
-    for k in index(path):
-        for part in k.source:
-            p, _ = _part(part)
-            dest = src / k.library / p
-            if dest in got:
-                continue
-            with urllib.request.urlopen(f"https://raw.githubusercontent.com/{k.repo}/{k.version}/{p}", timeout=60) as r:
-                data = r.read()
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(data)
-            got.append(dest)
-    return got
 
 
 @functools.lru_cache(maxsize=None)
@@ -209,15 +203,11 @@ def build_cards(task: str, dump: Path | None, arch: str | None) -> tuple[list[di
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="lab kernels library")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("fetch")
     c = sub.add_parser("cards")
     c.add_argument("--task", required=True)
     c.add_argument("--out", required=True)
     c.add_argument("--dump", help="a lab.kernels.library.competitors out dir")
     a = ap.parse_args(argv)
-    if a.cmd == "fetch":
-        print(json.dumps({"files": len(fetch())}))
-        return 0
     from lab.kernels.library.ptx import render
     import torch
     arch = "sm_%d%d" % torch.cuda.get_device_capability() if torch.cuda.is_available() else None

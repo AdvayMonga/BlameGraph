@@ -9,6 +9,8 @@ blobs are the data, so a new table or column is a rebuild, never a migration.
   engine_rows         the engine's per-request telemetry rows (trace_id = 'bg-' || client_rows.id)
   device_samples      GPU samples over each served window
   kernels, ops        profile bundles' CUDA kernel and operator tables (profile records and each bench's `profiled`)
+  kernel_ideas        one row per idea of every kernel search: plan, prediction, fate, gain, reflection, and the
+                      keys of its model calls and program in the run's `calls` and `texts` blobs
   heldout_rows        submit's per-request held-out rows: researcher index only, never the agent's
 
 Two files under <ledger>/index/: agent.duckdb (everything but heldout_rows and researcher runs' records) and
@@ -160,6 +162,17 @@ def _profiles(root: Path, recs: list[dict], missing: list) -> tuple[Iterator, It
     return kernels(), ops()
 
 
+def _kernel_ideas(root: Path, recs: list[dict], missing: list) -> Iterator[dict]:
+    for r in recs:
+        res = r.get("result") if isinstance(r.get("result"), dict) else {}
+        p = _blob(root, res.get("ideas"), missing) if r["kind"] == "kernels" else None
+        for line in p.read_text().splitlines() if p else []:
+            d = json.loads(line)
+            yield {**_key(r), "task": (r.get("config") or {}).get("task"), "calls_blob": res.get("calls"),
+                   "texts_blob": res.get("texts"),
+                   **{k: _j(v) if isinstance(v, (dict, list)) else v for k, v in d.items()}}
+
+
 def _heldout_rows(runs: Path) -> Iterator[dict]:
     for p in sorted(Path(runs).glob("*/heldout-private/*/client_rows.jsonl")):
         for line in p.read_text().splitlines():
@@ -181,7 +194,7 @@ def build(root: Path, db: Path, heldout_runs: Path | None = None, agent: bool = 
         kernels, ops = _profiles(root, recs, missing)
         tables = {"records": _records(recs), "regimes": _regimes(recs), "heldout_aggregates": _heldout(recs),
                   "noise": _noise(recs), "client_rows": client, "engine_rows": engine, "device_samples": device,
-                  "kernels": kernels, "ops": ops}
+                  "kernels": kernels, "ops": ops, "kernel_ideas": _kernel_ideas(root, recs, missing)}
         if heldout_runs is not None:
             tables["heldout_rows"] = _heldout_rows(heldout_runs)
         counts = {name: _table(con, name, rows, tmp) for name, rows in tables.items()}

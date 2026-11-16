@@ -1,246 +1,193 @@
-"""The search: from the engine's kernel, repeatedly pick an open node of the tree, show the model that program and its
-measurements (facts only: gates, per-shape paired timings, % of the roofline bound, error against the reference, the
-lineage's scores, what its earlier children scored or why they failed), apply its SEARCH/REPLACE answer, and judge
-the result with the cascade (stage 1, then stage 2). Lessons it builds on: serial refinement over parallel sampling
-(Kevin), a tree with caps and pruning (STARK), keeping slower and failed nodes as context (Kernel Forge), no
-conversation history, only the latest program and its facts (CudaForge), duplicates refused before any GPU time.
-With a judge (a strong model), each expansion is one round (lab/kernels/search/funnel.py), whose calls use
-`JUDGE` and `MODES` below; the genetic search (lab/kernels/search/generations.py) runs the same rounds from several parents.
+"""The search: each generation names its changes in one call, reviews them in a second, and has a writer make each.
 
-Every node goes to `<out>/trace.jsonl` in the fields `lab.kernels.evolve.run.record` and `retime` read."""
+Before the first generation the start and the seeds are judged, and one call names public implementations to port
+as further starting programs (context.ports), each made by a writer call and judged beside them.
+
+A generation picks its parents (diversity.pick) and drops the ones that fail the full correctness check
+(evaluate.Evaluator.check). One naming call reflects on the last generation's ideas and names `ideas` changes
+(context.name). The ones whose text is close to another idea's are found (diversity.Similar) and one review call
+writes the final list, the same change merged and combinations added (context.review). A writer call makes each
+change (context.write). Programs that repeat one already written are dropped (diversity.Novelty), the rest are built
+and timed (evaluate.Evaluator.evaluate) and join the population. It runs every generation whatever they score.
+
+`<out>/trace.jsonl` holds every judged program, `<out>/hypotheses.jsonl` every generation's ideas and their fates,
+`<out>/ideas.jsonl` one row per idea (plan, prediction, program, outcome, reflection), rewritten after every
+generation, `<out>/reflection.txt` the model's closing reflection on the run, and `<out>/calls.jsonl` with
+`<out>/texts.jsonl` every model call whole (calls.py)."""
 from __future__ import annotations
 
 import difflib
 import json
-import re
-import tempfile
+import random
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Callable
 
-from lab.kernels.search import diff
-from lab.kernels.search.tree import UCT_C, Node, Tree, fingerprint
-
-FORMAT = """Answer with SEARCH/REPLACE blocks against the program shown. Each SEARCH section must match the program
-exactly once, or the answer is not applied. Any number of blocks:
-
-<<<<<<< SEARCH
-old lines
-=======
-new lines
->>>>>>> REPLACE"""
-
-TIMING_KEYS = ("shape", "candidate_ms", "baseline_ms", "speedup", "speedup_p25", "speedup_p75", "beyond_noise",
-               "pct_of_roofline", "bound", "pct_of_peak_bandwidth", "pct_of_peak_flops")
+from lab.kernels.search import context, diff, diversity
+from lab.kernels.search.calls import Calls, Model
+from lab.kernels.search.evaluate import Evaluator, Result
+from lab.kernels.search.program import Config, Idea, Program
 
 
-JUDGE = ("You are making changes to GPU kernel programs in a search. You are shown one program, its measurements and "
-         "the starting program.")
-SHAPE = ('{{"bottleneck": "<max 30 words>", "optimisation_method": "<max 35 words>", "modification_plan": "<max 35 '
-         'words>", "mechanism": [{{"counter": "<an ncu metric name from the measurements>", "change_pct": <predicted % '
-         'change, summed over the program\'s kernels>}}]}}')
-ONE = ('Answer with one JSON object ' + SHAPE + ' ("mechanism" may be empty), then the change as SEARCH/REPLACE blocks '
-       'against the program shown. It is applied and measured.')
-MODES = {           # the request that ends a call's prompt, by idea type (lab/kernels/search/generations.py)
-    "optimization": "The program is correct. Make one change to it. " + ONE,
-    "persistence": "The program is correct. Its last change, shown above, took its parent from {before:.4f} to "
-                   "{after:.4f}. Make one change that takes that same change further. " + ONE,
-    "fresh": "The program is correct. Make one change that gives the kernel an overall structure that differs from this "
-             "program's and from every idea in the table of ideas tried on this task. " + ONE,
-    "crossover": "The program is correct. Another program from the same search is shown after it. Make one change to "
-                 "this program that carries over what the other program does differently. " + ONE,
-}
+def new_id() -> str:
+    return uuid.uuid4().hex[:8]
 
 
-def trace_row(node: Node, cost: float) -> dict:
-    """A node as `<out>/trace.jsonl` keeps it (the fields `lab.kernels.evolve.run.record` and `retime` read)."""
-    return {"iteration": node.iteration, "parent_id": node.parent, "child_id": node.id, "child_metrics": node.metrics,
-            "child_code": node.code, "mode": node.mode, "artifacts": node.artifacts, "judge": node.judge,
-            "proposal": node.proposal, "kind": node.kind, "cost_usd": cost}
+def trace_row(p: Program) -> dict:
+    return {"iteration": p.generation, "parent_id": p.parent, "child_id": p.id, "child_metrics": p.metrics,
+            "child_code": p.code, "artifacts": p.artifacts, "judge": json.dumps(p.plan) if p.plan else "",
+            "kind": p.kind}
 
 
-def hypotheses(text: str, n: int) -> list[dict]:
-    """The judge's JSON array (or one object), best effort; unparsable text becomes one hypothesis."""
-    m = re.search(r"\[.*\]|\{.*\}", text or "", re.S)
-    try:
-        v = json.loads(m.group(0)) if m else None
-    except json.JSONDecodeError:
-        v = None
-    v = v if isinstance(v, list) else [v] if isinstance(v, dict) else [{"plan": text}] if text else []
-    return [h for h in v if isinstance(h, dict)][:n]
+def idea_row(i: Idea, parent: Program) -> dict:
+    """An idea in its generation's row of hypotheses.jsonl (what the idea archive reads)."""
+    row = {"idea": {**i.plan, "model": i.model, "parent_id": i.parent, "idea_id": i.id}, "fate": i.fate}
+    if i.child:
+        row |= {"child_id": i.child.id, "child_score": i.child.score, "improved": i.child.score > parent.score}
+    if i.code:
+        row["diff"] = "".join(difflib.unified_diff(parent.code.splitlines(True), i.code.splitlines(True), n=2))[:4000]
+    return row
 
 
-def ncu_facts(node: Node) -> str:
-    """The top kernels of one call with CudaForge's 24 counters, or why there are none."""
-    a = node.artifacts
-    if a.get("ncu"):
-        d = json.loads(a["ncu"])
-        per = d.get("shapes") or [{"shape": None, **d}]
-        lines = []
-        for p in per:
-            head = f"shape {p['shape']}: " if p.get("shape") is not None else ""
-            ks = p.get("kernels") or []
-            lines += [head + json.dumps(k) for k in ks] or [head + (p.get("error") or "none recorded")]
-        return "\n".join(lines)
-    if a.get("ncu_missing"):
-        return a["ncu_missing"]
-    return "ncu failed: " + a["ncu_error"][-300:] if a.get("ncu_error") else ""
+def table_row(i: Idea, score: dict) -> dict:
+    """An idea's row of ideas.jsonl: everything about it, its texts by their keys in texts.jsonl."""
+    kid = i.child
+    return {"idea_id": i.id, "generation": i.generation, "parent_id": i.parent, "parent_score": score.get(i.parent),
+            "plan": i.plan, "merged_from": i.merged, "writer": i.model, "calls": i.calls, "program": i.program,
+            "fate": i.fate, "child_id": kid.id if kid else None, "child_score": kid.score if kid else None,
+            "gain": context.outcome(i, score).get("gain"), "metrics": kid.metrics if kid else None,
+            "reflection": i.reflection}
 
 
-def facts(node: Node) -> str:
-    """A node's measurements as the evaluator returned them, compacted: the gates (with reasons when failed), the
-    per-shape timings, the error against the reference, or the error that stopped it."""
-    a, out = node.artifacts, [f"metrics: {json.dumps(node.metrics)}"]
-    if a.get("error"):
-        out.append(f"error: {a['error'][-2000:]}")
-    if a.get("gates"):
-        g = json.loads(a["gates"])
-        out.append("gates: " + "; ".join(f"{k} {'passed' if v['passed'] else 'FAILED: ' + v['reason']}"
-                                         for k, v in g.items()))
-    if a.get("timings"):
-        out.append("timings (per seen shape, paired with the baseline):")
-        out += [json.dumps({k: r.get(k) for k in TIMING_KEYS}) for r in json.loads(a["timings"])]
-    if a.get("error_vs_reference"):
-        out.append(f"error against the reference: {a['error_vs_reference']}")
-    if ncu_facts(node):
-        out.append("ncu counters (one call each on the smallest and the largest seen shape, longest kernels first):\n"
-                   + ncu_facts(node))
-    return "\n".join(out)
+def changes(answer: dict, parents: list[Program]) -> list[dict]:
+    """An answer's ideas that change one of `parents`."""
+    ids = {p.id for p in parents}
+    return [p for p in answer.get("ideas") or [] if isinstance(p, dict) and p.get("parent") in ids]
 
 
-def diff_from_root(tree: Tree, node: Node, limit: int = 3000) -> str:
-    root = tree.root()
-    d = "".join(difflib.unified_diff(root.code.splitlines(keepends=True), node.code.splitlines(keepends=True),
-                                     "start", node.id, n=2))
-    return d if len(d) <= limit else d[:limit] + f"\n... ({len(d) - limit} more characters)\n"
+def idea(plan: dict, generation: int, calls: dict) -> Idea:
+    """A named change as an idea: its parent and the named changes it is from, apart from the rest of its plan."""
+    return Idea(new_id(), plan["parent"], generation, {k: v for k, v in plan.items() if k not in ("parent", "from")},
+                plan["from"] if isinstance(plan.get("from"), list) else [], dict(calls))
 
 
-def inspirations(tree: Tree, node: Node, k: int = 2) -> list[Node]:
-    """The best judged programs off this program's lineage that beat the start (CodeEvolve: 2-3 inspirations)."""
-    mine = {n.id for n in tree.lineage(node)}
-    base = tree.root().score
-    others = [n for n in tree.nodes.values() if n.id not in mine and n.metrics.get("correct") == 1.0 and n.score > base]
-    return sorted(others, key=lambda n: -n.score)[:k]
+def reflected(ideas: list[Idea], answer: dict) -> None:
+    """Each reflection of an answer onto the idea it names."""
+    by = {i.id: i for i in ideas}
+    for r in answer.get("reflections") or []:
+        if isinstance(r, dict) and r.get("id") in by:
+            by[r["id"]].reflection = str(r.get("reflection") or "")
 
 
-def prompt(tree: Tree, node: Node) -> str:
-    """The program, its measurements, its lineage and children, the starting program (when it is not the starting
-    program) and the best programs off its lineage, all as full code."""
-    path = " -> ".join(f"{n.id} ({n.score:.4f})" for n in tree.lineage(node))
-    tried = [tree.nodes[c] for c in node.children]
-    kids = "\n".join(f"- {c.id}: score {c.score:.4f}" + (f", {c.artifacts.get('error', '')[:300]}"
-                                                          if c.score <= 0 else "") for c in tried) or "none"
-    sol = f"; {node.pct_of_roofline:.1f}% of its roofline bound, call-weighted" if node.pct_of_roofline else ""
-    root = tree.root()
-    start = "" if node is root else (f"# The starting program {root.id} (score {root.score:.4f})\n"
-                                     f"```python\n{root.code}\n```\n\n")
-    other = "".join(f"## Program {o.id} (score {o.score:.4f})\n```python\n{o.code}\n```\n"
-                    for o in inspirations(tree, node))
-    return (f"# Program {node.id} (score {node.score:.4f}{sol}; best in the tree {tree.best().score:.4f})\n"
-            f"```python\n{node.code}\n```\n\n# Its measurements\n{facts(node)}\n\n"
-            f"# Lineage (node, score)\n{path}\n\n# Programs already derived from it\n{kids}\n\n" + start
-            + (f"# Other programs in the tree\n{other}\n" if other else ""))
+def write(calls: Calls, writer: Model, setting: str, idea: Idea, by: dict[str, Program]) -> None:
+    """One writer call: the program its change makes of the idea's parent, or why it could not be applied."""
+    parent = by[idea.parent]
+    borrowed = [by[b] for b in idea.plan.get("borrows") or [] if isinstance(b, str) and b in by and b != parent.id]
+    text, idea.calls["write"] = calls(writer, "write", idea.generation,
+                                      *context.write(setting, parent, idea.plan, borrowed))
+    idea.model = getattr(writer, "model", None)
+    idea.code, why = diff.apply(parent.code, text) if text else (None, "the model returned no text")
+    if idea.code:
+        idea.program = calls.put(idea.code)
+    else:
+        idea.fate = f"not applied: {why}"
 
 
-REFUSED = "ERR_NVGPUCTRPERM"        # ncu: this host does not let the jail read GPU performance counters
-
-
-def cascade(judge_stage: Callable[[str, int], dict], counters: bool = False) -> Callable[[str], dict]:
-    """Stage 1, then stage 2 for a program that passes it, then (counters=True) its ncu counters: {metrics, artifacts,
-    code: the program measured}. Once the host refuses counters, they are not asked for again (two jailed runs per program, for an
-    error: every profile of 2026-10-18/19)."""
-    on = [counters]
-
-    def staged(code: str, n: int) -> dict:
-        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
-            f.write(code)
-        try:
-            return judge_stage(f.name, n)
-        finally:
-            Path(f.name).unlink()
-
-    def judge(code: str) -> dict:
-        r = staged(code, 1)
-        if r["metrics"].get("correct") != 1.0:
-            return {**r, "code": code}
-        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
-            f.write(code)
-        try:
-            r = judge_stage(f.name, 2)
-            if on[0] and r["metrics"].get("correct") == 1.0 and r["metrics"].get("combined_score", 0) > 0:
-                a = judge_stage(f.name, 3)["artifacts"]
-                if REFUSED in json.dumps(a):
-                    on[0] = False
-                    a = {"ncu_missing": f"ncu counters unavailable on this host ({REFUSED}); not collected this run"}
-                r["artifacts"] = {**r["artifacts"], **a}
-            return {**r, "code": code}
-        finally:
-            Path(f.name).unlink()
-    return judge
-
-
-def search(initial: str, system: str, propose: Callable[[str, str], tuple[str, float]],
-           judge: Callable[[str], dict], out: Path, evals: int, seed: int = 0,
-           patience: int | None = None, children: int = 4,
-           uct_c: float = UCT_C, funnel=None) -> tuple[Tree, dict]:
-    """Search until `evals` programs are judged, nothing is left to try, or `patience`
-    programs have been judged since the best last improved (MANTIS, Hari et al.: 16 attempts without progress).
-
-    Each expansion of an MCTS-chosen parent is one funnel round (lab/kernels/search/funnel.py), every idea and what became
-    of it in `<out>/hypotheses.jsonl`; without a funnel (no judge), the coder alone proposes `children` children.
-    Returns the tree and the run's cost {usd, model_calls, evals, ...}."""
+def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer: Model, evaluator: Evaluator,
+           novelty: diversity.Novelty, similar: diversity.Similar, out: Path,
+           cfg: Config = Config()) -> tuple[list[Program], dict]:
+    """The population (the start first) and the run's cost {usd, model_calls, evals, generations}. `seeds`: name ->
+    program, judged beside the start. `namer` names the ports and names and reviews a generation's changes, and
+    writes the ports (it can read their sources); `writer` makes each change."""
     out.mkdir(parents=True, exist_ok=True)
-    tree, spent, calls, judged, it, rows = Tree(seed, c=uct_c), 0.0, 0, 0, 0, []
-    with open(out / "trace.jsonl", "w") as trace, open(out / "hypotheses.jsonl", "w") as hyplog:
-        def keep(node: Node, cost: float) -> None:
-            tree.add(node)
-            trace.write(json.dumps(trace_row(node, cost)) + "\n")
+    rng, population, ideas, ran = random.Random(cfg.seed), [], [], 0
+    calls = Calls(out)
+    with open(out / "trace.jsonl", "w") as trace, open(out / "hypotheses.jsonl", "w") as log:
+        def keep(code: str, r: Result, generation: int, parent: str | None = None, plan: dict | None = None,
+                 kind: str = "") -> Program:
+            p = Program(new_id(), parent, code, r.metrics, r.artifacts, generation, plan or {}, kind)
+            population.append(p)
+            trace.write(json.dumps(trace_row(p)) + "\n")
             trace.flush()
+            return p
 
-        def attempt(parent: Node) -> None:
-            """One coder call, applied and judged (nothing once `evals` are judged)."""
-            nonlocal spent, calls, judged
-            if judged >= evals:
-                return
-            text, c = propose(system + "\n\n" + FORMAT, prompt(tree, parent))
-            spent, calls = spent + c, calls + 1
-            code, why = diff.apply(parent.code, text) if text else (None, "the model returned no text")
-            if code is not None and fingerprint(code) in tree.seen:
-                code, why = None, "identical to a program already judged (comments and whitespace aside)"
-            if code is None:                     # no GPU time spent: a failed child of its parent
-                zero = {"combined_score": 0.0, "correct": 0.0, "stage": 0}
-                keep(Node(uuid.uuid4().hex[:8], parent.id, parent.code, zero, {"error": why}, it, text), c)
-                return
-            r = judge(code)
-            judged += 1
-            keep(Node(uuid.uuid4().hex[:8], parent.id, r.get("code", code), r["metrics"], r["artifacts"], it, text), c)
+        def make(gen: int, parents: list[Program], new: list[Idea], model: Model, spent: float, row: dict,
+                 kind: str = "") -> None:
+            """A generation's ideas written, the repeats refused, the rest judged; its row of hypotheses.jsonl."""
+            by = {p.id: p for p in population}
+            with ThreadPoolExecutor(max_workers=cfg.workers) as ex:
+                list(ex.map(lambda i: write(calls, model, setting, i, by), new))
+            for i in new:
+                why = novelty.refuse(i.code) if i.code else None
+                if why:
+                    i.code, i.fate = None, f"not applied: {why}"
+            written = [i for i in new if i.code]
+            for i, r in zip(written, evaluator.evaluate([i.code for i in written])):
+                i.fate = r.fate
+                if r.examined:
+                    i.child = keep(i.code, r, gen, i.parent, i.plan, kind)
+            similar.add(new)
+            ideas.extend(new)
+            kids = [i.child for i in new if i.child]
+            log.write(json.dumps({
+                "iteration": gen, "parents": [{"id": p.id, "score": p.score} for p in parents], **row,
+                "written": len(written), "examined": len(kids),
+                "improved": sum(c.score > by[c.parent].score for c in kids), "usd": round(calls.usd - spent, 4),
+                "ideas": [idea_row(i, by[i.parent]) for i in new]}, default=str) + "\n")
+            log.flush()
+            table()
 
-        r = judge(initial)
-        judged += 1
-        keep(Node(uuid.uuid4().hex[:8], None, r.get("code", initial), r["metrics"], r["artifacts"], 0), 0.0)
-        best_at, best_score = judged, tree.best().score
-        while judged < evals:
-            if tree.best().score > best_score:
-                best_at, best_score = judged, tree.best().score
-            if patience and judged - best_at >= patience:
+        def table() -> None:
+            score = {p.id: p.score for p in population}
+            (out / "ideas.jsonl").write_text(
+                "".join(json.dumps(table_row(i, score), default=str) + "\n" for i in ideas))
+
+        first = [start, *seeds.values()]
+        for code in first:
+            novelty.add(code)
+        results = evaluator.evaluate(first)
+        root = keep(start, results[0], 0)
+        for name, code, r in zip(seeds, first[1:], results[1:]):
+            keep(code, r, 0, root.id, {"competitor": name}, "competitor")
+        if cfg.ports:
+            spent = calls.usd
+            text, nid = calls(namer, "ports", 0, *context.ports(setting, root, list(seeds), cfg.ports))
+            plans = changes(context.read(text), [root])[:cfg.ports]
+            make(0, [root], [idea(p, 0, {"name": nid}) for p in plans], namer, spent,
+                 {"named": len(plans), "calls": {"name": nid}}, "competitor")
+
+        for gen in range(1, cfg.generations + 1):
+            picked = diversity.pick(population, cfg.parents, rng)
+            if not picked:
                 break
-            it += 1
-            parent = tree.select()
-            if parent is None:
-                break
-            if funnel is None:
-                for _ in range(children):
-                    attempt(parent)
-                continue
-            from lab.kernels.search import memory
-            from lab.kernels.search.funnel import expand
-            before, library = funnel.spent, funnel.library
-            funnel.memory = (memory.general(library, funnel.task), memory.task(library, funnel.task, rows))
-            kids = expand(funnel, tree, parent, system, it, keep,
-                          lambda row: (rows.append(row), hyplog.write(json.dumps(row, default=str) + "\n"),
-                                       hyplog.flush()))
-            spent, calls, judged = spent + funnel.spent - before, funnel.calls, judged + len(kids)
-            if not kids:                         # a round that examined nothing counts as one failure
-                parent.failures += 1
-    stalled = bool(patience and judged < evals and judged - best_at >= patience)
-    return tree, {"usd": round(spent, 4), "model_calls": calls, "evals": judged, "stopped_no_progress": stalled}
+            spent, dropped = calls.usd, evaluator.check(picked)
+            for i in ideas:
+                if i.child and i.child.id in dropped:
+                    i.fate = f"failed the full check as a parent: {dropped[i.child.id]}"
+            parents = [p for p in picked if p.id not in dropped]
+            for p in parents:
+                evaluator.profile(p)
+            plans, final, nid, rid = [], [], None, None
+            if parents:
+                text, nid = calls(namer, "name", gen,
+                                  *context.name(setting, parents, population, ideas, gen, cfg.ideas))
+                answer = context.read(text)
+                reflected(ideas, answer)
+                plans = changes(answer, parents)[:cfg.ideas]
+            if plans:
+                text, rid = calls(namer, "review", gen, *context.review(
+                    setting, parents, population, ideas, plans, similar.match(plans), cfg.merges))
+                final = changes(context.read(text), parents)[:cfg.ideas + cfg.merges] or plans   # unreadable: as named
+            make(gen, parents, [idea(p, gen, {"name": nid, "review": rid}) for p in final], writer, spent,
+                 {"dropped": dropped, "named": len(plans), "reviewed": len(final), "calls": {"name": nid, "review": rid}})
+            ran = gen
+
+        if ran:                                  # the last generation's ideas have no naming call after them
+            text, _ = calls(namer, "reflect", ran + 1, *context.reflect(setting, population, ideas, ran + 1))
+            answer = context.read(text)
+            reflected(ideas, answer)
+            (out / "reflection.txt").write_text(str(answer.get("run") or ""))
+        table()
+    calls.close()
+    return population, {"usd": round(calls.usd, 4), "model_calls": calls.n, "evals": evaluator.evals,
+                        "generations": ran}

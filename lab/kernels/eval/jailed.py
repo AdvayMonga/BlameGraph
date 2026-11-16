@@ -1,4 +1,4 @@
-"""python -m lab.kernels.eval.jailed CONFIG.json PROGRAM|- STAGE (1, 2, 3: ncu counters, 4: quick, 5: precheck, 6: sanitizer, 7: freeze)  (or `- - STAGE`: {config, source} as JSON on stdin)  ->  lab.kernels.eval.core's JSON, judged in the jail.
+"""python -m lab.kernels.eval.jailed CONFIG.json PROGRAM|- STAGE (1, 2, 3: ncu counters, 4: quick, 5: precheck, 6: sanitizer, 7: freeze, 8: full check, 9: winner's check)  (or `- - STAGE`: {config, source} as JSON on stdin)  ->  lab.kernels.eval.core's JSON, judged in the jail.
 
 The candidate runs as agent code (lab/infra/sandbox/grader.jailed: a container with no network on Linux, srt elsewhere;
 LAB_NO_JAIL=1 waives it). The jail sees a fresh tree holding only the candidate and its config, a read-only copy of
@@ -34,6 +34,9 @@ NCU_STAGE = 3                    # not a judging stage: ncu counters for a progr
 QUICK_STAGE = 4                  # stage 2 on the most-called seen shape only: the funnel's quick speed test
 PRECHECK_STAGE = 5               # no GPU attached: the screen, the CUDA C++ build, the compiler's report (precheck.py)
 SANITIZE_STAGE = 6               # the gate's: compute-sanitizer around one call per shape (lab/kernels/eval/sanitize.py)
+CHECK_STAGE = 8                  # the full check on every seen shape, no timing: a program picked as a parent
+WINNER_STAGE = 9                 # CHECK_STAGE on WINNER_SEEDS seeds: a program about to be promoted
+WINNER_SEEDS = 20
 EVAL_DIRS = Path(os.environ.get("KERNEL_EVAL_DIRS") or Path(tempfile.gettempdir()) / "kernel-eval")
 CUDA = Path("/usr/local/cuda")
 MEMORY = os.environ.get("KERNEL_EVAL_MEMORY", "32g")   # host RAM a judgment may use: a program cannot starve the host
@@ -184,6 +187,10 @@ def judge_jailed(cfg: dict, source: str, stage: int, timeout_s: float = TIMEOUT_
             why = a.get("ncu_error") or a.get("shared_weights_changed") or a.get("error", "")    # a void's evidence too
             out.append({"shape": shape, **(json.loads(a["ncu"]) if "ncu" in a else {"error": why[-500:]})})
         return {"metrics": {"stage": stage}, "artifacts": {"ncu": json.dumps({"shapes": out})}}
+    if stage in (CHECK_STAGE, WINNER_STAGE):
+        r = judge_jailed({**cfg, "full": True, "check_only": True,
+                          **({"seeds": WINNER_SEEDS} if stage == WINNER_STAGE else {})}, source, 2, timeout_s)
+        return {**r, "metrics": {**r["metrics"], "stage": stage}}
     if stage == QUICK_STAGE:        # selection orders seen shapes by calls: the first is the most called
         one = json.dumps(list(cfg["seen"][0]))
         r = judge_jailed({**cfg, "seen": cfg["seen"][:1], "weights": {one: (cfg.get("weights") or {}).get(one, 1)},

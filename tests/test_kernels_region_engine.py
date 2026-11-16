@@ -318,7 +318,7 @@ def test_the_search_cli_takes_a_region_with_its_samples_and_holder(tmp_path, mon
     out = tmp_path / "out"
     with pytest.raises(KeyboardInterrupt):
         cli.main(["--task", "region:norm:add", "--samples", str(caps), "--shared-weights", str(h.path),
-                  "--out", str(out), "--judge-model", "none", "--device", "cpu"])
+                  "--out", str(out), "--device", "cpu"])
     cfg = json.loads((out / "eval_config.json").read_text())
     assert cfg["task"] == "region:norm:add" and cfg["samples"] == str(caps.resolve())
     assert cfg["shared_weights"] == str(h.path.resolve()) and cfg["seen"] == [[4, 64], [16, 64], [64, 64]]   # split
@@ -349,7 +349,7 @@ def test_a_region_judged_on_a_remote_worker_is_described_here_from_its_shapes_fi
     monkeypatch.setattr(cli, "Claude", lambda *a, **k: None)
     monkeypatch.setattr(cli, "search", lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
     argv = ["--task", "region:norm:add", "--samples", "/gpu/s", "--shared-weights", "/gpu/w.pkl", "--out",
-            str(tmp_path / "out"), "--judge-model", "none", "--device", "cuda", "--no-ncu"]
+            str(tmp_path / "out"), "--device", "cuda"]
     with pytest.raises(SystemExit, match="--shapes and --initial"):
         cli.main(argv)
     with pytest.raises(KeyboardInterrupt):

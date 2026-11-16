@@ -1,4 +1,4 @@
-"""The library of other implementations (kernels/library): the index, the vendored source, the prompt block and the
+"""The library of other implementations (kernels/library): the index, the downloaded source, the prompt block and the
 cards, no network or GPU."""
 import sys
 from pathlib import Path
@@ -27,22 +27,41 @@ source = ["y.py"]
 
 def make(tmp_path):
     (tmp_path / "index.toml").write_text(INDEX)
-    (tmp_path / "src" / "a" / "x").mkdir(parents=True)
-    (tmp_path / "src" / "a" / "x" / "k.cu").write_text("1\n2\n3\n4\n5\n6\n")
-    (tmp_path / "src" / "a" / "y.py").write_text("def f(): pass\n")
+    (tmp_path / "src" / "a" / "v1" / "x").mkdir(parents=True)
+    (tmp_path / "src" / "a" / "v1" / "x" / "k.cu").write_text("1\n2\n3\n4\n5\n6\n")
+    (tmp_path / "src" / "a" / "v1" / "y.py").write_text("def f(): pass\n")
     (tmp_path / "cards").mkdir()
     (tmp_path / "cards" / "t.txt").write_text('engine: 1 kernels\n  e: {"mma": 1}\na.k (0.5 ms on our shapes): 1 kernels\n'
                                               '  k: {"mma": 2}\n')
     return tmp_path / "index.toml", tmp_path / "src", tmp_path / "cards"
 
 
-def test_every_indexed_file_is_vendored_its_ranges_hold_and_its_tasks_exist():
+def test_every_entrys_tasks_exist_its_ranges_are_well_formed_and_a_file_is_downloaded_once(tmp_path, monkeypatch):
     for k in L.index():
         assert set(k.tasks) <= set(TASKS), k.name
         for part in k.source:
-            path, r = L._part(part)
-            lines = (L.SRC / k.library / path).read_text().splitlines()
-            assert r is None or 1 <= r[0] <= r[1] <= len(lines), part
+            r = L._part(part)[1]
+            assert r is None or 1 <= r[0] <= r[1], part
+    asked = []
+
+    class Reply:
+        def __init__(self, url):
+            asked.append(url)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def read(self):
+            return b"1\n2\n3\n4\n5\n6\n"
+    monkeypatch.setattr(L.urllib.request, "urlopen", lambda url, timeout: Reply(url))
+    (tmp_path / "index.toml").write_text(INDEX)
+    k = L.for_task("t", tmp_path / "index.toml")[0]
+    assert L.text(k, tmp_path / "src") == L.text(k, tmp_path / "src") == "2\n3\n\n5"
+    assert asked == ["https://raw.githubusercontent.com/o/a/v1/x/k.cu"]
+    assert (tmp_path / "src" / "a" / "v1" / "x" / "k.cu").exists()
     assert {t for k in L.index() for t in k.tasks} == set(TASKS) - {"toy_rmsnorm"}     # every real task has some
 
 

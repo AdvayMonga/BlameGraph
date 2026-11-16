@@ -15,6 +15,7 @@ from the cache (`lab.apiproxy.cost_usd` prices reads and writes)."""
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 from lab.apiproxy import cost_usd, price
@@ -62,6 +63,8 @@ def _transient(e: Exception) -> bool:
 
 
 class Claude:
+    last = threading.local()                     # .stop: why this thread's last call ended
+
     def __init__(self, model: str = "claude-opus-5-5", effort: str = "high", max_tokens: int = 64000,
                  tools: bool = False, max_turns: int = 8, ledger_root: Path | None = None):
         import anthropic
@@ -101,6 +104,7 @@ class Claude:
         for _ in range(self.max_turns):
             m = self._turn(system, messages, kw)
             usd += self._usd(m)
+            self.last.stop = m.stop_reason
             if m.stop_reason == "refusal":
                 return "", usd
             if m.stop_reason not in ("tool_use", "pause_turn"):
