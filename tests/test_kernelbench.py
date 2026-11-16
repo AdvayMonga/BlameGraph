@@ -11,14 +11,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("LAB_NO_JAIL", "1")
-os.environ.setdefault("LAB_TARGET", str(ROOT / "targets" / "inference-server.toml"))
+os.environ.setdefault("LAB_TARGET", str(ROOT / "lab" / "targets" / "inference-server.toml"))
 
 import torch  # noqa: E402
 
-from generate.kernels.tasks import kernelbench as kb  # noqa: E402
-from evals.kernels.core import judge, screen  # noqa: E402
-from generate.kernels.evolve.run import _target_tolerances, initial_program, system_message  # noqa: E402
-from generate.kernels.tasks import from_config, load  # noqa: E402
+from lab.kernels.tasks import kernelbench as kb  # noqa: E402
+from lab.kernels.eval.core import judge, screen  # noqa: E402
+from lab.kernels.evolve.run import _target_tolerances, initial_program, system_message  # noqa: E402
+from lab.kernels.tasks import from_config, load  # noqa: E402
 
 PROBLEM = '''import torch
 import torch.nn as nn
@@ -114,7 +114,7 @@ def test_the_judge_passes_a_correct_rewrite_and_zeroes_a_wrong_one():
 
 
 def test_a_jailed_judgment_reads_the_problem_from_its_config_and_verifies_outside():
-    from evals.kernels.jailed import judge_jailed
+    from lab.kernels.eval.jailed import judge_jailed
     with tempfile.TemporaryDirectory() as d:
         src = program(d, FAST).read_text()
     cfg = {"task": "kb:9:1", "source": PROBLEM, "seen": [[1]], "device": "cpu", "iters": 3,

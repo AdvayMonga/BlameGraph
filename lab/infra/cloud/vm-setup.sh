@@ -18,7 +18,7 @@ export PATH="$HOME/.local/bin:$PATH"
 # The engine's venv is built by the target spec's `[engine] build` command (the one recipe lab/infra/sandbox/build.py also runs for a
 # changed dependency set), with the project installed on top; nothing engine-specific lives in this script. Skipped
 # when the venv already has a CUDA torch; never run a bare `uv sync` on this box afterwards (the lock pins CPU torch).
-target="$here/../../../${LAB_TARGET:-targets/inference-server.toml}"
+target="$here/../../../${LAB_TARGET:-lab/targets/inference-server.toml}"
 if ! .venv/bin/python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
   build=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["engine"]["build"])' "$target")
   UV_PROJECT_ENVIRONMENT="$PWD/.venv" bash -euo pipefail -c "$build"
@@ -36,7 +36,7 @@ if [ -n "$tv" ] && [ ! -x "/usr/local/cuda-$tv/bin/nvcc" ]; then
     || echo "cuda-toolkit-$tv: not in apt (finding, not failure)"
 fi
 [ -n "$tv" ] && { "/usr/local/cuda-$tv/bin/nvcc" --version 2>/dev/null | tail -1 || true; }
-# The held-out gate runs compute-sanitizer from that toolkit (evals/kernels/sanitize.py); without it the gate says so.
+# The held-out gate runs compute-sanitizer from that toolkit (lab/kernels/eval/sanitize.py); without it the gate says so.
 for d in ${tv:+/usr/local/cuda-$tv} /usr/local/cuda; do
   [ -x "$d/bin/compute-sanitizer" ] && { "$d/bin/compute-sanitizer" --version 2>/dev/null | tail -1; break; }
 done || echo "compute-sanitizer: not in the toolkit (finding, not failure)"
@@ -57,7 +57,7 @@ ncu --version 2>/dev/null | head -1 || true
 
 echo "== py-spy (hostprof) and srt, the agent CLI's jail until the controller/worker split (Node >= 20, bubblewrap, socat, ripgrep)"
 uv pip install -q --python .venv/bin/python py-spy && .venv/bin/py-spy --version
-uv pip install -q --python .venv/bin/python duckdb zstandard    # the agent's query tool (data/knowledge/index.py)
+uv pip install -q --python .venv/bin/python duckdb zstandard    # the agent's query tool (lab/records/index.py)
 uv pip install -q --python .venv/bin/python ninja    # torch C++ extensions: the engine's megakernel builds on first use
 if ! command -v srt >/dev/null; then
   $SUDO apt-get install -y -qq bubblewrap socat ripgrep xz-utils >/dev/null
@@ -135,13 +135,13 @@ else
   echo "clock lock: refused"
 fi
 
-echo "== peaks: HBM bandwidth and bf16 GEMM, measured (measure/context/peaks.py; the ceilings' denominators)"
+echo "== peaks: HBM bandwidth and bf16 GEMM, measured (lab/infra/context/peaks.py; the ceilings' denominators)"
 ENV_DIR="${LAB_VM_ENV_DIR:-$HOME/BlameGraph}"; ENGINE_DIR="$PWD"
-(cd "$ENV_DIR" && "$ENGINE_DIR/.venv/bin/python" -m measure.context.peaks --seconds 3) || echo "peaks: not measured (finding, not failure)"
+(cd "$ENV_DIR" && "$ENGINE_DIR/.venv/bin/python" -m lab.infra.context.peaks --seconds 3) || echo "peaks: not measured (finding, not failure)"
 
 echo "== model cache: the target's model and the Hub repos its tests read (every jail is offline)"
 mkdir -p "$HOME/.cache/huggingface"
-.venv/bin/python - "$here/../../../${LAB_TARGET:-targets/inference-server.toml}" <<'PY' \
+.venv/bin/python - "$here/../../../${LAB_TARGET:-lab/targets/inference-server.toml}" <<'PY' \
   || echo "model cache: download failed (finding, not failure)"
 import sys, tomllib
 from huggingface_hub import snapshot_download

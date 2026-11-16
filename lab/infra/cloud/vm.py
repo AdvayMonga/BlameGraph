@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from targets import engine
+from lab.targets import engine
 from lab.infra.cloud import providers
 from lab.infra.cloud.providers import ProviderError, Record, env_field, pricing
 
@@ -219,7 +219,7 @@ def fetch(vm: VM, record: Record, remote: str, local: Path, base: str | None = N
 def collect(vm: VM, record: Record) -> None:
     """Bring a lab run home before the VM goes: its ledger merged into this one, its run dirs (minus the trees that
     can be rebuilt), then everything pushed to the store when LAB_STORE is set."""
-    from data.knowledge import ledger
+    from lab.records import ledger
     staging = Path(tempfile.mkdtemp(prefix="vm-ledger-"))
     try:
         fetch(vm, record, "local/ledger", staging, vm.env_dir, "--exclude=index/")
@@ -229,8 +229,8 @@ def collect(vm: VM, record: Record) -> None:
     fetch(vm, record, "local/runs", engine.ENV_ROOT / "local" / "runs", vm.env_dir,
           "--exclude=workspace/", "--exclude=pristine/", "--exclude=base-tree-*/", "--exclude=scratch/")
     if os.environ.get("LAB_STORE"):
-        from data.knowledge import sync
-        from data.knowledge.remote import open_remote
+        from lab.records import sync
+        from lab.records.remote import open_remote
         print(f"[lab.infra.cloud.vm] stored {sync.push(ledger.ROOT, open_remote(), runs=engine.ENV_ROOT / 'lab' / 'runs')}",
               file=sys.stderr)
 
@@ -361,7 +361,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "setup":
         code = run(vm, f"bash {vm.env_dir}/lab/infra/cloud/vm-setup.sh {vm.remote_dir}", keep=True)
         try:                                   # the measured peaks come home: every ceiling is computed from them
-            fetch(vm, p.get(vm.name), "data/calibration/peaks", engine.ENV_ROOT / "data" / "calibration" / "peaks", base=vm.env_dir)
+            fetch(vm, p.get(vm.name), "lab/infra/calibration/peaks", engine.ENV_ROOT / "lab" / "infra" / "calibration" / "peaks", base=vm.env_dir)
         except ProviderError as e:
             print(f"[lab.infra.cloud.vm] peaks not fetched: {e}", file=sys.stderr)
         return code

@@ -20,7 +20,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from targets import engine, target
+from lab.targets import engine, target
 from lab.infra.sandbox import container
 
 # PyPI, plus the wheel hosts that CUDA builds of torch pull from (its nvidia-* dependencies live on NVIDIA's index);
@@ -77,7 +77,7 @@ def python_for(tree: Path) -> str:
 
 
 def cache_dir() -> Path:
-    from measure.runner import worker
+    from lab.infra.runner import worker
     return worker.cache_dir() / "venvs"
 
 

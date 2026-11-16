@@ -248,7 +248,7 @@ def test_stream_role_chunk_is_not_a_first_token():
     import json
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    from evals.researcher.canaries.cheat_proxy import serve
+    from evals.agent.canaries.cheat_proxy import serve
     from lab.gate.correctness.client import generate_stream
 
     class H(BaseHTTPRequestHandler):

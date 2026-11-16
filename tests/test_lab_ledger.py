@@ -1,4 +1,4 @@
-"""data.knowledge.ledger appends stamped records, stores blobs by hash, guards held-out detail, and merges another ledger."""
+"""lab.records.ledger appends stamped records, stores blobs by hash, guards held-out detail, and merges another ledger."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from data.knowledge import ledger
+from lab.records import ledger
 
 
 def test_append_stamps_and_reads_back(tmp_path):

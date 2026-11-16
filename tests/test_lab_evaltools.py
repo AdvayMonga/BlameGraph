@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from data.knowledge import ledger
-from measure.runner import serve
-from targets import target
+from lab.records import ledger
+from lab.infra.runner import serve
+from lab.targets import target
 from lab.budget import Budget
 from lab.session import Session
 from lab.tools import Toolbox
@@ -133,8 +133,8 @@ def test_bench_serves_and_measures(lab):
 
 
 def test_bench_keeps_passive_data_as_blobs(lab):
-    from measure.runner import artifacts
-    from measure.profile import gpu
+    from lab.infra.runner import artifacts
+    from lab.profile import gpu
     tb, s = lab
     tb.bench({"regimes": ["single_stream"]})
     rec = next(ledger.records(s.ledger_root, kind="bench"))
@@ -161,7 +161,7 @@ def test_equiv_judges_against_the_reference(lab):
     assert out["metrics"]["accuracy"]["unanswered"] == 0 and "divergence" not in out["metrics"]
     rec = next(ledger.records(s.ledger_root, kind="equiv"))
     assert rec["result"]["passed"] is True and rec["result"]["tier"] == "dev"
-    from measure.runner import artifacts
+    from lab.infra.runner import artifacts
     rows = artifacts.load(rec, s.ledger_root)["client_rows"]
     assert len(rows) == 40 and all("text" not in r for r in rows)
     from lab.gate.correctness.run import TRACE_PREFIX
@@ -259,7 +259,7 @@ def test_inconclusive_equiv_is_neither_passing_nor_failing(lab, monkeypatch):
     assert json.loads(tb.equiv({}))["verdict"] == "inconclusive"
     rec = list(ledger.records(s.ledger_root, kind="equiv"))[-1]
     assert rec["result"]["passed"] is None                              # lab_verdict counts neither pass nor fail
-    from evals.researcher.feedback.lab_verdict import passed
+    from evals.agent.feedback.lab_verdict import passed
     assert passed(rec) is None
 
 
@@ -341,7 +341,7 @@ AGENT_PROC = {"pid": 4242, "used_mib": 9000, "name": "python"}
 
 
 def test_nothing_is_measured_while_another_process_holds_the_gpu(lab, monkeypatch):
-    from measure.profile import gpu
+    from lab.profile import gpu
     tb, s = lab
     monkeypatch.setattr(gpu, "compute_apps", lambda: [AGENT_PROC])
     out = tb.bench({"regimes": ["single_stream"]})
@@ -352,7 +352,7 @@ def test_nothing_is_measured_while_another_process_holds_the_gpu(lab, monkeypatc
 
 
 def test_a_measurement_shared_with_another_gpu_process_is_contaminated_and_never_cached(lab, monkeypatch):
-    from measure.profile import gpu
+    from lab.profile import gpu
     tb, s = lab
     calls = []
     monkeypatch.setattr(serve, "POLL_S", 0.05)
@@ -369,7 +369,7 @@ def test_a_measurement_shared_with_another_gpu_process_is_contaminated_and_never
 
 def test_the_engines_own_gpu_processes_are_not_foreign(lab, monkeypatch):
     import time
-    from measure.profile import gpu
+    from lab.profile import gpu
     tb, s = lab
     srv = serve.Served(tb._pristine(), target.load().engine, jailed=False)
     monkeypatch.setattr(serve, "POLL_S", 0.05)
@@ -526,7 +526,7 @@ def test_an_engine_without_profiles_is_served_once(lab, launches):
 
 
 def test_a_regime_with_its_own_profile_is_served_again_and_that_is_its_headline(lab, launches):
-    from measure.runner import artifacts
+    from lab.infra.runner import artifacts
     tb, s = lab
     _profile(s, "[general]\n[single_stream]\nMAX_BATCH_SIZE = 1\n[saturated]\nMAX_BATCH_SIZE = 64\n")
     out = json.loads(tb.bench({"regimes": ["single_stream"]}))
@@ -642,7 +642,7 @@ def test_an_after_profile_shares_no_gpu_and_spends_no_budget_that_is_gone(lab, m
 
 def test_task_shares_come_with_every_profile_and_the_latest_reaches_the_harness_facts(tmp_path):
     pytest.importorskip("torch")                 # the kernel tasks import it
-    from data.knowledge import ledger as L
+    from lab.records import ledger as L
     from lab.evaltools import _layer_facts
     from lab.tools import task_shares
     b = tmp_path / "bundle"

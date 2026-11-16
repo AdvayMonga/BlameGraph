@@ -13,10 +13,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from lab import agent, experiments
-from evals.researcher import live
-from measure.runner import worker
-from data.knowledge import ledger
-from targets import engine, target
+from evals.agent import live
+from lab.infra.runner import worker
+from lab.records import ledger
+from lab.targets import engine, target
 from lab.budget import Budget, BudgetExceeded
 from lab.evaltools import BENCH_TIER
 from lab.infra.sandbox import grader
@@ -43,7 +43,7 @@ class Session:
     profile_runner: object = None          # None: lab.tools.default_profile_runner
     task: Task | None = None
     workbench: str | None = None           # the agent's container: paused while the tools measure
-    worker: object = None                  # None: measure.runner.worker.load() per toolbox
+    worker: object = None                  # None: lab.infra.runner.worker.load() per toolbox
     remote_workspace: str | None = None    # the workspace's mirror on a Remote worker, where the agent works
 
 
@@ -68,7 +68,7 @@ class RunConfig:
 def referee(s: Session) -> dict:
     """What the agent gets from the referee at the start of every session: the integrity verdict on this run so
     far, with evidence, and the harness facts it cannot read off its ledger. Nothing judged, nothing advised."""
-    from evals.researcher.feedback.report import lab_feedback
+    from evals.agent.feedback.report import lab_feedback
     from lab.evaltools import harness_facts
     recs = list(ledger.records(s.ledger_root, run=s.run_id))
     try:

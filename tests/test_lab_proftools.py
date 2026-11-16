@@ -11,10 +11,10 @@ import time
 
 import pytest
 
-from measure.profile import gpu
+from lab.profile import gpu
 from lab import proftools
-from measure.runner import serve
-from data.knowledge import ledger
+from lab.infra.runner import serve
+from lab.records import ledger
 from lab import tools as labtools
 from lab.budget import Budget, BudgetExceeded
 from lab.infra.sandbox import container, jail
@@ -86,7 +86,7 @@ def test_trace_wraps_the_workload_in_nsys_then_exports_stats(tb):
     prof, stats = calls(tb)
     assert prof[:2] == ["nsys", "profile"] and after(prof, "--capture-range") == "cudaProfilerApi"
     assert after(prof, "--cuda-graph-trace") == "node"
-    assert after(prof, "-m") == "measure.profile.profile" and after(prof, "--profiler") == "cuda-range"
+    assert after(prof, "-m") == "lab.profile.profile" and after(prof, "--profiler") == "cuda-range"
     assert after(prof, "--requests") == "2" and after(prof, "--max-tokens") == "32"
     assert stats[:2] == ["nsys", "stats"] and after(stats, "--report") == proftools.NSYS_REPORTS
     assert stats[-1].endswith("_instr/trace.nsys-rep")
@@ -117,7 +117,7 @@ def test_kernel_targets_the_regex_with_limits_and_keeps_raw_metrics(tb):
 def test_hostprof_runs_the_workload_with_py_spy_readable_in_the_jail(tb, monkeypatch):
     seen = {}
 
-    def runner(tree, argv, read=(), **_):            # stands in for measure.profile.profile, which needs the engine
+    def runner(tree, argv, read=(), **_):            # stands in for lab.profile.profile, which needs the engine
         seen.update(argv=argv, read=read)
         b = tree / proftools.OUT / "bundle" / "b1"
         b.mkdir(parents=True)
@@ -129,7 +129,7 @@ def test_hostprof_runs_the_workload_with_py_spy_readable_in_the_jail(tb, monkeyp
     out = tb.hostprof({"seconds": 5, "rate": 250})
     assert "MainThread" in out
     argv, exe = seen["argv"], shutil.which("py-spy")
-    assert argv[1:3] == ["-m", "measure.profile.profile"] and after(argv, "--profiler") == "pyspy"
+    assert argv[1:3] == ["-m", "lab.profile.profile"] and after(argv, "--profiler") == "pyspy"
     assert after(argv, "--seconds") == "5" and after(argv, "--rate") == "250"
     assert after(argv, "--pyspy-bin") == os.path.realpath(exe)
     assert os.path.dirname(os.path.realpath(exe)) in map(str, seen["read"])
@@ -224,7 +224,7 @@ def test_gpu_time_is_charged_to_the_budget_and_stops_at_the_cap(tb, monkeypatch)
 
 
 def test_every_instrument_passes_a_workload_source_to_lab_profile(tb):
-    """measure.profile.profile refuses to run without one of --corpus-class/--workload/--prompts/--synthetic."""
+    """lab.profile.profile refuses to run without one of --corpus-class/--workload/--prompts/--synthetic."""
     tb.trace({"requests": 2, "synthetic": True})
     prof = calls(tb)[0]
     assert "--synthetic" in prof and after(prof, "--prompt-len") == "64"
@@ -325,7 +325,7 @@ def test_a_watch_never_counts_the_jobs_own_exiting_process_as_another(monkeypatc
 
 
 def test_the_runner_gets_the_jobs_timeout_for_the_run_and_its_report(tb, monkeypatch):
-    from measure.runner import worker
+    from lab.infra.runner import worker
     seen = []
     monkeypatch.setattr(labtools, "stage_harness", lambda tree: tree)
     monkeypatch.setattr(labtools, "workload_flags", lambda a, h, n: [])

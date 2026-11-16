@@ -27,7 +27,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from targets import engine
+from lab.targets import engine
 from lab import rehearsal_server
 
 MODEL = "Qwen/Qwen3-30B-A3B"       # its tokenizer only: nothing loads the weights

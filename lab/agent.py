@@ -13,8 +13,8 @@ from typing import Any, Callable, Protocol
 from urllib.parse import urlsplit
 
 from lab import apiproxy
-from evals.researcher import live
-from targets import engine
+from evals.agent import live
+from lab.targets import engine
 from lab.infra.sandbox import container, jail
 from lab.infra.sandbox.grader import HF_HUB
 from lab.hooks import WRITE_TOOLS, write_guard
@@ -54,7 +54,7 @@ class AgentSpec:
     timeout_s: float = 3600.0
     model: str = field(default_factory=lambda: os.environ.get("LAB_MODEL", "claude-fable-5-1"))
     workbench: str | None = None            # the container name of the agent's workbench (Linux)
-    remote: Any = None                      # a measure.runner.worker.Remote: the workbench runs on that host
+    remote: Any = None                      # a lab.infra.runner.worker.Remote: the workbench runs on that host
     remote_workspace: str | None = None     # the workspace's path there
 
 
@@ -124,7 +124,7 @@ def workbench_command(name: str, ws: Path, scratch: Path, cli: Path, base_url: s
 
 
 def _live(msg, spent_usd: float) -> None:
-    """What the agent just said or called, for the dashboard (`evals.researcher.live`)."""
+    """What the agent just said or called, for the dashboard (`evals.agent.live`)."""
     from claude_agent_sdk import AssistantMessage, TextBlock, ThinkingBlock, ToolResultBlock, ToolUseBlock, UserMessage
     if isinstance(msg, AssistantMessage):
         for b in msg.content:

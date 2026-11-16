@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from lab.infra.sandbox import build
-from targets import engine, target
+from lab.targets import engine, target
 from lab.infra.sandbox import container, jail
 
 
