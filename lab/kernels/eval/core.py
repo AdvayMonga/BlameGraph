@@ -30,9 +30,9 @@ FORBIDDEN = {
     r"|\b(Stream|ExternalStream|Event|CUDAGraph|current_stream|set_stream|_sleep)\b":
         "streams or timer events",
     r"\btime\.(perf_counter|time|monotonic|sleep)\b|\bimport time\b|\bfrom time\b": "the clock",
-    r"\bsys\.modules\b|\bbuiltins\b|__builtins__|\bimportlib\b|__import__|__setattr__|__dict__"
+    r"\bsys\.modules\b|\bbuiltins\b|__builtins__|\bimportlib\b|__import__|\b(set|get)attr\s*\(|__setattr__|__dict__"
     r"|\bglobals\s*\(|\bvars\s*\(|\b(torch|triton|time|math|statistics)(\.\w+)+\s*=(?!=)": "patching modules",
-    r"(?<![.\w])(eval|exec|compile)\s*\(|__subclasses__|\btypes\.(FunctionType|CodeType)\b": "code built at run time",
+    r"(?<![.\w])(eval|exec|compile)\s*\(|__subclasses__|\btypes\.(FunctionType|CodeType)\b|__doc__": "code built at run time",
     r"\bkernels\.(eval|evolve)\b|\blab\.kernels\b|\b(from|import) (kernels|evals|lab)\b"
     r"|\b(import|from) __main__\b":
         "the evaluator itself",
@@ -66,28 +66,27 @@ def screen(source: str) -> list[str]:
     import re
     code = _code(source)
     return ([f"uses {why}: `{m.group(0)}`" for pat, why in FORBIDDEN.items() if (m := re.search(pat, code))] +
-            [f"writes or reaches into what it imported: `{w}`" for w in _writes_into(source)]
-            + _cpp_built_at_run_time(source))
+            [f"assigns into what it imported: `{w}`" for w in _writes_into(source)] + _cpp_built_at_run_time(source))
 
 
 def _code(source: str) -> str:
-    """The source with its comments and its docstrings (strings that are a whole statement) blanked; other strings,
-    C++ sources among them, are kept."""
+    """The source with its comments and docstrings blanked. A docstring is a plain string that is a whole statement on
+    its own lines; every other string, C++ sources among them, is kept."""
     import io
     import tokenize
-    skip = (tokenize.NL, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT)
     try:
         toks = list(tokenize.generate_tokens(io.StringIO(source).readline))
     except (tokenize.TokenError, SyntaxError, IndentationError):
         return source                            # loading reports it
-    real = [t for t in toks if t.type not in skip]
+    real = [t for t in toks if t.type not in (tokenize.NL, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT)]
+    ends = (tokenize.NEWLINE, tokenize.ENDMARKER)
     blank = [t for t in toks if t.type == tokenize.COMMENT]
-    blank += [t for a, t, b in zip([None, *real], real, [*real[1:], None]) if t.type == tokenize.STRING
-              and (a is None or a.type == tokenize.NEWLINE) and (b is None or b.type in (tokenize.NEWLINE, tokenize.ENDMARKER))]
-    lines = source.splitlines(keepends=True)
+    blank += [t for a, t, b in zip([None, *real], real, [*real[1:], None])
+              if t.type == tokenize.STRING and t.string.lstrip("rRuU")[:1] in ("'", '"')
+              and (a is None or a.type == tokenize.NEWLINE) and (b is None or b.type in ends)]
     start = [0]
-    for x in lines:
-        start.append(start[-1] + len(x))
+    for line in source.split("\n"):             # the tokenizer's lines: split at \n only
+        start.append(start[-1] + len(line) + 1)
     out = list(source)
     for t in blank:
         for k in range(start[t.start[0] - 1] + t.start[1], start[t.end[0] - 1] + t.end[1]):
@@ -132,11 +131,11 @@ def _cpp_built_at_run_time(source: str) -> list[str]:
 
 
 def _writes_into(source: str) -> list[str]:
-    """Attribute writes or deletes whose root is an imported name, a name bound to one (`m = torch.cuda`) or to a
-    `type(...)` call (`T = type(x)`), or a call (`type(x).abs = f`); item writes or deletes into an imported name or a
-    name bound to one (`M = os.environ; M[k] = v`); and `getattr`, `setattr` or `delattr` on an imported name or a
-    name bound to one: patching a library under any alias. Writes on other objects (`self.x = 1`, `out[i] = v` or
-    `d.block_shape = s` on an object the program made, a parameter's attribute) are left alone."""
+    """Attribute writes or deletes whose root is an imported name, a name bound to one (`m = torch.cuda`) or to a call
+    (`T = type(x)`), or a call (`type(x).abs = f`); item writes or deletes into an imported name or a name bound to
+    one (`M = os.environ; M[k] = v`); and any write through a dunder attribute (`x.__class__.f = g`): patching a
+    library under any alias. Writes on other objects are left alone: `self.x = 1`, a parameter's attribute, and an
+    object another call returned (`d = TensorDescriptor(w); d.block_shape = s`)."""
     import ast
     try:
         tree = ast.parse(source)
@@ -151,25 +150,37 @@ def _writes_into(source: str) -> list[str]:
             e = e.value
         return e
     def bound(names: set, calls: bool) -> set:
-        """`names` grown by every name bound to one of them or an attribute chain of one (and, with `calls`, to a
-        `type(...)` call's result)."""
+        """`names` grown by every name bound to one of them or an attribute chain of one (and, with `calls`, to what
+        a `type` call returns or to an attribute of any call's result)."""
         names, grew = set(names), True
         while grew:
             grew = False
             for n in nodes:
                 if isinstance(n, (ast.Assign, ast.AnnAssign, ast.NamedExpr)) and n.value is not None:
                     r = root(n.value) if isinstance(n.value, (ast.Name, ast.Attribute, ast.Call)) else None
-                    typed = isinstance(r, ast.Call) and isinstance(r.func, ast.Name) and r.func.id == "type"
-                    if (calls and typed) or (isinstance(r, ast.Name) and r.id in names):
+                    typed = calls and isinstance(r, ast.Call) and (r is not n.value or (
+                        isinstance(r.func, ast.Name) and r.func.id in types))
+                    if typed or (isinstance(r, ast.Name) and r.id in names):
                         for t in (n.targets if isinstance(n, ast.Assign) else [n.target]):
                             if isinstance(t, ast.Name) and t.id not in names:
                                 names.add(t.id)
                                 grew = True
         return names
+    types = bound({"type"}, False)
     held, mods = bound(held, True), bound(held, False)
+
+    def dunder(e) -> bool:
+        """An attribute `__x__` somewhere under the written one."""
+        while isinstance(e, (ast.Attribute, ast.Subscript)):
+            e = e.value
+            if isinstance(e, ast.Attribute) and e.attr.startswith("__"):
+                return True
+        return False
     out = []
     for n in nodes:
-        if isinstance(n, ast.Attribute) and isinstance(n.ctx, (ast.Store, ast.Del)):
+        if isinstance(n, (ast.Attribute, ast.Subscript)) and isinstance(n.ctx, (ast.Store, ast.Del)) and dunder(n):
+            out.append(ast.unparse(n))
+        elif isinstance(n, ast.Attribute) and isinstance(n.ctx, (ast.Store, ast.Del)):
             r = root(n)
             if isinstance(r, ast.Call) or (isinstance(r, ast.Name) and r.id in held):
                 out.append(ast.unparse(n))
@@ -177,9 +188,6 @@ def _writes_into(source: str) -> list[str]:
             r = root(n)
             if isinstance(r, ast.Name) and r.id in mods:
                 out.append(ast.unparse(n))
-        elif (isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("getattr", "setattr", "delattr")
-              and n.args and isinstance(root(n.args[0]), ast.Name) and root(n.args[0]).id in mods):
-            out.append(ast.unparse(n))
     return out
 
 
