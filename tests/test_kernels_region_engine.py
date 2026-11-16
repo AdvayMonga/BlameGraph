@@ -96,13 +96,13 @@ def engine(tmp, monkeypatch):
 def test_the_lab_names_nothing_of_the_engine_and_the_target_declares_it():
     import re
     from lab.kernels.tasks import regions
-    from lab.targets import target
+    from evals.targets import target
     root = Path(__file__).resolve().parents[1]
     for f in ("lab/kernels/tasks/regions.py", "lab/kernels/tasks/hold.py", "lab/kernels/eval/ship.py"):
         found = re.findall(r"inference_server|k_cache|fi_kv|attn_block_tables|sorted_ids|MEGAKERNEL|paged_ctx|DECODE|PREFILL",
                            (root / f).read_text())
         assert not found, (f, found)
-    eng = regions.load_engine(target.parse(root / "lab/targets/inference-server.toml").raw["regions"])
+    eng = regions.load_engine(target.parse(root / "evals/targets/inference-server.toml").raw["regions"])
     assert eng.which("p_attention") == "PREFILL" and eng.which("attention") == "DECODE" and eng.step == "DECODE"
     assert eng.sets["DECODE"].graphs and not eng.sets["PREFILL"].graphs and eng.layers == (0, 16, 32, 47)
     assert regions.load_engine(eng.as_dict()) == eng                         # as an eval config carries it
