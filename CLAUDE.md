@@ -37,8 +37,8 @@ One command: `lab <command> [args]` (`pip install -e .` puts it on PATH; else `b
 if present, else `python3`). `lab` lists every command, `lab <command> -h` its arguments; the table is `lab/cli.py`, where a new module
 with a CLI gets its entry. The agent's tools are the same commands by the same names, run by a person on a researcher
 run. Jailed and remote internals keep `python -m`.
-1. Once per target and GPU: `lab setup --target T` (the corpus; the reference's answers, the model run in
-   transformers; `lab validate`: noise bands).
+1. Once per target and GPU, with step 2's GPU as the worker: `lab setup --task TASK.toml` (the corpus; the
+   reference's answers, the model run in transformers; `lab validate`: a noise band for each of the task's regimes).
 2. A GPU: `lab vm start` (deleted 12 hours later), `lab vm setup` (also measures
    the GPU's peaks); `LAB_WORKER=ssh` runs measured jobs there.
 3. A run: `lab session --task lab/tasks/single_stream.toml --budget USD`, from this machine; `lab dashboard` shows

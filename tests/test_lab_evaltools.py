@@ -445,7 +445,7 @@ def test_bench_starts_its_searches_where_the_base_ended(lab, monkeypatch):
     tb, s = lab
     got = []
     monkeypatch.setattr(evaltools, "run_regimes", lambda url, t, names, split, tier, seed, rows=None, hints=None,
-                        bands=None: got.append(hints) or [])
+                        bands=None, tol=None: got.append(hints) or [])
     tb.bench({"regimes": ["saturated"]})                                     # no base measured yet: a cold search
     base = json.dumps({"saturated": {"value": 3.8, "valid": True, "concurrency": 64}, "bursty": {"value": 2.0, "valid": True},
                        "realistic": {"value": 5.98, "valid": True, "sittings_per_s": 2.0},

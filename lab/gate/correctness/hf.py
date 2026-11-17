@@ -3,6 +3,10 @@ reads: items.jsonl, outputs.jsonl, sequences.jsonl, meta.json."""
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import tempfile
+import time
 from pathlib import Path
 
 from .run import HFEncoder, _jsonl_read, _jsonl_write, sequences
@@ -24,9 +28,25 @@ def batches(todo: list[tuple[dict, list[int]]]) -> list[list[tuple[dict, list[in
     return out
 
 
+def build(ref_dir: Path, tasks: tuple[str, ...], wk, seconds: float = 600.0) -> None:
+    """The reference in `ref_dir` completed by `reference` jobs on worker `wk`, each continuing the last."""
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    done = lambda: len(_jsonl_read(ref_dir / "outputs.jsonl"))     # noqa: E731
+    while not (ref_dir / "meta.json").exists():
+        before = done()
+        with tempfile.TemporaryDirectory() as d:
+            reply = wk.call("reference", {"prior": ref_dir}, {"tasks": list(tasks), "seconds": seconds}, Path(d))
+            for f in sorted(Path(d).iterdir(), key=lambda f: f.name == "meta.json"):   # whole files, meta.json last
+                shutil.copyfile(f, ref_dir / (f.name + ".part"))
+                os.replace(ref_dir / (f.name + ".part"), ref_dir / f.name)
+        if not reply["complete"] and done() == before:
+            raise RuntimeError(f"the reference job answered nothing new ({before} answers in {ref_dir})")
+
+
 def reference(model: str, out_dir: str | Path, items: list[dict], chat_kwargs: dict | None = None, top_k: int = 20,
-              div_n: int = 400) -> dict:
-    """Greedy answers for every item (resumable), then the reference's logprobs on its own answers."""
+              div_n: int = 400, seconds: float | None = None) -> dict | None:
+    """Greedy answers for every item (resumable), then the reference's logprobs on its own answers. With `seconds`,
+    generation stops after the batch that passes it and None is returned while items are left."""
     import torch
     import transformers
     from transformers import AutoModelForCausalLM
@@ -41,8 +61,11 @@ def reference(model: str, out_dir: str | Path, items: list[dict], chat_kwargs: d
     pad = tok.pad_token_id if tok.pad_token_id is not None else min(eos)
     outputs = {r["id"]: r for r in _jsonl_read(out / "outputs.jsonl")}
     todo = [(it, enc.chat_ids(it["messages"])) for it in items if it["id"] not in outputs]
+    t0 = time.monotonic()
     with open(out / "outputs.jsonl", "a") as f, torch.inference_mode():
         for batch in batches(todo):
+            if seconds is not None and time.monotonic() - t0 > seconds:
+                return None
             width, new = max(len(ids) for _, ids in batch), batch[0][0].get("max_tokens", 2048)
             x = torch.full((len(batch), width), pad, dtype=torch.long)
             mask = torch.zeros_like(x)
