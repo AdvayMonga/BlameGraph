@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Layer-1 GPU validation, run on the VM from this environment's dir with the engine's venv on PATH:
-#   lab vm run --env --keep -- bash lab/kernels/eval/validate_gpu.sh [ITERATIONS] [TASK]   (TASK: paged_decode)
+#   lab vm run --env -- bash lab/kernels/eval/validate_gpu.sh [ITERATIONS] [TASK]   (TASK: paged_decode)
 # 1. capture the engine's calls to the task's entry point under real corpus traffic at several concurrencies, CUDA graphs off:
 #    replayed graphs never reach Python, so with them on most calls would be invisible
 # 2. split them into seen / held-out regions
@@ -16,7 +16,7 @@ ENTRY=$(python -c "from lab.kernels.tasks import load; print(load('$TASK').entry
 export LAB_TARGET="${LAB_TARGET:-evals/targets/inference-server.toml}"
 mkdir -p "$OUT"
 # The engine's serving env (BACKEND, MODEL_NAME, ...) from the target spec, as `serve` would set it.
-eval "$(python -c 'from lab import target; import shlex; print(" ".join(f"export {k}={shlex.quote(v)};" for k, v in target.load().engine.env.items()))')"
+eval "$(python -c 'from evals.targets import target; import shlex; print(" ".join(f"export {k}={shlex.quote(v)};" for k, v in target.load().engine.env.items()))')"
 ENGINE="${LAB_ENGINE_REPO:-$HOME/inference-server}"
 export PYTHONPATH="$PWD:$ENGINE/src${PYTHONPATH:+:$PYTHONPATH}"
 python -c "import openevolve" 2>/dev/null || "$HOME/.local/bin/uv" pip install -q --python "$(command -v python)" "openevolve==0.4.0"

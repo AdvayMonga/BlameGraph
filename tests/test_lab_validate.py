@@ -58,10 +58,12 @@ bad = {{ wrong4 = "python {FAKE} --port {{port}} --out-tokens 6 --wrong-every 4"
 
 
 def test_validate_separates_and_measures_bands(spec, tmp_path, monkeypatch):
-    from lab.gate.correctness import tasks
+    from lab.gate.correctness import run as crun
+    from lab.infra.runner import serve
     items = [{"id": f"mc-{k}", "task": "mmlu_pro", "gold": "C", "max_tokens": 6,
               "messages": [{"role": "user", "content": f"question {k} pick one"}]} for k in range(60)]
-    monkeypatch.setattr(tasks, "load", lambda names, tier="dev", **kw: items)
+    with serve.Served(target.ENV_ROOT, spec.reference, log=tmp_path / "serve-reference.log", jailed=False) as srv:
+        crun.reference(srv.url, spec.model, spec.reference_dir, items, Enc())
     from lab.infra.context import calibrate
     monkeypatch.setattr(calibrate, "REFERENCE_DIR", tmp_path / "reference")
     rep = validate.validate(spec, noise_runs=2, regimes=["single_stream"], out=tmp_path / "out", encoder=Enc(),

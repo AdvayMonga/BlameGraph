@@ -78,7 +78,7 @@ def lab(tmp_path, monkeypatch):
     monkeypatch.setenv("LAB_NO_JAIL", "1")
     monkeypatch.setenv("LAB_STORE", str(tmp_path / "store"))          # where the shared holdout guard lives
     repo = make_repo(tmp_path)
-    # a reference from the same fake engine, dev and full tiers
+    # a reference from the same fake engine
     import socket
     s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
     proc = subprocess.Popen([sys.executable, str(FAKE), "--port", str(port)])
@@ -91,7 +91,6 @@ def lab(tmp_path, monkeypatch):
             except OSError:
                 time.sleep(0.1)
         _reference(f"http://127.0.0.1:{port}", tmp_path / "ref")
-        _reference(f"http://127.0.0.1:{port}", tmp_path / "ref-full")
     finally:
         proc.kill()
     spec = _target(tmp_path, repo, tmp_path / "ref")
@@ -158,9 +157,9 @@ def test_equiv_judges_against_the_reference(lab):
     tb, s = lab
     out = json.loads(tb.equiv({}))
     assert out["verdict"] == "pass", out["reasons"]
-    assert out["metrics"]["accuracy"]["unanswered"] == 0 and "divergence" not in out["metrics"]
+    assert out["metrics"]["accuracy"]["unanswered"] == 0 and out["metrics"]["divergence"]["n_sequences"] > 0
     rec = next(ledger.records(s.ledger_root, kind="equiv"))
-    assert rec["result"]["passed"] is True and rec["result"]["tier"] == "dev"
+    assert rec["result"]["passed"] is True and rec["config"] == {"split": "seen"}
     from lab.infra.runner import artifacts
     rows = artifacts.load(rec, s.ledger_root)["client_rows"]
     assert len(rows) == 40 and all("text" not in r for r in rows)
@@ -172,7 +171,7 @@ def test_equiv_judges_against_the_reference(lab):
 def test_a_second_equiv_on_the_same_snapshot_reuses_its_answers(lab):
     tb, s = lab
     tb.equiv({})
-    answers = next((s.run_dir / "equiv").glob("*-dev.outputs.jsonl"))
+    answers = next((s.run_dir / "equiv").glob("*.outputs.jsonl"))
     marked = "".join(json.dumps({**json.loads(x), "kept": True}) + "\n" for x in answers.read_text().splitlines())
     answers.write_text(marked)
     tb.equiv({})
@@ -182,7 +181,7 @@ def test_a_second_equiv_on_the_same_snapshot_reuses_its_answers(lab):
 
 def test_submit_keeps_heldout_passive_data_out_of_the_ledger(lab):
     tb, s = lab
-    tb.equiv({"tier": "full"}); tb.bench({"regimes": ["single_stream"]})
+    tb.equiv({}); tb.bench({"regimes": ["single_stream"]})
     before = {p.name for p in (s.ledger_root / "blobs").iterdir()}
     json.loads(tb.submit({}))
     rec = next(r for r in ledger.records(s.ledger_root, kind="submit") if r.get("config", {}).get("split") == "heldout")
@@ -194,10 +193,10 @@ def test_submit_keeps_heldout_passive_data_out_of_the_ledger(lab):
     assert not (s.run_dir / "pristine" / serve.TELEMETRY_SUBDIR).exists()
 
 
-def test_submit_needs_full_equiv_and_a_bench_then_records_one_aggregate_per_metric(lab):
+def test_submit_needs_an_equiv_and_a_bench_then_records_one_aggregate_per_metric(lab):
     tb, s = lab
-    assert tb.submit({}).startswith("submit refused: no full-tier equiv")
-    assert json.loads(tb.equiv({"tier": "full"}))["verdict"] == "pass"
+    assert tb.submit({}).startswith("submit refused: no equiv")
+    assert json.loads(tb.equiv({}))["verdict"] == "pass"
     assert tb.submit({}).startswith("submit refused: no completed min-tier seen-split bench")
     tb.bench({"regimes": ["single_stream"], "tier": "full"})            # the wrong tier does not count
     assert tb.submit({}).startswith("submit refused: no completed min-tier seen-split bench")
@@ -214,59 +213,18 @@ def test_submit_needs_full_equiv_and_a_bench_then_records_one_aggregate_per_metr
     assert (s.run_dir / "base-heldout-min.json").exists()
 
 
-def test_submit_takes_the_equiv_tier_the_target_names(lab, monkeypatch):
-    tb, s = lab
-    t = target.load()
-    monkeypatch.setattr(target, "load", lambda path=None: t.__class__(**{**t.__dict__, "submit_tier": "dev"}))
-    assert json.loads(tb.equiv({"tier": "full"}))["verdict"] == "pass"
-    tb.bench({"regimes": ["single_stream"]})
-    assert tb.submit({}).startswith("submit refused: no dev-tier equiv")
-    assert "a passing dev-tier equiv" in next(x for x in tb.specs() if x.name == "submit").description
-    assert json.loads(tb.equiv({"tier": "dev"}))["verdict"] == "pass"
-    assert json.loads(tb.submit({}))["split"] == "heldout"
-
-
-def test_quick_equiv_scores_the_reference_answers_and_returns_facts(lab):
-    tb, s = lab
-    out = json.loads(tb.equiv({"tier": "quick"}))
-    assert out["verdict"] == "facts" and out["tier"] == "quick"
-    assert out["metrics"]["n_sequences"] > 0 and "kl_mean" in out["metrics"] and "top1_agree" in out["metrics"]
-    rec = next(ledger.records(s.ledger_root, kind="equiv"))
-    assert rec["result"]["passed"] is None and rec["config"]["tier"] == "quick"
-    assert tb.submit({}).startswith("submit refused: no full-tier equiv")      # facts never count as a pass
-    with pytest.raises(ValueError, match="submit_tier"):
-        target._submit_tier("quick")                   # submit takes a generated-answer tier only
-
-
 def test_submit_is_refused_where_there_is_no_shared_heldout_budget(lab, monkeypatch):
     tb, s = lab
-    tb.equiv({"tier": "full"}); tb.bench({"regimes": ["single_stream"]})
+    tb.equiv({}); tb.bench({"regimes": ["single_stream"]})
     monkeypatch.delenv("LAB_STORE")
     assert tb.submit({}).startswith("submit refused: no shared held-out budget on this host")
     assert not (s.run_dir / "base-heldout-min.json").exists()             # refused before anything was measured
 
 
-def test_inconclusive_equiv_is_neither_passing_nor_failing(lab, monkeypatch):
-    from lab.gate.correctness import run as crun
-    tb, s = lab
-    real = crun.candidate
-
-    def inconclusive(*a, **kw):
-        res = real(*a, **kw)
-        res["verdict"], res["passed"] = "inconclusive", False
-        return res
-    monkeypatch.setattr(crun, "candidate", inconclusive)
-    assert json.loads(tb.equiv({}))["verdict"] == "inconclusive"
-    rec = list(ledger.records(s.ledger_root, kind="equiv"))[-1]
-    assert rec["result"]["passed"] is None                              # neither pass nor fail
-    from evals.agent.feedback.lab_verdict import passed
-    assert passed(rec) is None
-
-
 def test_submit_reports_no_heldout_delta_without_a_seen_delta(lab, monkeypatch, tmp_path):
     from lab import evaltools
     tb, s = lab
-    tb.equiv({"tier": "full"}); tb.bench({"regimes": ["single_stream"]})
+    tb.equiv({}); tb.bench({"regimes": ["single_stream"]})
     monkeypatch.setattr(evaltools.EvalTools, "base_seen", lambda self, t, names: {})   # no seen baseline at all
     out = json.loads(tb.submit({}))
     m = out["metrics"]["single_stream"]
@@ -301,7 +259,7 @@ def test_submit_scores_the_task(lab, tmp_path):
     t = tmp_path / "task.toml"
     t.write_text('[task]\ngoal = "g"\n[objective]\nregimes = ["single_stream"]\n')
     s.task = Task.parse(t)
-    tb.equiv({"tier": "full"}); tb.bench({"regimes": ["single_stream"]})
+    tb.equiv({}); tb.bench({"regimes": ["single_stream"]})
     out = json.loads(tb.submit({}))
     sc = out["score"]
     assert set(sc["gains_pct"]) == {"single_stream"} and sc["win"] is False       # no noise band
@@ -549,16 +507,16 @@ def test_equiv_serves_a_profile_only_when_the_file_has_it(lab, launches):
     assert launches == [{"ENGINE_PROFILE": "single_stream"}]
     rec = list(ledger.records(s.ledger_root, kind="equiv"))[-1]
     assert rec["config"]["profile"] == "single_stream"
-    assert (s.run_dir / "equiv" / f"{rec['snapshot']}-dev-single_stream.json").exists()
+    assert (s.run_dir / "equiv" / f"{rec['snapshot']}-single_stream.json").exists()
 
 
-def test_submit_needs_a_passing_full_equiv_for_each_profile_it_measures(lab):
+def test_submit_needs_a_passing_equiv_for_each_profile_it_measures(lab):
     tb, s = lab
     _profile(s, "[single_stream]\nMAX_BATCH_SIZE = 1\n")
-    tb.equiv({"tier": "full"}); tb.bench({"regimes": ["single_stream"]})
-    assert tb.submit({}).startswith("submit refused: no passing full-tier equiv for profile(s) ['single_stream']")
+    tb.equiv({}); tb.bench({"regimes": ["single_stream"]})
+    assert tb.submit({}).startswith("submit refused: no passing equiv for profile(s) ['single_stream']")
     assert not (s.run_dir / "base-heldout-min.json").exists()             # refused before anything was measured
-    assert json.loads(tb.equiv({"tier": "full", "profile": "single_stream"}))["verdict"] == "pass"
+    assert json.loads(tb.equiv({"profile": "single_stream"}))["verdict"] == "pass"
     out = json.loads(tb.submit({}))
     assert set(out["metrics"]) == {"single_stream"}
     rec = next(r for r in ledger.records(s.ledger_root, kind="submit") if r.get("config", {}).get("split") == "heldout")
@@ -593,7 +551,7 @@ def test_a_profiles_file_that_does_not_parse_is_a_recorded_refusal(lab):
 def test_submit_says_which_heldout_profile_launch_failed_and_how_only(lab, monkeypatch):
     tb, s = lab
     _profile(s, "[single_stream]\nMAX_BATCH_SIZE = 1\n")
-    tb.equiv({"tier": "full"}); tb.equiv({"tier": "full", "profile": "single_stream"}); tb.bench({"regimes": ["single_stream"]})
+    tb.equiv({}); tb.equiv({"profile": "single_stream"}); tb.bench({"regimes": ["single_stream"]})
     real = serve.Served.__enter__
 
     def enter(self):

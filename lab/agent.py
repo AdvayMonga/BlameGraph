@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import os
 import shlex
@@ -81,6 +82,25 @@ def load(name: str | None = None) -> Provider:
         from lab.agent_openai import OpenAICompatible
         return OpenAICompatible()
     raise ValueError(f"unknown agent provider {name!r}; LAB_AGENT_PROVIDER is claude or openai")
+
+
+def missing(name: str | None = None) -> list[str]:
+    """What the provider needs that this machine lacks, one line each."""
+    name = name or os.environ.get("LAB_AGENT_PROVIDER", "claude")
+    if name != "claude":
+        try:
+            load(name)
+        except ValueError as e:
+            return [str(e)]
+        return []
+    out = []
+    if importlib.util.find_spec("claude_agent_sdk") is None:
+        out.append("the Claude Agent SDK is not installed: pip install -e '.[agents]'")
+    try:
+        apiproxy.credential()
+    except RuntimeError as e:
+        out.append(str(e))
+    return out
 
 
 PROXY_PORT_IN = 4000              # the tunnelled proxy's port inside a remote workbench

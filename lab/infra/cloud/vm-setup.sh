@@ -4,7 +4,7 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)           # this environment's lab/infra/cloud/
 cd "${1:-$HOME/inference-server}"            # the engine tree: its venv is the one every GPU command runs with
-SUDO=$([ "$(id -u)" = 0 ] && echo "" || echo sudo)   # Verda images log in as root
+SUDO=$([ "$(id -u)" = 0 ] && echo "" || echo sudo)
 
 echo "== GPU"
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
@@ -29,13 +29,14 @@ echo "== CUDA toolkit"
 # The image's nvcc decides what JIT-compiling libraries can do: vLLM's DeepGEMM FP8 path needs nvcc >= 12.9.
 nvcc --version 2>/dev/null | tail -1 || ls /usr/local/cuda/bin/nvcc 2>/dev/null || echo "nvcc: not on PATH"
 # A C++ extension (the kernel loop's CUDA candidates, the engine's megakernel) loads only when nvcc matches the CUDA
-# torch was built with: install that toolkit beside the image's (Verda's is 12.8 beside torch cu130).
+# torch was built with: install that toolkit beside the image's; setup fails without it.
 tv=$(.venv/bin/python -c "import torch; print(torch.version.cuda or '')" 2>/dev/null || true)
-if [ -n "$tv" ] && [ ! -x "/usr/local/cuda-$tv/bin/nvcc" ]; then
-  DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq "cuda-toolkit-${tv/./-}" >/dev/null \
-    || echo "cuda-toolkit-$tv: not in apt (finding, not failure)"
+[ -n "$tv" ] || { echo "torch in the engine's venv has no CUDA version"; exit 1; }
+if [ ! -x "/usr/local/cuda-$tv/bin/nvcc" ]; then
+  DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq "cuda-toolkit-${tv/./-}" >/dev/null || true
 fi
-[ -n "$tv" ] && { "/usr/local/cuda-$tv/bin/nvcc" --version 2>/dev/null | tail -1 || true; }
+"/usr/local/cuda-$tv/bin/nvcc" --version | tail -1 \
+  || { echo "no nvcc for CUDA $tv (torch's) at /usr/local/cuda-$tv: this machine cannot be used"; exit 1; }
 # The held-out gate runs compute-sanitizer from that toolkit (lab/kernels/eval/sanitize.py); without it the gate says so.
 for d in ${tv:+/usr/local/cuda-$tv} /usr/local/cuda; do
   [ -x "$d/bin/compute-sanitizer" ] && { "$d/bin/compute-sanitizer" --version 2>/dev/null | tail -1; break; }
@@ -58,6 +59,7 @@ ncu --version 2>/dev/null | head -1 || true
 echo "== py-spy (hostprof) and srt, the agent CLI's jail until the controller/worker split (Node >= 20, bubblewrap, socat, ripgrep)"
 uv pip install -q --python .venv/bin/python py-spy && .venv/bin/py-spy --version
 uv pip install -q --python .venv/bin/python duckdb zstandard    # the agent's query tool (lab/records/index.py)
+uv pip install -q --python .venv/bin/python pandas pyarrow     # the correctness task sets (lab/gate/correctness/tasks.py)
 uv pip install -q --python .venv/bin/python ninja    # torch C++ extensions: the engine's megakernel builds on first use
 if ! command -v srt >/dev/null; then
   $SUDO apt-get install -y -qq bubblewrap socat ripgrep xz-utils >/dev/null

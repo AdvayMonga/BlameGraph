@@ -1,0 +1,5 @@
+[task]
+goal = "Improve the single_stream regime on the target engine."
+
+[objective]
+regimes = ["single_stream"]

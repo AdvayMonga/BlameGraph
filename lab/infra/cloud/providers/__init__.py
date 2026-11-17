@@ -1,9 +1,10 @@
-"""Cloud adapters for lab.infra.cloud.vm: each exposes get/create/start/stop/types over one provider's API."""
+"""Cloud adapters for lab.infra.cloud.vm: each is a `Provider` over one cloud's API."""
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from typing import Protocol
 
 
 @dataclass(frozen=True)
@@ -30,21 +31,23 @@ def env_field(name: str, default: str):
     return field(default_factory=lambda: os.environ.get(name, default))
 
 
-def as_list(payload, what: str) -> list:
-    """An API answer that must be a list, or a ProviderError naming the endpoint."""
-    if not isinstance(payload, list):
-        raise ProviderError(f"{what}: expected a list, got {type(payload).__name__}: {str(payload)[:200]}")
-    return payload
+class Provider(Protocol):
+    """One cloud. `name` is the VM's name there; a refusal raises ProviderError."""
+    type: str            # the GPU machine type `create` asks for
+    location: str
+    default_user: str    # the ssh login of a VM it created
+    spot: bool           # `create` asks for a preemptible VM
+
+    def get(self, name: str) -> Record | None: ...
+    def create(self, name: str, keyfile: str) -> None: ...
+    def start(self, name: str) -> None: ...
+    def stop(self, name: str) -> None: ...      # the disk is kept
+    def delete(self, name: str) -> None: ...    # the VM and its disk
+    def types(self) -> str: ...
 
 
-def load(name: str):
-    if name == "verda":
-        from lab.infra.cloud.providers import verda
-        return verda.Verda()
-    if name == "crusoe":
-        from lab.infra.cloud.providers import crusoe
-        return crusoe.Crusoe()
+def load(name: str) -> Provider:
     if name == "nebius":
         from lab.infra.cloud.providers import nebius
         return nebius.Nebius()
-    raise ProviderError(f"unknown provider {name!r}; LAB_VM_PROVIDER is verda, nebius or crusoe")
+    raise ProviderError(f"unknown provider {name!r}; LAB_VM_PROVIDER is nebius")
