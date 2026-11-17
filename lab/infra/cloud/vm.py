@@ -25,6 +25,7 @@ LOST_WAIT_S = 60.0       # after ssh drops: seconds to wait for the provider to 
 START_TIMEOUT_S = 900.0
 STOP_TIMEOUT_S = 600.0
 SSH_TIMEOUT_S = 300.0
+MAX_MINUTES = 12 * 60    # a started VM is deleted this long after `lab vm start`
 
 
 @dataclass(frozen=True)
@@ -89,15 +90,6 @@ def start(vm: VM) -> Record:
 
 def _watchdog_file(vm: VM) -> Path:
     return KNOWN_HOSTS_DIR / f"{vm.name}.watchdog"
-
-
-def minutes_for(usd: float) -> int:
-    """How long `usd` rents the GPU, in whole minutes, at the configured rate."""
-    from lab.budget import gpu_rate
-    rate, known = gpu_rate()
-    if not known or rate <= 0:
-        raise ProviderError("no GPU rate: set LAB_GPU_USD_PER_HOUR or the target's [cost] gpu_usd_per_hour")
-    return int(usd / rate * 60)
 
 
 def left_s(vm: VM) -> float:
@@ -304,7 +296,7 @@ def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | Non
     that dir, then leave it running. `keep=False` deletes it; a VM stopped under the command keeps its disk."""
     minutes = int(left_s(vm) // 60)
     if minutes < 1:
-        raise ProviderError(f"{vm.name} has no budget left: `lab vm start --budget USD` arms it")
+        raise ProviderError(f"{vm.name} is not armed: `lab vm start` arms it")
     record = start(vm)
     wait_ssh(vm, record)
     if push_tree:
@@ -328,7 +320,7 @@ def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | Non
         spot = "LAB_VM_SPOT=1 " if vm.provider.spot else ""
         again = f"run --no-push --fetch {fetch_dir} true" if fetch_dir and where != "env" else "run --env --no-push true"
         print(f"[lab.infra.cloud.vm] {vm.name} stopped under the command (preempted, or stopped from outside); its disk is kept: "
-              f"`{spot}lab vm start --budget USD` restarts it, then `{spot}lab vm {again}` brings the results home",
+              f"`{spot}lab vm start` restarts it, then `{spot}lab vm {again}` brings the results home",
               file=sys.stderr)
     if fetch_dir and not lost:
         try:
@@ -352,15 +344,14 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("(")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status", help="state, type and ip")
-    st = sub.add_parser("start", help="create or start, wait for ssh, arm the auto-stop")
-    st.add_argument("--budget", type=float, required=True, help="dollars of GPU time; the VM is deleted when it is spent")
+    sub.add_parser("start", help="create or start, wait for ssh, arm the auto-stop: the VM is deleted 12 hours later")
     wd = sub.add_parser("watchdog", help="(internal) stop the VM at --deadline if still running")
     wd.add_argument("--deadline", type=float, required=True)
     sp = sub.add_parser("stop", help="delete the VM and its disk: billing ends")
     sp.add_argument("--keep-disk", action="store_true", help="stop the VM and keep its disk (the disk stays billed)")
     sub.add_parser("types", help="what the account can rent right now")
     sub.add_parser("setup", help="run lab/infra/cloud/vm-setup.sh on the VM (builds the engine's venv)")
-    r = sub.add_parser("run", help="push both trees, run a command within the VM's budget, fetch an output dir; "
+    r = sub.add_parser("run", help="push both trees, run a command within the VM's time left, fetch an output dir; "
                                    "the VM stays running")
     r.add_argument("--stop", dest="keep", action="store_false", help="delete the VM and its disk afterwards")
     r.add_argument("--fetch", help="remote dir, relative to the repo, to bring back")
@@ -380,10 +371,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{vm.name}: {record.state} {record.type} {record.ip or ''} [{record.detail}]")
         return 0
     if args.cmd == "start":
-        minutes = minutes_for(args.budget)
         record = start(vm)
         wait_ssh(vm, record)
-        arm(vm, record, minutes)
+        arm(vm, record, MAX_MINUTES)
         print(ssh_target(vm, record))
         return 0
     if args.cmd == "watchdog":

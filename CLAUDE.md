@@ -39,7 +39,7 @@ with a CLI gets its entry. The agent's tools are the same commands by the same n
 run. Jailed and remote internals keep `python -m`.
 1. Once per target and GPU: `lab setup --target T` (the corpus; the reference's answers, the model run in
    transformers; `lab validate`: noise bands).
-2. A GPU: `lab vm start --budget USD` (deleted when that much GPU time is spent), `lab vm setup` (also measures
+2. A GPU: `lab vm start` (deleted 12 hours later), `lab vm setup` (also measures
    the GPU's peaks); `LAB_WORKER=ssh` runs measured jobs there.
 3. A run: `lab session --task lab/tasks/single_stream.toml --budget USD`, from this machine; `lab dashboard` shows
    it live. No GPU: `lab rehearsal setup DIR` (prints the practice engine, target and task it wrote).

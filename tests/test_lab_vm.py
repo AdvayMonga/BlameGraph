@@ -161,23 +161,20 @@ def test_collect_merges_the_vms_ledger(fake, monkeypatch):
     assert [r["id"] for r in ledger.records(fake / "ledger")] == [rec["id"]]
 
 
-def test_start_arms_the_vm_for_what_its_budget_rents(fake, monkeypatch):
+def test_start_arms_the_vm_for_twelve_hours(fake, monkeypatch):
     monkeypatch.undo(); fake_again(fake, monkeypatch)               # the real left_s
-    monkeypatch.setenv("LAB_VM", "t4k"); monkeypatch.setenv("LAB_GPU_USD_PER_HOUR", "4")
+    monkeypatch.setenv("LAB_VM", "t4k")
     vm = labvm.VM()
-    with pytest.raises(ProviderError, match="no budget left"):      # not armed: nothing runs
+    with pytest.raises(ProviderError, match="not armed"):           # not armed: nothing runs
         labvm.run(vm, "true")
-    assert labvm.main(["start", "--budget", "3"]) == 0              # $3 at $4/h: 45 minutes
+    assert labvm.main(["start"]) == 0
     pid, deadline = labvm._watchdog_file(vm).read_text().split()
-    assert pid == "4242" and 44 * 60 < float(deadline) - labvm.time.time() <= 45 * 60 + 1
+    assert pid == "4242" and 719 * 60 < float(deadline) - labvm.time.time() <= 720 * 60 + 1
     assert SPAWNED[-1][-3:-1] == ["watchdog", "--deadline"]
-    assert any("shutdown -h +45" in c[-1] for c in calls(fake) if c[0] == "ssh")
+    assert any("shutdown -h +720" in c[-1] for c in calls(fake) if c[0] == "ssh")
     assert labvm.run(vm, "true") == 0                               # a command gets the time that is left
-    assert [c for c in calls(fake) if c[0] == "ssh" and c[-1].startswith("cd ")][-1][-1].endswith(("44m true", "45m true"))
+    assert [c for c in calls(fake) if c[0] == "ssh" and c[-1].startswith("cd ")][-1][-1].endswith(("719m true", "720m true"))
     assert float(labvm._watchdog_file(vm).read_text().split()[1]) == float(deadline)      # run does not re-arm
-    monkeypatch.delenv("LAB_GPU_USD_PER_HOUR"); monkeypatch.setattr("lab.budget.gpu_rate", lambda: (0.0, False))
-    with pytest.raises(ProviderError, match="no GPU rate"):
-        labvm.minutes_for(3)
 
 
 def test_watchdog_deletes_a_running_vm_at_its_deadline(fake, monkeypatch):
