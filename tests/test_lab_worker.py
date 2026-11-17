@@ -180,3 +180,26 @@ def test_a_capture_for_a_task_adds_the_tasks_own_env(tmp_path, monkeypatch):
     worker._profile({"tree": tmp_path}, tmp_path / "out", {"kind": "profile", "args": {
         "capture": ["m:f"], "capture_task": "paged_decode_fp8"}}, {"profile_runner": runner})
     assert seen["env"] == {"CUSTOM_BACKEND_CUDA_GRAPH": "0", "KV_CACHE_DTYPE": "fp8"}
+
+
+def test_a_job_whose_vm_stopped_runs_again_on_the_vm_brought_back(tmp_path, monkeypatch):
+    r = worker.Remote(["ssh", "old"], "~/BlameGraph", "python", {}, rsh="ssh -i k")
+    monkeypatch.setattr(worker.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 255, b"", b"closed"))
+    with pytest.raises(worker.WorkerLost):                          # ssh's own exit code: the host is gone
+        r._run("root")
+    seen = []
+
+    def job(*a):
+        seen.append(r.prefix[-1])
+        if len(seen) == 1:
+            raise worker.WorkerLost("closed")
+        return {"ok": True}
+    r._call = job
+    monkeypatch.setattr(worker, "recovered", lambda: worker.Remote(["ssh", "new"], "~/BlameGraph", "python", {}, rsh="ssh -i k2"))
+    assert r.call("measure", {}, {}, tmp_path) == {"ok": True}
+    assert seen == ["old", "new"] and r.rsh == "ssh -i k2"
+    seen.clear()
+    monkeypatch.setattr(worker, "recovered", lambda: None)          # no VM to bring back
+    with pytest.raises(worker.WorkerLost):
+        r.call("measure", {}, {}, tmp_path)
+    assert len(seen) == 1

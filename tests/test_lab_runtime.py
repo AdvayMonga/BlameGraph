@@ -285,6 +285,30 @@ def test_a_provider_that_works_locally_is_refused_with_a_remote_worker(cfg, monk
         session.run(cfg, ScriptedProvider(lambda n, ws: iter(())))
 
 
+def test_a_session_whose_worker_is_lost_is_charged_and_recorded_and_the_run_ends(cfg, monkeypatch):
+    from lab.infra.runner import worker
+
+    class Far(worker.Remote):
+        def __init__(self):
+            pass
+
+        def workspace_path(self, run_id):
+            return "/far"
+
+        def push(self, local, remote):
+            pass
+
+        def pull(self, remote, local):
+            raise worker.WorkerLost("closed")
+    monkeypatch.setattr(worker, "load", lambda **k: Far())
+    p = ScriptedProvider(lambda n, ws: iter([("reply", AgentReply(None, 0.3, 4, "provider failed"))]))
+    p.remote = True
+    out = session.run(cfg, p)
+    assert out["stopped"] == "worker lost: closed" and out["sessions"] == 1 and out["spent_usd"] == pytest.approx(0.3)
+    assert next(ledger.records(cfg.ledger_root, kind="session"))["cost"]["usd"] == pytest.approx(0.3)
+    assert len(p.specs) == 1                                               # no closing call on a lost worker
+
+
 def _unreflected(cfg, n_session):
     """A hypothesis and a measured record on it, as a measured tool would leave them."""
     h = next(ledger.records(cfg.ledger_root, kind="hypothesis"))

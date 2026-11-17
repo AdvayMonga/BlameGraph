@@ -43,6 +43,10 @@ class WorkerError(RuntimeError):
     """The worker could not run the job (transport, hash mismatch, or an unexpected failure there)."""
 
 
+class WorkerLost(WorkerError):
+    """The ssh session to the worker host failed."""
+
+
 def tree_sha(root: Path) -> str:
     """Content hash of a directory: every regular file's path, exec bit and bytes; refuses symlinks."""
     h = hashlib.sha256()
@@ -282,7 +286,19 @@ class Remote:
                             *(["--rsync-path", "sudo -n rsync"] if self.sudo else []), src, dst],
                            capture_output=True, text=True)
         if p.returncode != 0:
-            raise WorkerError(f"rsync {src} -> {dst}: {p.stderr.strip()[-1000:]}")
+            kind = WorkerLost if self.prefix and p.returncode == 255 else WorkerError
+            raise kind(f"rsync {src} -> {dst}: {p.stderr.strip()[-1000:]}")
+
+    def _retried(self, fn):
+        """`fn()`, run once more after the worker's VM that stopped under it is started and set up again."""
+        try:
+            return fn()
+        except WorkerLost:
+            back = recovered()
+            if back is None:
+                raise
+            self.prefix, self.rsh = back.prefix, back.rsh
+            return fn()
 
     def root(self) -> str:
         """This repo's absolute path on the worker host."""
@@ -294,12 +310,14 @@ class Remote:
         return f"{self.root()}/local/runs/remote/{run_id}/workspace"
 
     def push(self, local: Path, remote: str) -> None:
-        self._run(f"mkdir {shlex.quote(remote)}")
-        self._rsync(f"{local}/", self._where(f"{remote}/"))
+        def go():
+            self._run(f"mkdir {shlex.quote(remote)}")
+            self._rsync(f"{local}/", self._where(f"{remote}/"))
+        self._retried(go)
 
     def pull(self, remote: str, local: Path) -> None:
         Path(local).mkdir(parents=True, exist_ok=True)
-        self._rsync(self._where(f"{remote}/"), f"{local}/")
+        self._retried(lambda: self._rsync(self._where(f"{remote}/"), f"{local}/"))
 
     def workbench(self, name: str, session: str, workspace: str, sdk_version: str) -> dict:
         """{argv, sock}: that host's `docker run` for the CLI, and where the proxy's tunnel must land."""
@@ -330,10 +348,14 @@ class Remote:
         argv = [*self.prefix, line] if self.prefix else ["sh", "-c", line]
         p = subprocess.run(argv, input=stdin, capture_output=True)
         if p.returncode != 0:
-            raise WorkerError(f"worker `{command}` exited {p.returncode}: {p.stderr.decode(errors='replace')[-2000:]}")
+            kind = WorkerLost if self.prefix and p.returncode == 255 else WorkerError
+            raise kind(f"worker `{command}` exited {p.returncode}: {p.stderr.decode(errors='replace')[-2000:]}")
         return p.stdout
 
     def call(self, job: str, inputs: dict[str, Path], args: dict, out: Path) -> dict:
+        return self._retried(lambda: self._call(job, inputs, args, out))
+
+    def _call(self, job: str, inputs: dict[str, Path], args: dict, out: Path) -> dict:
         shas = {k: tree_sha(p) for k, p in inputs.items()}
         have = set(self._run("has " + " ".join(shas.values())).decode().split()) if shas else set()
         for k, p in inputs.items():
@@ -377,7 +399,12 @@ def recovered():
     if os.environ.get("LAB_WORKER") != "ssh":
         return None
     from lab.infra.cloud import vm
-    return load() if vm.restart(vm.VM()) else None
+    from lab.infra.cloud.providers import ProviderError
+    try:
+        return load() if vm.restart(vm.VM()) else None
+    except ProviderError as e:
+        print(f"[lab.infra.runner.worker] the VM was not brought back: {e}", file=sys.stderr)
+        return None
 
 
 # -- the worker host's side ---------------------------------------------------------------------------------------

@@ -235,14 +235,18 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
         (seen / "brief.md").write_text(spec.prompt)
         live.emit("session", session=s.session_id, n=n, cap_usd=spec.max_budget_usd)
         t0 = time.monotonic()
+        if remote:
+            remote.push(ws.path, rws)
         try:
-            if remote:
-                remote.push(ws.path, rws)
             reply = provider.run(spec)
         except Exception as e:                  # a provider that raises is still charged and recorded
             reply = agent.AgentReply(None, spec.max_budget_usd, 0, f"provider raised: {e}", True)
+        lost = None
         if remote:
-            remote.pull(rws, ws.path)           # pull what the agent left on the worker
+            try:
+                remote.pull(rws, ws.path)       # pull what the agent left on the worker
+            except worker.WorkerLost as e:      # the session is still charged and recorded
+                lost = f"worker lost: {e}"
         clean_pristine(run_dir)
         try:
             budget.charge(reply.cost_usd, s.session_id)
@@ -253,7 +257,7 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
         end = ws.snapshot()
         if end.violations and not tools.violation:      # a Bash write outside the surface, with no tool call after
             tools.violation = "; ".join(end.violations)
-        close = None if tools.violation or over else closing(provider, spec, tools, s)
+        close = None if tools.violation or over or lost else closing(provider, spec, tools, s)
         if close and "usd" in close:            # a cap overshoot ends the run
             try:
                 budget.charge(close["usd"], f"{s.session_id} closing")
@@ -274,8 +278,8 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
         if tools.violation:
             summary["stopped"] = f"security: {tools.violation}"
             break
-        if over:
-            summary["stopped"] = over
+        if over or lost:
+            summary["stopped"] = over or lost
             break
         if status == "stop":
             summary["stopped"] = "agent"

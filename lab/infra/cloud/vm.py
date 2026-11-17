@@ -51,7 +51,8 @@ class VM:
     def ssh_opts(self) -> list[str]:
         identity = os.path.expanduser(self.keyfile.removesuffix(".pub"))   # the private half of the uploaded key
         return ["-i", identity, "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
-                "-o", "ConnectTimeout=10", "-o", f"UserKnownHostsFile={self.known_hosts}"]
+                "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
+                "-o", f"UserKnownHostsFile={self.known_hosts}"]
 
 
 def _wait(vm: VM, wanted: str, timeout_s: float) -> Record:
