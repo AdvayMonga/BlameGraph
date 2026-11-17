@@ -376,13 +376,22 @@ def test_the_naming_and_review_calls_read_the_setting_every_idea_and_the_parents
     shown, asked = user.split(CACHE_SPLIT)
     assert shown.startswith("The best score in the search is 2.0000.") and "# Program p1 (score 1.5000)" in shown
     assert "# Program p3 (score 2.0000)" in shown and "p0 (1.0000) -> p1 (1.5000)" in shown
-    assert "# The starting program p0" in shown and "40.0% of its roofline bound" in shown and "REPORT" in shown
+    assert "# The starting program" not in shown and "40.0% of its roofline bound" in shown and "REPORT" in shown
+    assert "# Program p1 (score 1.5000)\n```python\na = 1\n\n```" in shown                 # the first parent whole
+    assert "# Program p3 (score 2.0000)\n```python\na = 3\n\n```" in shown                 # a diff would be longer
+    body = "".join(f"x{k} = {k}\n" for k in range(30))
+    a, b, c = (program(k, 1.0 + k, code=body + tail) for k, tail in ((5, "y = 1\n"), (6, "y = 2"), (7, "y = 1\n")))
+    diffs = context.programs([a, b, c], [a, b, c])
+    assert "# Program p5 (score 6.0000)\n```python\nx0 = 0\n" in diffs
+    assert ("# Program p6 (score 7.0000), as its differences from program p5\n```diff\n--- p5\n+++ p6\n" in diffs
+            and "-y = 1\n+y = 2\n```\n\n# Its measurements" in diffs)                    # the others as diffs
+    assert "# Program p7 (score 8.0000), as its differences from program p5\n```diff\n(the same code)\n```" in diffs
     assert "no ncu" in shown and "secret" not in shown
     assert '{"id": "i1", "idea": "fuse", "prediction": {"speedup": 1.3}, "gain": 1.5}' in asked
     assert "Name 5 changes" in asked and '"reflections"' in asked
     first = context.name("S", [root], [root], [], 1, 5)
     assert first[0] == "S" + CACHE_SPLIT + "\n\n" + context.NAMER
-    assert not any(t in first[1] for t in ("# The starting program", "reflections", "last generation"))
+    assert not any(t in first[1] for t in ("differences from", "reflections", "last generation"))
 
     named = [{"parent": "p1", "optimisation_method": "a"}, {"parent": "p3", "optimisation_method": "b"}]
     matches = [{"named": 1, "like": 0, "where": "this list", "cosine": 0.95},

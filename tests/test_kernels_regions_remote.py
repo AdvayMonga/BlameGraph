@@ -163,8 +163,8 @@ FAKE_WEIGHTS = """
 def layer_weights(model, i):
     return {"w.mm": model.w, "w.mm_scale": None}
 
-def layer_config(model):
-    return LayerConfig(1e-6)
+def constants(model):
+    return {"cfg": LayerConfig(1e-6)}
 
 class _Model:
     w = torch.randn(64, 64, generator=torch.Generator().manual_seed(0)) / 8

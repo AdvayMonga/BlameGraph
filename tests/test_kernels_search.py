@@ -129,10 +129,10 @@ def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_program():
         assert fates[0] == "failed correctness" and "no SEARCH/REPLACE" in fates[1] and fates[2] == "full exam"
         assert all("identical to a program" in f for f in fates[3:])
         system, first = written[0]
-        assert "How a program is judged" in system and "SEARCH/REPLACE" in system
+        assert "Goal: the highest score." in system and "SEARCH/REPLACE" in system
         assert "# Its measurements" in first and "timings (per seen shape" in first and "consider" not in first.lower()
-        assert "How a program is judged" in named[0][0] and "consider" not in named[0][1].lower()
-        assert "# The starting program" in named[2][1] and f"-> {best.id}" in named[2][1]
+        assert "Goal: the highest score." in named[0][0] and "consider" not in named[0][1].lower()
+        assert "# The starting program" not in named[2][1] and f"-> {best.id}" in named[2][1]
         rows = [json.loads(x) for x in (out / "trace.jsonl").read_text().splitlines()]
         assert len(rows) == len(pop) and rows[0]["parent_id"] is None
         code, metrics, retimed = retime(out / "trace.jsonl", 2)
@@ -457,7 +457,7 @@ def test_the_setting_states_seen_shapes_with_calls_weight_and_traffic_never_the_
             "sources": {"[64, 1024]": {"mixed_1": 20, "long_context": 10}},
             "example_calls": {"[8, 1024]": {"args": [{"shape": [8, 1024], "dtype": "float8_e4m3fn"}], "kwargs": {}}}}
     text = setting(task, sets, "cpu", {"float32": [0.02, 0.02], "bfloat16": [1, 1]})
-    assert 'entry point at shape [8, 1024] (each tensor argument by shape and dtype): {"args": [{"shape": [8, 1024], ' \
+    assert 'A captured call at shape [8, 1024] (each tensor by shape and dtype): {"args": [{"shape": [8, 1024], ' \
         '"dtype": "float8_e4m3fn"}], "kwargs": {}}' in text
     assert "[64, 1024]: 30 calls, 75.0% of the score (captured under: long_context 10, mixed_1 20)" in text
     assert "[8, 1024]: 10 calls, 25.0% of the score" in text and "4096" not in text
