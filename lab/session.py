@@ -7,6 +7,7 @@ import argparse
 import dataclasses
 import json
 import subprocess
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -287,6 +288,22 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
     return summary
 
 
+def preflight(provider: str | None = None) -> list[str]:
+    """What a run needs that is absent here: the target, the provider's package and credential, the store."""
+    from lab.records.remote import NoRemote, open_remote
+    out = []
+    try:
+        target.load()
+    except target.NoTarget as e:
+        out.append(str(e))
+    out += agent.missing(provider)
+    try:
+        open_remote()
+    except NoRemote as e:
+        out.append(str(e))
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="lab session")
     ap.add_argument("--goal", help="plain goal text (or give --task)")
@@ -301,6 +318,10 @@ def main(argv: list[str] | None = None) -> int:
     task = Task.parse(a.task) if a.task else None
     if not task and not a.goal:
         ap.error("give --task or --goal")
+    absent = preflight(a.provider)
+    if absent:
+        print("lab session: nothing was started.\n" + "\n".join(f"- {x}" for x in absent), file=sys.stderr)
+        return 2
     out = run(RunConfig(goal=task.goal if task else a.goal, budget_usd=a.budget, task=task, base=a.base, run_id=a.run,
                         max_sessions=a.max_sessions, session_usd=a.session_usd, provider=a.provider))
     print(json.dumps(out, indent=1))

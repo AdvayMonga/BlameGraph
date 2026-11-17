@@ -196,6 +196,7 @@ def test_restore_and_profile_tools(cfg, monkeypatch):
 def test_cli_parses(monkeypatch, cfg):
     seen = {}
     monkeypatch.setattr(session, "run", lambda c, provider=None: seen.setdefault("cfg", c) and {"ok": 1})
+    monkeypatch.setattr(session, "preflight", lambda provider=None: [])
     session.main(["--goal", "g", "--budget", "3", "--base", "HEAD", "--max-sessions", "2"])
     assert seen["cfg"].goal == "g" and seen["cfg"].budget_usd == 3.0 and seen["cfg"].max_sessions == 2
     assert json.dumps({"ok": 1})
