@@ -219,7 +219,7 @@ class Toolbox(EvalTools, ProfTools):
                     back, was, at = worker.recovered(), at, pipeline.saved(out / "search")
                     if back is None and at == was:           # no VM to bring back, no generation since the last loss
                         raise
-                    if back is not None:
+                    if back and remote:
                         self.worker.prefix, self.worker.rsh = back.prefix, back.rsh
         except Exception as e:                   # noqa: BLE001  a tool never crashes the session
             model_cost = self._charge_models(pipeline.spent(out / "search"))
