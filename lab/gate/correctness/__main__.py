@@ -1,10 +1,9 @@
-"""lab correctness reference --out DIR [--tasks a,b] [--target T]   (the model in transformers; needs a GPU)
+"""lab correctness reference --out DIR [--tasks a,b] [--target T]   (the model in transformers, on the worker's GPU)
 lab correctness candidate --url URL --out FILE.json [--ref DIR] [--api vllm|sglang|none] [--target T]
 lab correctness verdict A.json [B.json ...] [--target T]   (re-judge saved results, no server)"""
 from __future__ import annotations
 
 import argparse
-import json
 
 from evals.targets import target
 
@@ -15,7 +14,6 @@ def main():
     sub = ap.add_subparsers(dest="step", required=True)
     r = sub.add_parser("reference"); r.add_argument("--out", required=True)
     r.add_argument("--tasks", help="comma-separated (default: the target's)")
-    r.add_argument("--div-n", type=int, default=400)
     c = sub.add_parser("candidate"); c.add_argument("--url", required=True); c.add_argument("--out", required=True)
     c.add_argument("--ref", help="reference outputs dir (default: the target's reference.dir)")
     c.add_argument("--api", choices=("vllm", "sglang", "none"), help="logprobs API (default: the target's engine.api)")
@@ -23,15 +21,16 @@ def main():
     v = sub.add_parser("verdict"); v.add_argument("results", nargs="+")
     a = ap.parse_args()
     t = target.load(a.target)
-    from lab.gate.correctness import client, run, tasks
+    from lab.gate.correctness import client, run
     from lab.gate.correctness.gate import Thresholds
     th = Thresholds(max_kl=t.max_kl, min_length_ratio=t.min_length_ratio)
     enc = lambda: run.HFEncoder(t.model, t.chat_kwargs)
     if a.step == "reference":
+        from pathlib import Path
         from lab.gate.correctness import hf
-        names = tuple(a.tasks.split(",")) if a.tasks else t.tasks
-        meta = hf.reference(t.model, a.out, tasks.load(names), t.chat_kwargs, div_n=a.div_n)
-        print(json.dumps(meta, indent=1))
+        from lab.infra.runner import worker
+        hf.build(Path(a.out), tuple(a.tasks.split(",")) if a.tasks else t.tasks, worker.load())
+        print((Path(a.out) / "meta.json").read_text())
     elif a.step == "candidate":
         ref = a.ref or (str(t.reference_dir) if t.reference_dir else None)
         if not ref:

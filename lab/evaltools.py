@@ -33,13 +33,15 @@ def _regimes(args: dict, default: tuple[str, ...]) -> list[str]:
 
 
 def run_regimes(url: str, t: target.Target, names: list[str], split: str, tier: str, seed: int,
-                rows: list | None = None, hints: dict | None = None, bands: dict | None = None) -> list[dict]:
+                rows: list | None = None, hints: dict | None = None, bands: dict | None = None,
+                tol: float | None = None) -> list[dict]:
     """Each regime's result; with `rows`, every measured client row is appended to it, tagged with its regime.
-    `hints` / `bands`: where the base's searches ended and each regime's noise band."""
+    `hints` / `bands`: where the base's searches ended and each regime's noise band; `tol`: the searches' relative
+    resolution, over the bands."""
     from evals.loadgen import suite
     watch = split == "seen"             # only the seen split's progress goes to the dashboard
     ctx = suite.Ctx.from_target(t, url, split=split, tier=tier, seed=seed, rows=rows, hints=hints or {},
-                                bands=bands or {}, on_rows=_progress if watch else None)
+                                bands=bands or {}, tol=tol, on_rows=_progress if watch else None)
     out = []
     for n in names:
         if watch:

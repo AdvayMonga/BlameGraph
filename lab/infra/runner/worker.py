@@ -7,6 +7,7 @@ Contaminated, NotReady and ValueError are re-raised on the controller. measure, 
   test     lint + the engine's suite on `tree`                      -> {lint, tests}
   measure  serve `tree`, run regimes; passive data into out          -> {results, ready_s}
   equiv    serve `tree`, the correctness gate against `reference`   -> the gate's result; outputs in out
+  reference  continue the correctness reference in `prior`           -> {complete}; the reference dir in out
   profile  lab.profile.profile under torch, nsys, ncu or py-spy on `tree`   -> {returncode, output, ...}; files in out
 
     python -m lab.infra.runner.worker has SHA...  |  put SHA < tar  |  run JOB < json > tar      (the worker host's side)
@@ -74,7 +75,8 @@ def job_test(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
 
 
 def job_measure(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
-    """`args`: names, split, tier, seed, jailed, passive (keep device/telemetry/client rows in `out`), hints, bands.
+    """`args`: names, split, tier, seed, jailed, passive (keep device/telemetry/client rows in `out`), hints, bands,
+    tol.
     One engine launch per profile, general first; every result and row carries its `profile` (None = general), and a
     profile's passive data lands in `out/profiles/<regime>/`. A failed profile launch makes its regimes invalid; a
     failed general launch, a busy GPU or a contaminated measurement raises."""
@@ -96,7 +98,7 @@ def job_measure(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
                     with serve.Served(inputs["tree"], t.engine, log=out / ENGINE_LOG, jailed=args["jailed"],
                                       artifacts=where, env_extra=profiles.env(t, prof)) as srv:
                         got = run_regimes(srv.url, t, names, args["split"], args["tier"], args["seed"], rows,
-                                          args.get("hints"), args.get("bands"))
+                                          args.get("hints"), args.get("bands"), args.get("tol"))
                         srv.exclusive()
                     ready[prof] = srv.ready_s
                 except (serve.GpuBusy, serve.Contaminated):
@@ -140,6 +142,17 @@ def job_equiv(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
                              concurrency=args["concurrency"], api=api)
         srv.exclusive()
     return {**res, "killed": killed}
+
+
+def job_reference(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
+    """`args`: tasks, seconds. The correctness reference in `prior` continued into `out` for about `seconds` of
+    generation; `complete` when its meta.json is written."""
+    from lab.gate.correctness import hf, tasks
+    t = target.load()
+    shutil.copytree(inputs["prior"], out, dirs_exist_ok=True)
+    build = hooks.get("reference") or hf.reference
+    meta = build(t.model, out, tasks.load(tuple(args["tasks"])), t.chat_kwargs, seconds=args["seconds"])
+    return {"complete": meta is not None}
 
 
 def job_profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
@@ -215,7 +228,8 @@ def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
             "head": proftools._head(found[-1] if found else None), "gpu": gpu.query()}
 
 
-JOBS = {"test": job_test, "measure": job_measure, "equiv": job_equiv, "profile": job_profile}
+JOBS = {"test": job_test, "measure": job_measure, "equiv": job_equiv, "reference": job_reference,
+        "profile": job_profile}
 
 # Errors re-raised as themselves on the controller; anything else is a WorkerError.
 _ERRORS = {"GpuBusy": lambda e: serve.GpuBusy(e["apps"]), "Contaminated": lambda e: serve.Contaminated(e["apps"]),

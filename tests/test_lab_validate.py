@@ -1,6 +1,7 @@
 """lab.gate.validate on a fake engine: noise bands from repeated runs."""
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -21,7 +22,7 @@ def spec(tmp_path, monkeypatch):
 [model]
 name = "fake"
 [engine]
-repo = "{tmp_path}"
+repo = "{tmp_path / 'engine'}"
 python = "{sys.executable}"
 launch = "python {FAKE} --port {{port}}"
 test = "true"
@@ -33,6 +34,11 @@ conversational = {{ ttft_s = 0.25, tpot_s = 0.05 }}
 dir = "{tmp_path / 'no-corpus'}"
 ''')
     monkeypatch.setenv("LAB_TARGET", str(t)); monkeypatch.setenv("LAB_ENGINE_PYTHON", sys.executable)
+    monkeypatch.delenv("LAB_WORKER", raising=False)
+    (tmp_path / "engine").mkdir(); (tmp_path / "engine" / "engine.py").write_text("")
+    for argv in (["init", "-q"], ["add", "engine.py"],
+                 ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base"]):
+        subprocess.run(["git", "-C", str(tmp_path / "engine"), *argv], check=True)
     target._cache.clear()
     saved = dict(suite.TIERS["min"]); suite.TIERS["min"].update(probe_s=1.0, final_s=1.5)
     yield target.load()
@@ -45,7 +51,7 @@ def test_validate_measures_bands(spec, tmp_path):
     noise = rec["result"]
     assert noise["runs"] == 2 and noise["band_pct"] is not None and rep["bands_measured"] is True
     assert noise["server"] == "engine" and noise["target"] == spec.name
-    assert "engine_commit" in noise and noise["engine_commit"] is None     # not a git repo
+    assert len(noise["engine_commit"]) == 40 and len(noise["values"]) == 2
     assert rep["noise"]["single_stream"] == noise and (tmp_path / "out" / "report.json").exists()
 
 
