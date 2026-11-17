@@ -1,6 +1,5 @@
-"""A measured number with its context: % of the physical ceiling, % of the reference engine, and for parts of a step
-their share of the whole. A ceiling or reference appears only under a matching config fingerprint; else the field says
-why it is missing."""
+"""A measured number with its context: % of the physical ceiling, and for parts of a step their share of the whole.
+A missing ceiling comes with a field saying why."""
 from __future__ import annotations
 
 import csv
@@ -12,11 +11,6 @@ from pathlib import Path
 from evals.targets import target
 from lab.infra.context import ceiling, peaks
 from lab.infra.context.ceiling import ModelSpec, Shape
-
-REFERENCE_DIR = target.ENV_ROOT / "lab" / "infra" / "calibration" / "reference"
-FINGERPRINT_KEYS = ("model", "w_dtype", "kv_dtype", "max_model_len", "tier", "split", "corpus_version", "gpu")
-DETERMINISM_ENV = ("VLLM_BATCH_INVARIANT",)
-DETERMINISM_FLAGS = ("--enable-deterministic-inference",)
 
 
 # -- model config -----------------------------------------------------------------------
@@ -45,16 +39,6 @@ def dtypes(t: target.Target) -> tuple[str, str]:
     return w, ceiling.dtype(m.get("kv_dtype", w))
 
 
-def perf_reference(t: target.Target) -> target.Server | None:
-    """The reference server without its determinism switches; None when the target has no reference."""
-    import dataclasses
-    if t.reference is None:
-        return None
-    env = {k: v for k, v in t.reference.env.items() if k not in DETERMINISM_ENV}
-    launch = " ".join(w for w in t.reference.launch.split() if w not in DETERMINISM_FLAGS)
-    return dataclasses.replace(t.reference, env=env, launch=launch)
-
-
 # -- fingerprint --------------------------------------------------------------------------
 def fingerprint(t: target.Target, gpu: dict | None, tier: str, split: str, seed: int | None = None) -> dict:
     from evals.loadgen.workload import corpus_version
@@ -63,11 +47,6 @@ def fingerprint(t: target.Target, gpu: dict | None, tier: str, split: str, seed:
             "split": split, "corpus_version": corpus_version(t.corpus_dir) if t.corpus_dir.is_dir() else None,
             "gpu": (gpu or {}).get("name"), "driver": (gpu or {}).get("driver_version"),
             "sm_clock_mhz": (gpu or {}).get("clocks.sm"), "seed": seed}
-
-
-def same_config(a: dict, b: dict) -> list[str]:
-    """The fingerprint keys that differ (empty = comparable); driver, clocks and seed are not compared."""
-    return [k for k in FINGERPRINT_KEYS if a.get(k) != b.get(k)]
 
 
 # -- shapes from client rows --------------------------------------------------------------
@@ -89,43 +68,10 @@ def shape_from_rows(rows: list[dict]) -> Shape | None:
     return Shape(statistics.fmean(prompts), float(p99), statistics.fmean(outs), max(1.0, conc), uncached)
 
 
-# -- reference numbers -----------------------------------------------------------------------
-def reference_path(t: target.Target, regime: str) -> Path:
-    return REFERENCE_DIR / t.name / f"{regime}.json"
-
-
-def write_reference(t: target.Target, regime: str, result: dict, fp: dict, rows: list[dict] | None = None) -> Path:
-    """Store one regime's reference result with its fingerprint; returns the file."""
-    p = reference_path(t, regime)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    srv = perf_reference(t)
-    d = {"target": t.name, "server": "reference", "launch": srv.launch if srv else None, "env": srv.env if srv else None,
-         "regime": regime, "objective": result["objective"],
-         "value": result["value"] if result.get("valid") else None, "better": result["better"],
-         "valid": result.get("valid"), "summary": result.get("summary"), "fingerprint": fp}
-    sh = shape_from_rows(rows) if rows else None
-    if sh:
-        d["shape"] = sh.__dict__
-    p.write_text(json.dumps(d, indent=1, default=str) + "\n")
-    return p
-
-
-def reference_for(t: target.Target, regime: str, fp: dict) -> tuple[float | None, str | None]:
-    """(value, why_missing): the reference's objective for this regime, only under the same fingerprint."""
-    p = reference_path(t, regime)
-    if not p.exists():
-        return None, "no reference measurement of this regime on record"
-    d = json.loads(p.read_text())
-    diff = same_config(d.get("fingerprint") or {}, fp)
-    if diff:
-        return None, f"reference measured under a different config: {', '.join(diff)}"
-    return d.get("value"), None if d.get("value") is not None else "reference measurement was invalid"
-
-
 # -- regime results ----------------------------------------------------------------------------
 def calibrate_results(results: list[dict], rows: list[dict], t: target.Target, gpu: dict | None, tier: str,
                       split: str, seed: int | None = None) -> dict:
-    """{regime: {value, ceiling, pct_of_ceiling, reference, pct_of_reference, ...}} for a bench's results.
+    """{regime: {value, ceiling, pct_of_ceiling, ...}} for a bench's results.
     Never raises: a failure is returned as {"error": ...}."""
     try:
         return _calibrate_results(results, rows, t, gpu, tier, split, seed)
@@ -161,12 +107,6 @@ def _calibrate_results(results, rows, t, gpu, tier, split, seed):
                 row.update(ceiling=c["ceiling"], pct_of_ceiling=ceiling.pct_of(value, c["ceiling"], r["better"]),
                            bound=c["bound"], ceiling_basis=c["basis"], peaks_source=hw.source,
                            shape=shape.__dict__)
-        ref, why = reference_for(t, name, fp)
-        row["reference"] = ref
-        if why:
-            row["reference_missing"] = why
-        else:
-            row["pct_of_reference"] = ceiling.pct_of(value, ref, r["better"])
         out[name] = row
     return out
 

@@ -1,7 +1,6 @@
-"""lab.gate.validate on fakes: the reference, a known-good and a known-bad candidate, noise bands from repeated runs."""
+"""lab.gate.validate on a fake engine: noise bands from repeated runs."""
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
@@ -13,14 +12,6 @@ from evals.targets import target
 from evals.loadgen import suite
 
 FAKE = Path(__file__).resolve().parent / "fake_engine.py"
-
-
-class Enc:
-    def encode(self, text):
-        return [hash(w) % 1000 + 1 for w in text.split()]
-
-    def chat_ids(self, messages):
-        return self.encode(" ".join(m["content"] for m in messages))
 
 
 @pytest.fixture
@@ -35,20 +26,11 @@ python = "{sys.executable}"
 launch = "python {FAKE} --port {{port}}"
 test = "true"
 lint = "true"
-[reference]
-launch = "python {FAKE} --port {{port}} --out-tokens 6"
-dir = "{tmp_path / 'ref'}"
-startup_timeout_s = 30
-[correctness]
-tasks = ["mmlu_pro"]
 [limits]
 interactive = {{ ttft_s = 0.25, tpot_s = 0.05 }}
 conversational = {{ ttft_s = 0.25, tpot_s = 0.05 }}
 [corpus]
 dir = "{tmp_path / 'no-corpus'}"
-[validation]
-good = {{ same = "python {FAKE} --port {{port}} --out-tokens 6" }}
-bad = {{ wrong4 = "python {FAKE} --port {{port}} --out-tokens 6 --wrong-every 4" }}
 ''')
     monkeypatch.setenv("LAB_TARGET", str(t)); monkeypatch.setenv("LAB_ENGINE_PYTHON", sys.executable)
     target._cache.clear()
@@ -57,29 +39,14 @@ bad = {{ wrong4 = "python {FAKE} --port {{port}} --out-tokens 6 --wrong-every 4"
     suite.TIERS["min"].update(saved); target._cache.clear()
 
 
-def test_validate_separates_and_measures_bands(spec, tmp_path, monkeypatch):
-    from lab.gate.correctness import run as crun
-    from lab.infra.runner import serve
-    items = [{"id": f"mc-{k}", "task": "mmlu_pro", "gold": "C", "max_tokens": 6,
-              "messages": [{"role": "user", "content": f"question {k} pick one"}]} for k in range(60)]
-    with serve.Served(target.ENV_ROOT, spec.reference, log=tmp_path / "serve-reference.log", jailed=False) as srv:
-        crun.reference(srv.url, spec.model, spec.reference_dir, items, Enc())
-    from lab.infra.context import calibrate
-    monkeypatch.setattr(calibrate, "REFERENCE_DIR", tmp_path / "reference")
-    rep = validate.validate(spec, noise_runs=2, regimes=["single_stream"], out=tmp_path / "out", encoder=Enc(),
-                            root=tmp_path / "ledger")
-    ref = json.loads((tmp_path / "reference" / spec.name / "single_stream.json").read_text())
-    assert ref["server"] == "reference" and ref["fingerprint"]["tier"] == "min" and "single_stream" in rep["reference_regimes"]
-    assert ref["value"] is not None and ref["shape"]["prompt_tokens_mean"] > 0
-    assert rep["candidates"]["same"]["verdict"] == "pass"
-    assert rep["candidates"]["wrong4"]["verdict"] == "fail", rep["candidates"]["wrong4"]
-    assert rep["gate_separates"] is True
+def test_validate_measures_bands(spec, tmp_path):
+    rep = validate.validate(spec, noise_runs=2, regimes=["single_stream"], out=tmp_path / "out", root=tmp_path / "ledger")
     [rec] = ledger.records(tmp_path / "ledger", kind="noise")
     noise = rec["result"]
     assert noise["runs"] == 2 and noise["band_pct"] is not None and rep["bands_measured"] is True
     assert noise["server"] == "engine" and noise["target"] == spec.name
     assert "engine_commit" in noise and noise["engine_commit"] is None     # not a git repo
-    assert (tmp_path / "ref" / "outputs.jsonl").exists() and (tmp_path / "out" / "report.json").exists()
+    assert rep["noise"]["single_stream"] == noise and (tmp_path / "out" / "report.json").exists()
 
 
 def test_a_searched_band_is_never_below_the_search_resolution():
