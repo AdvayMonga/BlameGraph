@@ -7,6 +7,7 @@ import argparse
 import dataclasses
 import json
 import subprocess
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ from evals.targets import target
 from lab.targets import engine
 from lab.budget import Budget, BudgetExceeded
 from lab.evaltools import BENCH_TIER
+from lab.gate.correctness.gate import Thresholds
 from lab.infra.sandbox import grader
 from lab.task import Task
 from lab.tools import Toolbox, clean_pristine
@@ -112,11 +114,12 @@ def system_prompt(t: target.Target, spec: agent.AgentSpec) -> str:
         interactive_tpot_ms=t.interactive.tpot_s * 1e3, conversational_ttft_ms=t.conversational.ttft_s * 1e3,
         conversational_tpot_ms=t.conversational.tpot_s * 1e3, bench_tier=BENCH_TIER,
         tiers="; ".join(f"{k} = {v['probe_s']:g} s probes and a {v['final_s']:g} s measurement window per regime"
-                        for k, v in suite.TIERS.items()), min_score_ratio=t.min_score_ratio, min_length_ratio=t.min_length_ratio,
+                        for k, v in suite.TIERS.items()), max_kl=t.max_kl, min_length_ratio=t.min_length_ratio,
+        max_length_ratio=Thresholds.max_length_ratio,
         workbench=workbench, write=globs(t.write), add_only=globs(t.add_only), deny=globs(ALWAYS_DENY),
         tools="\n".join(f"- `{x.name}`: {x.description}" for x in spec.tools),
         session_usd=spec.max_budget_usd, max_turns=spec.max_turns, timeout_s=spec.timeout_s,
-        min_session_usd=MIN_SESSION_USD, holdout=HOLDOUT_BUDGET, submit_tier=t.submit_tier, closing_usd=CLOSING_USD, closing_turns=CLOSING_TURNS,
+        min_session_usd=MIN_SESSION_USD, holdout=HOLDOUT_BUDGET, closing_usd=CLOSING_USD, closing_turns=CLOSING_TURNS,
         closing_tools=" and ".join(f"`{x}`" for x in CLOSING_TOOLS))
 
 
@@ -285,6 +288,22 @@ def run(cfg: RunConfig, provider: agent.Provider | None = None) -> dict:
     return summary
 
 
+def preflight(provider: str | None = None) -> list[str]:
+    """What a run needs that is absent here: the target, the provider's package and credential, the store."""
+    from lab.records.remote import NoRemote, open_remote
+    out = []
+    try:
+        target.load()
+    except target.NoTarget as e:
+        out.append(str(e))
+    out += agent.missing(provider)
+    try:
+        open_remote()
+    except NoRemote as e:
+        out.append(str(e))
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="lab session")
     ap.add_argument("--goal", help="plain goal text (or give --task)")
@@ -299,6 +318,10 @@ def main(argv: list[str] | None = None) -> int:
     task = Task.parse(a.task) if a.task else None
     if not task and not a.goal:
         ap.error("give --task or --goal")
+    absent = preflight(a.provider)
+    if absent:
+        print("lab session: nothing was started.\n" + "\n".join(f"- {x}" for x in absent), file=sys.stderr)
+        return 2
     out = run(RunConfig(goal=task.goal if task else a.goal, budget_usd=a.budget, task=task, base=a.base, run_id=a.run,
                         max_sessions=a.max_sessions, session_usd=a.session_usd, provider=a.provider))
     print(json.dumps(out, indent=1))

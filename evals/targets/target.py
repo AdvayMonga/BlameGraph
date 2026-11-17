@@ -53,28 +53,15 @@ class Target:
     interactive: Limits
     conversational: Limits
     tasks: tuple[str, ...]
-    min_score_ratio: float
+    max_kl: float
     min_length_ratio: float
     corpus_dir: Path
     raw: dict
     layers: dict = field(default_factory=dict)   # layer -> globs in the engine repo ([layers])
-    submit_tier: str = "full"           # the equiv tier submit requires: full or dev
 
     @property
     def name(self) -> str:
         return self.path.stem
-
-    def reference_dir_for(self, tier: str) -> Path | None:
-        """The reference outputs for a tier: `reference.dir` for dev, `<reference.dir>-full` for full."""
-        if self.reference_dir is None:
-            return None
-        return self.reference_dir if tier == "dev" else self.reference_dir.with_name(self.reference_dir.name + "-full")
-
-
-def _submit_tier(v: str) -> str:
-    if v not in ("dev", "full"):
-        raise ValueError(f"[correctness] submit_tier must be dev or full, not {v!r}")
-    return v
 
 
 def reference_complete(ref_dir: Path | None) -> bool:
@@ -109,8 +96,7 @@ def parse(path: Path) -> Target:
         interactive=Limits(**lim.get("interactive", {"ttft_s": 0.5, "tpot_s": 0.030})),
         conversational=Limits(**lim.get("conversational", {"ttft_s": 2.0, "tpot_s": 0.100})),
         tasks=tuple(c.get("tasks") or ("mmlu_pro", "math", "code", "needle")),
-        min_score_ratio=float(c.get("min_score_ratio", 0.99)), min_length_ratio=float(c.get("min_length_ratio", 0.90)),
-        submit_tier=_submit_tier(c.get("submit_tier", "full")),
+        max_kl=float(c.get("max_kl", 0.01)), min_length_ratio=float(c.get("min_length_ratio", 0.90)),
         layers={k: tuple(v) for k, v in (raw.get("layers") or {}).items()},
         corpus_dir=ENV_ROOT / raw.get("corpus", {}).get("dir", "evals/regimes"), raw=raw)
 
