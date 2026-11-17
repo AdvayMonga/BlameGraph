@@ -23,8 +23,14 @@ sys.exit(int(os.environ.get("FAKE_EXIT", "0")) if any(a.startswith("cd ") for a 
 
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
+    fake_again(tmp_path, monkeypatch)
+    monkeypatch.setattr(labvm, "left_s", lambda vm: 180 * 60.0)    # every VM here is armed with three hours left
+    return tmp_path
+
+
+def fake_again(tmp_path, monkeypatch):
     bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
+    bin_dir.mkdir(exist_ok=True)
     for name, body in (("nebius", FAKE_NEBIUS), ("ssh", FAKE_TOOL), ("rsync", FAKE_TOOL)):
         p = bin_dir / name
         p.write_text(body)
@@ -40,7 +46,6 @@ def fake(tmp_path, monkeypatch):
     monkeypatch.setattr(labvm, "POLL_S", 0.0)
     monkeypatch.setattr(labvm, "_spawn_watchdog", _fake_spawn)     # the watchdog: recorded, never spawned
     monkeypatch.setattr(labvm, "SSH_TIMEOUT_S", 0.05)
-    return tmp_path
 
 
 SPAWNED: list = []
@@ -122,10 +127,7 @@ def test_run_pushes_runs_in_repo_dir_and_fetches(fake, monkeypatch):
     assert cmd.startswith("cd ~/repo && LAB_GIT_SHA=")
     assert cmd.endswith('PATH="$HOME/BlameGraph/bin:$HOME/repo/.venv/bin:$PATH" timeout --signal=TERM --kill-after=60 180m python -m lab.profile.profile')
     assert any(a.startswith("UserKnownHostsFile=") and a.endswith("t4.known_hosts") for a in sshs[-1])
-    # the VM stays running afterwards with the auto-stop armed
-    assert vm.provider.get("t4").state == "running" and labvm._watchdog_file(vm).exists()
-    assert any("shutdown -h +180" in c[-1] for c in sshs)
-    assert SPAWNED and SPAWNED[-1][-3:-1] == ["watchdog", "--deadline"]
+    assert vm.provider.get("t4").state == "running"                 # the VM stays running afterwards
 
 
 def test_run_in_the_environment_dir(fake, monkeypatch):
@@ -159,14 +161,23 @@ def test_collect_merges_the_vms_ledger(fake, monkeypatch):
     assert [r["id"] for r in ledger.records(fake / "ledger")] == [rec["id"]]
 
 
-def test_run_leaves_the_vm_running_with_the_watchdog_armed(fake):
-    vm = labvm.VM(name="t4k", user="u", remote_dir="~/repo")
-    assert labvm.run(vm, "true", minutes=45) == 0
-    assert vm.provider.get("t4k").state == "running"
+def test_start_arms_the_vm_for_what_its_budget_rents(fake, monkeypatch):
+    monkeypatch.undo(); fake_again(fake, monkeypatch)               # the real left_s
+    monkeypatch.setenv("LAB_VM", "t4k"); monkeypatch.setenv("LAB_GPU_USD_PER_HOUR", "4")
+    vm = labvm.VM()
+    with pytest.raises(ProviderError, match="no budget left"):      # not armed: nothing runs
+        labvm.run(vm, "true")
+    assert labvm.main(["start", "--budget", "3"]) == 0              # $3 at $4/h: 45 minutes
     pid, deadline = labvm._watchdog_file(vm).read_text().split()
-    assert pid == "4242" and 0 < float(deadline) - labvm.time.time() <= 45 * 60 + 1
+    assert pid == "4242" and 44 * 60 < float(deadline) - labvm.time.time() <= 45 * 60 + 1
+    assert SPAWNED[-1][-3:-1] == ["watchdog", "--deadline"]
     assert any("shutdown -h +45" in c[-1] for c in calls(fake) if c[0] == "ssh")
-    assert "45m true" in [c for c in calls(fake) if c[0] == "ssh" and c[-1].startswith("cd ")][-1][-1]
+    assert labvm.run(vm, "true") == 0                               # a command gets the time that is left
+    assert [c for c in calls(fake) if c[0] == "ssh" and c[-1].startswith("cd ")][-1][-1].endswith(("44m true", "45m true"))
+    assert float(labvm._watchdog_file(vm).read_text().split()[1]) == float(deadline)      # run does not re-arm
+    monkeypatch.delenv("LAB_GPU_USD_PER_HOUR"); monkeypatch.setattr("lab.budget.gpu_rate", lambda: (0.0, False))
+    with pytest.raises(ProviderError, match="no GPU rate"):
+        labvm.minutes_for(3)
 
 
 def test_watchdog_deletes_a_running_vm_at_its_deadline(fake, monkeypatch):

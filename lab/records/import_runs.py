@@ -28,10 +28,10 @@ def bench_record(run: str, commit: str, env: dict, label: str, regimes_json: dic
     return {"kind": "bench", "run": run, "session": SESSION, "tool": "bench",
             "args": {"regimes": [r["regime"] for r in results], "label": label, "manual": True},
             "snapshot": commit, "snapshot_blob": None, "patch": None,
-            "config": {"split": regimes_json.get("split", "seen"), "tier": regimes_json.get("tier", "short"),
+            "config": {"split": regimes_json.get("split", "seen"), "tier": regimes_json.get("tier", "min"),
                        "seed": regimes_json.get("seed", 0), "commit": commit, "env": env},
             "result": {"verdict": "ok", "metrics": headline(results), "regimes": results,
-                       "tier": regimes_json.get("tier", "short"), "gpu": gpu, "source": "manual",
+                       "tier": regimes_json.get("tier", "min"), "gpu": gpu, "source": "manual",
                        "measured_at": regimes_json.get("at"), "corpus_version": regimes_json.get("corpus_version"),
                        "model": regimes_json.get("model")},
             "cost": {"usd": None, "seconds": None}}
