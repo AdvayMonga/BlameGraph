@@ -25,7 +25,6 @@ LOST_WAIT_S = 60.0       # after ssh drops: seconds to wait for the provider to 
 START_TIMEOUT_S = 900.0
 STOP_TIMEOUT_S = 600.0
 SSH_TIMEOUT_S = 300.0
-MAX_MINUTES = int(os.environ.get("LAB_VM_MAX_MINUTES", "180"))   # wall-clock cap on any VM session, minutes
 
 
 @dataclass(frozen=True)
@@ -92,7 +91,24 @@ def _watchdog_file(vm: VM) -> Path:
     return KNOWN_HOSTS_DIR / f"{vm.name}.watchdog"
 
 
-def arm(vm: VM, record: Record, minutes: int = MAX_MINUTES) -> None:
+def minutes_for(usd: float) -> int:
+    """How long `usd` rents the GPU, in whole minutes, at the configured rate."""
+    from lab.budget import gpu_rate
+    rate, known = gpu_rate()
+    if not known or rate <= 0:
+        raise ProviderError("no GPU rate: set LAB_GPU_USD_PER_HOUR or the target's [cost] gpu_usd_per_hour")
+    return int(usd / rate * 60)
+
+
+def left_s(vm: VM) -> float:
+    """Seconds until the armed deadline; 0 when the VM is not armed."""
+    try:
+        return max(0.0, float(_watchdog_file(vm).read_text().split()[1]) - time.time())
+    except (OSError, IndexError, ValueError):
+        return 0.0
+
+
+def arm(vm: VM, record: Record, minutes: int) -> None:
     """Arm the auto-stop: a detached local watchdog that deletes the VM at the deadline, and an in-VM `shutdown -h`.
     Re-arming replaces the previous deadline."""
     disarm(vm)
@@ -279,13 +295,15 @@ def restart(vm: VM) -> bool:
 
 
 def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | None = None,
-        push_tree: bool = True, where: str = "engine", keep: bool = True, minutes: int = MAX_MINUTES) -> int:
-    """Start the VM if needed, push both trees, run `command` in the engine dir (or `where="env"`: this environment's)
-    with the engine's venv on PATH under a `minutes` wall-clock timeout, fetch `fetch_dir` from that dir, then leave
-    it running with the watchdog armed. `keep=False` deletes it; a VM stopped under the command keeps its disk."""
+        push_tree: bool = True, where: str = "engine", keep: bool = True) -> int:
+    """On a VM armed by `lab vm start`: push both trees, run `command` in the engine dir (or `where="env"`: this
+    environment's) with the engine's venv on PATH for at most the time left to the deadline, fetch `fetch_dir` from
+    that dir, then leave it running. `keep=False` deletes it; a VM stopped under the command keeps its disk."""
+    minutes = int(left_s(vm) // 60)
+    if minutes < 1:
+        raise ProviderError(f"{vm.name} has no budget left: `lab vm start --budget USD` arms it")
     record = start(vm)
     wait_ssh(vm, record)
-    arm(vm, record, minutes)
     if push_tree:
         push(vm, record)
     sha = local_sha()
@@ -301,13 +319,14 @@ def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | Non
     except subprocess.TimeoutExpired:
         code = 124
     print(f"[lab.infra.cloud.vm] exit {code} after {time.monotonic() - t0:.0f}s on {vm.name}"
-          + (" (hit the wall-clock cap)" if code == 124 else ""), file=sys.stderr)
+          + (" (reached the deadline)" if code == 124 else ""), file=sys.stderr)
     lost = code == 255 and _lost(vm)
     if lost:
         spot = "LAB_VM_SPOT=1 " if vm.provider.spot else ""
         again = f"run --no-push --fetch {fetch_dir} true" if fetch_dir and where != "env" else "run --env --no-push true"
         print(f"[lab.infra.cloud.vm] {vm.name} stopped under the command (preempted, or stopped from outside); its disk is kept: "
-              f"`{spot}lab vm {again}` restarts it and brings the results home", file=sys.stderr)
+              f"`{spot}lab vm start --budget USD` restarts it, then `{spot}lab vm {again}` brings the results home",
+              file=sys.stderr)
     if fetch_dir and not lost:
         try:
             fetch(vm, record, fetch_dir, local or engine.ENV_ROOT / "local" / "runs", base=cwd)
@@ -320,9 +339,7 @@ def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | Non
             print(f"[lab.infra.cloud.vm] collect failed: {e}", file=sys.stderr)
     if lost:
         stop(vm, keep_disk=True)
-    elif keep:
-        arm(vm, record, minutes)
-    else:
+    elif not keep:
         stop(vm)
         print(f"[lab.infra.cloud.vm] {vm.name} deleted (billing ended)", file=sys.stderr)
     return code
@@ -333,17 +350,16 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status", help="state, type and ip")
     st = sub.add_parser("start", help="create or start, wait for ssh, arm the auto-stop")
-    st.add_argument("--minutes", type=int, default=MAX_MINUTES, help=f"auto-stop after this long (default {MAX_MINUTES})")
+    st.add_argument("--budget", type=float, required=True, help="dollars of GPU time; the VM is deleted when it is spent")
     wd = sub.add_parser("watchdog", help="(internal) stop the VM at --deadline if still running")
     wd.add_argument("--deadline", type=float, required=True)
     sp = sub.add_parser("stop", help="delete the VM and its disk: billing ends")
     sp.add_argument("--keep-disk", action="store_true", help="stop the VM and keep its disk (the disk stays billed)")
     sub.add_parser("types", help="what the account can rent right now")
     sub.add_parser("setup", help="run lab/infra/cloud/vm-setup.sh on the VM (builds the engine's venv)")
-    r = sub.add_parser("run", help="push both trees, run a command under a wall-clock cap, fetch an output dir; "
-                                   "the VM stays running with the auto-stop armed")
+    r = sub.add_parser("run", help="push both trees, run a command within the VM's budget, fetch an output dir; "
+                                   "the VM stays running")
     r.add_argument("--stop", dest="keep", action="store_false", help="delete the VM and its disk afterwards")
-    r.add_argument("--minutes", type=int, default=MAX_MINUTES, help=f"wall-clock cap for the command and the VM (default {MAX_MINUTES})")
     r.add_argument("--fetch", help="remote dir, relative to the repo, to bring back")
     r.add_argument("--local", help="where to put it (default local/runs)")
     r.add_argument("--no-push", action="store_true")
@@ -361,9 +377,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{vm.name}: {record.state} {record.type} {record.ip or ''} [{record.detail}]")
         return 0
     if args.cmd == "start":
+        minutes = minutes_for(args.budget)
         record = start(vm)
         wait_ssh(vm, record)
-        arm(vm, record, args.minutes)
+        arm(vm, record, minutes)
         print(ssh_target(vm, record))
         return 0
     if args.cmd == "watchdog":
@@ -388,7 +405,7 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("run needs a command")
     return run(vm, " ".join(shlex.quote(w) for w in words), fetch_dir=args.fetch,
                local=Path(args.local) if args.local else None, push_tree=not args.no_push,
-               where="env" if args.env else "engine", keep=args.keep, minutes=args.minutes)
+               where="env" if args.env else "engine", keep=args.keep)
 
 
 if __name__ == "__main__":

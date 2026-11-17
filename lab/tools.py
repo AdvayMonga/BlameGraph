@@ -452,12 +452,12 @@ class Toolbox(EvalTools, ProfTools):
                      "scoring and generating the task set, 128 requests in flight." + gpu("about 4 min after the engine starts on the example engine (H200)"),
                      {"type": "object", "properties": {**({"profile": {"type": "string"}} if tg.profiles else {})}},
                      self.equiv),
-            ToolSpec("submit", "Measure your current workspace on the held-out split at the short tier and compare it "
+            ToolSpec("submit", "Measure your current workspace on the held-out split at tier min and compare it "
                      "with the base commit measured the same way. Needs a passing equiv and a completed "
-                     "short-tier seen bench on this snapshot. `regimes`: default those of that bench. The only thing "
+                     "tier-min seen bench on this snapshot. `regimes`: default those of that bench. The only thing "
                      "that can produce a win. Returns one aggregate per regime (base, new, delta %, noise band % (measured on "
                      "the base engine's general config), "
-                     "verdict, and % of the ceiling computed from the base's seen-split request shape) and, with a task, its score. Takes one engine start plus a held-out short-tier "
+                     "verdict, and % of the ceiling computed from the base's seen-split request shape) and, with a task, its score. Takes one engine start plus a held-out tier-min "
                      f"measurement per regime, the base commit's held-out measurement once per run, and up to one of the "
                      f"{HOLDOUT_BUDGET} held-out queries per regime." + prof + gpu("5-25 min per regime"),
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}}}},
