@@ -30,10 +30,7 @@ build = '''uv sync --locked --extra dev --extra flashinfer --no-install-project 
 [engine.telemetry]                           # optional: engine-native files serve collects after teardown
 env = { TELEMETRY_DIR = "{dir}", TIMELINE_DIR = "{dir}/timeline" }   # request rows (lab/infra/runner/trace_contract.py); events.jsonl apart
 
-[reference]                                  # another engine serving the model: the performance reference
-api = "vllm"
-launch = "vllm serve Qwen/Qwen3-30B-A3B --dtype bfloat16 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}"
-env = { VLLM_BATCH_INVARIANT = "1" }
+[reference]
 dir = "local/equiv/ref"                       # the correctness reference: where `lab correctness reference` wrote the model's answers
 
 [kernels]                                    # layer-1 kernel equivalence, per dtype [atol, rtol]; lower-precision kernels
@@ -86,8 +83,3 @@ serving = ["src/inference_server/server.py", "src/inference_server/openai_shim.p
 
 [corpus]
 dir = "evals/regimes"
-
-[validation]                                 # lab validate: known-good must PASS, known-bad must FAIL
-good = { fp8 = "vllm serve Qwen/Qwen3-30B-A3B-FP8 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}", int8 = "vllm serve nytopop/Qwen3-30B-A3B.w8a8 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}" }
-bad = { int4 = "vllm serve Qwen/Qwen3-30B-A3B-GPTQ-Int4 --served-model-name Qwen/Qwen3-30B-A3B --max-model-len 32768 --port {port}" }
-env = { fp8 = { VLLM_USE_DEEP_GEMM = "0" } }   # per-candidate env (the Verda image's nvcc is too old for DeepGEMM)

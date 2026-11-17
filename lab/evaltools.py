@@ -134,8 +134,7 @@ def heldout_context(seen_cal: dict, base: dict, delta: float | None, better: str
     new = b * (1 + delta / 100) if b is not None and delta is not None else None
     return {"ceiling": c, "pct_of_ceiling_base": pct_of(b, c, better), "pct_of_ceiling_new": pct_of(new, c, better),
             "ceiling_from": "the base commit's seen-split request shape" if c is not None
-            else (seen_cal.get("ceiling_missing") or "no seen-split calibration of the base in this run"),
-            "reference_missing": "the reference is measured on the seen split; this is the held-out split"}
+            else (seen_cal.get("ceiling_missing") or "no seen-split calibration of the base in this run")}
 
 
 def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
@@ -145,7 +144,7 @@ def harness_facts(t: target.Target, ledger_root: Path | None = None) -> dict:
     from evals.loadgen import suite
     from evals.loadgen.workload import corpus_version
     facts = {
-        "model": t.model, "reference": t.reference.launch if t.reference else None,
+        "model": t.model,
         "latency_limits": {"interactive": t.interactive.__dict__, "conversational": t.conversational.__dict__},
         "goodput_attainment": 0.99,
         "tiers": {k: dict(v) for k, v in suite.TIERS.items()},

@@ -1,4 +1,4 @@
-"""Calibrated results: ceilings and reference only under a matching fingerprint, kernel shares, baseline context."""
+"""Calibrated results: ceilings, kernel shares, baseline context."""
 from __future__ import annotations
 
 import json
@@ -23,9 +23,8 @@ def results(regime="single_stream", objective="tpot_p99_s", value=0.02, better="
 
 
 @pytest.fixture
-def t(monkeypatch, tmp_path):
+def t(monkeypatch):
     monkeypatch.setattr(calibrate, "model_config", lambda model: QWEN3_30B_A3B)
-    monkeypatch.setattr(calibrate, "REFERENCE_DIR", tmp_path / "no-reference")      # no committed references
     return target.load()
 
 
@@ -34,7 +33,7 @@ def test_results_get_ceiling_pct_and_shape(t):
     assert cal["value"] == 0.02 and cal["ceiling"] < 0.02 and 0 < cal["pct_of_ceiling"] < 100
     assert cal["bound"] == "memory" and cal["peaks_source"] == "spec" and cal["shape"]["prompt_tokens_mean"] == 600
     assert cal["fingerprint"]["gpu"] == "NVIDIA H200" and cal["fingerprint"]["w_dtype"] == "bf16"
-    assert cal["reference"] is None and "no reference measurement" in cal["reference_missing"]
+    assert "reference" not in cal
 
 
 def test_missing_inputs_are_named_not_guessed(t, monkeypatch):
@@ -47,20 +46,6 @@ def test_missing_inputs_are_named_not_guessed(t, monkeypatch):
     assert ratio["ceiling"] is None and "no physical bound" in ratio["ceiling_missing"]
     monkeypatch.setattr(calibrate, "model_config", lambda model: None)
     assert "model config" in calibrate.calibrate_results(results(), rows(), t, GPU, "short", "seen")["single_stream"]["ceiling_missing"]
-
-
-def test_reference_only_under_the_same_fingerprint(t, tmp_path, monkeypatch):
-    monkeypatch.setattr(calibrate, "REFERENCE_DIR", tmp_path)
-    fp = calibrate.fingerprint(t, GPU, "short", "seen")
-    calibrate.write_reference(t, "single_stream", results(value=0.015)[0], fp, rows())
-    same = calibrate.calibrate_results(results(), rows(), t, GPU, "short", "seen")["single_stream"]
-    assert same["reference"] == 0.015 and same["pct_of_reference"] == pytest.approx(75)
-    other_gpu = calibrate.calibrate_results(results(), rows(), t, {**GPU, "name": "NVIDIA H100"}, "short", "seen")["single_stream"]
-    assert other_gpu["reference"] is None and "gpu" in other_gpu["reference_missing"]
-    full = calibrate.calibrate_results(results(), rows(), t, GPU, "full", "seen")["single_stream"]
-    assert full["reference"] is None and "tier" in full["reference_missing"]
-    stored = json.loads((tmp_path / t.name / "single_stream.json").read_text())
-    assert stored["server"] == "reference" and stored["shape"]["output_tokens_mean"] == 100
 
 
 def test_nsys_kernel_and_api_time_against_the_window(tmp_path):
@@ -122,15 +107,6 @@ def test_facts_for_the_brief(t):
     assert calibrate.facts(t, None)["peaks"] is None
 
 
-def test_perf_reference_drops_determinism_switches(t):
-    import dataclasses
-    srv = calibrate.perf_reference(t)
-    assert "VLLM_BATCH_INVARIANT" not in srv.env and srv.launch == t.reference.launch
-    sg = dataclasses.replace(t, reference=dataclasses.replace(t.reference, launch="python -m sglang.launch_server "
-                                                              "--enable-deterministic-inference --port {port}"))
-    assert "--enable-deterministic-inference" not in calibrate.perf_reference(sg).launch
-
-
 def test_calibration_never_raises_and_invalid_values_say_why(t, monkeypatch):
     bad = calibrate.calibrate_results([{"regime": "x"}], [], t, GPU, "short", "seen")
     assert "calibration failed" in bad["error"]
@@ -161,7 +137,7 @@ def test_heldout_aggregate_context_uses_the_seen_ceiling_only():
     seen = {"ceiling": 20.0}
     m = {**aggregate({"value": 5.0}, 10.0, "higher", 3.0), **heldout_context(seen, {"value": 5.0}, 10.0, "higher")}
     assert m["pct_of_ceiling_base"] == pytest.approx(25) and m["pct_of_ceiling_new"] == pytest.approx(27.5)
-    assert "seen-split" in m["ceiling_from"] and "held-out" in m["reference_missing"]
+    assert "seen-split" in m["ceiling_from"]
     none = heldout_context({"ceiling_missing": "no peaks"}, {"value": 5.0}, None, "higher")
     assert none["ceiling"] is None and none["pct_of_ceiling_new"] is None and none["ceiling_from"] == "no peaks"
     import tempfile

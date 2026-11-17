@@ -54,8 +54,6 @@ profile_env = "ENGINE_PROFILE"
 [engine.telemetry]
 env = {{ TELEMETRY_DIR = "{{dir}}" }}
 [reference]
-api = "vllm"
-launch = "python {FAKE} --port {{port}}"
 dir = "{ref_dir}"
 [limits]
 interactive = {{ ttft_s = 0.25, tpot_s = 0.05 }}
@@ -126,7 +124,7 @@ def test_bench_serves_and_measures(lab):
     assert rec["config"] == {"split": "seen", "tier": "min", "seed": tb.seed} and rec["result"]["verdict"] == "ok"
     cal = out["calibrated"]["single_stream"]
     assert cal["value"] == out["metrics"]["single_stream"]["value"] and cal["fingerprint"]["tier"] == "min"
-    assert ("ceiling_missing" in cal) == (cal.get("ceiling") is None) and "reference_missing" in cal
+    assert ("ceiling_missing" in cal) == (cal.get("ceiling") is None)
     assert cal["shape"]["prompt_tokens_mean"] > 0 if cal.get("shape") else True
     assert rec["result"]["ready_s"] is not None and (s.run_dir / "serve-bench.log").exists()
 
@@ -205,7 +203,7 @@ def test_submit_needs_an_equiv_and_a_bench_then_records_one_aggregate_per_metric
     assert out["split"] == "heldout" and set(out["metrics"]) == {"single_stream"}
     m = out["metrics"]["single_stream"]
     assert set(m) == {"base", "new", "delta_pct", "band_pct", "verdict", "ceiling", "pct_of_ceiling_base",
-                      "pct_of_ceiling_new", "ceiling_from", "reference_missing"} and m["verdict"] == "unknown_band"
+                      "pct_of_ceiling_new", "ceiling_from"} and m["verdict"] == "unknown_band"
     rec = next(r for r in ledger.records(s.ledger_root, kind="submit") if r.get("config", {}).get("split") == "heldout")
     assert "result" not in rec and rec["metrics"] == out["metrics"]        # the ledger's held-out shape, nothing else
     from lab import evaltools

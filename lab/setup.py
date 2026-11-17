@@ -1,4 +1,4 @@
-"""One-time setup of a target on this machine: the corpus, the correctness reference, the validation.
+"""One-time setup of a target on this machine: the corpus, the correctness reference, the noise bands.
 
   lab setup [--target T]
 

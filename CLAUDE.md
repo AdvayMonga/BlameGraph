@@ -38,8 +38,9 @@ if present, else `python3`). `lab` lists every command, `lab <command> -h` its a
 with a CLI gets its entry. The agent's tools are the same commands by the same names, run by a person on a researcher
 run. Jailed and remote internals keep `python -m`.
 1. Once per target and GPU: `lab setup --target T` (the corpus; the reference's answers, the model run in
-   transformers; `lab validate`: launch checks, noise bands, performance reference).
-2. A GPU: `lab vm start --budget USD` (deleted when that much GPU time is spent), `lab vm setup` (also measures the GPU's peaks); `LAB_WORKER=ssh` runs measured jobs there.
+   transformers; `lab validate`: noise bands).
+2. A GPU: `lab vm start --budget USD` (deleted when that much GPU time is spent), `lab vm setup` (also measures
+   the GPU's peaks); `LAB_WORKER=ssh` runs measured jobs there.
 3. A run: `lab session --task lab/tasks/single_stream.toml --budget USD`, from this machine; `lab dashboard` shows
    it live. No GPU: `lab rehearsal setup DIR` (prints the practice engine, target and task it wrote).
 4. After it: `lab feedback local/ledger --run RUN`, `lab store push`, `lab vm stop`.
@@ -62,7 +63,7 @@ the guard's query budget.
   - `profile/` — profilers, capture.
   - `infra/` — `cloud/` (vm, providers, gpucheck), `sandbox/` (jail, container, write surfaces, grader, dependency
     build), `runner/` (worker, serve, launch profiles, passive artifacts, trace contract), `context/` (calibration,
-    layer facts, ceiling, peaks), `calibration/` (peaks, performance references).
+    layer facts, ceiling, peaks), `calibration/` (peaks).
   - `targets/` — `engine.py`: the engine's repo and interpreter, per the target spec.
 - `evals/` — the benchmarking suite: `public/` (frontier benchmark loaders, researcher-only), `regimes/` (the corpus:
   frozen traces; held-out split in the store), `loadgen/` (the regimes: client, runner, suite, workload, synth,

@@ -48,7 +48,6 @@ class Target:
     build: str | None              # command that installs `deps` into $UV_PROJECT_ENVIRONMENT
     profiles: str | None           # the engine's launch-profiles file, relative to its tree
     profile_env: str | None        # the env var that names the profile of a launch
-    reference: Server | None
     reference_dir: Path | None
     interactive: Limits
     conversational: Limits
@@ -69,9 +68,7 @@ def reference_complete(ref_dir: Path | None) -> bool:
     return ref_dir is not None and (ref_dir / "meta.json").exists()
 
 
-def _server(d: dict | None) -> Server | None:
-    if not d:
-        return None
+def _server(d: dict) -> Server:
     return Server(d["launch"], dict(d.get("env") or {}), d.get("health", "/health"), d.get("api", "vllm"),
                   float(d.get("startup_timeout_s", 1800)), dict((d.get("telemetry") or {}).get("env") or {}))
 
@@ -92,7 +89,7 @@ def parse(path: Path) -> Target:
         write=tuple(e.get("write") or ()), add_only=tuple(e.get("add_only") or ()),
         test=e["test"], lint=e["lint"], deps=tuple(e.get("deps") or ()), build=e.get("build"),
         profiles=e.get("profiles"), profile_env=e.get("profile_env"),
-        reference=_server(r), reference_dir=(ENV_ROOT / r["dir"]) if r and r.get("dir") else None,
+        reference_dir=(ENV_ROOT / r["dir"]) if r and r.get("dir") else None,
         interactive=Limits(**lim.get("interactive", {"ttft_s": 0.5, "tpot_s": 0.030})),
         conversational=Limits(**lim.get("conversational", {"ttft_s": 2.0, "tpot_s": 0.100})),
         tasks=tuple(c.get("tasks") or ("mmlu_pro", "math", "code", "needle")),

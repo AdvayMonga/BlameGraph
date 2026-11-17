@@ -97,7 +97,6 @@ def make_reference(script: Path, out: Path, n: int, encoder) -> dict:
 
 
 def target_toml(d: Path, python: str) -> str:
-    ref = d / "reference.py"
     return f'''# The rehearsal target (lab rehearsal): the practice engine in {d / "engine"}.
 [model]
 name = "{MODEL}"                             # its tokenizer counts tokens; nothing loads the weights
@@ -116,8 +115,6 @@ test = "python -m pytest -q -p no:cacheprovider -c pyproject.toml"   # its own c
 lint = "python -m ruff check ."
 
 [reference]
-api = "vllm"
-launch = "{python} {ref} --port {{port}}"
 dir = "{d / "ref"}"
 
 [limits]                                     # MLPerf Llama-3.1-8B latency limits, checked at p99
@@ -131,10 +128,6 @@ min_length_ratio = 0.90
 
 [corpus]
 dir = "{engine.ENV_ROOT / "evals" / "regimes"}"
-
-[validation]                                 # the gate must pass the unmodified server and fail a wrong one
-good = {{ same = "{python} {ref} --port {{port}}" }}
-bad = {{ wrong = "{python} {ref} --port {{port}} --wrong-every 3" }}
 '''
 
 
