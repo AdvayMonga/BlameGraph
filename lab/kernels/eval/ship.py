@@ -105,19 +105,22 @@ def _region_files(task, program: str, repo: Path, base: str) -> dict[str, str]:
 
 def region_files(task, program: str, pkg: str, overrides: list, names: list[str], has_init: bool) -> dict[str, str]:
     """A region's winner as a module of the overrides package `pkg`, plus `__init__.py` when the package lacks one.
-    Raises ValueError when it overlaps one of `overrides` ((path, (first, last)), stations ordered as `names`)."""
+    Raises ValueError when it overlaps one of `overrides` ((path, (first, last))) of its own set, whose stations in
+    order are `names`."""
     from lab.kernels.tasks import regions
     from lab.profile.capture import STEP
     if task.name == STEP:
         raise ValueError(f"{STEP} does not ship: the engine's STEP hook writes the K/V pools in place and this task's K/V "
                          "is pure (copied per call)")
     _, first, last = task.name.split(":")
+    eng = regions.load_engine()
     for path, (a, b) in overrides:
+        if eng.which(a) != eng.which(first):         # another set's: it cannot overlap
+            continue
         if a not in names or b not in names:
             raise ValueError(f"the override {a}..{b} in {path} names a station this engine lacks")
         if names.index(a) <= names.index(last) and names.index(first) <= names.index(b):
             raise ValueError(f"region {first}..{last} overlaps the override {a}..{b} already in {path}")
-    eng = regions.load_engine()
     files = {f"{pkg}/{first}_{last}.py": no_live_autotune(regions.override_module(eng, program, first, last), None)}
     if not has_init:
         files[f"{pkg}/__init__.py"] = '"""Region overrides from the layer-1 loop."""\n'

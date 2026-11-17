@@ -26,7 +26,8 @@ def held(name: str, model) -> tuple[dict, dict]:
 
 
 def describe(name: str, samples: Path, holder: Path) -> dict:
-    """The region as the controller needs it: {holder, samples, start, shapes, stations}."""
+    """The region as the controller needs it: {holder, samples, start, shapes, stations, set}; `set` is every
+    station of the region's set, in order."""
     from lab.kernels.tasks import regions, shapes
     from lab.kernels.evolve.run import initial_program
     from lab.kernels.tasks import load
@@ -37,15 +38,14 @@ def describe(name: str, samples: Path, holder: Path) -> dict:
     if not counts:
         raise SystemExit(f"the captures in {samples} hold no sampled call of {name}")
     eng = regions.load_engine()
-    names = [s.name for s in regions.engine_stations(eng, eng.step)] if name == STEP else \
-        [s.name for s in regions.span(regions.engine_stations(eng, eng.which(name.split(":")[1])),
-                                      *name.split(":")[1:3])]
+    whole = regions.engine_stations(eng, eng.step if name == STEP else eng.which(name.split(":")[1]))
+    names = [s.name for s in (whole if name == STEP else regions.span(whole, *name.split(":")[1:3]))]
     sets = {**shapes.split(task, counts), "ints": shapes.ints_from_captures(task, caps),
             "sources": shapes.sources_from_captures(task, caps), "heldout_axes": list(task.heldout_axes),
             "stations": names}
     return {"holder": str(holder), "samples": str(samples), "start": initial_program(task),
             "shapes": {k: [list(s) for s in v] if k in ("seen", "heldout") else v for k, v in sets.items()},
-            "stations": names}
+            "stations": names, "set": [s.name for s in whole]}
 
 
 def main(argv: list[str] | None = None) -> int:

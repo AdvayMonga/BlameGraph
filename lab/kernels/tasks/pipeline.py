@@ -291,7 +291,7 @@ def patch(task, tree: Path, program: str, held: dict | None = None) -> str:
         rel = pkg.relative_to(tree).as_posix()
         have = [(f"{rel}/{f.name}", f.read_text()) for f in sorted(pkg.glob("*.py"))] if pkg.is_dir() else []
         files = region_files(task, program, rel, [k for f, src in have for k in override_keys(f, src)],
-                             held["stations"], (pkg / "__init__.py").exists())
+                             held["set"], (pkg / "__init__.py").exists())
         return "".join("".join(difflib.unified_diff([], src.splitlines(True), "/dev/null", f"b/{f}"))
                        for f, src in files.items())
     path = module_file(task, tree)

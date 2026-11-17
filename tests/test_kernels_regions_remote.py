@@ -60,6 +60,7 @@ def test_the_hold_side_describes_a_region_from_its_samples_and_holder(tmp_path, 
     assert d["shapes"]["heldout"] == [[32, 64]] and d["shapes"]["heldout_axes"] == [0]
     assert sorted(d["shapes"]["seen"]) == [[4, 64], [16, 64], [64, 64]] and d["stations"] == ["norm", "mm", "act", "add"]
     assert d["shapes"]["stations"] == d["stations"]                  # in the shapes file the controller's search reads
+    assert d["set"] == ["norm", "mm", "act", "add", "kv"]            # the whole set, for the overlap check at ship
     assert "_CONST['w.mm_scale'] = None" in d["start"] and json.loads(json.dumps(d)) == d     # one JSON line
 
 
@@ -104,12 +105,18 @@ def test_a_region_winner_is_a_patch_adding_its_override_module(tmp_path, monkeyp
     h = held(tmp_path, regions)
     t = regions.from_engine("norm", "add", shared_weights=str(h.path))
     program = regions.start_program(regions.load_engine(), "norm", "add", shared_weights=str(h.path))
-    names = {"stations": ["norm", "mm", "act", "add", "kv"]}
+    names = {"stations": ["norm", "mm", "act", "add"], "set": ["norm", "mm", "act", "add", "kv"]}
     diff = pipeline.patch(t, tree, program, names)
     assert diff.startswith("--- /dev/null\n+++ b/src/fake_engine/models/regions/norm_add.py")
     assert "+OVERRIDES = {('norm', 'add'): _override}" in diff and "__init__" not in diff
+    (pkg / "kv_kv.py").write_text("OVERRIDES = {('kv', 'kv'): None}\n")              # after the region: no overlap
+    (pkg / "p_norm_p_scale.py").write_text("OVERRIDES = {('p_norm', 'p_scale'): None}\n")   # another set's
+    assert pipeline.patch(t, tree, program, names) == diff
     (pkg / "act_kv.py").write_text("OVERRIDES = {('act', 'kv'): None}\n")
     with pytest.raises(ValueError, match="overlaps the override act..kv"):
+        pipeline.patch(t, tree, program, names)
+    (pkg / "act_kv.py").write_text("OVERRIDES = {('gone', 'kv'): None}\n")
+    with pytest.raises(ValueError, match="names a station this engine lacks"):
         pipeline.patch(t, tree, program, names)
 
 
@@ -123,7 +130,7 @@ def test_kernel_search_runs_a_region_and_hands_back_its_override_module(tb, monk
     @contextmanager
     def hold(task, caps, out, env, worker=None):
         seen["hold"] = task.name
-        yield {"holder": "/gpu/w.pkl", "samples": "/gpu/s", "start": start, "stations": ["norm", "mm", "act", "add"],
+        yield {"holder": "/gpu/w.pkl", "samples": "/gpu/s", "start": start, "stations": ["norm", "mm", "act", "add"], "set": ["norm", "mm", "act", "add", "kv"],
                "shapes": {"seen": [[4, 64]], "heldout": [[64, 64]], "heldout_axes": [0]}}
     monkeypatch.setattr(pipeline, "hold", hold)
 
