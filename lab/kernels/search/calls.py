@@ -1,5 +1,6 @@
 """Every model call of a search, kept whole: `<out>/calls.jsonl` has one row per call, its prompt parts and answer as
-keys into `<out>/texts.jsonl`, which stores each distinct text once and every program a writer made."""
+keys into `<out>/texts.jsonl`, which stores each distinct text once and every program a writer made. Both files are
+appended to: a search that continues in `<out>` counts on from the calls already there."""
 from __future__ import annotations
 
 import hashlib
@@ -13,10 +14,23 @@ from lab.kernels.search.llm import CACHE_SPLIT
 Model = Callable[[str, str], tuple[str, float]]  # (system, user) -> (text, $)
 
 
+def lines(path: Path) -> list[str]:
+    """A file's whole lines; a line cut short by a stop is dropped from the file."""
+    if not path.exists():
+        return []
+    text = path.read_text()
+    whole = text[:text.rfind("\n") + 1]
+    if whole != text:
+        path.write_text(whole)
+    return whole.splitlines()
+
+
 class Calls:
     def __init__(self, out: Path):
-        self.calls, self.texts = open(out / "calls.jsonl", "w"), open(out / "texts.jsonl", "w")
-        self.seen, self.n, self.usd, self.lock = set(), 0, 0.0, threading.Lock()
+        had = [json.loads(x) for x in lines(out / "calls.jsonl")]
+        self.seen = {json.loads(x)["key"] for x in lines(out / "texts.jsonl")}
+        self.n, self.usd, self.lock = len(had), sum(r["usd"] for r in had), threading.Lock()
+        self.calls, self.texts = open(out / "calls.jsonl", "a"), open(out / "texts.jsonl", "a")
 
     def put(self, text: str) -> str:
         """The key `text` is stored under."""

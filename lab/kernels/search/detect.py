@@ -15,8 +15,8 @@ calls, skipping or deferring work, or doing what a program may not: """ + "; ".j
 JSON object and nothing else: {"gaming": true or false, "evidence": "<the code that shows it, quoted, max 40 words>"}."""
 
 
-def detector(call: Callable[[str, str], tuple[str, float]], spent: list):
-    """`check(code, row)`: the flag's evidence, or None; each program is read once. `spent` collects each call's $."""
+def detector(call: Callable[[str, str], str]):
+    """`check(code, row)`: the flag's evidence, or None; each program is read once by `call(system, user) -> text`."""
     read: dict[str, str | None] = {}
 
     def check(code: str, row: dict) -> str | None:
@@ -26,8 +26,7 @@ def detector(call: Callable[[str, str], tuple[str, float]], spent: list):
 
     def _read(code: str, row: dict) -> str | None:
         facts = json.dumps({k: row.get(k) for k in ("child_metrics",)})[:4000]
-        text, usd = call(DETECT, f"# Program\n```python\n{code}\n```\n\n# Its measurements\n{facts}")
-        spent.append(usd)
+        text = call(DETECT, f"# Program\n```python\n{code}\n```\n\n# Its measurements\n{facts}")
         m = re.search(r"\{.*\}", text or "", re.S)
         try:
             v = json.loads(m.group(0)) if m else {}

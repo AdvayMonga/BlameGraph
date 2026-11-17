@@ -172,16 +172,13 @@ def remote_env(prefix: list[str], env_dir: str, python: str, env: dict, sudo: bo
 
 
 def spent(out: Path) -> float:
-    """Model dollars a search has spent, summed from its logs."""
-    usd = 0.0
-    for name, key in (("trace.jsonl", "cost_usd"), ("hypotheses.jsonl", "usd")):
-        f = Path(out) / name
-        for line in f.read_text().splitlines() if f.exists() else []:
-            try:
-                v = json.loads(line).get(key)
-            except ValueError:
-                continue
-            usd += float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
+    """Model dollars a search has spent: its model calls' (calls.jsonl)."""
+    f, usd = Path(out) / "calls.jsonl", 0.0
+    for line in f.read_text().splitlines() if f.exists() else []:
+        try:
+            usd += float(json.loads(line).get("usd") or 0.0)
+        except ValueError:
+            continue
     return round(usd, 4)
 
 

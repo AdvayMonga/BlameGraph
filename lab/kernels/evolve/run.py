@@ -429,7 +429,7 @@ def retime(trace: Path, k: int, repeats: int = 3, exclude=None) -> tuple[str | N
 
 def record(task, sets: dict, models: list[dict], iterations: int, device: str, trace: Path, best: Path,
            best_metrics: dict, root: Path | None = None, retimed: list | None = None, tool: str = "kernels.evolve.run",
-           cost: dict | None = None, extra: dict | None = None) -> dict:
+           cost: dict | None = None, extra: dict | None = None, run: str | None = None) -> dict:
     """Append the run's `kernels` ledger record: every candidate's seen-shape metrics and lineage, the trace and the
     best program as blobs."""
     import time
@@ -439,7 +439,7 @@ def record(task, sets: dict, models: list[dict], iterations: int, device: str, t
     cands = [{"id": r["child_id"], "parent": r["parent_id"], "iteration": r["iteration"],
               "island": r.get("island_id"), "metrics": r.get("child_metrics")} for r in rows]
     return ledger.append({
-        "kind": "kernels", "run": f"kernels-{time.strftime('%Y%m%d-%H%M%S')}", "tool": tool,
+        "kind": "kernels", "run": run or f"kernels-{time.strftime('%Y%m%d-%H%M%S')}", "tool": tool,
         "config": {"split": "seen", "task": task.name, "entry": task.entry, "iterations": iterations,
                    "device": device, "seen_shapes": len(sets["seen"]), "selected_from": sets.get("selected_from"),
                    "models": models},

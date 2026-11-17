@@ -380,12 +380,12 @@ def test_a_flagged_candidate_is_passed_over_at_promotion():
     from lab.kernels.evolve.run import retime
     from lab.kernels.search.detect import detector
     from lab.kernels.tasks import load
-    spent = []
-    flag = detector(lambda s, u: (('{"gaming": true, "evidence": "if x.shape[0] == 64"}' if "SPECIAL" in u
-                                   else '{"gaming": false, "evidence": ""}'), 0.003), spent)
+    read = []
+    flag = detector(lambda s, u: read.append(u) or ('{"gaming": true, "evidence": "if x.shape[0] == 64"}'
+                                                    if "SPECIAL" in u else '{"gaming": false, "evidence": ""}'))
     assert flag("x = 1  # SPECIAL\n", {}) == "flagged as gaming: if x.shape[0] == 64"
-    assert flag("x = 1\n", {}) is None and spent == [0.003, 0.003]
-    assert flag("x = 1  # SPECIAL\n", {}) and flag("x = 1\n", {}) is None and len(spent) == 2     # each program read once
+    assert flag("x = 1\n", {}) is None and len(read) == 2
+    assert flag("x = 1  # SPECIAL\n", {}) and flag("x = 1\n", {}) is None and len(read) == 2     # each program read once
     t = load("toy_rmsnorm")
     fast = SEED.read_text().replace(LOOP, "    xf = x.float()\n    return (xf * torch.rsqrt(xf.pow(2).mean(-1, "
                                          "keepdim=True) + 1e-6) * w.float()).to(x.dtype)")
@@ -508,3 +508,57 @@ def test_the_cli_starts_the_search_from_every_competitor_port_with_its_namer_wri
         "vllm.silu_and_mul"]
     assert seen["models"] == ("claude-opus-5-5", "claude-sonnet-5-5") and "SETTING" in seen["setting"]
     assert seen["past"] == ["silu_mul"]
+
+
+def test_the_run_is_a_ledger_record_after_every_generation_under_one_run_id(monkeypatch, tmp_path):
+    from lab.kernels import archive
+    from lab.kernels.search import __main__ as cli
+    from lab.records import ledger
+    program, out, root = tmp_path / "start.py", tmp_path / "out", tmp_path / "ledger"
+    program.write_text("# EVOLVE-BLOCK-START\nimport torch\n\n\ndef silu_mul(x):\n    return x\n"
+                       "# EVOLVE-BLOCK-END\n\nkernel = silu_mul\n")
+    root.mkdir()
+    monkeypatch.setattr(cli, "_shapes", lambda task, a: {})
+    monkeypatch.setattr(cli, "prepare", lambda *a, **k: ({"seen": []}, program))
+    monkeypatch.setattr(cli, "setting", lambda *a, **k: "SETTING")
+    monkeypatch.setattr(cli, "Claude", lambda model, *a, **k: model)
+    monkeypatch.setattr(cli, "_embedder", lambda root: None)
+    monkeypatch.setattr(cli, "retime", lambda *a, **k: (None, None, []))
+    monkeypatch.setattr(cli, "_exclude", lambda *a: lambda code, row: None)
+    stop = [True]
+
+    def search(start, seeds, setting, namer, writer, evaluator, novelty, similar, out, cfg, gaming, calls, each):
+        from lab.kernels.search.program import Program
+        pop = [Program("p0", None, start, {"correct": 1.0, "combined_score": 1.0}, {}, 0)]
+        for gen in (0, 1):
+            pop.append(Program(f"p{gen + 1}", "p0", f"x = {gen}\n", {"correct": 1.0, "combined_score": 1.1 + gen}, {}, gen))
+            (out / "trace.jsonl").write_text("".join(json.dumps(cli_row(p)) + "\n" for p in pop))
+            (out / "hypotheses.jsonl").write_text("".join(json.dumps(
+                {"iteration": g, "parents": [{"id": "p0", "score": 1.0}], "ideas": [
+                    {"idea": {"optimisation_method": f"m{g}", "parent_id": "p0"}, "fate": "full exam",
+                     "child_id": f"p{g + 1}", "child_score": 1.1 + g, "improved": True}]}) + "\n" for g in range(gen + 1)))
+            calls(lambda s, u: ("t", 0.25), "name", gen, "s", "u")
+            each(gen)
+            if stop[0] and gen == 0:
+                raise RuntimeError("stopped")
+        return pop, {"generations": 1}
+
+    def cli_row(p):
+        from lab.kernels.search.loop import trace_row
+        return trace_row(p)
+    monkeypatch.setattr(cli, "search", search)
+    argv = ["--task", "silu_mul", "--shapes", "s.json", "--out", str(out), "--device", "cpu", "--ledger", str(root)]
+    try:
+        cli.main(argv)
+    except RuntimeError as e:
+        assert str(e) == "stopped"
+    one = list(ledger.records(root, kind="kernels"))
+    assert len(one) == 1 and one[0]["result"]["finished"] is False and one[0]["cost"]["usd"] == 0.25
+    assert one[0]["result"]["best"]["combined_score"] == 1.1 and len(archive.ideas(root)) == 1
+    (out / "state.json").write_text("{}")                                # a search there saved its state
+    stop[0] = False
+    assert cli.main(argv) == 0
+    recs = list(ledger.records(root, kind="kernels"))
+    assert [r["result"]["finished"] for r in recs] == [False, False, False, True] and len({r["run"] for r in recs}) == 1
+    assert recs[-1]["cost"]["usd"] == 0.75 and recs[-1]["cost"]["model_calls"] == 3
+    assert len(archive.ideas(root)) == 2                                 # the run's last record only

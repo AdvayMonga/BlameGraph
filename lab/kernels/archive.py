@@ -59,8 +59,10 @@ def text(idea: dict) -> str:
 
 def ideas(root: Path) -> list[tuple[str, dict, Outcome]]:
     """(task, idea, outcome) for every named change of every `lab.kernels.search` run on the ledger, oldest first."""
-    out = []
+    out, runs = [], {}
     for r in ledger.records(root, kind="kernels"):
+        runs[r.get("run")] = r                  # a run's later record holds everything its earlier ones do
+    for r in runs.values():
         res, task = r.get("result") or {}, (r.get("config") or {}).get("task")
         if not res.get("hypotheses") or not task:
             continue

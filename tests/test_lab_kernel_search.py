@@ -148,7 +148,7 @@ def test_a_search_that_dies_still_charges_what_it_spent(tb, monkeypatch, tmp_pat
 
     def dies(t, cs, start, out, *a, **k):
         out.mkdir(parents=True)
-        (out / "trace.jsonl").write_text(json.dumps({"cost_usd": 1.25}) + "\n" + json.dumps({"cost_usd": 0.5}) + "\n")
+        (out / "calls.jsonl").write_text(json.dumps({"usd": 1.25}) + "\n" + json.dumps({"usd": 0.5}) + "\n")
         raise RuntimeError("lab.kernels.search exited 1")
     monkeypatch.setattr(pipeline, "search", dies)
     h = next(s for s in tb.specs() if s.name == "hypothesis").fn
