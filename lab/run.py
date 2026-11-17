@@ -3,7 +3,7 @@ when the run ends, however it ends.
 
   lab run --task TASK.toml --budget USD [--target T]
 
-`--budget` caps the session, and the VM is armed for the GPU time the same dollars rent.
+`--budget` caps the session.
 """
 from __future__ import annotations
 
@@ -21,22 +21,9 @@ from lab.records import ledger
 def steps(task: str, budget: float, run_id: str) -> list[list[str]]:
     """The `lab` commands of a run, in order."""
     usd = f"{budget:g}"
-    return [["vm", "start", "--budget", usd], ["vm", "setup"], ["setup", "--task", task],
+    return [["vm", "start"], ["vm", "setup"], ["setup", "--task", task],
             ["session", "--task", task, "--budget", usd, "--run", run_id],
             ["feedback", str(ledger.ROOT), "--run", run_id], ["store", "push"]]
-
-
-def absent(budget: float) -> list[str]:
-    """What a run needs that is absent here: what a session needs, and a GPU rate for the VM's budget."""
-    from lab import session
-    from lab.infra.cloud import vm
-    from lab.infra.cloud.providers import ProviderError
-    out = session.preflight()
-    try:
-        vm.minutes_for(budget)
-    except ProviderError as e:
-        out.append(str(e))
-    return out
 
 
 def lab(step: list[str]) -> int:
@@ -52,7 +39,8 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     if a.target:
         os.environ["LAB_TARGET"] = a.target
-    missing = absent(a.budget)
+    from lab import session
+    missing = session.preflight()
     if missing:
         print("lab run: nothing was started.\n" + "\n".join(f"- {x}" for x in missing), file=sys.stderr)
         return 2
