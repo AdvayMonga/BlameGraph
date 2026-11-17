@@ -95,9 +95,11 @@ def _exists(repo: Path, base: str, path: str) -> bool:
 def _region_files(task, program: str, repo: Path, base: str) -> dict[str, str]:
     """A region's winner as a module of the engine's overrides package at `base`."""
     from lab.kernels.tasks import regions
-    root = _module_path(repo, base, regions.ENGINE).removesuffix(regions.ENGINE.replace(".", "/") + ".py")
-    pkg = root + regions.OVERRIDES_PACKAGE.replace(".", "/")
-    return region_files(task, program, pkg, _overrides_at(repo, base, pkg), [s.name for s in regions.engine_stations()],
+    eng = regions.load_engine()
+    root = _module_path(repo, base, eng.stations).removesuffix(eng.stations.replace(".", "/") + ".py")
+    pkg = root + eng.overrides.replace(".", "/")
+    names = [s.name for s in regions.engine_stations(eng, eng.which(task.name.split(":")[1]))]
+    return region_files(task, program, pkg, _overrides_at(repo, base, pkg), names,
                         _exists(repo, base, f"{pkg}/__init__.py"))
 
 
@@ -115,9 +117,10 @@ def region_files(task, program: str, pkg: str, overrides: list, names: list[str]
             raise ValueError(f"the override {a}..{b} in {path} names a station this engine lacks")
         if names.index(a) <= names.index(last) and names.index(first) <= names.index(b):
             raise ValueError(f"region {first}..{last} overlaps the override {a}..{b} already in {path}")
-    files = {f"{pkg}/{first}_{last}.py": no_live_autotune(regions.override_module(program, first, last), None)}
+    eng = regions.load_engine()
+    files = {f"{pkg}/{first}_{last}.py": no_live_autotune(regions.override_module(eng, program, first, last), None)}
     if not has_init:
-        files[f"{pkg}/__init__.py"] = '"""Region overrides from the layer-1 loop (models/stations.py: `overrides`)."""\n'
+        files[f"{pkg}/__init__.py"] = '"""Region overrides from the layer-1 loop."""\n'
     return files
 
 

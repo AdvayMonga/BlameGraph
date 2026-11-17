@@ -40,6 +40,30 @@ dir = "local/equiv/ref"                       # the correctness reference: where
 tolerances = { bfloat16 = [1e-2, 1e-2], float16 = [1e-3, 1e-3], float32 = [1e-5, 1e-5] }   # are judged finally by equiv
 capture_env = { CUSTOM_BACKEND_CUDA_GRAPH = "0" }   # a capture (`profile` with `capture`) sees only calls that reach Python
 
+[regions]                                    # the engine's steps (stations); a kernel search replaces a stretch of them
+stations = "inference_server.models.stations"   # its station sets, LIVE, IN_PLACE, STEP, DISCRETE, OPAQUE, functional,
+                                                # reference, layer_weights, layer_config, load_model
+overrides = "inference_server.models.regions"   # the package the engine reads a region's replacement from
+watch = ["inference_server.models.fused", "inference_server.models.moe_kernel",
+         "inference_server.models.paged_attention_kernel", "inference_server.models.paged_kv_cache",
+         "inference_server.models.qwen3_moe", "inference_server.models.prefill_flashinfer"]   # what the stations call into
+layers = [0, 16, 32, 47]                     # the layers a region is captured at and its weights held for
+heldout_layer = 32                           # its calls are held out
+weights = "w."                               # context entries with this prefix are weights
+step = "DECODE"                              # the set a whole decode step runs
+hold_env = { CUSTOM_BACKEND_BLOCKS = "16", CUSTOM_BACKEND_CUDA_GRAPH = "0", MEGAKERNEL = "0" }   # the hold process: weights only
+
+[regions.sets.DECODE]                        # one decode step of a layer
+graphs = true                                # replayed in CUDA graphs
+capture_env = { MEGAKERNEL = "0" }
+rows = 0                                     # what grows with load: the first activation's rows ...
+tables = { attn_block_tables = 1 }           # ... and the block tables' width
+
+[regions.sets.PREFILL]                       # one prefill wave of a layer
+prefix = "p_"                                # its stations' names start with this
+rows = 1                                     # the first activation's tokens
+instead = { fi_kv_indices = 0 }              # when read: its length, in place of the tokens
+
 [limits]                                     # MLPerf Llama-3.1-8B latency limits, checked at p99
 interactive = { ttft_s = 0.5, tpot_s = 0.030 }
 conversational = { ttft_s = 2.0, tpot_s = 0.100 }

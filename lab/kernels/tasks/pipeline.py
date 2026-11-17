@@ -258,7 +258,7 @@ def _judged(task, caps: list[Path], program: Path, out: Path, env: dict, held: d
     cfg = {"task": task.name, "seen": [list(s) for s in sets["seen"]], "heldout": [list(s) for s in sets["heldout"]],
            "weights": sets.get("calls"), "device": device, "tolerances": tolerances(_target_tolerances()),
            "ints": _ints(sets, ("seen", "heldout")), "options": options_from_target(task), "full": True,
-           **({"samples": held["samples"], "shared_weights": held["holder"]} if held else {})}
+           **({"samples": held["samples"], "shared_weights": held["holder"], "engine": _engine()} if held else {})}
     path = Path(out) / "gate_config.json"
     path.write_text(json.dumps(cfg))
     env = {**env, "KERNEL_EVAL_TIMEOUT_S": str(GATE_TIMEOUT_S)}            # every seen and held-out shape: longer
@@ -273,13 +273,21 @@ def _judged(task, caps: list[Path], program: Path, out: Path, env: dict, held: d
             os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
 
 
+def _engine() -> dict:
+    """The target's engine, for a region judged where no target is set."""
+    from lab.kernels.tasks import regions
+    return regions.load_engine().as_dict()
+
+
 def patch(task, tree: Path, program: str, held: dict | None = None) -> str:
     """The winner as a unified diff of the engine module in `tree`, the task's start edits undone; a region's as its
     override module, checked for overlap with the overrides in `tree`."""
     from lab.kernels.eval.ship import module_source, no_live_autotune, override_keys, region_files, unstart
     if task.name.startswith("region:"):
         from lab.kernels.tasks import regions
-        pkg = Path(tree) / "src" / regions.OVERRIDES_PACKAGE.replace(".", "/")
+        rel_pkg = regions.load_engine().overrides.replace(".", "/")
+        pkg = next((p for p in (Path(tree) / "src" / rel_pkg, Path(tree) / rel_pkg) if p.parent.is_dir()),
+                   Path(tree) / "src" / rel_pkg)
         rel = pkg.relative_to(tree).as_posix()
         have = [(f"{rel}/{f.name}", f.read_text()) for f in sorted(pkg.glob("*.py"))] if pkg.is_dir() else []
         files = region_files(task, program, rel, [k for f, src in have for k in override_keys(f, src)],

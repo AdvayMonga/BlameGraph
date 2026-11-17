@@ -10,21 +10,19 @@ import os
 import sys
 from pathlib import Path
 
-HOLD_ENV = {"CUSTOM_BACKEND_BLOCKS": "16", "CUSTOM_BACKEND_CUDA_GRAPH": "0", "MEGAKERNEL": "0"}   # weights only
-
-
 def held(name: str, model) -> tuple[dict, dict]:
     """(tensors, constants) the region `name` reads from the loaded engine `model`."""
     from lab.kernels.tasks import regions, step
     from lab.profile.capture import STEP
     if name == STEP:
         return step.weights(model)
-    st = regions._engine()
+    eng = regions.load_engine()
+    st = eng.module()
     tensors = {}
-    for i in regions.LAYERS:
+    for i in eng.layers:
         for k, v in st.layer_weights(model, i).items():
             tensors.update({f"L{i}.{k}": v} if v is not None else {k: None})     # a None (bf16 scale) is every layer's
-    return tensors, {"cfg": st.layer_config(model), "layers": list(regions.LAYERS)}
+    return tensors, {"cfg": st.layer_config(model), "layers": list(eng.layers)}
 
 
 def describe(name: str, samples: Path, holder: Path) -> dict:
@@ -38,8 +36,9 @@ def describe(name: str, samples: Path, holder: Path) -> dict:
     counts = shapes.from_captures(task, caps, equal=True)
     if not counts:
         raise SystemExit(f"the captures in {samples} hold no sampled call of {name}")
-    names = [s.name for s in regions.engine_stations()] if name == STEP else \
-        [s.name for s in regions.span(regions.engine_stations(regions.station_set(name.split(":")[1])),
+    eng = regions.load_engine()
+    names = [s.name for s in regions.engine_stations(eng, eng.step)] if name == STEP else \
+        [s.name for s in regions.span(regions.engine_stations(eng, eng.which(name.split(":")[1])),
                                       *name.split(":")[1:3])]
     sets = {**shapes.split(task, counts), "ints": shapes.ints_from_captures(task, caps),
             "sources": shapes.sources_from_captures(task, caps), "heldout_axes": list(task.heldout_axes),
@@ -59,11 +58,11 @@ def main(argv: list[str] | None = None) -> int:
     from lab.infra.sandbox import container
     for k, v in target.load().engine.env.items():
         os.environ.setdefault(k, v)
-    os.environ.update(HOLD_ENV)
-    from inference_server.config import load_settings
-    from inference_server.server import build_backend
+    from lab.kernels.tasks import regions
     from lab.kernels.tasks.shared_weights import Holder
-    model = build_backend(load_settings()).model
+    eng = regions.load_engine()
+    os.environ.update(eng.hold_env)
+    model = eng.module().load_model()
     tensors, consts = held(a.task, model)
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
