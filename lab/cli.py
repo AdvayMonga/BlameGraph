@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 import runpy
 import sys
 from pathlib import Path
@@ -14,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # command -> the module it runs; a dict is a group: `lab kernels search ...`
 COMMANDS = {
-    "session": "lab.session", "rehearsal": "lab.rehearsal", "dashboard": "lab.dashboard",
+    "setup": "lab.setup", "session": "lab.session", "rehearsal": "lab.rehearsal", "dashboard": "lab.dashboard",
     "validate": "lab.gate.validate", "feedback": "evals.agent.feedback",
     "store": "lab.records", "records": "lab.records.ledger", "import-runs": "lab.records.import_runs",
     "workloads": "evals.public",
@@ -61,7 +62,18 @@ def usage() -> str:
                       "  TOOL                 any tool the agent has, same name and arguments: --run RUN ..."])
 
 
+def load_env(path: Path) -> None:
+    """The KEY=VALUE lines of `path` into the environment; a key already set keeps its value."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        key, eq, value = line.strip().partition("=")
+        if eq and key and not key.startswith("#"):
+            os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+
+
 def main(argv: list[str] | None = None) -> int:
+    load_env(ROOT / ".env")
     argv = sys.argv[1:] if argv is None else argv
     if not argv or argv[0] in ("-h", "--help"):
         print(usage())

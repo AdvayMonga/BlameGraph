@@ -14,10 +14,6 @@ class Api:
     name: str = "vllm"
     chat_kwargs: dict = field(default_factory=dict)
 
-    @classmethod
-    def from_target(cls, server, target) -> "Api":
-        return cls(server.api, dict(target.chat_kwargs))
-
 
 class NoLogprobs(RuntimeError):
     """The engine's API exposes no teacher-forced logprobs."""

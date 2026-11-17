@@ -79,7 +79,7 @@ def test_create_runs_with_h200_preset_cloud_init_key_and_subnet(fake):
 def test_stop_keeps_the_vm_and_start_resumes_it(fake):
     vm = labvm.VM(name="g")
     labvm.start(vm)
-    labvm.stop(vm)
+    labvm.stop(vm, keep_disk=True)
     assert vm.provider.get("g").state == "stopped"
     labvm.start(vm)
     kinds = [c[2] for c in calls(fake) if c[:2] == ["compute", "instance"]]

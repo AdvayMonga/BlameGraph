@@ -1,4 +1,4 @@
-"""lab.infra.cloud.vm against a fake `crusoe` CLI, ssh and rsync on PATH: the lifecycle it drives, not the cloud."""
+"""lab.infra.cloud.vm against a fake `nebius` CLI, ssh and rsync on PATH: the lifecycle it drives, not the cloud."""
 
 from __future__ import annotations
 
@@ -10,31 +10,8 @@ import stat
 import pytest
 
 from lab.infra.cloud import vm as labvm
-from lab.infra.cloud.providers import ProviderError, crusoe
-
-FAKE_CRUSOE = r'''#!/usr/bin/env python3
-"""Fake crusoe CLI: state lives in $FAKE_STATE, every call is appended to $FAKE_LOG."""
-import json, os, sys
-state_path, log = os.environ["FAKE_STATE"], os.environ["FAKE_LOG"]
-args = sys.argv[1:]
-open(log, "a").write(json.dumps(args) + "\n")
-db = json.load(open(state_path)) if os.path.exists(state_path) else {}
-def save(): json.dump(db, open(state_path, "w"))
-if args[:3] == ["compute", "vms", "list"]:
-    print(json.dumps([{"name": n, "state": v["state"], "type": "a100-80gb.1x",
-                       "network_interfaces": [{"ips": [{"public_ipv4": {"address": "10.0.0.7"}}]}]}
-                      for n, v in db.items()]))
-elif args[:3] == ["compute", "vms", "create"]:
-    db[args[args.index("--name") + 1]] = {"state": "STATE_RUNNING"}; save()
-elif args[:3] == ["compute", "vms", "start"]:
-    db[args[3]]["state"] = "RUNNING"; save()
-elif args[:3] == ["compute", "vms", "stop"]:
-    db[args[3]]["state"] = "STOPPED"; save()
-elif args[:3] == ["compute", "vms", "types"]:
-    print("a100-80gb.1x\nl40s-48gb.1x")
-else:
-    sys.stderr.write("unknown\n"); sys.exit(2)
-'''
+from lab.infra.cloud.providers import ProviderError, nebius
+from test_lab_nebius import FAKE as FAKE_NEBIUS
 
 FAKE_TOOL = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -48,14 +25,16 @@ sys.exit(int(os.environ.get("FAKE_EXIT", "0")) if any(a.startswith("cd ") for a 
 def fake(tmp_path, monkeypatch):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for name, body in (("crusoe", FAKE_CRUSOE), ("ssh", FAKE_TOOL), ("rsync", FAKE_TOOL)):
+    for name, body in (("nebius", FAKE_NEBIUS), ("ssh", FAKE_TOOL), ("rsync", FAKE_TOOL)):
         p = bin_dir / name
         p.write_text(body)
         p.chmod(p.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("FAKE_STATE", str(tmp_path / "state.json"))
     monkeypatch.setenv("FAKE_LOG", str(tmp_path / "calls.log"))
-    monkeypatch.setenv("LAB_VM_PROVIDER", "crusoe")
+    monkeypatch.delenv("LAB_VM_PROVIDER", raising=False)
+    monkeypatch.delenv("LAB_VM_SPOT", raising=False)
+    (tmp_path / "key.pub").write_text("ssh-ed25519 AAAA lab\n")
     monkeypatch.setenv("LAB_VM_KEYFILE", str(tmp_path / "key.pub"))
     monkeypatch.setattr(labvm, "KNOWN_HOSTS_DIR", tmp_path / "kh")
     monkeypatch.setattr(labvm, "POLL_S", 0.0)
@@ -80,37 +59,52 @@ def calls(tmp_path):
 def test_start_creates_an_absent_vm(fake):
     vm = labvm.VM(name="t1")
     record = labvm.start(vm)
-    assert record.state == "running" and record.ip == "10.0.0.7"
-    create = next(c for c in calls(fake) if c[:3] == ["compute", "vms", "create"])
-    assert create[create.index("--type") + 1] == vm.provider.type
+    assert record.state == "running" and record.ip == "203.0.113.9"
+    create = next(c for c in calls(fake) if c[:3] == ["compute", "instance", "create"])
+    assert create[create.index("--resources-preset") + 1] == vm.provider.type
 
 
-def test_start_starts_a_stopped_vm_and_stop_waits(fake):
+def kinds(tmp_path):
+    return [c[2] for c in calls(tmp_path) if c[:2] == ["compute", "instance"] and c[2] != "list"]
+
+
+def test_stop_deletes_the_vm_and_its_known_hosts(fake):
     vm = labvm.VM(name="t2")
     labvm.start(vm)
+    vm.known_hosts.parent.mkdir(parents=True, exist_ok=True)
+    vm.known_hosts.write_text("x")
     labvm.stop(vm)
-    assert vm.provider.get("t2").state == "stopped"
+    assert vm.provider.get("t2") is None and not vm.known_hosts.exists()
+    assert kinds(fake) == ["create", "delete"]
+
+
+def test_stop_keeping_the_disk_stops_and_start_resumes(fake):
+    vm = labvm.VM(name="t2k")
     labvm.start(vm)
-    kinds = [c[2] for c in calls(fake) if c[:2] == ["compute", "vms"]]
-    assert kinds.count("create") == 1 and kinds.count("start") == 1 and kinds.count("stop") == 1
+    labvm.stop(vm, keep_disk=True)
+    labvm.stop(vm, keep_disk=True)                     # already stopped: nothing more is asked
+    assert vm.provider.get("t2k").state == "stopped"
+    labvm.start(vm)
+    assert kinds(fake) == ["create", "stop", "start"]
 
 
-def test_stop_is_a_no_op_when_absent_or_stopped(fake):
+def test_stop_deletes_a_stopped_vm_and_is_a_no_op_when_absent(fake):
     labvm.stop(labvm.VM(name="t3"))
     vm = labvm.VM(name="t3b")
     labvm.start(vm)
+    labvm.stop(vm, keep_disk=True)
     labvm.stop(vm)
     labvm.stop(vm)
-    stops = [c for c in calls(fake) if c[:3] == ["compute", "vms", "stop"]]
-    assert stops == [["compute", "vms", "stop", "t3b"]]
+    assert kinds(fake) == ["create", "stop", "delete"]
 
 
-def test_crusoe_state_accepts_both_spellings(fake):
-    vm = labvm.VM(name="t3c")
-    labvm.start(vm)                                    # the fake writes STATE_RUNNING on create
-    assert vm.provider.get("t3c").state == "running"
-    vm.provider.stop("t3c")                            # and STOPPED on stop
-    assert vm.provider.get("t3c").state == "stopped"
+def test_cli_stop_deletes_unless_keep_disk(fake, monkeypatch, capsys):
+    monkeypatch.setenv("LAB_VM", "t3c")
+    labvm.start(labvm.VM())
+    assert labvm.main(["stop", "--keep-disk"]) == 0 and "disk is kept" in capsys.readouterr().out
+    assert labvm.VM().provider.get("t3c").state == "stopped"
+    assert labvm.main(["stop"]) == 0 and "deleted" in capsys.readouterr().out
+    assert labvm.VM().provider.get("t3c") is None
 
 
 def test_run_pushes_runs_in_repo_dir_and_fetches(fake, monkeypatch):
@@ -120,19 +114,18 @@ def test_run_pushes_runs_in_repo_dir_and_fetches(fake, monkeypatch):
     assert labvm.run(vm, "python -m lab.profile.profile", fetch_dir="lab/runs", local=local) == 0
     log = calls(fake)
     rsyncs = [c for c in log if c[0] == "rsync"]
-    assert rsyncs[0][-1] == "u@10.0.0.7:~/repo/" and "--filter=:- .gitignore" in rsyncs[0]          # the engine
-    assert rsyncs[1][-1] == "u@10.0.0.7:~/BlameGraph/" and "--filter=:- .gitignore" in rsyncs[1]    # this environment
-    assert rsyncs[2][-2] == "u@10.0.0.7:~/repo/lab/runs/"
+    assert rsyncs[0][-1] == "u@203.0.113.9:~/repo/" and "--filter=:- .gitignore" in rsyncs[0]          # the engine
+    assert rsyncs[1][-1] == "u@203.0.113.9:~/BlameGraph/" and "--filter=:- .gitignore" in rsyncs[1]    # this environment
+    assert rsyncs[2][-2] == "u@203.0.113.9:~/repo/lab/runs/"
     sshs = [c for c in log if c[0] == "ssh"]
     cmd = [c for c in sshs if c[-1].startswith("cd ")][-1][-1]
     assert cmd.startswith("cd ~/repo && LAB_GIT_SHA=")
     assert cmd.endswith('PATH="$HOME/BlameGraph/bin:$HOME/repo/.venv/bin:$PATH" timeout --signal=TERM --kill-after=60 180m python -m lab.profile.profile')
     assert any(a.startswith("UserKnownHostsFile=") and a.endswith("t4.known_hosts") for a in sshs[-1])
-    # the VM is stopped afterwards by default, and the auto-stop was armed on the way in
-    assert vm.provider.get("t4").state == "stopped"
+    # the VM stays running afterwards with the auto-stop armed
+    assert vm.provider.get("t4").state == "running" and labvm._watchdog_file(vm).exists()
     assert any("shutdown -h +180" in c[-1] for c in sshs)
     assert SPAWNED and SPAWNED[-1][-3:-1] == ["watchdog", "--deadline"]
-    assert not labvm._watchdog_file(vm).exists()                     # stop disarms it
 
 
 def test_run_in_the_environment_dir(fake, monkeypatch):
@@ -147,8 +140,8 @@ def test_run_in_the_environment_dir(fake, monkeypatch):
     assert cmd.startswith("cd ~/env && ") and 'PATH="$HOME/env/bin:$HOME/repo/.venv/bin:$PATH" timeout --signal=TERM --kill-after=60 180m lab regimes' in cmd
     rsyncs = [c for c in log if c[0] == "rsync"]
     assert "--include=evals/regimes/*/heldout.jsonl" in rsyncs[1]                     # held-out traces travel
-    assert [r[-2] for r in rsyncs[-3:]] == ["u@10.0.0.7:~/env/out/", "u@10.0.0.7:~/env/local/ledger/",
-                                            "u@10.0.0.7:~/env/local/runs/"]      # a lab run is always brought home
+    assert [r[-2] for r in rsyncs[-3:]] == ["u@203.0.113.9:~/env/out/", "u@203.0.113.9:~/env/local/ledger/",
+                                            "u@203.0.113.9:~/env/local/runs/"]      # a lab run is always brought home
     assert "--exclude=workspace/" in rsyncs[-1]
 
 
@@ -166,9 +159,9 @@ def test_collect_merges_the_vms_ledger(fake, monkeypatch):
     assert [r["id"] for r in ledger.records(fake / "ledger")] == [rec["id"]]
 
 
-def test_keep_leaves_the_vm_running_with_the_watchdog_armed(fake):
+def test_run_leaves_the_vm_running_with_the_watchdog_armed(fake):
     vm = labvm.VM(name="t4k", user="u", remote_dir="~/repo")
-    assert labvm.run(vm, "true", keep=True, minutes=45) == 0
+    assert labvm.run(vm, "true", minutes=45) == 0
     assert vm.provider.get("t4k").state == "running"
     pid, deadline = labvm._watchdog_file(vm).read_text().split()
     assert pid == "4242" and 0 < float(deadline) - labvm.time.time() <= 45 * 60 + 1
@@ -176,7 +169,7 @@ def test_keep_leaves_the_vm_running_with_the_watchdog_armed(fake):
     assert "45m true" in [c for c in calls(fake) if c[0] == "ssh" and c[-1].startswith("cd ")][-1][-1]
 
 
-def test_watchdog_stops_a_running_vm_at_its_deadline(fake, monkeypatch):
+def test_watchdog_deletes_a_running_vm_at_its_deadline(fake, monkeypatch):
     vm = labvm.VM(name="t4w")
     labvm.start(vm)
     assert vm.provider.get("t4w").state == "running"
@@ -184,17 +177,13 @@ def test_watchdog_stops_a_running_vm_at_its_deadline(fake, monkeypatch):
     labvm._watchdog_file(vm).write_text(f"{os.getpid()} 0\n")      # the armed file names the watchdog itself
     monkeypatch.setenv("LAB_VM", "t4w")
     assert labvm.watchdog(labvm.time.time() - 1) == 0               # must not SIGTERM itself on the way
-    assert vm.provider.get("t4w").state == "stopped" and not labvm._watchdog_file(vm).exists()
+    assert vm.provider.get("t4w") is None and not labvm._watchdog_file(vm).exists()
 
 
-def test_run_keeps_the_vm_where_stop_would_delete_the_disk(fake, monkeypatch):
+def test_run_deletes_the_vm_when_asked(fake):
     vm = labvm.VM(name="t4d", user="u", remote_dir="~/repo")
-    monkeypatch.setattr(type(vm.provider), "stop_deletes", True, raising=False)
-    assert labvm.run(vm, "true") == 0
-    assert vm.provider.get("t4d").state == "running" and labvm._watchdog_file(vm).exists()
-    monkeypatch.setattr(type(vm.provider), "stop_deletes", False)   # the forced path is plain stop
     assert labvm.run(vm, "true", keep=False) == 0
-    assert vm.provider.get("t4d").state == "stopped"
+    assert vm.provider.get("t4d") is None and not labvm._watchdog_file(vm).exists()     # stop disarms it
 
 
 def test_run_returns_the_remote_exit_code_and_still_fetches(fake, monkeypatch):
@@ -204,21 +193,21 @@ def test_run_returns_the_remote_exit_code_and_still_fetches(fake, monkeypatch):
 
 
 def test_login_defaults_to_the_provider(fake, monkeypatch):
-    assert labvm.VM().login == "ubuntu"
+    assert labvm.VM().login == "lab"
     monkeypatch.setenv("LAB_VM_USER", "me")
     assert labvm.VM().login == "me"
 
 
 def test_provider_reads_env_at_construction(fake, monkeypatch):
-    monkeypatch.setenv("LAB_VM_TYPE", "l40s-48gb.1x")
-    assert crusoe.Crusoe().type == "l40s-48gb.1x"
+    monkeypatch.setenv("LAB_VM_TYPE", "2gpu-32vcpu-400gb")
+    assert nebius.Nebius().type == "2gpu-32vcpu-400gb"
 
 
 def test_cli_status_types_and_separator(fake, capsys, monkeypatch):
     assert labvm.main(["status"]) == 0
     assert "absent" in capsys.readouterr().out
     assert labvm.main(["types"]) == 0
-    assert "a100-80gb.1x" in capsys.readouterr().out
+    assert "gpu-h200-sxm: 1gpu-16vcpu-200gb" in capsys.readouterr().out
     seen = {}
     monkeypatch.setattr(labvm, "run", lambda vm, command, **kw: seen.setdefault("cmd", command) and 0)
     labvm.main(["run", "--", "pytest", "--", "tests"])
@@ -228,7 +217,7 @@ def test_cli_status_types_and_separator(fake, capsys, monkeypatch):
 def test_missing_cli_is_a_clear_error(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path))
     with pytest.raises(ProviderError, match="not installed"):
-        crusoe.Crusoe().get("t7")
+        nebius.Nebius().get("t7")
 
 
 def test_unknown_provider(monkeypatch):
@@ -245,10 +234,13 @@ def test_ssh_uses_the_private_half_of_the_keyfile(fake, monkeypatch):
 
 def test_rsync_quotes_a_keyfile_path_with_spaces(fake, monkeypatch):
     import shlex
-    monkeypatch.setenv("LAB_VM_KEYFILE", "/Users/A B/.ssh/lab key.pub")
+    key = fake / "A B" / "lab key.pub"
+    key.parent.mkdir()
+    key.write_text("ssh-ed25519 AAAA lab\n")
+    monkeypatch.setenv("LAB_VM_KEYFILE", str(key))
     labvm.run(labvm.VM(name="t5"), "true")
     e = next(c for c in calls(fake) if c[0] == "rsync")[3]
-    assert shlex.split(e)[1:3] == ["-i", "/Users/A B/.ssh/lab key"]
+    assert shlex.split(e)[1:3] == ["-i", str(fake / "A B" / "lab key")]
 
 
 def test_run_reports_a_vm_stopped_under_the_command(fake, monkeypatch, capsys):
@@ -265,6 +257,7 @@ def test_run_reports_a_vm_stopped_under_the_command(fake, monkeypatch, capsys):
     assert "stopped under the command" in capsys.readouterr().err
     assert not any(c[0] == "rsync" and c[-2].endswith("lab/runs/") for c in calls(fake))    # no fetch from a stopped VM
     assert not labvm._watchdog_file(vm).exists()
+    assert vm.provider.get("t9").state == "stopped"                  # its disk is kept for the restart
 
 
 def _nebius(monkeypatch, instances, spot):
@@ -312,15 +305,15 @@ def test_spot_flag_refuses_other_spellings(monkeypatch):
         nebius.Nebius()
 
 
-def test_a_dropped_session_on_a_running_vm_still_fetches_and_stops(fake, monkeypatch):
+def test_a_dropped_session_on_a_running_vm_still_fetches_and_deletes(fake, monkeypatch):
     monkeypatch.setenv("FAKE_EXIT", "255")              # ssh dropped, but the VM never stopped
     monkeypatch.setattr(labvm, "LOST_WAIT_S", 0.0)
-    assert labvm.run(labvm.VM(name="t10"), "true", fetch_dir="lab/runs", local=fake / "out") == 255
+    assert labvm.run(labvm.VM(name="t10"), "true", fetch_dir="lab/runs", local=fake / "out", keep=False) == 255
     assert any(c[0] == "rsync" and c[-2].endswith("lab/runs/") for c in calls(fake))
-    assert any(c[:3] == ["compute", "vms", "stop"] for c in calls(fake))
+    assert kinds(fake) == ["create", "delete"]
 
 
-def test_a_provider_error_after_a_dropped_session_still_stops(fake, monkeypatch):
+def test_a_provider_error_after_a_dropped_session_still_deletes(fake, monkeypatch):
     vm = labvm.VM(name="t11")
     real_get, n = type(vm.provider).get, {"calls": 0}
 
@@ -331,5 +324,5 @@ def test_a_provider_error_after_a_dropped_session_still_stops(fake, monkeypatch)
         return real_get(self, name)
     monkeypatch.setenv("FAKE_EXIT", "255")
     monkeypatch.setattr(type(vm.provider), "get", flaky_get)
-    assert labvm.run(vm, "true") == 255
-    assert real_get(vm.provider, "t11").state == "stopped"
+    assert labvm.run(vm, "true", keep=False) == 255
+    assert real_get(vm.provider, "t11") is None

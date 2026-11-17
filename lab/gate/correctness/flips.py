@@ -1,14 +1,5 @@
-"""Paired flip test: same questions to reference and candidate, compared answer by answer (McNemar)."""
+"""Paired flips: same questions to reference and candidate, compared answer by answer."""
 from __future__ import annotations
-
-import math
-
-
-def _binom_tail_ge(k: int, n: int) -> float:
-    """P(X >= k) for X ~ Binomial(n, 0.5)."""
-    if n == 0:
-        return 1.0
-    return sum(math.comb(n, i) for i in range(k, n + 1)) / 2 ** n
 
 
 def flip_test(ref_correct: list[bool], cand_correct: list[bool]) -> dict:
@@ -26,6 +17,4 @@ def flip_test(ref_correct: list[bool], cand_correct: list[bool]) -> dict:
         "net_loss_rate": (lost - gained) / n if n else float("nan"),
         "ref_accuracy": ref_acc, "cand_accuracy": cand_acc,
         "score_ratio": cand_acc / ref_acc if ref_acc else float("nan"),
-        # one-sided exact McNemar
-        "p_degraded": _binom_tail_ge(lost, lost + gained),
     }

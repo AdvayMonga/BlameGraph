@@ -42,10 +42,10 @@ def equiv_record(run: str, commit: str, env: dict, label: str, equiv_json: dict)
     passed = {"pass": True, "fail": False}.get(res["verdict"])
     return {"kind": "equiv", "run": run, "session": SESSION, "tool": "equiv",
             "args": {"label": label, "manual": True}, "snapshot": commit, "snapshot_blob": None, "patch": None,
-            "config": {"split": "seen", "tier": "dev", "commit": commit, "env": env},
+            "config": {"split": "seen", "commit": commit, "env": env},
             "result": {"verdict": res["verdict"], "passed": passed, "reasons": res.get("reasons"),
                        "gates": res.get("gates"), "metrics": res.get("metrics"), "thresholds": res.get("thresholds"),
-                       "tier": "dev", "source": "manual"},
+                       "source": "manual"},
             "cost": {"usd": None, "seconds": None}}
 
 
