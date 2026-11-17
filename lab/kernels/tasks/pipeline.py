@@ -9,7 +9,6 @@ import os
 import shlex
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 from typing import Callable
 
@@ -105,7 +104,8 @@ def pack(caps: list[Path], dest: Path) -> Path:
     capture, and each capture's calls again in traffic<i>/profile-<source>/captures/."""
     from lab.kernels.tasks import shapes
     from lab.profile import capture
-    (dest / "samples").mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(dest, ignore_errors=True)
+    (dest / "samples").mkdir(parents=True)
     every = []
     for i, cap in enumerate(caps):
         calls = capture.load(cap)
@@ -172,17 +172,20 @@ def remote_env(prefix: list[str], env_dir: str, python: str, env: dict, sudo: bo
 
 
 def spent(out: Path) -> float:
-    """Model dollars a search has spent, summed from its logs."""
-    usd = 0.0
-    for name, key in (("trace.jsonl", "cost_usd"), ("hypotheses.jsonl", "usd")):
-        f = Path(out) / name
-        for line in f.read_text().splitlines() if f.exists() else []:
-            try:
-                v = json.loads(line).get(key)
-            except ValueError:
-                continue
-            usd += float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
+    """Model dollars a search has spent: its model calls' (calls.jsonl)."""
+    f, usd = Path(out) / "calls.jsonl", 0.0
+    for line in f.read_text().splitlines() if f.exists() else []:
+        try:
+            usd += float(json.loads(line).get("usd") or 0.0)
+        except ValueError:
+            continue
     return round(usd, 4)
+
+
+def saved(out: Path) -> int:
+    """The last generation a search in `out` saved; -1 when it saved none."""
+    f = Path(out) / "state.json"
+    return json.loads(f.read_text())["ran"] if f.exists() else -1
 
 
 def facts(task, kernel_tasks: dict | None, regimes: tuple[str, ...] = ()) -> str:
@@ -205,8 +208,9 @@ def facts(task, kernel_tasks: dict | None, regimes: tuple[str, ...] = ()) -> str
 
 def search(task, caps: list[Path], start: Path, out: Path, ledger_root: Path, env: dict,
            device: str = "cuda", facts_text: str | None = None, held: dict | None = None) -> dict:
-    """`lab kernels search` on the captures (a region: on its shapes, samples and holder, `hold`'s): its last
-    JSON line (best, cost, out, ledger record id)."""
+    """The kernel search on the captures (a region: on its shapes, samples and holder, `hold`'s), judged under `env`:
+    {best, cost, out, ledger}. A search that stopped in `out` goes on from its last generation."""
+    from lab.kernels.search.__main__ import run
     out.mkdir(parents=True, exist_ok=True)
     if facts_text:
         (out / "facts.txt").write_text(facts_text)
@@ -215,14 +219,17 @@ def search(task, caps: list[Path], start: Path, out: Path, ledger_root: Path, en
         given = ["--shapes", str(out / "shapes.json"), "--samples", held["samples"], "--shared-weights", held["holder"]]
     else:
         given = [w for c in caps for w in ("--captures", str(c))]
-    argv = [sys.executable, "-m", "lab.kernels.search", "--task", task.name, "--out", str(out),
-            "--initial", str(start), "--ledger", str(ledger_root), "--equal-captures",
-            "--device", device, *(["--facts", str(out / "facts.txt")] if facts_text else []), *given]
-    p = subprocess.run(argv, capture_output=True, text=True, cwd=ROOT, env={**os.environ, **env})
-    lines = [x for x in p.stdout.splitlines() if x.startswith("{")]
-    if p.returncode != 0 or not lines:
-        raise RuntimeError(f"lab.kernels.search exited {p.returncode}: {(p.stderr or p.stdout)[-2000:]}")
-    return json.loads(lines[-1])
+    argv = ["--task", task.name, "--out", str(out), "--initial", str(start), "--ledger", str(ledger_root),
+            "--equal-captures", "--device", device, *(["--facts", str(out / "facts.txt")] if facts_text else []), *given]
+    saved = {k: os.environ.get(k) for k in (*env, "KERNEL_EVAL_CONFIG", "KERNELS_EVAL_LOG")}   # the search sets its own
+    os.environ.update(env)
+    try:
+        return run(argv)
+    except SystemExit as e:                      # the search's own refusal of its arguments
+        raise RuntimeError(f"lab.kernels.search: {e}") from None
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
 
 
 def freeze(task, caps: list[Path], program: Path, out: Path, env: dict, held: dict | None, device: str) -> Path:

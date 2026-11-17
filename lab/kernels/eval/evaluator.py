@@ -13,6 +13,10 @@ TIMEOUT_S = float(os.environ.get("KERNEL_EVAL_TIMEOUT_S", "600"))
 ROOT = Path(__file__).resolve().parents[3]
 
 
+class WorkerLost(RuntimeError):
+    """The ssh session to the worker host failed: the program was not judged."""
+
+
 def tail(out: str, n: int = 3000) -> str:
     """The last `n` characters of a process's output, C++ stack frames removed."""
     return "\n".join(x for x in out.splitlines() if not x.startswith("frame #"))[-n:]
@@ -51,6 +55,8 @@ def _judge_stage(program_path: str, stage: int) -> dict:
         p = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=limit, env=env, cwd=ROOT)
     except subprocess.TimeoutExpired:
         return {"metrics": zero, "artifacts": {"error": f"evaluation exceeded {limit:.0f} s"}}
+    if remote and p.returncode == 255:
+        raise WorkerLost(tail(p.stderr or p.stdout))
     lines = [x for x in p.stdout.splitlines() if x.startswith("{")]
     if p.returncode != 0 or not lines:
         return {"metrics": zero,

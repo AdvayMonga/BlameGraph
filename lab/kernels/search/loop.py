@@ -1,19 +1,26 @@
 """The search: the start, the seeds and the ports are judged, then each generation picks parents, names and reviews its
-changes, has a writer make each and judges the programs. Its records go under `<out>` (trace, hypotheses, ideas, calls)."""
+changes, has a writer make each and judges the programs. Its records go under `<out>` (trace, hypotheses, ideas, calls),
+and its state after every generation (state.json): a search started in an `<out>` that has one goes on from it."""
 from __future__ import annotations
 
 import difflib
+import hashlib
 import json
+import os
 import random
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
 
 from lab.kernels.search import context, diff, diversity
-from lab.kernels.search.calls import Calls, Model
+from lab.kernels.search.calls import Calls, Model, lines
 from lab.kernels.search.evaluate import Evaluator, Result
 from lab.kernels.search.program import Config, Idea, Program
+
+
+STATE = "state.json"
 
 
 def new_id() -> str:
@@ -94,13 +101,47 @@ def write(calls: Calls, writer: Model, setting: str, idea: Idea, by: dict[str, P
 
 def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer: Model, evaluator: Evaluator,
            novelty: diversity.Novelty, similar: diversity.Similar, out: Path,
-           cfg: Config = Config(), detect: Callable | None = None) -> tuple[list[Program], dict]:
+           cfg: Config = Config(), detect: Callable | None = None, calls: Calls | None = None,
+           each: Callable[[int, list[Program]], None] | None = None) -> tuple[list[Program], dict]:
     """The population (the start first) and the run's cost {usd, model_calls, evals, generations}. `seeds`: name ->
-    program; `namer` names, reviews and writes the ports; `writer` makes each change; `detect(code, row)` flags a parent."""
+    program; `namer` names, reviews and writes the ports; `writer` makes each change; `detect(code, row)` flags a
+    parent; `calls`: the `Calls` of `out`, when the caller makes model calls of its own; `each(generation,
+    population)` runs after every saved state. `out` holds one search: another's state there is refused."""
     out.mkdir(parents=True, exist_ok=True)
-    rng, population, ideas, ran = random.Random(cfg.seed), [], [], 0
-    calls = Calls(out)
+    own = calls is None
+    calls = calls or Calls(out)
+    rng, population, ideas, ran, closed, rows = random.Random(cfg.seed), [], [], 0, False, []
+    of = hashlib.sha256(json.dumps([start, sorted(seeds), asdict(cfg)]).encode()).hexdigest()[:16]
+    saved = json.loads((out / STATE).read_text()) if (out / STATE).exists() else None
+    if saved and saved["of"] != of:
+        raise ValueError(f"{out} holds the state of another search (another start, seeds or settings)")
+    if saved:
+        population = [Program(**p) for p in saved["population"]]
+        by = {p.id: p for p in population}
+        ideas = [Idea(**{**i, "child": by.get(i["child"])}) for i in saved["ideas"]]
+        ran, closed, evaluator.evals = saved["ran"], saved["closed"], saved["evals"]
+        version, internal, gauss = saved["rng"]
+        rng.setstate((version, tuple(internal), gauss))
+        for code in [p.code for p in population] + [i.code for i in ideas if i.code]:
+            novelty.add(code)
+        similar.add(ideas)
+        rows = [x for x in lines(out / "hypotheses.jsonl") if json.loads(x)["iteration"] <= ran]
     with open(out / "trace.jsonl", "w") as trace, open(out / "hypotheses.jsonl", "w") as log:
+        trace.writelines(json.dumps(trace_row(p)) + "\n" for p in population)
+        log.writelines(x + "\n" for x in rows)
+        trace.flush()
+        log.flush()
+
+        def save() -> None:
+            """The state so far, whole or not at all; then `each`."""
+            state = {"of": of, "ran": ran, "closed": closed, "rng": rng.getstate(), "evals": evaluator.evals,
+                     "population": [asdict(p) for p in population],
+                     "ideas": [{**asdict(i), "child": i.child.id if i.child else None} for i in ideas]}
+            (out / (STATE + ".tmp")).write_text(json.dumps(state, default=str))
+            os.replace(out / (STATE + ".tmp"), out / STATE)
+            if each:
+                each(ran, population)
+
         def keep(code: str, r: Result, generation: int, parent: str | None = None, plan: dict | None = None,
                  kind: str = "") -> Program:
             p = Program(new_id(), parent, code, r.metrics, r.artifacts, generation, plan or {}, kind)
@@ -140,21 +181,23 @@ def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer
             (out / "ideas.jsonl").write_text(
                 "".join(json.dumps(table_row(i, score), default=str) + "\n" for i in ideas))
 
-        first = [start, *seeds.values()]
-        for code in first:
-            novelty.add(code)
-        results = evaluator.evaluate(first)
-        root = keep(start, results[0], 0)
-        for name, code, r in zip(seeds, first[1:], results[1:]):
-            keep(code, r, 0, root.id, {"competitor": name}, "competitor")
-        if cfg.ports:
-            spent = calls.usd
-            text, nid = calls(namer, "ports", 0, *context.ports(setting, root, list(seeds), cfg.ports))
-            plans = changes(context.read(text), [root])[:cfg.ports]
-            make(0, [root], [idea(p, 0, {"name": nid}) for p in plans], namer, spent,
-                 {"named": len(plans), "calls": {"name": nid}}, "competitor")
+        if not saved:
+            first = [start, *seeds.values()]
+            for code in first:
+                novelty.add(code)
+            results = evaluator.evaluate(first)
+            root = keep(start, results[0], 0)
+            for name, code, r in zip(seeds, first[1:], results[1:]):
+                keep(code, r, 0, root.id, {"competitor": name}, "competitor")
+            if cfg.ports:
+                spent = calls.usd
+                text, nid = calls(namer, "ports", 0, *context.ports(setting, root, list(seeds), cfg.ports))
+                plans = changes(context.read(text), [root])[:cfg.ports]
+                make(0, [root], [idea(p, 0, {"name": nid}) for p in plans], namer, spent,
+                     {"named": len(plans), "calls": {"name": nid}}, "competitor")
+            save()
 
-        for gen in range(1, cfg.generations + 1):
+        for gen in range(ran + 1, 1 if closed else cfg.generations + 1):
             picked = diversity.pick(population, cfg.parents, rng)
             if not picked:
                 break
@@ -183,13 +226,17 @@ def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer
             make(gen, parents, [idea(p, gen, {"name": nid, "review": rid}) for p in final], writer, spent,
                  {"dropped": dropped, "named": len(plans), "reviewed": len(final), "calls": {"name": nid, "review": rid}})
             ran = gen
+            save()
 
-        if ran:                                  # the last generation's ideas have no naming call after them
+        if ran and not closed:                   # the last generation's ideas have no naming call after them
             text, _ = calls(namer, "reflect", ran + 1, *context.reflect(setting, population, ideas, ran + 1))
             answer = context.read(text)
             reflected(ideas, answer)
             (out / "reflection.txt").write_text(str(answer.get("run") or ""))
+            closed = True
+            save()
         table()
-    calls.close()
+    if own:
+        calls.close()
     return population, {"usd": round(calls.usd, 4), "model_calls": calls.n, "evals": evaluator.evals,
                         "generations": ran}
