@@ -17,7 +17,7 @@ from pathlib import Path
 
 from lab.targets import engine
 from lab.infra.cloud import providers
-from lab.infra.cloud.providers import ProviderError, Record, env_field, pricing
+from lab.infra.cloud.providers import Provider, ProviderError, Record, env_field, pricing
 
 KNOWN_HOSTS_DIR = Path.home() / ".cache" / "inference-server-lab"
 POLL_S = 5.0             # between state and ssh probes
@@ -36,7 +36,7 @@ class VM:
     remote_dir: str = env_field("LAB_VM_DIR", "~/inference-server")       # the engine, with its venv
     env_dir: str = env_field("LAB_VM_ENV_DIR", "~/BlameGraph")             # this environment
     user: str = env_field("LAB_VM_USER", "")
-    provider: object = field(default_factory=lambda: providers.load(os.environ.get("LAB_VM_PROVIDER", "verda")))
+    provider: Provider = field(default_factory=lambda: providers.load(os.environ.get("LAB_VM_PROVIDER", "nebius")))
 
     @property
     def login(self) -> str:
@@ -71,7 +71,7 @@ def _wait(vm: VM, wanted: str, timeout_s: float) -> Record:
 
 def start(vm: VM) -> Record:
     record = vm.provider.get(vm.name)
-    wanted = getattr(vm.provider, "spot", None)
+    wanted = vm.provider.spot
     if record is not None and record.spot is not None and record.spot != wanted:
         raise ProviderError(f"{vm.name} was created {pricing(record.spot)}, LAB_VM_SPOT asks for "
                             f"{pricing(wanted)}; pricing is fixed at create: set LAB_VM_SPOT to "
@@ -93,7 +93,7 @@ def _watchdog_file(vm: VM) -> Path:
 
 
 def arm(vm: VM, record: Record, minutes: int = MAX_MINUTES) -> None:
-    """Arm the auto-stop: a detached local watchdog that stops the VM at the deadline, and an in-VM `shutdown -h`.
+    """Arm the auto-stop: a detached local watchdog that deletes the VM at the deadline, and an in-VM `shutdown -h`.
     Re-arming replaces the previous deadline."""
     disarm(vm)
     deadline = time.time() + minutes * 60
@@ -106,7 +106,7 @@ def arm(vm: VM, record: Record, minutes: int = MAX_MINUTES) -> None:
             check=False, capture=True, timeout_s=30)
     except subprocess.TimeoutExpired:
         pass
-    print(f"[lab.infra.cloud.vm] {vm.name} will be stopped by {time.strftime('%H:%M', time.localtime(deadline))} "
+    print(f"[lab.infra.cloud.vm] {vm.name} will be deleted by {time.strftime('%H:%M', time.localtime(deadline))} "
           f"({minutes} min) unless re-armed or stopped first", file=sys.stderr)
 
 
@@ -130,31 +130,37 @@ def disarm(vm: VM) -> None:
 
 
 def watchdog(deadline: float) -> int:
-    """Sleep until `deadline` (epoch seconds), then stop the VM if it is still running."""
+    """Sleep until `deadline` (epoch seconds), then delete the VM if it is still running."""
     time.sleep(max(0.0, deadline - time.time()))
     vm = VM()
     record = vm.provider.get(vm.name)
     if record is not None and record.state == "running":
-        print(f"[lab.infra.cloud.vm watchdog] deadline reached: stopping {vm.name}", file=sys.stderr)
+        print(f"[lab.infra.cloud.vm watchdog] deadline reached: deleting {vm.name}", file=sys.stderr)
         stop(vm)
     _watchdog_file(vm).unlink(missing_ok=True)
     return 0
 
 
-def stop(vm: VM) -> None:
-    """End GPU billing: stop the VM (disk kept), or delete it where the provider's stop deletes."""
+def stop(vm: VM, keep_disk: bool = False) -> None:
+    """End billing: delete the VM and its disk; `keep_disk` stops it instead (the disk stays billed)."""
     disarm(vm)
     record = vm.provider.get(vm.name)
-    if record is None or record.state == "stopped":
+    if record is None:
         return
-    if record.state != "stopping":
-        vm.provider.stop(vm.name)
-    if getattr(vm.provider, "stop_deletes", False):
-        if vm.provider.get(vm.name) is not None:
-            raise ProviderError(f"{vm.name} still exists after delete")
-        vm.known_hosts.unlink(missing_ok=True)
+    if keep_disk:
+        if record.state == "stopped":
+            return
+        if record.state != "stopping":
+            vm.provider.stop(vm.name)
+        _wait(vm, "stopped", STOP_TIMEOUT_S)
         return
-    _wait(vm, "stopped", STOP_TIMEOUT_S)
+    vm.provider.delete(vm.name)
+    deadline = time.monotonic() + STOP_TIMEOUT_S
+    while vm.provider.get(vm.name) is not None:
+        if time.monotonic() > deadline:
+            raise ProviderError(f"{vm.name} still exists {STOP_TIMEOUT_S:.0f}s after delete")
+        time.sleep(POLL_S)
+    vm.known_hosts.unlink(missing_ok=True)
 
 
 def ssh_target(vm: VM, record: Record) -> str:
@@ -258,12 +264,10 @@ def _lost(vm: VM) -> bool:
 
 
 def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | None = None,
-        push_tree: bool = True, where: str = "engine", keep: bool | None = None, minutes: int = MAX_MINUTES) -> int:
+        push_tree: bool = True, where: str = "engine", keep: bool = True, minutes: int = MAX_MINUTES) -> int:
     """Start the VM if needed, push both trees, run `command` in the engine dir (or `where="env"`: this environment's)
-    with the engine's venv on PATH under a `minutes` wall-clock timeout, fetch `fetch_dir` from that dir, then stop
-    the VM. `keep=True` leaves it running with the watchdog armed; `keep=None` keeps it only where stop deletes."""
-    if keep is None:
-        keep = bool(getattr(vm.provider, "stop_deletes", False))
+    with the engine's venv on PATH under a `minutes` wall-clock timeout, fetch `fetch_dir` from that dir, then leave
+    it running with the watchdog armed. `keep=False` deletes it; a VM stopped under the command keeps its disk."""
     record = start(vm)
     wait_ssh(vm, record)
     arm(vm, record, minutes)
@@ -285,7 +289,7 @@ def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | Non
           + (" (hit the wall-clock cap)" if code == 124 else ""), file=sys.stderr)
     lost = code == 255 and _lost(vm)
     if lost:
-        spot = "LAB_VM_SPOT=1 " if getattr(vm.provider, "spot", False) else ""
+        spot = "LAB_VM_SPOT=1 " if vm.provider.spot else ""
         again = f"run --no-push --fetch {fetch_dir} true" if fetch_dir and where != "env" else "run --env --no-push true"
         print(f"[lab.infra.cloud.vm] {vm.name} stopped under the command (preempted, or stopped from outside); its disk is kept: "
               f"`{spot}lab vm {again}` restarts it and brings the results home", file=sys.stderr)
@@ -299,11 +303,13 @@ def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | Non
             collect(vm, record)
         except Exception as e:                  # never skip the stop below over a failed copy
             print(f"[lab.infra.cloud.vm] collect failed: {e}", file=sys.stderr)
-    if keep and not lost:
+    if lost:
+        stop(vm, keep_disk=True)
+    elif keep:
         arm(vm, record, minutes)
     else:
         stop(vm)
-        print(f"[lab.infra.cloud.vm] {vm.name} stopped (GPU billing ended; --keep leaves it running)", file=sys.stderr)
+        print(f"[lab.infra.cloud.vm] {vm.name} deleted (billing ended)", file=sys.stderr)
     return code
 
 
@@ -315,13 +321,13 @@ def main(argv: list[str] | None = None) -> int:
     st.add_argument("--minutes", type=int, default=MAX_MINUTES, help=f"auto-stop after this long (default {MAX_MINUTES})")
     wd = sub.add_parser("watchdog", help="(internal) stop the VM at --deadline if still running")
     wd.add_argument("--deadline", type=float, required=True)
-    sub.add_parser("stop", help="end GPU billing; disk kept")
+    sp = sub.add_parser("stop", help="delete the VM and its disk: billing ends")
+    sp.add_argument("--keep-disk", action="store_true", help="stop the VM and keep its disk (the disk stays billed)")
     sub.add_parser("types", help="what the account can rent right now")
     sub.add_parser("setup", help="run lab/infra/cloud/vm-setup.sh on the VM (builds the engine's venv)")
-    r = sub.add_parser("run", help="push both trees, run a command under a wall-clock cap, fetch an output dir, stop")
-    r.add_argument("--keep", dest="keep", action="store_true", default=None,
-                   help="leave the VM running afterwards (watchdog stays armed); the default where stop deletes the disk")
-    r.add_argument("--stop", dest="keep", action="store_false", help="stop afterwards even where that deletes the disk")
+    r = sub.add_parser("run", help="push both trees, run a command under a wall-clock cap, fetch an output dir; "
+                                   "the VM stays running with the auto-stop armed")
+    r.add_argument("--stop", dest="keep", action="store_false", help="delete the VM and its disk afterwards")
     r.add_argument("--minutes", type=int, default=MAX_MINUTES, help=f"wall-clock cap for the command and the VM (default {MAX_MINUTES})")
     r.add_argument("--fetch", help="remote dir, relative to the repo, to bring back")
     r.add_argument("--local", help="where to put it (default local/runs)")
@@ -348,14 +354,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "watchdog":
         return watchdog(args.deadline)
     if args.cmd == "stop":
-        stop(vm)
-        print(f"{vm.name}: {p.stop_word}d, GPU billing ended")
+        stop(vm, keep_disk=args.keep_disk)
+        print(f"{vm.name}: stopped, its disk is kept and still billed" if args.keep_disk else
+              f"{vm.name}: deleted, billing ended")
         return 0
     if args.cmd == "types":
         print(p.types(), end="")
         return 0
     if args.cmd == "setup":
-        code = run(vm, f"bash {vm.env_dir}/lab/infra/cloud/vm-setup.sh {vm.remote_dir}", keep=True)
+        code = run(vm, f"bash {vm.env_dir}/lab/infra/cloud/vm-setup.sh {vm.remote_dir}")
         try:                                   # fetch the measured peaks
             fetch(vm, p.get(vm.name), "lab/infra/calibration/peaks", engine.ENV_ROOT / "lab" / "infra" / "calibration" / "peaks", base=vm.env_dir)
         except ProviderError as e:

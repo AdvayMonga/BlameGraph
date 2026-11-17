@@ -24,7 +24,6 @@ class Nebius:
     subnet: str = env_field("LAB_VM_SUBNET", "")                        # empty: the project's first subnet
     spot: bool = field(default_factory=lambda: _flag("LAB_VM_SPOT"))   # preemptible at the spot price; fixed at create
     default_user: str = USER
-    stop_word: str = "stop"
 
     def _cli(self, *args: str) -> str:
         argv = ["nebius", *args]
