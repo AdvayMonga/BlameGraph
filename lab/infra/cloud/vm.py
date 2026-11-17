@@ -263,6 +263,21 @@ def _lost(vm: VM) -> bool:
         time.sleep(POLL_S)
 
 
+def setup(vm: VM, minutes: int = MAX_MINUTES) -> int:
+    """vm-setup.sh on the VM: the engine's venv, the weights, the GPU's counters."""
+    return run(vm, f"bash {vm.env_dir}/lab/infra/cloud/vm-setup.sh {vm.remote_dir}", minutes=minutes)
+
+
+def restart(vm: VM) -> bool:
+    """A VM that stopped under a session (a spot VM preempted) started and set up again, under the auto-stop it
+    had; False when it did not stop, or that deadline has passed."""
+    f = _watchdog_file(vm)
+    left = int((float(f.read_text().split()[1]) - time.time()) // 60) if f.exists() else 0
+    if left <= 0 or not _lost(vm):
+        return False
+    return setup(vm, left) == 0
+
+
 def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | None = None,
         push_tree: bool = True, where: str = "engine", keep: bool = True, minutes: int = MAX_MINUTES) -> int:
     """Start the VM if needed, push both trees, run `command` in the engine dir (or `where="env"`: this environment's)
@@ -362,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:
         print(p.types(), end="")
         return 0
     if args.cmd == "setup":
-        code = run(vm, f"bash {vm.env_dir}/lab/infra/cloud/vm-setup.sh {vm.remote_dir}")
+        code = setup(vm)
         try:                                   # fetch the measured peaks
             fetch(vm, p.get(vm.name), "lab/infra/calibration/peaks", engine.ENV_ROOT / "lab" / "infra" / "calibration" / "peaks", base=vm.env_dir)
         except ProviderError as e:

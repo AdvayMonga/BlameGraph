@@ -371,6 +371,15 @@ def load(**hooks):
                   rsh=f"ssh {shlex.join(v.ssh_opts)}", sudo=v.login != "root")
 
 
+def recovered():
+    """The ssh worker again, once its VM that stopped under a job is started and set up again; None when the worker is
+    not a VM or the VM did not stop."""
+    if os.environ.get("LAB_WORKER") != "ssh":
+        return None
+    from lab.infra.cloud import vm
+    return load() if vm.restart(vm.VM()) else None
+
+
 # -- the worker host's side ---------------------------------------------------------------------------------------
 
 def cache_dir() -> Path:

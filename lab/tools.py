@@ -187,9 +187,8 @@ class Toolbox(EvalTools, ProfTools):
                 raise RuntimeError(f"a capture was {r['verdict']}: {r['reason']}")
             return self.s.ledger_root / r["bundle"] if r["verdict"] == "ok" else None
         from lab.infra.runner import worker
-        w = self.worker
-        remote = isinstance(w, worker.Remote)
-        env = pipeline.remote_env(w.prefix, w.env_dir, w.python, w.env, w.sudo) if remote else {}
+        from lab.kernels.eval.evaluator import WorkerLost
+        remote = isinstance(self.worker, worker.Remote)
         import torch
         device = "cuda" if remote or torch.cuda.is_available() else "cpu"     # judged where the GPU is
         try:
@@ -199,17 +198,27 @@ class Toolbox(EvalTools, ProfTools):
             if not caps:
                 raise RuntimeError("no capture traffic produced calls to the task's entry point")
             region = task.name.startswith("region:")     # loads where the GPU is: held and described there
-            with pipeline.hold(task, caps, out, env, w if remote else None) if region else \
-                    contextlib.nullcontext() as held:
-                start = out / "start.py"
-                start.write_text(held["start"] if held else pipeline.start_program(task, tree))
-                from lab.evaltools import _layer_facts
-                found = pipeline.search(task, caps, start, out / "search", self.s.ledger_root, env,
-                                        device=device, held=held,
-                                        facts_text=pipeline.facts(task, _layer_facts(self.s.ledger_root,
-                                                                                     "kernel_tasks"), scored))
-                best = pipeline.freeze(task, caps, out / "search" / "best_program.py", out, env, held, device)
-                g = pipeline.gate(task, caps, best, out, env, held, device)
+            while True:                          # again from the search's last generation after the worker's VM stopped
+                w = self.worker
+                env = pipeline.remote_env(w.prefix, w.env_dir, w.python, w.env, w.sudo) if remote else {}
+                try:
+                    with pipeline.hold(task, caps, out, env, w if remote else None) if region else \
+                            contextlib.nullcontext() as held:
+                        start = out / "start.py"
+                        start.write_text(held["start"] if held else pipeline.start_program(task, tree))
+                        from lab.evaltools import _layer_facts
+                        found = pipeline.search(task, caps, start, out / "search", self.s.ledger_root, env,
+                                                device=device, held=held,
+                                                facts_text=pipeline.facts(task, _layer_facts(self.s.ledger_root,
+                                                                                             "kernel_tasks"), scored))
+                        best = pipeline.freeze(task, caps, out / "search" / "best_program.py", out, env, held, device)
+                        g = pipeline.gate(task, caps, best, out, env, held, device)
+                    break
+                except WorkerLost:
+                    back = worker.recovered()
+                    if back is None:
+                        raise
+                    self.worker = back
         except Exception as e:                   # noqa: BLE001  a tool never crashes the session
             model_cost = self._charge_models(pipeline.spent(out / "search"))
             result = {"verdict": "error", "reason": f"{type(e).__name__}: {e}"[-2000:], "model_usd": model_cost}

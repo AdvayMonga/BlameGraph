@@ -260,6 +260,20 @@ def test_run_reports_a_vm_stopped_under_the_command(fake, monkeypatch, capsys):
     assert vm.provider.get("t9").state == "stopped"                  # its disk is kept for the restart
 
 
+def test_a_vm_that_stopped_under_a_session_is_started_and_set_up_again_under_the_deadline_it_had(fake, monkeypatch):
+    monkeypatch.setattr(labvm, "LOST_WAIT_S", 0.0)
+    vm = labvm.VM(name="t10")
+    labvm.arm(vm, labvm.start(vm), 60)
+    assert labvm.restart(vm) is False                                # it is running: the session failed otherwise
+    vm.provider.stop(vm.name)
+    assert labvm.restart(vm) is True and vm.provider.get("t10").state == "running"
+    assert any(c[0] == "ssh" and "vm-setup.sh" in c[-1] for c in calls(fake))
+    assert float(labvm._watchdog_file(vm).read_text().split()[1]) <= labvm.time.time() + 60 * 60
+    vm.provider.stop(vm.name)
+    labvm._watchdog_file(vm).write_text("4242 1\n")                  # its deadline has passed
+    assert labvm.restart(vm) is False and vm.provider.get("t10").state == "stopped"
+
+
 def _nebius(monkeypatch, instances, spot):
     from lab.infra.cloud.providers import nebius
     monkeypatch.setenv("LAB_VM_SPOT", "1" if spot else "0")

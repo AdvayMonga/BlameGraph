@@ -75,8 +75,9 @@ def _past(root: Path, task: str, embedder) -> list:
     return [e for e in archive.build(root, embedder) if e.task == task]
 
 
-def main(argv: list[str] | None = None, namer: str = NAMER, writer: str = WRITER, retime_k: int = RETIME,
-         detector: str | None = DETECTOR) -> int:
+def run(argv: list[str] | None = None, namer: str = NAMER, writer: str = WRITER, retime_k: int = RETIME,
+        detector: str | None = DETECTOR) -> dict:
+    """The search of `argv`: {best, cost, nodes, out, ledger (its last record's id)}."""
     from lab.records import ledger
     ap = argparse.ArgumentParser(prog="lab kernels search")
     task_args(ap)
@@ -138,8 +139,12 @@ def main(argv: list[str] | None = None, namer: str = NAMER, writer: str = WRITER
     rec = save(code or best.code, metrics or best.metrics, ran["generations"], True, retimed)
     cost = rec["cost"]
     calls.close()
-    print(json.dumps({"best": metrics or best.metrics, "cost": cost, "nodes": len(population), "out": str(out),
-                      "ledger": rec["id"]}))
+    return {"best": metrics or best.metrics, "cost": cost, "nodes": len(population), "out": str(out),
+            "ledger": rec["id"]}
+
+
+def main(argv: list[str] | None = None, **models) -> int:
+    print(json.dumps(run(argv, **models)))
     return 0
 
 

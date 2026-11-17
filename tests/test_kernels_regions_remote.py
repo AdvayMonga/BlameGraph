@@ -153,6 +153,63 @@ def test_kernel_search_runs_a_region_and_hands_back_its_override_module(tb, monk
     assert "+++ b/src/inference_server/models/regions/norm_add.py" in patch and "OVERRIDES = {('norm', 'add')" in patch
 
 
+def test_kernel_search_goes_on_after_the_workers_vm_stopped_and_came_back(tb, monkeypatch, tmp_path):
+    from lab.infra.runner import worker
+    from lab.kernels.eval.evaluator import WorkerLost
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    monkeypatch.setenv("LAB_GPU_USD_PER_HOUR", "3")
+    monkeypatch.setattr(pipeline, "captures", lambda t, tree, profile, *a: [tmp_path])
+    start = "# EVOLVE-BLOCK-START\nimport torch\n\n\ndef kernel(h):\n    return (h,)\n# EVOLVE-BLOCK-END\n"
+    seen = {"hold": 0, "search": 0, "back": []}
+
+    @contextmanager
+    def hold(task, caps, out, env, worker=None):
+        seen["hold"] += 1
+        yield {"holder": "/gpu/w.pkl", "samples": "/gpu/s", "start": start, "stations": ["norm", "mm", "act", "add"],
+               "set": ["norm", "mm", "act", "add", "kv"],
+               "shapes": {"seen": [[4, 64]], "heldout": [[64, 64]], "heldout_axes": [0]}}
+    monkeypatch.setattr(pipeline, "hold", hold)
+
+    def search(t, cs, s, out, root, env, device="cuda", facts_text=None, held=None):
+        seen["search"] += 1
+        if seen["search"] == 1:
+            raise WorkerLost("ssh: connection closed")
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "best_program.py").write_text(s.read_text().replace("(h,)", "(h + 0,)"))
+        return {"best": {"combined_score": 1.2, "correct": 1.0}, "cost": {"usd": 1.0}, "ledger": "ev"}
+    monkeypatch.setattr(pipeline, "search", search)
+    monkeypatch.setattr(pipeline, "gate", lambda *a: {"metrics": {"correct": 1.0, "heldout_speedup": 1.1},
+                                                      "artifacts": {"gates": json.dumps({
+                                                          "correctness_seen": {"passed": True},
+                                                          "correctness_heldout": {"passed": True, "cases": 2}})}})
+    monkeypatch.setattr(worker, "recovered", lambda: seen["back"] and seen["back"].pop())
+    seen["back"].append(tb.worker)
+    h = next(s for s in tb.specs() if s.name == "hypothesis").fn
+    fn = next(s for s in tb.specs() if s.name == "kernel_search").fn
+    k = h({"hypothesis": "fuse norm..add", "rationale": "r", "layer": "kernels"}).split()[1]
+    out = json.loads(fn({"hypothesis_id": k, "expect": EXPECT, "task": "region:norm:add"}
+                        ).split("\n\nExperiment record")[0])
+    assert out["gate"]["passed"] and (seen["hold"], seen["search"]) == (2, 2)       # held and searched again
+
+
+def test_a_lost_worker_that_is_no_stopped_vm_fails_the_search(tb, monkeypatch, tmp_path):
+    from lab.infra.runner import worker
+    from lab.kernels.eval.evaluator import WorkerLost
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    monkeypatch.setattr(pipeline, "captures", lambda t, tree, profile, *a: [tmp_path])
+    monkeypatch.setattr(pipeline, "start_program", lambda t, tree: "x = 1\n")
+
+    def search(*a, **k):
+        raise WorkerLost("ssh: permission denied")
+    monkeypatch.setattr(pipeline, "search", search)
+    monkeypatch.setattr(worker, "recovered", lambda: None)
+    h = next(s for s in tb.specs() if s.name == "hypothesis").fn
+    fn = next(s for s in tb.specs() if s.name == "kernel_search").fn
+    k = h({"hypothesis": "faster", "rationale": "r", "layer": "kernels"}).split()[1]
+    assert fn({"hypothesis_id": k, "expect": EXPECT, "task": "silu_mul"}).startswith(
+        "kernel_search failed: WorkerLost: ssh: permission denied")
+
+
 FAKE_ENGINE = {                      # the engine as lab.kernels.tasks.hold loads it: its stations module
     "inference_server/__init__.py": "",
     "inference_server/models/__init__.py": "",
@@ -219,6 +276,10 @@ def test_kernel_search_runs_a_region_through_hold_search_and_gate_on_the_cpu(tb,
     for k in ("KERNEL_EVAL_CONFIG", "KERNELS_EVAL_LOG", "KERNEL_EVAL_SSH"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setattr(pipeline, "captures", lambda t, tree, profile, *a: two_traffics(tmp_path))
+    from lab.kernels.search import __main__ as cli
+    model = {}
+    exec(FAKE_MODEL.format(root=str(pipeline.ROOT)).split("if llm is not None")[0], model)
+    monkeypatch.setattr(cli, "Claude", model["Claude"])                  # the search runs in this process
     h = next(s for s in tb.specs() if s.name == "hypothesis").fn
     k = h({"hypothesis": "fuse norm..add", "rationale": "r", "layer": "kernels"}).split()[1]
     fn = next(s for s in tb.specs() if s.name == "kernel_search").fn
@@ -231,7 +292,7 @@ def test_kernel_search_runs_a_region_through_hold_search_and_gate_on_the_cpu(tb,
     assert out["metrics"]["speedup"] > 0 and out["metrics"]["heldout_speedup"] > 0
     patch = (tb.s.workspace.path / out["patch"]).read_text()
     assert "+++ b/src/inference_server/models/regions/norm_add.py" in patch and "OVERRIDES = {('norm', 'add')" in patch
-    rec = next(r for r in ledger.records(tb.s.ledger_root, kind="kernels") if "candidates" in r["result"])   # the search's
+    rec = [r for r in ledger.records(tb.s.ledger_root, kind="kernels") if "candidates" in r["result"]][-1]   # the search's
     assert rec["config"]["task"] == "region:norm:add"
     assert any(c["parent"] and c["metrics"].get("correct") == 1.0 for c in rec["result"]["candidates"])  # the change, judged
     run = next(d for d in (tb.s.run_dir / "kernel_search").iterdir() if d.is_dir() and "region" in d.name)

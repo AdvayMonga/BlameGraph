@@ -562,3 +562,19 @@ def test_the_run_is_a_ledger_record_after_every_generation_under_one_run_id(monk
     assert [r["result"]["finished"] for r in recs] == [False, False, False, True] and len({r["run"] for r in recs}) == 1
     assert recs[-1]["cost"]["usd"] == 0.75 and recs[-1]["cost"]["model_calls"] == 3
     assert len(archive.ideas(root)) == 2                                 # the run's last record only
+
+
+def test_a_failed_ssh_session_to_the_worker_is_no_judgment(monkeypatch, tmp_path):
+    from lab.kernels.eval import evaluator
+    (tmp_path / "cfg.json").write_text("{}")
+    (tmp_path / "p.py").write_text("x = 1\n")
+    monkeypatch.setenv("KERNEL_EVAL_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setenv("KERNEL_EVAL_SSH", json.dumps(["sh", "-c", "echo gone >&2; exit 255"]))
+    try:
+        evaluator.judge_stage(str(tmp_path / "p.py"), 1)
+        raise AssertionError("judged")
+    except evaluator.WorkerLost as e:
+        assert "gone" in str(e)
+    monkeypatch.setenv("KERNEL_EVAL_SSH", json.dumps(["sh", "-c", "exit 3"]))
+    r = evaluator.judge_stage(str(tmp_path / "p.py"), 1)                 # the program's own failure: scored 0
+    assert r["metrics"]["correct"] == 0.0 and "exited 3" in r["artifacts"]["error"]
