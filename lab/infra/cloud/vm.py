@@ -310,7 +310,8 @@ def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | Non
         spot = "LAB_VM_SPOT=1 " if vm.provider.spot else ""
         again = f"run --no-push --fetch {fetch_dir} true" if fetch_dir and where != "env" else "run --env --no-push true"
         print(f"[lab.infra.cloud.vm] {vm.name} stopped under the command (preempted, or stopped from outside); its disk is kept: "
-              f"`{spot}lab vm {again}` restarts it and brings the results home", file=sys.stderr)
+              f"`{spot}lab vm start --budget USD` restarts it, then `{spot}lab vm {again}` brings the results home",
+              file=sys.stderr)
     if fetch_dir and not lost:
         try:
             fetch(vm, record, fetch_dir, local or engine.ENV_ROOT / "local" / "runs", base=cwd)
