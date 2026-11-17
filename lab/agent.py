@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib.util
 import json
 import os
@@ -16,6 +17,7 @@ from urllib.parse import urlsplit
 from lab import apiproxy
 from lab import live
 from lab.targets import engine
+from lab.infra.runner.worker import WorkerLost
 from lab.infra.sandbox import container, jail
 from lab.infra.sandbox.grader import HF_HUB
 from lab.hooks import WRITE_TOOLS, write_guard
@@ -265,7 +267,8 @@ class ClaudeAgentSDK:
                 reply = AgentReply(None, 0.0, 0, f"provider failed: {type(e).__name__}: {e}")
             finally:                                    # remove the CLI's container
                 if spec.remote is not None:
-                    spec.remote.remove_workbench(spec.workbench)
+                    with contextlib.suppress(WorkerLost):       # a host that is gone has no container
+                        spec.remote.remove_workbench(spec.workbench)
                 elif spec.workbench and self.containerized():
                     container.remove(spec.workbench)
         reply.cost_usd, reply.cost_estimated, reply.usage = proxy.spent_usd, False, dict(proxy.usage)
