@@ -37,12 +37,16 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     if a.target:
         os.environ["LAB_TARGET"] = a.target
-    for step in steps(target.load(), Task.parse(a.task).regimes):
-        print("lab", *step, flush=True)
-        code = subprocess.run([sys.executable, "-m", "lab", *step]).returncode
+    regimes, ran = Task.parse(a.task).regimes, []
+    while True:                                 # re-read after each step: one step's output changes what is left
+        todo = [s for s in steps(target.load(), regimes) if s not in ran]
+        if not todo:
+            return 0
+        print("lab", *todo[0], flush=True)
+        code = subprocess.run([sys.executable, "-m", "lab", *todo[0]]).returncode
         if code:
             return code
-    return 0
+        ran.append(todo[0])
 
 
 if __name__ == "__main__":

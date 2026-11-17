@@ -4,6 +4,7 @@ lab correctness verdict A.json [B.json ...] [--target T]   (re-judge saved resul
 from __future__ import annotations
 
 import argparse
+import os
 
 from evals.targets import target
 
@@ -20,7 +21,9 @@ def main():
     c.add_argument("--concurrency", type=int, default=128)
     v = sub.add_parser("verdict"); v.add_argument("results", nargs="+")
     a = ap.parse_args()
-    t = target.load(a.target)
+    if a.target:
+        os.environ["LAB_TARGET"] = a.target        # the worker's jobs read the target from the environment
+    t = target.load()
     from lab.gate.correctness import client, run
     from lab.gate.correctness.gate import Thresholds
     th = Thresholds(max_kl=t.max_kl, min_length_ratio=t.min_length_ratio)

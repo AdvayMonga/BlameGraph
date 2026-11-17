@@ -3,6 +3,7 @@ reads: items.jsonl, outputs.jsonl, sequences.jsonl, meta.json."""
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import tempfile
 import time
@@ -35,7 +36,9 @@ def build(ref_dir: Path, tasks: tuple[str, ...], wk, seconds: float = 600.0) -> 
         before = done()
         with tempfile.TemporaryDirectory() as d:
             reply = wk.call("reference", {"prior": ref_dir}, {"tasks": list(tasks), "seconds": seconds}, Path(d))
-            shutil.copytree(d, ref_dir, dirs_exist_ok=True)
+            for f in sorted(Path(d).iterdir(), key=lambda f: f.name == "meta.json"):   # whole files, meta.json last
+                shutil.copyfile(f, ref_dir / (f.name + ".part"))
+                os.replace(ref_dir / (f.name + ".part"), ref_dir / f.name)
         if not reply["complete"] and done() == before:
             raise RuntimeError(f"the reference job answered nothing new ({before} answers in {ref_dir})")
 
