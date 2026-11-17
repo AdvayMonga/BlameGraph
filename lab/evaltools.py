@@ -489,7 +489,7 @@ class EvalTools:
         return have
 
     def baseline(self, commit: str) -> dict:
-        """The base commit under bench's defaults (seen split, short tier), once per run: a `baseline` record."""
+        """The base commit under bench's defaults (seen split, tier min), once per run: a `baseline` record."""
         have = next(ledger.records(self.s.ledger_root, run=self.s.run_id, kind="baseline"), None)
         if have:
             return have

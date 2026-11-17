@@ -64,9 +64,9 @@ def test_load_progress_is_written_for_the_seen_split_only(tmp_path, monkeypatch)
         return {}
     monkeypatch.setitem(suite.REGIMES, "fake", fake)
     live.path = tmp_path / "live.jsonl"
-    evaltools.run_regimes("http://127.0.0.1:1", target.load(), ["fake"], "heldout", "short", 0)
+    evaltools.run_regimes("http://127.0.0.1:1", target.load(), ["fake"], "heldout", "min", 0)
     assert not live.path.exists()
-    evaltools.run_regimes("http://127.0.0.1:1", target.load(), ["fake"], "seen", "short", 0)
+    evaltools.run_regimes("http://127.0.0.1:1", target.load(), ["fake"], "seen", "min", 0)
     regime, probe = lines(live.path)
     assert regime["regime"] == "fake"
     assert probe["n"] == 2 and probe["ok"] == 1 and probe["ttft_p99_s"] == 0.1 and probe["tpot_p50_s"] == 0.01

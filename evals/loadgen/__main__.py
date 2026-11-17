@@ -1,4 +1,4 @@
-"""lab regimes run REGIME[,REGIME...]|all --url URL [--split seen|heldout] [--tier short|full] [--seed N]
+"""lab regimes run REGIME[,REGIME...]|all --url URL [--split seen|heldout] [--tier min|full] [--seed N]
                        [--corpus DIR | --workload FILE] [--synthetic] [--tokenizer] [--out FILE] [--target T]
 lab regimes cold-start --url URL --cmd "launch command" [--expect 42] [--no-warm] [--out FILE] [--target T]
 The model, chat kwargs, latency limits and corpus come from the target spec ($LAB_TARGET)."""
@@ -38,7 +38,7 @@ def main():
     r.add_argument("--synthetic", action="store_true",
                    help="traffic generated fresh from the corpus's seen split (evals/loadgen/synth.py), by --seed; nothing kept")
     r.add_argument("--split", choices=("seen", "heldout"), default="seen")
-    r.add_argument("--tier", choices=tuple(suite.TIERS), default="short")
+    r.add_argument("--tier", choices=tuple(suite.TIERS), default="min")
     r.add_argument("--seed", type=int, default=0); r.add_argument("--timeout", type=float, default=600.0)
     r.add_argument("--tokenizer", help="re-count output tokens with this HF tokenizer (default: server usage)")
     r.add_argument("--client-procs", type=int, help="client processes (default: 4 open loop, 1 closed loop)")
