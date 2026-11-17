@@ -24,7 +24,7 @@ from lab.infra.runner import serve, worker
 from lab.infra.sandbox import container, grader
 
 HOLD = "import torch, time; x = torch.empty(2**30, dtype=torch.uint8, device='cuda'); print('holding', flush=True); time.sleep(600)"
-MEASURE = {"names": ["single_stream"], "split": "seen", "tier": "short", "seed": 0, "jailed": True, "passive": False}
+MEASURE = {"names": ["single_stream"], "split": "seen", "tier": "min", "seed": 0, "jailed": True, "passive": False}
 results: list[tuple[str, bool, str]] = []
 
 

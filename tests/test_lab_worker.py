@@ -17,7 +17,7 @@ from lab.infra.sandbox import grader
 from tests.lab_fixtures import make_repo
 from tests.test_lab_evaltools import _target
 
-MEASURE = {"names": ["single_stream"], "split": "seen", "tier": "short", "seed": 0, "jailed": False, "passive": False}
+MEASURE = {"names": ["single_stream"], "split": "seen", "tier": "min", "seed": 0, "jailed": False, "passive": False}
 
 
 @pytest.fixture

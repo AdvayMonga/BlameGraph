@@ -172,7 +172,7 @@ def run(out: Path, engines: list[str], precisions: list[str], stages: list[str],
                                 print(f"{engine}-{precision}: launch check failed: {res}", file=sys.stderr)
                                 continue
                         if "regimes" in todo:
-                            _python("evals.loadgen", "run", regimes, "--url", url, "--tier", "short", "--tol", str(tol),
+                            _python("evals.loadgen", "run", regimes, "--url", url, "--tier", "min", "--tol", str(tol),
                                     "--client-procs", "8", "--client-cpus", c["client_cpus"],
                                     *(["--tokenizer", c["tokenizer"]] if c.get("tokenizer") else []),
                                     "--out", str(d / f"regimes-{rep}.json"))

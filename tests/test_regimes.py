@@ -139,9 +139,9 @@ def test_workload_builders():
 
 def test_every_regime_runs_on_a_fake_engine():
     proc, url = spawn(slots=2, token_s=0.005, out_tokens=10)       # ~40 req/s capacity
-    saved, think, lag, settle = dict(suite.TIERS["short"]), suite.ARRIVALS, runner.MAX_CLIENT_LAG_S, suite._settle_s
+    saved, think, lag, settle = dict(suite.TIERS["min"]), suite.ARRIVALS, runner.MAX_CLIENT_LAG_S, suite._settle_s
     suite._settle_s = lambda reqs, limits: 0.3     # a short settle time
-    suite.TIERS["short"].update(probe_s=1.0, final_s=2.0)
+    suite.TIERS["min"].update(probe_s=1.0, final_s=2.0)
     suite.ARRIVALS = fast_arrivals()
     runner.MAX_CLIENT_LAG_S = 0.05      # a loose lag bound for the wiring test
     try:
@@ -152,7 +152,7 @@ def test_every_regime_runs_on_a_fake_engine():
             assert res["regime"] == name and res["valid"], (name, res["invalid_reasons"])
             assert res["value"] is not None, (name, res)
     finally:
-        suite.TIERS["short"].update(saved)
+        suite.TIERS["min"].update(saved)
         suite.ARRIVALS, runner.MAX_CLIENT_LAG_S, suite._settle_s = think, lag, settle
         proc.kill()
 
@@ -167,9 +167,9 @@ def test_every_regime_runs_from_a_workload_file():
     path = Path(tempfile.mkdtemp()) / "w.jsonl"
     path.write_text("".join(json.dumps(r) + "\n" for r in recs))
     proc, url = spawn(slots=2, token_s=0.005, out_tokens=10)
-    saved, think, lag, settle = dict(suite.TIERS["short"]), suite.ARRIVALS, runner.MAX_CLIENT_LAG_S, suite._settle_s
+    saved, think, lag, settle = dict(suite.TIERS["min"]), suite.ARRIVALS, runner.MAX_CLIENT_LAG_S, suite._settle_s
     suite._settle_s = lambda reqs, limits: 0.3     # a short settle time
-    suite.TIERS["short"].update(probe_s=1.0, final_s=2.0)
+    suite.TIERS["min"].update(probe_s=1.0, final_s=2.0)
     suite.ARRIVALS = fast_arrivals()
     runner.MAX_CLIENT_LAG_S = 0.05
     try:
@@ -187,7 +187,7 @@ def test_every_regime_runs_from_a_workload_file():
         res = suite.shared_prefix_multi_turn(suite.Ctx(url, "m", workload=str(no_convs), min_requests=10))
         assert not res["valid"] and "multi-turn" in res["invalid_reasons"][0], res
     finally:
-        suite.TIERS["short"].update(saved)
+        suite.TIERS["min"].update(saved)
         suite.ARRIVALS, runner.MAX_CLIENT_LAG_S, suite._settle_s = think, lag, settle
         proc.kill()
 
