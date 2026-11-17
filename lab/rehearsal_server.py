@@ -1,7 +1,7 @@
 """The practice engine for `lab rehearsal`: an OpenAI-compatible server with a fixed number of decode slots.
 Stdlib only; copied into the practice engine's repo.
 
-  python server.py --port N [--wrong-every K]
+  python server.py --port N
 """
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ STEP_S = 0.01           # the simulated device: seconds per decode step
 MIX_ROUNDS = 2000       # host work per word folded into the decoder state
 WORDS = [" the", " of", " and", " to", " in", " a", " is", " that", " for", " it"]
 ANSWER, ANSWER_TOKENS = "The answer is (C).", 6
-WRONG, WRONG_TOKENS = "The answer is (B).", 6
 COLD, COLD_TOKENS = "42", 2
 
 
@@ -37,26 +36,19 @@ def decode(n: int):
 # <<< decode
 
 
-def answer(messages: list[dict], max_tokens: int, wrong: bool = False) -> tuple[list[str], int]:
+def answer(messages: list[dict], max_tokens: int) -> tuple[list[str], int]:
     """The reply as streamed chunks and its token count."""
     last = messages[-1]["content"]
     if "17 + 25" in last:
         return [COLD], COLD_TOKENS
     if "pick one" in last:
-        return ([WRONG], WRONG_TOKENS) if wrong else ([ANSWER], ANSWER_TOKENS)
+        return [ANSWER], ANSWER_TOKENS
     n = max(1, max_tokens)
     return None, n                      # generated word by word by `decode`
 
 
-def make_server(port: int = 0, wrong_every: int = 0) -> ThreadingHTTPServer:
-    """`wrong_every` = K: every Kth multiple-choice answer is wrong."""
-    slots, lock, counter = threading.Semaphore(SLOTS), threading.Lock(), [0]
-
-    def reply(messages: list[dict], max_tokens: int) -> tuple[list[str], int]:
-        with lock:
-            counter[0] += 1
-            wrong = bool(wrong_every) and "pick one" in messages[-1]["content"] and counter[0] % wrong_every == 0
-        return answer(messages, max_tokens, wrong)
+def make_server(port: int = 0) -> ThreadingHTTPServer:
+    slots = threading.Semaphore(SLOTS)
 
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -88,7 +80,7 @@ def make_server(port: int = 0, wrong_every: int = 0) -> ThreadingHTTPServer:
                                 for t in ids[1:]]
                 return self._json({"choices": [{"text": "", "prompt_logprobs": plp}]})
             prompt_tokens = sum(len(m["content"].split()) for m in body["messages"])
-            chunks, n = reply(body["messages"], body.get("max_tokens") or 16)
+            chunks, n = answer(body["messages"], body.get("max_tokens") or 16)
             with slots:
                 if not body.get("stream"):
                     time.sleep(STEP_S * n)
@@ -123,7 +115,6 @@ def make_server(port: int = 0, wrong_every: int = 0) -> ThreadingHTTPServer:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, required=True)
-    ap.add_argument("--wrong-every", type=int, default=0)
     a = ap.parse_args()
-    make_server(a.port, a.wrong_every)
+    make_server(a.port)
     threading.Event().wait()
