@@ -234,7 +234,7 @@ def collect(vm: VM, record: Record) -> None:
     if os.environ.get("LAB_STORE"):
         from lab.records import sync
         from lab.records.remote import open_remote
-        print(f"[lab.infra.cloud.vm] stored {sync.push(ledger.ROOT, open_remote(), runs=engine.ENV_ROOT / 'lab' / 'runs')}",
+        print(f"[lab.infra.cloud.vm] stored {sync.push(ledger.ROOT, open_remote(), runs=engine.ENV_ROOT / 'local' / 'runs')}",
               file=sys.stderr)
 
 
