@@ -4,6 +4,7 @@ and its state after every generation (state.json): a search started in an `<out>
 from __future__ import annotations
 
 import difflib
+import hashlib
 import json
 import os
 import random
@@ -20,16 +21,6 @@ from lab.kernels.search.program import Config, Idea, Program
 
 
 STATE = "state.json"
-RECORDS = ("calls.jsonl", "texts.jsonl", "trace.jsonl", "hypotheses.jsonl", "ideas.jsonl", "reflection.txt")
-
-
-def opened(out: Path) -> Calls:
-    """The model calls of the search in `out`: counted on when a search there saved its state, else none yet."""
-    out.mkdir(parents=True, exist_ok=True)
-    if not (out / STATE).exists():
-        for name in RECORDS:
-            (out / name).unlink(missing_ok=True)
-    return Calls(out)
 
 
 def new_id() -> str:
@@ -111,15 +102,19 @@ def write(calls: Calls, writer: Model, setting: str, idea: Idea, by: dict[str, P
 def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer: Model, evaluator: Evaluator,
            novelty: diversity.Novelty, similar: diversity.Similar, out: Path,
            cfg: Config = Config(), detect: Callable | None = None, calls: Calls | None = None,
-           each: Callable[[int], None] | None = None) -> tuple[list[Program], dict]:
+           each: Callable[[int, list[Program]], None] | None = None) -> tuple[list[Program], dict]:
     """The population (the start first) and the run's cost {usd, model_calls, evals, generations}. `seeds`: name ->
     program; `namer` names, reviews and writes the ports; `writer` makes each change; `detect(code, row)` flags a
-    parent; `calls`: `opened(out)`, when the caller makes model calls of its own; `each(generation)` runs after every
-    saved state."""
+    parent; `calls`: the `Calls` of `out`, when the caller makes model calls of its own; `each(generation,
+    population)` runs after every saved state. `out` holds one search: another's state there is refused."""
+    out.mkdir(parents=True, exist_ok=True)
     own = calls is None
-    calls = calls or opened(out)
+    calls = calls or Calls(out)
     rng, population, ideas, ran, closed, rows = random.Random(cfg.seed), [], [], 0, False, []
+    of = hashlib.sha256(json.dumps([start, sorted(seeds), asdict(cfg)]).encode()).hexdigest()[:16]
     saved = json.loads((out / STATE).read_text()) if (out / STATE).exists() else None
+    if saved and saved["of"] != of:
+        raise ValueError(f"{out} holds the state of another search (another start, seeds or settings)")
     if saved:
         population = [Program(**p) for p in saved["population"]]
         by = {p.id: p for p in population}
@@ -134,16 +129,18 @@ def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer
     with open(out / "trace.jsonl", "w") as trace, open(out / "hypotheses.jsonl", "w") as log:
         trace.writelines(json.dumps(trace_row(p)) + "\n" for p in population)
         log.writelines(x + "\n" for x in rows)
+        trace.flush()
+        log.flush()
 
         def save() -> None:
             """The state so far, whole or not at all; then `each`."""
-            state = {"ran": ran, "closed": closed, "rng": rng.getstate(), "evals": evaluator.evals,
+            state = {"of": of, "ran": ran, "closed": closed, "rng": rng.getstate(), "evals": evaluator.evals,
                      "population": [asdict(p) for p in population],
                      "ideas": [{**asdict(i), "child": i.child.id if i.child else None} for i in ideas]}
             (out / (STATE + ".tmp")).write_text(json.dumps(state, default=str))
             os.replace(out / (STATE + ".tmp"), out / STATE)
             if each:
-                each(ran)
+                each(ran, population)
 
         def keep(code: str, r: Result, generation: int, parent: str | None = None, plan: dict | None = None,
                  kind: str = "") -> Program:

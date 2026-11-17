@@ -182,6 +182,12 @@ def spent(out: Path) -> float:
     return round(usd, 4)
 
 
+def saved(out: Path) -> int:
+    """The last generation a search in `out` saved; -1 when it saved none."""
+    f = Path(out) / "state.json"
+    return json.loads(f.read_text())["ran"] if f.exists() else -1
+
+
 def facts(task, kernel_tasks: dict | None, regimes: tuple[str, ...] = ()) -> str:
     """Facts for every prompt of the search: the scored regimes and, from the latest profile (`kernel_tasks`), the
     task's share of the profiled window and the window's speedup if its kernels took no time."""
@@ -215,7 +221,7 @@ def search(task, caps: list[Path], start: Path, out: Path, ledger_root: Path, en
         given = [w for c in caps for w in ("--captures", str(c))]
     argv = ["--task", task.name, "--out", str(out), "--initial", str(start), "--ledger", str(ledger_root),
             "--equal-captures", "--device", device, *(["--facts", str(out / "facts.txt")] if facts_text else []), *given]
-    saved = {k: os.environ.get(k) for k in env}
+    saved = {k: os.environ.get(k) for k in (*env, "KERNEL_EVAL_CONFIG", "KERNELS_EVAL_LOG")}   # the search sets its own
     os.environ.update(env)
     try:
         return run(argv)

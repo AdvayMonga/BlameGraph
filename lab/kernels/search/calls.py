@@ -27,6 +27,7 @@ def lines(path: Path) -> list[str]:
 
 class Calls:
     def __init__(self, out: Path):
+        out.mkdir(parents=True, exist_ok=True)
         had = [json.loads(x) for x in lines(out / "calls.jsonl")]
         self.seen = {json.loads(x)["key"] for x in lines(out / "texts.jsonl")}
         self.n, self.usd, self.lock = len(had), sum(r["usd"] for r in had), threading.Lock()

@@ -279,19 +279,22 @@ def _lost(vm: VM) -> bool:
         time.sleep(POLL_S)
 
 
-def setup(vm: VM, minutes: int = MAX_MINUTES) -> int:
+def setup(vm: VM) -> int:
     """vm-setup.sh on the VM: the engine's venv, the weights, the GPU's counters."""
-    return run(vm, f"bash {vm.env_dir}/lab/infra/cloud/vm-setup.sh {vm.remote_dir}", minutes=minutes)
+    return run(vm, f"bash {vm.env_dir}/lab/infra/cloud/vm-setup.sh {vm.remote_dir}")
 
 
 def restart(vm: VM) -> bool:
-    """A VM that stopped under a session (a spot VM preempted) started and set up again, under the auto-stop it
-    had; False when it did not stop, or that deadline has passed."""
-    f = _watchdog_file(vm)
-    left = int((float(f.read_text().split()[1]) - time.time()) // 60) if f.exists() else 0
-    if left <= 0 or not _lost(vm):
+    """A VM that stopped under a session (a spot VM preempted) started and set up again, within the deadline it
+    had; False when it did not stop, is gone, or has under a minute left. One that stops again in setup is deleted."""
+    if left_s(vm) < 60 or not _lost(vm) or vm.provider.get(vm.name) is None:
         return False
-    return setup(vm, left) == 0
+    if setup(vm) == 0:
+        return True
+    record = vm.provider.get(vm.name)
+    if record is not None and record.state != "running":
+        stop(vm)
+    return False
 
 
 def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | None = None,

@@ -198,7 +198,8 @@ class Toolbox(EvalTools, ProfTools):
             if not caps:
                 raise RuntimeError("no capture traffic produced calls to the task's entry point")
             region = task.name.startswith("region:")     # loads where the GPU is: held and described there
-            while True:                          # again from the search's last generation after the worker's VM stopped
+            at = None
+            while True:                          # again from the search's last generation after the worker was lost
                 w = self.worker
                 env = pipeline.remote_env(w.prefix, w.env_dir, w.python, w.env, w.sudo) if remote else {}
                 try:
@@ -215,10 +216,10 @@ class Toolbox(EvalTools, ProfTools):
                         g = pipeline.gate(task, caps, best, out, env, held, device)
                     break
                 except WorkerLost:
-                    back = worker.recovered()
-                    if back is None:
+                    back, was, at = worker.recovered(), at, pipeline.saved(out / "search")
+                    if back is None and at == was:           # no VM to bring back, no generation since the last loss
                         raise
-                    self.worker = back
+                    self.worker = back or self.worker
         except Exception as e:                   # noqa: BLE001  a tool never crashes the session
             model_cost = self._charge_models(pipeline.spent(out / "search"))
             result = {"verdict": "error", "reason": f"{type(e).__name__}: {e}"[-2000:], "model_usd": model_cost}

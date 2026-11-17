@@ -160,6 +160,10 @@ def test_it_runs_every_generation_though_nothing_improves_and_stops_when_no_prog
 def test_a_stopped_search_goes_on_from_its_last_saved_generation(tmp_path):
     cfg, timed, saved = Config(generations=3, ideas=6, merges=2, ports=0, parents=2, workers=2), [0], []
 
+    def each(generation, population):            # the trace on disk holds every program by then
+        assert [t["child_id"] for t in lines(tmp_path / "trace.jsonl")] == [p.id for p in population]
+        saved.append(generation)
+
     def dies(code, n):
         timed[0] += n == 2
         if timed[0] == 9:                        # in generation 2's timings
@@ -168,14 +172,14 @@ def test_a_stopped_search_goes_on_from_its_last_saved_generation(tmp_path):
     Writer.made[0] = 0
     try:
         search(START, {}, "S", Namer(), Writer(), Evaluator(dies), diversity.Novelty(), diversity.Similar(), tmp_path,
-               cfg, each=saved.append)
+               cfg, each=each)
     except RuntimeError:
         pass
     assert saved == [0, 1] and len(lines(tmp_path / "hypotheses.jsonl")) == 1
     first, state = lines(tmp_path / "hypotheses.jsonl")[0], json.loads((tmp_path / "state.json").read_text())
     assert len(state["population"]) == 7 and len(lines(tmp_path / "calls.jsonl")) == 16     # generation 2's were made
     pop, cost = search(START, {}, "S", Namer(), Writer(), Evaluator(stage), diversity.Novelty(), diversity.Similar(),
-                       tmp_path, cfg, each=saved.append)
+                       tmp_path, cfg, each=each)
     rows = lines(tmp_path / "hypotheses.jsonl")
     assert saved == [0, 1, 2, 3, 3] and [r["iteration"] for r in rows] == [1, 2, 3] and rows[0] == first
     assert cost["generations"] == 3 and cost["model_calls"] == 16 + 2 * 8 + 1 and cost["evals"] == 1 + 3 * 6
@@ -186,6 +190,12 @@ def test_a_stopped_search_goes_on_from_its_last_saved_generation(tmp_path):
     again, cost = search(START, {}, "S", Namer(), Writer(), Evaluator(stage), diversity.Novelty(), diversity.Similar(),
                          tmp_path, cfg)                                                 # a finished search: nothing more
     assert len(again) == 19 and cost["model_calls"] == 33
+    try:
+        search("a = 2\n", {}, "S", Namer(), Writer(), Evaluator(stage), diversity.Novelty(), diversity.Similar(),
+               tmp_path, cfg)
+        raise AssertionError("another search went on from this one's state")
+    except ValueError as e:
+        assert "another search" in str(e)
 
 
 def test_seeds_are_judged_beside_the_start_and_can_be_parents(tmp_path):

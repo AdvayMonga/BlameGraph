@@ -493,7 +493,7 @@ def test_the_cli_starts_the_search_from_every_competitor_port_with_its_namer_wri
     monkeypatch.setattr(cli, "setting", lambda *a, **k: "SETTING")
     monkeypatch.setattr(cli, "Claude", lambda model, *a, **k: model)
     monkeypatch.setattr(cli, "_embedder", lambda root: None)
-    monkeypatch.setattr(cli, "_past", lambda root, task, embedder: [task])
+    monkeypatch.setattr(cli, "_past", lambda root, task, embedder, run: [task])
     seen = {}
 
     def search(start, seeds, setting, namer, writer, evaluator, novelty, similar, *a):
@@ -538,7 +538,7 @@ def test_the_run_is_a_ledger_record_after_every_generation_under_one_run_id(monk
                     {"idea": {"optimisation_method": f"m{g}", "parent_id": "p0"}, "fate": "full exam",
                      "child_id": f"p{g + 1}", "child_score": 1.1 + g, "improved": True}]}) + "\n" for g in range(gen + 1)))
             calls(lambda s, u: ("t", 0.25), "name", gen, "s", "u")
-            each(gen)
+            each(gen, pop)
             if stop[0] and gen == 0:
                 raise RuntimeError("stopped")
         return pop, {"generations": 1}
@@ -555,7 +555,6 @@ def test_the_run_is_a_ledger_record_after_every_generation_under_one_run_id(monk
     one = list(ledger.records(root, kind="kernels"))
     assert len(one) == 1 and one[0]["result"]["finished"] is False and one[0]["cost"]["usd"] == 0.25
     assert one[0]["result"]["best"]["combined_score"] == 1.1 and len(archive.ideas(root)) == 1
-    (out / "state.json").write_text("{}")                                # a search there saved its state
     stop[0] = False
     assert cli.main(argv) == 0
     recs = list(ledger.records(root, kind="kernels"))

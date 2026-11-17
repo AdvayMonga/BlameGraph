@@ -23,7 +23,8 @@ from lab.kernels.search import detect
 from lab.kernels.search.diversity import Novelty, Similar
 from lab.kernels.search.evaluate import WINNER, Evaluator
 from lab.kernels.search.llm import Claude
-from lab.kernels.search.loop import opened, search
+from lab.kernels.search.calls import Calls
+from lab.kernels.search.loop import search
 from lab.kernels.search.program import Config
 
 NAMER = "claude-opus-5-5"    # names and reviews a generation's changes
@@ -69,10 +70,17 @@ def _embedder(root: Path):
         return None
 
 
-def _past(root: Path, task: str, embedder) -> list:
-    """The task's distinct ideas from earlier runs on the ledger at `root` (the idea archive)."""
+def _past(root: Path, task: str, embedder, run: str) -> list:
+    """The task's distinct ideas from earlier runs on the ledger at `root` (the idea archive); `run`'s own are left out."""
     from lab.kernels import archive
-    return [e for e in archive.build(root, embedder) if e.task == task]
+    from lab.records import ledger
+    mine = {r["id"] for r in ledger.records(root, kind="kernels", run=run)}
+    out = []
+    for e in archive.build(root, embedder):
+        e.outcomes = [o for o in e.outcomes if o.run not in mine]
+        if e.task == task and e.outcomes:
+            out.append(e)
+    return out
 
 
 def run(argv: list[str] | None = None, namer: str = NAMER, writer: str = WRITER, retime_k: int = RETIME,
@@ -99,12 +107,12 @@ def run(argv: list[str] | None = None, namer: str = NAMER, writer: str = WRITER,
              other_implementations(task.name, stations=_stations(task, sets))]
     root = Path(a.ledger) if a.ledger else ledger.ROOT
     embedder, cfg = _embedder(ledger.ROOT), Config(seed=a.seed)
-    evaluator, calls = Evaluator(counters=a.device.startswith("cuda")), opened(out)
+    evaluator, calls = Evaluator(counters=a.device.startswith("cuda")), Calls(out)
     judge = Claude(detector, EFFORT) if detector else None
     gaming = detect.detector(lambda s, u: calls(judge, "detect", None, s, u)[0]) if detector else None
-    run = out / "run_id"
-    if not run.exists():
-        run.write_text(f"kernels-{time.strftime('%Y%m%d-%H%M%S')}")
+    if not (out / "run_id").exists():
+        (out / "run_id").write_text(f"kernels-{time.strftime('%Y%m%d-%H%M%S')}")
+    run_id = (out / "run_id").read_text()
 
     def save(code: str, metrics: dict, done: int, finished: bool, retimed: list | None = None) -> dict:
         """The run so far as a `kernels` ledger record."""
@@ -119,24 +127,22 @@ def run(argv: list[str] | None = None, namer: str = NAMER, writer: str = WRITER,
         return record(task, sets, [{"name": namer, "role": "namer", "effort": EFFORT},
                                    {"name": writer, "role": "writer", "effort": EFFORT}], cfg.generations, a.device,
                       out / "trace.jsonl", out / "best_program.py", metrics, retimed=retimed, tool="kernels.search",
-                      cost=cost, root=root, run=run.read_text(),
+                      cost=cost, root=root, run=run_id,
                       extra={**blobs, "finished": finished,
                              "reflection": reflection.read_text() if reflection.exists() else ""})
 
-    def each(done: int) -> None:
-        rows = [json.loads(x) for x in (out / "trace.jsonl").read_text().splitlines()]
-        top = max(rows, key=lambda r: (r["child_metrics"].get("correct") == 1.0,
-                                       r["child_metrics"].get("combined_score") or 0.0, -r["iteration"]))
-        save(top["child_code"], top["child_metrics"], done, False)
-    population, ran = search(start, competitors.starts(task.name, start), "\n\n".join(f for f in facts if f),
-                           Claude(namer, EFFORT, tools=True), Claude(writer, EFFORT), evaluator, Novelty(),
-                           Similar(embedder, _past(root, task.name, embedder)), out, cfg, gaming, calls, each)
+    def each(done: int, population: list) -> None:
+        top = max(population, key=lambda p: (p.usable, p.score, -p.generation))
+        save(top.code, top.metrics, done, False)
+    population, cost = search(start, competitors.starts(task.name, start), "\n\n".join(f for f in facts if f),
+                              Claude(namer, EFFORT, tools=True), Claude(writer, EFFORT), evaluator, Novelty(),
+                              Similar(embedder, _past(root, task.name, embedder, run_id)), out, cfg, gaming, calls, each)
     exclude = _exclude(evaluator, gaming)
     code, metrics, retimed = retime(out / "trace.jsonl", retime_k, exclude=exclude)
     best = max(population, key=lambda p: (p.score, -p.generation))
     if code is None and (any("excluded" in r for r in retimed) or exclude(best.code, {"child_metrics": best.metrics})):
         best = population[0]                     # every candidate flagged: nothing is promoted over the start
-    rec = save(code or best.code, metrics or best.metrics, ran["generations"], True, retimed)
+    rec = save(code or best.code, metrics or best.metrics, cost["generations"], True, retimed)
     cost = rec["cost"]
     calls.close()
     return {"best": metrics or best.metrics, "cost": cost, "nodes": len(population), "out": str(out),
