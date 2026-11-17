@@ -399,7 +399,12 @@ def recovered():
     if os.environ.get("LAB_WORKER") != "ssh":
         return None
     from lab.infra.cloud import vm
-    return load() if vm.restart(vm.VM()) else None
+    from lab.infra.cloud.providers import ProviderError
+    try:
+        return load() if vm.restart(vm.VM()) else None
+    except ProviderError as e:
+        print(f"[lab.infra.runner.worker] the VM was not brought back: {e}", file=sys.stderr)
+        return None
 
 
 # -- the worker host's side ---------------------------------------------------------------------------------------
