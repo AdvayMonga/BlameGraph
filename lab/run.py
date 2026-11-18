@@ -28,7 +28,7 @@ def steps(task: str, budget: float, run_id: str) -> list[list[str]]:
 
 def lab(step: list[str]) -> int:
     print("lab", *step, flush=True)
-    return subprocess.run([sys.executable, "-m", "lab", *step]).returncode
+    return subprocess.run([sys.executable, "-m", "lab", *step], env={**os.environ, "LAB_WORKER": "ssh"}).returncode
 
 
 def main(argv=None) -> int:
@@ -44,7 +44,6 @@ def main(argv=None) -> int:
     if missing:
         print("lab run: nothing was started.\n" + "\n".join(f"- {x}" for x in missing), file=sys.stderr)
         return 2
-    os.environ["LAB_WORKER"] = "ssh"
     run_id = f"run-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
     code = 0
     try:

@@ -10,13 +10,12 @@ def test_a_run_is_its_commands_in_order_and_the_vm_is_always_deleted(monkeypatch
     done: list = []
     monkeypatch.setattr("lab.session.preflight", lambda provider=None: [])
     monkeypatch.setattr(run, "lab", lambda step: done.append(step) or 0)
-    monkeypatch.delenv("LAB_WORKER", raising=False)
     assert run.main(["--task", "t.toml", "--budget", "20"]) == 0
     run_id = done[3][-1]
     assert done == [["vm", "start"], ["vm", "setup"], ["setup", "--task", "t.toml"],
                     ["session", "--task", "t.toml", "--budget", "20", "--run", run_id],
                     ["feedback", str(run.ledger.ROOT), "--run", run_id], ["store", "push"], ["vm", "stop"]]
-    assert run_id.startswith("run-") and os.environ["LAB_WORKER"] == "ssh"
+    assert run_id.startswith("run-")
     # a failing step ends the run with its code; the VM is still deleted
     done.clear()
     monkeypatch.setattr(run, "lab", lambda step: done.append(step) or (3 if step[0] == "setup" else 0))
@@ -45,3 +44,9 @@ def test_nothing_is_started_when_something_is_absent(monkeypatch, capsys):
     assert run.main(["--task", "t.toml", "--budget", "20"]) == 2 and done == []
     assert "no API key" in capsys.readouterr().err
 
+
+
+def test_each_command_runs_with_the_vm_as_its_worker(monkeypatch):
+    seen: list = []
+    monkeypatch.setattr(run.subprocess, "run", lambda argv, env: seen.append((argv[1:], env["LAB_WORKER"])) or run.subprocess.CompletedProcess(argv, 0))
+    assert run.lab(["vm", "start"]) == 0 and seen == [(["-m", "lab", "vm", "start"], "ssh")]
