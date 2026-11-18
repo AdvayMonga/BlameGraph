@@ -37,14 +37,16 @@ One command: `lab <command> [args]` (`pip install -e .` puts it on PATH; else `b
 if present, else `python3`). `lab` lists every command, `lab <command> -h` its arguments; the table is `lab/cli.py`, where a new module
 with a CLI gets its entry. The agent's tools are the same commands by the same names, run by a person on a researcher
 run. Jailed and remote internals keep `python -m`.
-1. Once per target and GPU, with step 2's GPU as the worker: `lab setup --task TASK.toml` (the corpus; the
-   reference's answers, the model run in transformers; `lab validate`: a noise band for each of the task's regimes).
+1. A whole run in one command: `lab run --task lab/tasks/single_stream.toml --budget USD` (steps 2 to 5, with the VM
+   deleted at the end). `lab dashboard` shows it live. No GPU: `lab rehearsal setup DIR` (prints the practice engine,
+   target and task it wrote).
 2. A GPU: `lab vm start` (deleted 12 hours later), `lab vm setup` (also measures
-   the GPU's peaks); `LAB_WORKER=ssh` runs measured jobs there.
-3. A run: `lab session --task lab/tasks/single_stream.toml --budget USD`, from this machine; `lab dashboard` shows
-   it live. No GPU: `lab rehearsal setup DIR` (prints the practice engine, target and task it wrote).
-4. After it: `lab feedback local/ledger --run RUN`, `lab store push`, `lab vm stop`.
-5. A person's change under the agent's rules: `lab start --base REF --change REF --budget USD` (prints the run id),
+   the GPU's peaks); `LAB_WORKER=ssh` runs GPU jobs there.
+3. Once per target and GPU: `lab setup --task TASK.toml` (the corpus; the reference's answers, the model run in
+   transformers; `lab validate`: a noise band for each of the task's regimes).
+4. The session: `lab session --task TASK.toml --budget USD`, from this machine.
+5. After it: `lab feedback local/ledger --run RUN`, `lab store push`, `lab vm stop`.
+6. A person's change under the agent's rules: `lab start --base REF --change REF --budget USD` (prints the run id),
    `lab baseline --run RUN`, `lab hypothesis --run RUN ...`, a measured tool (`lab bench|equiv|submit|profile|trace|
    kernel|hostprof|kernel-search --run RUN --hypothesis-id H --expect JSON`), then `lab reflect --run RUN ...`.
 A merge of an engine change is a seen-split `bench` and a passing `equiv`; `submit` reads the held-out split through
@@ -53,7 +55,7 @@ the guard's query budget.
 ## Layout
 - `lab/` — the optimization system. The loop: `session`, `agent` (+ `agent_openai`, `apiproxy`),
   `tools`/`evaltools`/`proftools`, `experiments` (hypothesis/expect/reflection rules), `experiment` (a person's run),
-  `task`, `workspace`, `budget`, `rehearsal`, `dashboard` (+ `live`), `cli`, `prompts/`.
+  `task`, `run`, `setup`, `workspace`, `budget`, `rehearsal`, `dashboard` (+ `live`), `cli`, `prompts/`.
   - `kernels/` — `search/` (the kernel search; `METHOD.md` maps each part to its source), `evolve/` (OpenEvolve arm),
     `tasks/` (kernel tasks, regions, shapes, pipeline, KernelBench, FlashInfer-Bench), `library/` (other
     implementations and PTX cards), `archive.py` (idea archive), `eval/` (the kernel evaluator: check, timing, core,
