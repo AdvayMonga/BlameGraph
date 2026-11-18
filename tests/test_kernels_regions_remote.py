@@ -52,6 +52,21 @@ def test_captures_pack_into_one_samples_dir_each_traffic_counted_apart(tmp_path,
     assert torch.equal(x, torch.load(caps[1] / "samples" / "0.pt", weights_only=True)["reads"]["h"])
 
 
+def test_samples_left_on_the_worker_are_linked_where_the_region_is_held(tmp_path):
+    caps = two_traffics(tmp_path)
+    kept = tmp_path / "worker" / "kept"                       # the worker's cache: not on the controller yet
+    (caps[1] / "samples.at").write_text(str(kept))
+    (caps[1] / "samples").rename(tmp_path / "moved")
+    pack = pipeline.pack(caps, tmp_path / "pack")
+    assert not (pack / "samples" / "1-0.pt").exists() and (pack / "samples" / "0-0.pt").exists()
+    assert [json.loads(x) for x in (pack / "links.jsonl").read_text().splitlines()] == \
+        [{"from": str(kept / "0.pt"), "to": "1-0.pt"}]
+    kept.parent.mkdir()
+    (tmp_path / "moved").rename(kept)                         # the hold host has them
+    pipeline.link(pack)
+    assert (pack / "samples" / "1-0.pt").samefile(kept / "0.pt")
+
+
 def test_the_hold_side_describes_a_region_from_its_samples_and_holder(tmp_path, monkeypatch):
     from lab.kernels.tasks import hold
     regions = engine(tmp_path, monkeypatch)

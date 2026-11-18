@@ -79,7 +79,7 @@ def start_program(task, tree: Path) -> str:
 def captures(task, tree: Path, profile: Callable[[Path, dict], Path | None], regimes: tuple[str, ...] = (),
              cache: Path | None = None) -> list[Path]:
     """Each capture traffic's `captures/` dir, from `profile(tree, args) -> bundle dir`; `cache` (a JSON map) reuses
-    a bundle with an equal `tree_key`."""
+    a bundle with an equal `tree_key`. The runs are `capture_only`: no profiler trace, the samples left on the worker."""
     known = json.loads(cache.read_text()) if cache and cache.exists() else {}
     out = []
     env = capture_env(task)
@@ -88,7 +88,7 @@ def captures(task, tree: Path, profile: Callable[[Path, dict], Path | None], reg
         total, lanes = steady(cls, n)
         bundle = Path(known[key]) if key in known and Path(known[key]).is_dir() else \
             profile(tree, {"capture": [task.capture_fn or task.entry], "corpus_class": cls, "requests": total,
-                           "concurrency": lanes, "max_tokens": CAPTURE_TOKENS,
+                           "concurrency": lanes, "max_tokens": CAPTURE_TOKENS, "capture_only": True,
                            **({"capture_task": task.name} if task.capture_env else {})})
         if bundle is not None and (Path(bundle) / "captures").is_dir():
             out.append(Path(bundle) / "captures")
@@ -99,30 +99,47 @@ def captures(task, tree: Path, profile: Callable[[Path, dict], Path | None], reg
     return out
 
 
+def _link(src: Path, dst: Path) -> None:
+    try:
+        os.link(src, dst)
+    except OSError:                              # another file system
+        shutil.copyfile(src, dst)
+
+
 def pack(caps: list[Path], dest: Path) -> Path:
     """One samples dir of a region's captures: every call in calls.jsonl, its samples under samples/ renamed per
-    capture, and each capture's calls again in traffic<i>/profile-<source>/captures/."""
+    capture, and each capture's calls again in traffic<i>/profile-<source>/captures/. Samples a capture left on
+    the worker (`samples.at`) are listed in links.jsonl, for `link` there."""
     from lab.kernels.tasks import shapes
     from lab.profile import capture
     shutil.rmtree(dest, ignore_errors=True)
     (dest / "samples").mkdir(parents=True)
-    every = []
+    every, there = [], []
     for i, cap in enumerate(caps):
         calls = capture.load(cap)
+        at = Path(cap) / "samples.at"
+        src = Path(at.read_text()) if at.exists() else Path(cap) / "samples"
         for c in calls:
             if c.get("sample"):
                 name = f"{i}-{c['sample']}"
-                try:
-                    os.link(Path(cap) / "samples" / c["sample"], dest / "samples" / name)
-                except OSError:                  # another file system
-                    shutil.copyfile(Path(cap) / "samples" / c["sample"], dest / "samples" / name)
+                if src.is_dir():
+                    _link(src / c["sample"], dest / "samples" / name)
+                else:
+                    there.append({"from": str(src / c["sample"]), "to": name})
                 c["sample"] = name
         own = dest / f"traffic{i}" / f"profile-{shapes.source(cap)}" / "captures"
         own.mkdir(parents=True)
         (own / "calls.jsonl").write_text("".join(json.dumps(c) + "\n" for c in calls))
         every += calls
     (dest / "calls.jsonl").write_text("".join(json.dumps(c) + "\n" for c in every))
+    (dest / "links.jsonl").write_text("".join(json.dumps(x) + "\n" for x in there))
     return dest
+
+
+def link(samples: Path) -> None:
+    """The samples a pack listed in links.jsonl, linked into `samples` on the host that has them."""
+    for x in map(json.loads, (Path(samples) / "links.jsonl").read_text().splitlines()):
+        _link(Path(x["from"]), Path(samples) / "samples" / x["to"])
 
 
 @contextlib.contextmanager
