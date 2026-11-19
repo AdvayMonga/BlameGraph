@@ -151,7 +151,7 @@ print("cached", snapshot_download(t["model"]["name"]))
 for repo in t["engine"].get("hub", []):              # what tests read is tokenizers and configs, not weights
     print("cached", snapshot_download(repo, allow_patterns=["*.json", "*.txt", "*.model", "*.tiktoken"]))
 PY
-chmod -R a+rX "$HOME/.cache/huggingface"      # the jails' own user reads it (hub metadata is written 0600)
+sudo chmod -R a+rX "$HOME/.cache/huggingface" # the jails' own user reads it (hub metadata is written 0600)
 du -sh "$HOME/.cache/huggingface" 2>/dev/null || true
 
 echo "== smoke"
