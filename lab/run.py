@@ -45,8 +45,8 @@ def main(argv=None) -> int:
         print("lab run: nothing was started.\n" + "\n".join(f"- {x}" for x in missing), file=sys.stderr)
         return 2
     from lab.infra.cloud import vm
-    v = vm.VM()
     try:
+        v = vm.VM()
         exists = v.provider.get(v.name) is not None
     except vm.ProviderError as e:
         print(f"lab run: nothing was started. {e}", file=sys.stderr)
