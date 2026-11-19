@@ -3,7 +3,26 @@ import os
 
 os.environ.setdefault("LAB_TARGET", "evals/targets/inference-server.toml")
 
+import pytest
+
 from lab import run
+
+
+class FakeVM:
+    name, exists = "lab-gpu", False
+
+    @property
+    def provider(self):
+        return self
+
+    def get(self, name):
+        return object() if self.exists else None
+
+
+@pytest.fixture(autouse=True)
+def no_vm(monkeypatch):
+    monkeypatch.setattr("lab.infra.cloud.vm.VM", FakeVM)
+    monkeypatch.setattr(FakeVM, "exists", False)
 
 
 def test_a_run_is_its_commands_in_order_and_the_vm_is_always_deleted(monkeypatch):
@@ -50,3 +69,19 @@ def test_each_command_runs_with_the_vm_as_its_worker(monkeypatch):
     seen: list = []
     monkeypatch.setattr(run.subprocess, "run", lambda argv, env: seen.append((argv[1:], env["LAB_WORKER"])) or run.subprocess.CompletedProcess(argv, 0))
     assert run.lab(["vm", "start"]) == 0 and seen == [(["-m", "lab", "vm", "start"], "ssh")]
+
+
+def test_nothing_is_started_and_nothing_deleted_when_the_vm_already_exists(monkeypatch, capsys):
+    done: list = []
+    monkeypatch.setattr(run, "lab", lambda step: done.append(step) or 0)
+    monkeypatch.setattr("lab.session.preflight", lambda provider=None: [])
+    monkeypatch.setattr(FakeVM, "exists", True)
+    assert run.main(["--task", "t.toml", "--budget", "20"]) == 2 and done == []
+    assert "lab-gpu already exists" in capsys.readouterr().err
+    # a provider that cannot be asked starts nothing either
+    def broken(self, name):
+        from lab.infra.cloud.providers import ProviderError
+        raise ProviderError("`nebius` CLI not installed")
+    monkeypatch.setattr(FakeVM, "get", broken)
+    assert run.main(["--task", "t.toml", "--budget", "20"]) == 2 and done == []
+    assert "not installed" in capsys.readouterr().err
