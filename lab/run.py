@@ -1,5 +1,5 @@
 """One run, start to finish: a GPU VM, the target's setup, the session, its feedback, the store. The VM is deleted
-when the run ends, however it ends.
+when the run ends, however it ends. Nothing starts when a VM of that name already exists.
 
   lab run --task TASK.toml --budget USD [--target T]
 
@@ -43,6 +43,17 @@ def main(argv=None) -> int:
     missing = session.preflight()
     if missing:
         print("lab run: nothing was started.\n" + "\n".join(f"- {x}" for x in missing), file=sys.stderr)
+        return 2
+    from lab.infra.cloud import vm
+    try:
+        v = vm.VM()
+        exists = v.provider.get(v.name) is not None
+    except vm.ProviderError as e:
+        print(f"lab run: nothing was started. {e}", file=sys.stderr)
+        return 2
+    if exists:
+        print(f"lab run: nothing was started. A VM named {v.name} already exists: `lab vm stop` deletes it, or set "
+              "LAB_VM to another name.", file=sys.stderr)
         return 2
     run_id = f"run-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
     code = 0
