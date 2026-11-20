@@ -106,7 +106,7 @@ def test_missing_cli_and_missing_key(tmp_path, monkeypatch):
     with pytest.raises(ProviderError, match="not installed"):
         nebius.Nebius().get("g")
     with pytest.raises(ProviderError, match="LAB_VM_KEYFILE"):
-        nebius.Nebius(subnet="s").create("g", "/nope/key.pub")
+        nebius.Nebius(subnet="s").create("g", "/nope/key.pub", True)
 
 
 def test_project_is_passed_as_parent_id_on_list_and_create(fake, monkeypatch):

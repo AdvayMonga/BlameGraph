@@ -39,7 +39,6 @@ def fake_again(tmp_path, monkeypatch):
     monkeypatch.setenv("FAKE_STATE", str(tmp_path / "state.json"))
     monkeypatch.setenv("FAKE_LOG", str(tmp_path / "calls.log"))
     monkeypatch.delenv("LAB_VM_PROVIDER", raising=False)
-    monkeypatch.delenv("LAB_VM_SPOT", raising=False)
     (tmp_path / "key.pub").write_text("ssh-ed25519 AAAA lab\n")
     monkeypatch.setenv("LAB_VM_KEYFILE", str(tmp_path / "key.pub"))
     monkeypatch.setattr(labvm, "KNOWN_HOSTS_DIR", tmp_path / "kh")
@@ -299,9 +298,8 @@ def test_a_vm_that_stops_again_in_its_setup_is_deleted(fake, monkeypatch):
     assert labvm.restart(vm) is False and vm.provider.get("t11") is None     # nothing left billing
 
 
-def _nebius(monkeypatch, instances, spot):
+def _nebius(monkeypatch, instances):
     from lab.infra.cloud.providers import nebius
-    monkeypatch.setenv("LAB_VM_SPOT", "1" if spot else "0")
     seen = []
 
     def cli(self, *args):
@@ -319,29 +317,33 @@ def test_nebius_spot_creates_a_preemptible_vm_that_stops(tmp_path, monkeypatch):
     key = tmp_path / "k.pub"
     key.write_text("ssh-ed25519 AAA")
     for spot in (True, False):
-        p, seen = _nebius(monkeypatch, [], spot)
-        p.create("n1", str(key))
+        p, seen = _nebius(monkeypatch, [])
+        p.create("n1", str(key), spot)
         create = next(a for a in seen if a[:3] == ("compute", "instance", "create"))
         flags = ("--follows-spot-price", "--preemptible-on-preemption", "stop", "--recovery-policy", "fail")
         assert (create[-5:] == flags) is spot and ("--follows-spot-price" in create) is spot   # Nebius: "fail" only
 
 
-def test_start_refuses_the_other_pricing_running_or_not(monkeypatch):
+def test_cli_start_refuses_a_vm_created_at_the_other_price_and_start_takes_it_as_it_is(monkeypatch):
+    monkeypatch.setenv("LAB_VM", "n2")
     for state in ("STOPPED", "RUNNING"):
         inst = {"metadata": {"name": "n2", "id": "i2"}, "spec": {"preemptible": {"on_preemption": "stop"}},
-                "status": {"state": state}}
-        p, seen = _nebius(monkeypatch, [inst], spot=False)
+                "status": {"state": state, "network_interfaces": [{"public_ip_address": {"address": "203.0.113.9/32"}}]}}
+        p, seen = _nebius(monkeypatch, [inst])
         assert p.get("n2").detail == f"{state.lower()} spot"
         with pytest.raises(ProviderError, match="created spot"):
-            labvm.start(labvm.VM(name="n2", provider=p))
+            labvm.main(["start", "--on-demand"])
         assert not any(a[:3] == ("compute", "instance", "start") for a in seen)
+    assert labvm.start(labvm.VM(name="n2", provider=p), spot=False).spot is True      # running: returned as it is
 
 
-def test_spot_flag_refuses_other_spellings(monkeypatch):
-    from lab.infra.cloud.providers import nebius
-    monkeypatch.setenv("LAB_VM_SPOT", "true")
-    with pytest.raises(ProviderError, match="use 1 or 0"):
-        nebius.Nebius()
+def test_start_creates_at_the_spot_price_unless_told_otherwise(fake):
+    for name, spot in (("s1", True), ("s2", False)):
+        labvm.start(labvm.VM(name=name), spot=spot)
+        create = [c for c in calls(fake) if c[:3] == ["compute", "instance", "create"]][-1]
+        assert ("--follows-spot-price" in create) is spot
+    labvm.start(labvm.VM(name="s3"))
+    assert "--follows-spot-price" in [c for c in calls(fake) if c[:3] == ["compute", "instance", "create"]][-1]
 
 
 def test_a_dropped_session_on_a_running_vm_still_fetches_and_deletes(fake, monkeypatch):

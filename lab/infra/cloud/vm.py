@@ -70,16 +70,12 @@ def _wait(vm: VM, wanted: str, timeout_s: float) -> Record:
         time.sleep(POLL_S)
 
 
-def start(vm: VM) -> Record:
+def start(vm: VM, spot: bool = True) -> Record:
+    """The VM running: created when absent (`spot`: at the spot price, preemptible), started when stopped."""
     record = vm.provider.get(vm.name)
-    wanted = vm.provider.spot
-    if record is not None and record.spot is not None and record.spot != wanted:
-        raise ProviderError(f"{vm.name} was created {pricing(record.spot)}, LAB_VM_SPOT asks for "
-                            f"{pricing(wanted)}; pricing is fixed at create: set LAB_VM_SPOT to "
-                            "match, LAB_VM to another name, or delete this VM")
     if record is None:
         vm.known_hosts.unlink(missing_ok=True)
-        vm.provider.create(vm.name, vm.keyfile)
+        vm.provider.create(vm.name, vm.keyfile, spot)
     elif record.state == "running" and record.ip:
         return record
     elif record.state == "stopping":
@@ -318,10 +314,9 @@ def run(vm: VM, command: str, *, fetch_dir: str | None = None, local: Path | Non
           + (" (reached the deadline)" if code == 124 else ""), file=sys.stderr)
     lost = code == 255 and _lost(vm)
     if lost:
-        spot = "LAB_VM_SPOT=1 " if vm.provider.spot else ""
         again = f"run --no-push --fetch {fetch_dir} true" if fetch_dir and where != "env" else "run --env --no-push true"
         print(f"[lab.infra.cloud.vm] {vm.name} stopped under the command (preempted, or stopped from outside); its disk is kept: "
-              f"`{spot}lab vm start` restarts it, then `{spot}lab vm {again}` brings the results home",
+              f"`lab vm start` restarts it, then `lab vm {again}` brings the results home",
               file=sys.stderr)
     if fetch_dir and not lost:
         try:
@@ -345,7 +340,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("(")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status", help="state, type and ip")
-    sub.add_parser("start", help="create or start, wait for ssh, arm the auto-stop: the VM is deleted 12 hours later")
+    st = sub.add_parser("start", help="create or start, wait for ssh, arm the auto-stop: the VM is deleted 12 hours later")
+    st.add_argument("--on-demand", action="store_true", help="create it at the on-demand price (default: spot)")
     wd = sub.add_parser("watchdog", help="(internal) stop the VM at --deadline if still running")
     wd.add_argument("--deadline", type=float, required=True)
     sp = sub.add_parser("stop", help="delete the VM and its disk: billing ends")
@@ -372,7 +368,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{vm.name}: {record.state} {record.type} {record.ip or ''} [{record.detail}]")
         return 0
     if args.cmd == "start":
-        record = start(vm)
+        record = p.get(vm.name)
+        if record is not None and record.spot is not None and record.spot == args.on_demand:
+            raise ProviderError(f"{vm.name} was created {pricing(record.spot)}; pricing is fixed at create: "
+                                "`lab vm stop` deletes it")
+        record = start(vm, spot=not args.on_demand)
         wait_ssh(vm, record)
         arm(vm, record, MAX_MINUTES)
         print(ssh_target(vm, record))
