@@ -146,9 +146,9 @@ def pull_ledger(root: Path, remote: Remote) -> int:
 
 
 def _drop_trace(blob: Path, runs: Path | None) -> None:
-    """Remove a stored blob's trace.json from the blob and its workspace copies."""
-    copies = Path(runs).glob(f"*/workspace/lab/runs/{blob.name}/trace.json") if runs else []
-    for t in [blob / "trace.json", *copies]:
+    """Remove a stored blob's trace.json files (one per profiled process) from the blob and its workspace copies."""
+    copies = Path(runs).glob(f"*/workspace/lab/runs/{blob.name}/**/trace.json") if runs else []
+    for t in [*blob.rglob("trace.json"), *copies]:
         t.unlink(missing_ok=True)
 
 

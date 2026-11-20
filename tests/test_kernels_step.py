@@ -38,15 +38,20 @@ def fake_megakernel(ps):
     return mk
 
 
+def model(ps):
+    """The megakernel model's view of the pools."""
+    return SimpleNamespace(k_pools=[p.k for p in ps], v_pools=[p.v for p in ps])
+
+
 def capture_steps(tmp, monkeypatch):
     ps = pools(torch.Generator().manual_seed(0))
     mk = fake_megakernel(ps)
     monkeypatch.setitem(__import__("sys").modules, "inference_server.models.megakernel", mk)
     bt = torch.tensor([[7, 3, -1], [5, 9, 11]])
-    with capture.step(ps, tmp / "caps"):
-        mk.decode_step(None, torch.tensor([1, 2]), torch.tensor([20, 40]), bt)      # rows at 21 and 41 tokens
-        mk.decode_step(None, torch.tensor([1, 2]), torch.tensor([21, 41]), bt)      # same shape: logged only
-        mk.decode_step(None, torch.tensor([3]), torch.tensor([5]), bt[:1, :1])
+    with capture.step(tmp / "caps"):
+        mk.decode_step(model(ps), torch.tensor([1, 2]), torch.tensor([20, 40]), bt)      # rows at 21 and 41 tokens
+        mk.decode_step(model(ps), torch.tensor([1, 2]), torch.tensor([21, 41]), bt)      # same shape: logged only
+        mk.decode_step(model(ps), torch.tensor([3]), torch.tensor([5]), bt[:1, :1])
     return tmp / "caps", ps
 
 
@@ -69,8 +74,8 @@ def test_a_captured_step_reads_as_the_megakernel_indexes_its_pools(tmp_path, mon
     mk = fake_megakernel(ps)
     monkeypatch.setitem(__import__("sys").modules, "inference_server.models.megakernel", mk)
     bt, pos = torch.tensor([[7, 3, -1], [5, 9, 11]]), torch.tensor([31, 32])     # row 1's new token opens block 11
-    with capture.step(ps, tmp_path / "caps"):
-        mk.decode_step(None, torch.tensor([1, 2]), pos, bt)
+    with capture.step(tmp_path / "caps"):
+        mk.decode_step(model(ps), torch.tensor([1, 2]), pos, bt)
     s = torch.load(tmp_path / "caps" / "samples" / capture.load(tmp_path / "caps")[0]["sample"], weights_only=True)
     r = s["reads"]
     k, v, sbt, n = r["k_cache"], r["v_cache"], r["bt"], r["k_cache"].shape[1]

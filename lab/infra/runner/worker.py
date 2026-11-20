@@ -172,20 +172,19 @@ def job_profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
 
 
 def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
-    """Run lab.profile.profile's workload in the jail, wrapped by the instrument, under `serve.Watch` (GpuBusy before,
-    Contaminated after), then the instrument's report step."""
+    """Serve the tree under lab.profile.profile with the instrument before it (GpuBusy before, Contaminated after),
+    then the instrument's report step."""
     from lab.profile import gpu
     from lab.infra.runner import profiles
     from lab import proftools, tools as T
     tree, kind, a = inputs["tree"], args["kind"], args["args"]
-    prof = {"env": profiles.env(target.load(), a["profile"])} if a.get("profile") else {}
+    env = profiles.env(target.load(), a["profile"]) if a.get("profile") else {}
     if a.get("capture"):                         # the target's capture env
-        prof["env"] = {**prof.get("env", {}), **((target.load().raw.get("kernels") or {}).get("capture_env") or {})}
+        env = {**env, **((target.load().raw.get("kernels") or {}).get("capture_env") or {})}
     if a.get("capture_task"):                    # the task's capture env
         from lab.kernels.tasks import load as load_task
-        prof["env"] = {**prof.get("env", {}), **dict(load_task(a["capture_task"]).capture_env)}
-    if args.get("timeout_s"):
-        prof["timeout_s"] = args["timeout_s"]
+        env = {**env, **dict(load_task(a["capture_task"]).capture_env)}
+    timeout = {"timeout_s": args["timeout_s"]} if args.get("timeout_s") else {}
     ins = proftools.instrument(kind, a)
     exe, read = None, []
     if ins["binary"]:
@@ -199,39 +198,38 @@ def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
     work = tree / proftools.OUT
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir()
-    harness = T.stage_harness(tree)
-    src = T.workload_flags(a, harness, proftools._int(a, "requests", *proftools.WORKLOAD["requests"]))
-    argv = [*ins["wrap"](exe, work), engine.python(), "-m", "lab.profile.profile", *ins["flags"], *src, *ins["extra"](exe),
-            "--out", str(work / "bundle")]
-    runner = hooks.get("profile_runner") or T.default_profile_runner
-    watch = serve.Watch()
+    T.stage_harness(tree)
+    window, warmup, source = T.workload(a, proftools.workload(a))
+    prefix = ins["wrap"](exe, work)
+    commands, log, code = [[*prefix, target.load().engine.launch]], "", 0
+    run = hooks.get("profile_runner") or T.default_profile_runner
     try:
-        proc = runner(tree, argv, read=read, on_start=watch.start, **prof)
-    finally:
-        foreign = watch.stop()
-    if foreign:
-        raise serve.Contaminated(foreign)
-    log, commands = proc.stdout + proc.stderr, [argv]
+        run(tree, window, warmup, work / "bundle", source=source, prefix=prefix, read=read, env=env,
+            **ins["run"](exe), **timeout)
+    except (serve.GpuBusy, serve.Contaminated):
+        raise
+    except Exception as e:                       # noqa: BLE001  a failed run, returned as one
+        log, code = f"{type(e).__name__}: {e}", 1
+    bundles = sorted(p for p in (work / "bundle").glob("*") if p.is_dir()) if (work / "bundle").is_dir() else []
+    if bundles and (bundles[-1] / "serve.log").exists():
+        log = (bundles[-1] / "serve.log").read_text(errors="replace")[-3000:] + log
     T._drop_links(work)
-    if ins["post"] and proc.returncode == 0:
+    if ins["post"] and code == 0:
         pargv, dest = ins["post"](exe, work)
         commands.append(pargv)
-        p = runner(tree, pargv, read=read, **prof)
+        p = (hooks.get("post_runner") or T.default_post_runner)(tree, pargv, read=read, env=env, **timeout)
         if dest:
             dest.write_text(p.stdout)
         log += p.stderr if dest else p.stdout + p.stderr
-        proc = p if p.returncode else proc
+        code = p.returncode
         T._drop_links(work)
-    keep = work
-    if ins["bundle_only"]:                       # keep only the bundle
-        bundles = sorted((work / "bundle").glob("*")) if (work / "bundle").is_dir() else []
-        keep = bundles[-1] if bundles else None
+    keep = (bundles[-1] if bundles else None) if ins["bundle_only"] else work
     if keep and any(p.is_file() for p in keep.rglob("*")):
         shutil.copytree(keep, out / "files")
     if a.get("capture_only"):
         _leave_samples(out / "files" / "captures")
     found = sorted(work.glob(ins["summary"])) if ins["summary"] else []
-    return {"returncode": proc.returncode, "instrument": exe, "argv": commands, "output": log[-3000:],
+    return {"returncode": code, "instrument": exe, "argv": commands, "output": log[-3000:],
             "head": proftools._head(found[-1] if found else None), "gpu": gpu.query()}
 
 

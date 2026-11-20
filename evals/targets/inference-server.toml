@@ -12,6 +12,7 @@ python = ".venv/bin/python"                  # relative to repo; LAB_ENGINE_PYTH
 api = "vllm"                                 # logprobs adapter for the divergence check: vllm | sglang | none
 launch = "python -m uvicorn inference_server.server:app --host 127.0.0.1 --port {port}"
 health = "/health"                           # GET on the server; ready at 200
+stats = "/scheduler/stats"                   # GET: the engine's counters (JSON), read at a profile window's ends
 startup_timeout_s = 1800
 env = { BACKEND = "custom-cuda", MODEL_NAME = "Qwen/Qwen3-30B-A3B", CONTEXT_WINDOW = "32768" }   # batch size etc.: the engine's own defaults
 write = ["src/inference_server/*"]           # what the agent may add, modify or delete

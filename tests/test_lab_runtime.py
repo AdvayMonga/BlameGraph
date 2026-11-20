@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -158,12 +157,12 @@ def test_an_overspending_provider_is_recorded_and_stopped(cfg):
 
 def test_restore_and_profile_tools(cfg, monkeypatch):
     calls = []
-    def fake_profile(tree, argv, **_):
-        calls.append(argv)
-        out = Path(argv[argv.index("--out") + 1]) / "b1"
+    def fake_profile(tree, window, warmup, out, **_):
+        calls.append(window)
+        out = Path(out) / "b1"
         out.mkdir(parents=True)
         (out / "meta.json").write_text("{}")
-        return subprocess.CompletedProcess(argv, 0, "ok", "")
+        return out
     from lab import tools as labtools
     monkeypatch.setattr(labtools, "default_profile_runner", fake_profile)
     first = {}
@@ -186,7 +185,7 @@ def test_restore_and_profile_tools(cfg, monkeypatch):
     assert (ws / "src/inference_server/engine.py").read_text().endswith("return 5\n")
     prof = next(ledger.records(cfg.ledger_root, kind="profile"))
     assert prof["result"]["bundle"].startswith("blobs/") and (cfg.ledger_root / prof["result"]["bundle"] / "meta.json").exists()
-    assert "--requests" in calls[0] and "2" in calls[0]
+    assert len(calls[0]) == 2
     assert "profile output at lab/runs/" in dict(p.outputs)["profile"]
     copy = ws / prof["result"]["workspace_copy"]
     assert (copy / "meta.json").exists()                      # readable from inside the jail

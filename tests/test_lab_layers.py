@@ -18,10 +18,10 @@ def bundle(tmp_path: Path, kernel_s: float = 0.4, with_steps: bool = True) -> Pa
     t0 = 1000.0
     (b / "meta.json").write_text(json.dumps({
         "window": {"start": t0, "end": t0 + 2.0, "wall_s": 2.0}, "max_tokens": 64,
-        "settings": {"max_batch_size": 8}, "workload": {"kind": "synthetic", "prompt_len": 500},
+        "workload": {"kind": "synthetic", "prompt_len": 500},
         "gpu": {"window_start": {"name": "NVIDIA H200", "driver_version": "580.173.02"}}}))
     (b / "kernels.json").write_text(json.dumps({"total_us": kernel_s * 1e6, "launches": 1234, "kernels": []}))
-    (b / "stats.json").write_text(json.dumps({"window_delta": {"decode_steps": 10 if with_steps else 0, "kv_admit_blocked": 3,
+    (b / "stats.json").write_text(json.dumps({"window_end": {"max_batch_size": 8}, "window_delta": {"decode_steps": 10 if with_steps else 0, "kv_admit_blocked": 3,
                                                                "total_admitted": 4, "total_completed": 4}}))
     ev = [{"ts": t0 - 5, "kind": "step", "dur_s": 9.0, "active": 1, "pending": 0},            # warmup: outside
           {"ts": t0 - 5, "kind": "phase", "name": "decode", "dur_s": 9.0}]
@@ -37,7 +37,8 @@ def bundle(tmp_path: Path, kernel_s: float = 0.4, with_steps: bool = True) -> Pa
             ts = t0 + 0.5 + 0.15 * (k + 1)
             ev += [{"ts": ts, "kind": "phase", "name": "decode", "dur_s": 0.15},
                    {"ts": ts, "kind": "step", "dur_s": 0.15, "active": 4, "prefilling": 0, "pending": 0}]
-    (b / "events.jsonl").write_text("\n".join(json.dumps(e) for e in ev) + "\n")
+    (b / "telemetry" / "timeline").mkdir(parents=True)                              # where the engine's telemetry lands
+    (b / "telemetry" / "timeline" / "events.jsonl").write_text("\n".join(json.dumps(e) for e in ev) + "\n")
     return b
 
 

@@ -155,42 +155,42 @@ def test_a_capture_profile_runs_with_the_targets_capture_env(tmp_path, monkeypat
     from lab.infra.runner import worker
     seen = {}
     monkeypatch.setattr(T, "stage_harness", lambda tree: tmp_path / "h")
-    monkeypatch.setattr(T, "workload_flags", lambda a, h, n: [])
+    monkeypatch.setattr(T, "workload", lambda a, w: ([], [], {}))
 
-    def runner(tree, argv, env=None, **kw):
+    def runner(tree, window, warmup, out, env=None, **kw):
         seen["env"] = env
-        return subprocess.CompletedProcess(argv, 0, "", "")
-    for capture, want in ((["m:f"], {"CUSTOM_BACKEND_CUDA_GRAPH": "0"}), ([], None)):
+        return out
+    for capture, want in ((["m:f"], {"CUSTOM_BACKEND_CUDA_GRAPH": "0"}), ([], {})):
         seen.clear()
         worker._profile({"tree": tmp_path}, tmp_path / f"out{len(capture)}", {"kind": "profile", "args": {"capture": capture}},
                         {"profile_runner": runner})
-        assert (seen["env"] or None) == want
+        assert seen["env"] == want
 
 
 def test_a_capture_only_run_has_no_profiler_trace_and_leaves_its_samples_on_the_worker(tmp_path, monkeypatch):
     pytest.importorskip("torch")
-    from lab import proftools, tools as T
+    from lab import tools as T
     monkeypatch.setattr(T, "stage_harness", lambda tree: tmp_path / "h")
-    monkeypatch.setattr(T, "workload_flags", lambda a, h, n: [])
+    monkeypatch.setattr(T, "workload", lambda a, w: ([], [], {}))
     monkeypatch.setenv("LAB_WORKER_CACHE", str(tmp_path / "cache"))
     tree = tmp_path / "tree"
     tree.mkdir()
     seen = []
 
-    def runner(tree, argv, **kw):
-        seen.append(argv)
-        caps = tree / proftools.OUT / "bundle" / "b1" / "captures"
+    def runner(tree, window, warmup, out, profiler=None, capture=(), **kw):
+        seen.append((profiler, capture))
+        caps = out / "b1" / "captures"
         (caps / "samples").mkdir(parents=True)
         (caps / "samples" / "0.pt").write_text("tensor")
         (caps / "calls.jsonl").write_text("{}\n")
-        return subprocess.CompletedProcess(argv, 0, "", "")
+        return out / "b1"
     for only in (True, False):
         out = tmp_path / f"out{only}"
         worker._profile({"tree": tree}, out, {"kind": "profile", "args": {"capture": ["m:f"], **({"capture_only": True} if only else {})}},
                         {"profile_runner": runner})
         caps = out / "files" / "captures"
         assert (caps / "calls.jsonl").exists() and (caps / "samples").is_dir() != only
-        assert seen[-1][seen[-1].index("--profiler") + 1] == ("cuda-range" if only else "torch")
+        assert seen[-1] == ("cuda-range" if only else "torch", ["m:f"])
     kept = Path((tmp_path / "outTrue" / "files" / "captures" / "samples.at").read_text())
     assert kept.is_relative_to(tmp_path / "cache") and (kept / "0.pt").read_text() == "tensor"
 
@@ -202,13 +202,13 @@ def test_a_capture_for_a_task_adds_the_tasks_own_env(tmp_path, monkeypatch):
     from lab import tools as T
     seen = {}
     monkeypatch.setattr(T, "stage_harness", lambda tree: tmp_path / "h")
-    monkeypatch.setattr(T, "workload_flags", lambda a, h, n: [])
+    monkeypatch.setattr(T, "workload", lambda a, w: ([], [], {}))
     monkeypatch.setattr(lab.kernels.tasks, "load", lambda name: types.SimpleNamespace(
         capture_env=(("KV_CACHE_DTYPE", "fp8"),)) if name == "region:norm:add" else None)
 
-    def runner(tree, argv, env=None, **kw):
+    def runner(tree, window, warmup, out, env=None, **kw):
         seen["env"] = env
-        return subprocess.CompletedProcess(argv, 0, "", "")
+        return out
     worker._profile({"tree": tmp_path}, tmp_path / "out", {"kind": "profile", "args": {
         "capture": ["m:f"], "capture_task": "region:norm:add"}}, {"profile_runner": runner})
     assert seen["env"] == {"CUSTOM_BACKEND_CUDA_GRAPH": "0", "KV_CACHE_DTYPE": "fp8"}

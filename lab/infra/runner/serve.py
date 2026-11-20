@@ -1,5 +1,6 @@
 """Serve an engine tree from its pristine copy, inside the jail, on a free localhost port, with the target's env.
-`with Served(tree, spec) as s: ... s.url`; with `artifacts`, `device/`, `telemetry/` and `serve.log` land in that dir.
+`with Served(tree, spec) as s: ... s.url`; with `artifacts`, `device/`, `telemetry/` and `serve.log` land in that dir;
+`prefix` goes before the launch command (an instrument or wrapper), `read` is mounted read-only in the jail.
 Raises `GpuBusy` if the GPU is held at launch; `exclusive()` raises `Contaminated` if another process held it since."""
 
 from __future__ import annotations
@@ -104,7 +105,7 @@ class Watch:
 class Served:
     def __init__(self, tree: Path, server: target.Server, log: Path | None = None, port: int | None = None,
                  timeout_s: float | None = None, env_extra: dict | None = None, jailed: bool = True,
-                 artifacts: Path | None = None):
+                 artifacts: Path | None = None, prefix: list[str] = (), read: list[Path] = ()):
         self.tree, self.server = Path(tree), server
         self.port = port or free_port()
         self.url = f"http://127.0.0.1:{self.port}"
@@ -112,6 +113,7 @@ class Served:
         self.timeout_s = timeout_s if timeout_s is not None else server.startup_timeout_s
         self.env_extra = {**server.env, **(env_extra or {})}
         self.jailed = jailed
+        self.prefix, self.read = list(prefix), list(read)
         self.artifacts = Path(artifacts) if artifacts else None
         self.telemetry_dir = self.tree.resolve() / TELEMETRY_SUBDIR if self.artifacts and server.telemetry_env else None
         if self.telemetry_dir:
@@ -133,7 +135,7 @@ class Served:
 
     def __enter__(self) -> "Served":
         self.watch = Watch()
-        argv = argv_for(self.server, self.port)
+        argv = [*self.prefix, *argv_for(self.server, self.port)]
         self.log_offset = self.log.stat().st_size if self.log and self.log.exists() else 0
         if self.artifacts:
             self.sampler = gpu.DeviceSampler(self.artifacts / "device")
@@ -145,7 +147,7 @@ class Served:
         self.started_at = time.monotonic()
         if self.jailed:
             self.proc, self.tmp, self.stop_jail, self.pids = grader.jailed_popen(
-                self.tree, argv, env_extra=self.env_extra, stdout=out, stderr=out, port=self.port)
+                self.tree, argv, env_extra=self.env_extra, stdout=out, stderr=out, port=self.port, read=self.read)
         else:
             self.proc = subprocess.Popen(argv, cwd=self.tree, env={**os.environ, **self.env_extra}, stdout=out,
                                          stderr=out, start_new_session=True)
@@ -185,21 +187,30 @@ class Served:
     def __exit__(self, *exc) -> None:
         if self.watch:
             self.watch.stop()           # stop watching before teardown
-        if self.proc is not None and self.proc.poll() is None:
-            try:
-                os.killpg(self.proc.pid, signal.SIGTERM)
-                self.proc.wait(timeout=30)
-            except (ProcessLookupError, subprocess.TimeoutExpired):
-                try:
-                    os.killpg(self.proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+        if self.proc is not None:
+            self._end_group()
         if self.stop_jail:
             self.stop_jail()
         if self.tmp:
             shutil.rmtree(self.tmp, ignore_errors=True)
         if self.artifacts:
             self._collect()
+
+    def _end_group(self) -> None:
+        """SIGTERM the launch's process group, children that outlived it included; SIGKILL what is left after 30 s."""
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(self.proc.pid, sig)
+            except (ProcessLookupError, PermissionError):      # gone, or only an unreaped zombie left (macOS)
+                return
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                self.proc.poll()                         # reap the leader, which keeps the group alive until then
+                try:
+                    os.killpg(self.proc.pid, 0)
+                except (ProcessLookupError, PermissionError):
+                    return
+                time.sleep(0.2)
 
     def _collect(self) -> None:
         """Close the device samples, move telemetry out of the tree, copy this run's part of the log."""

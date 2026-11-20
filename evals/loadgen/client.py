@@ -21,6 +21,7 @@ class Request:
     session_id: str | None = None
     turn_index: int | None = None
     ignore_eos: bool = False          # the server runs to max_tokens past its stop token
+    prompt_ids: list[int] | None = None   # token ids sent as a text completion's prompt, in place of `messages`
 
 
 @dataclass
@@ -48,11 +49,19 @@ class Row:
         return d
 
 
+def _path(req: Request) -> str:
+    return "/v1/completions" if req.prompt_ids is not None else "/v1/chat/completions"
+
+
 def _encode(model: str, req: Request, chat_kwargs: dict | None, trace_prefix: str) -> tuple[bytes, dict]:
     """The request's JSON body and headers."""
-    body = {"model": model, "messages": req.messages, "max_tokens": req.max_tokens, "temperature": 0.0,
-            "stream": True, "stream_options": {"include_usage": True}}
-    if chat_kwargs:
+    body = {"model": model, "max_tokens": req.max_tokens, "temperature": 0.0, "stream": True,
+            "stream_options": {"include_usage": True}}
+    if req.prompt_ids is not None:
+        body["prompt"] = req.prompt_ids
+    else:
+        body["messages"] = req.messages
+    if chat_kwargs and req.prompt_ids is None:
         body["chat_template_kwargs"] = dict(chat_kwargs)
     if req.ignore_eos:            # special tokens kept in the text
         body.update(ignore_eos=True, skip_special_tokens=False)
@@ -80,7 +89,7 @@ class _Stream:
         chunk = json.loads(line[6:])
         self.usage = chunk.get("usage") or self.usage
         for ch in chunk.get("choices") or []:
-            text = (ch.get("delta") or {}).get("content")
+            text = (ch.get("delta") or {}).get("content") or ch.get("text")
             if text:
                 if self.first is None:
                     self.first = clock()
@@ -122,9 +131,9 @@ def _rejected(row: Row, status: int, detail: bytes, clock, scheduled: float) -> 
 
 def send(url: str, model: str, req: Request, scheduled: float, clock, timeout: float = 600,
          count_tokens=None, trace_prefix: str = "bg", chat_kwargs: dict | None = None) -> Row:
-    """POST req as a streamed chat completion; `clock()` is the run clock and `scheduled` the intended send time."""
+    """POST req as a streamed chat (or, with prompt ids, text) completion; `clock()` is the run clock and `scheduled` the intended send time."""
     data, headers = _encode(model, req, chat_kwargs, trace_prefix)
-    http_req = urllib.request.Request(f"{url.rstrip('/')}/v1/chat/completions", data=data, headers=headers)
+    http_req = urllib.request.Request(f"{url.rstrip('/')}{_path(req)}", data=data, headers=headers)
     start = clock()
     row, stream = Row(req.id, "crash", scheduled, start - scheduled), _Stream()
     try:
@@ -150,7 +159,7 @@ async def asend(url: str, model: str, req: Request, clock, timeout: float = 600,
     u = urllib.parse.urlsplit(url)
     head = "".join(f"{k}: {v}\r\n" for k, v in {**headers, "Host": u.netloc, "Content-Length": len(data),
                                                  "Connection": "close"}.items())
-    msg = f"POST {u.path.rstrip('/')}/v1/chat/completions HTTP/1.1\r\n{head}\r\n".encode() + data
+    msg = f"POST {u.path.rstrip('/')}{_path(req)} HTTP/1.1\r\n{head}\r\n".encode() + data
     writer, refused = None, None
     try:
         reader, writer = await asyncio.open_connection(u.hostname, u.port)

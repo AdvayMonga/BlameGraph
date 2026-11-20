@@ -39,6 +39,17 @@ def test_a_fixed_length_answer_runs_to_max_tokens_and_an_early_stop_is_truncated
         plain.shutdown()
 
 
+def test_token_ids_are_sent_as_a_streamed_text_completion():
+    srv = make_server(token_s=0.0, out_tokens=5)
+    clock = wall_clock()
+    try:
+        row = send(f"http://127.0.0.1:{srv.server_port}", "m", Request("a", [], 7, ignore_eos=True, prompt_ids=[5, 6, 7]),
+                   clock(), clock)
+        assert (row.status, row.n_tokens, row.prompt_tokens, row.finish_reason) == ("ok", 7, 3, "length")
+    finally:
+        srv.shutdown()
+
+
 def test_each_shared_prefix_turn_gets_its_own_measured_length():
     msgs = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}, {"role": "user", "content": "c"}]
     rec = {**REC, "messages": msgs, "expected_output_tokens": 9, "expected_turn_output_tokens": [4, 9]}

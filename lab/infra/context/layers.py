@@ -18,9 +18,9 @@ OUTER_PHASES = ("admit", "prefill_chunk", "evict", "decode")      # the step's o
 
 
 def _events(bundle: Path, window: dict) -> list[dict]:
-    """The timeline events inside the profiled window."""
-    p = bundle / "events.jsonl"
-    if not p.exists():
+    """The engine's timeline events (an events.jsonl anywhere in the bundle) inside the profiled window."""
+    p = next(bundle.rglob("events.jsonl"), None)
+    if p is None:
         return []
     lo, hi = float(window["start"]), float(window["end"])
     out = []
@@ -62,9 +62,10 @@ def from_bundle(bundle: str | Path, t=None, gpu: dict | None = None, gates: dict
     except (OSError, ValueError):
         kernel_s, launches = None, None
     try:
-        delta = (json.loads((bundle / "stats.json").read_text()).get("window_delta") or {})
+        stats = json.loads((bundle / "stats.json").read_text())
     except (OSError, ValueError):
-        delta = {}
+        stats = {}
+    delta, max_batch = stats.get("window_delta") or {}, (stats.get("window_end") or {}).get("max_batch_size")
     prefill_s, decode_s = phases.get("prefill_chunk", 0.0), phases.get("decode", 0.0)
     admin_s = phases.get("admit", 0.0) + phases.get("evict", 0.0)
     n_decode = delta.get("decode_steps") or len(decoding) or 0
@@ -91,8 +92,7 @@ def from_bundle(bundle: str | Path, t=None, gpu: dict | None = None, gates: dict
         "runtime": {"share": share(admin_s), "admit_evict_s": admin_s,
                     "gpu_idle_share": None if kernel_s is None else max(0.0, 1 - kernel_s / w),
                     "batch_mean": batch_mean,
-                    "batch_fill": batch_mean / meta["settings"]["max_batch_size"]
-                    if batch_mean and (meta.get("settings") or {}).get("max_batch_size") else None,
+                    "batch_fill": batch_mean / max_batch if batch_mean and max_batch else None,
                     "steps_idle_with_pending": pending_idle, "kv_admit_blocked": delta.get("kv_admit_blocked"),
                     "admitted": delta.get("total_admitted"), "completed": delta.get("total_completed"),
                     "preempted": delta.get("total_preempted"), "expired": delta.get("total_expired"),

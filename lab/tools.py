@@ -10,7 +10,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-from evals import regimes as corpus
 from lab import experiments
 from lab.records import ledger
 from evals.targets import target
@@ -492,7 +491,7 @@ def _names(names) -> str:
     return ", ".join(f"`{n}`" for n in names)
 
 
-HARNESS = ("__init__.py", "profile.py", "bundle.py", "gpu.py", "capture.py")     # all lab.profile.profile imports from the environment
+HARNESS = ("__init__.py", "window.py", "bundle.py", "capture.py", "hook/sitecustomize.py")   # what the engine imports
 HARNESS_DIR = "_harness"
 DEFAULT_CORPUS_CLASS = "steady_interactive"   # targets name no corpus class of their own
 
@@ -503,29 +502,32 @@ def stage_harness(tree: Path) -> Path:
     dest.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(engine.ENV_ROOT / "lab" / "__init__.py", dest.parent / "__init__.py")
     for name in HARNESS:
+        (dest / name).parent.mkdir(exist_ok=True)
         shutil.copyfile(engine.ENV_ROOT / "lab" / "profile" / name, dest / name)
     return dest.parents[1]
 
 
-def workload_flags(args: dict, harness: Path, n: int) -> list[str]:
-    """lab.profile.profile's workload flags: synthetic ids if asked, else `n` seen-split corpus requests staged in the
-    harness."""
-    if args.get("synthetic"):
-        return ["--synthetic", "--prompt-len", str(args.get("prompt_len", 64))]
-    t = target.load()
-    w = corpus.sample(args.get("corpus_class") or DEFAULT_CORPUS_CLASS, "seen", int(args.get("seed", 0)), n, t.corpus_dir)
-    (harness / "workload.json").write_text(json.dumps(w))
-    return ["--workload", str(harness / "workload.json")] + (["--enable-thinking"] if t.chat_kwargs.get("enable_thinking") else [])
+def workload(args: dict, sizes: dict):
+    """lab.profile.profile's window and warmup requests and their source, at `sizes` (requests, prompt_len,
+    max_tokens): synthetic ids if asked, else seen-split corpus requests."""
+    from lab.profile import profile
+    return profile.workload(sizes["requests"], sizes["max_tokens"], int(args.get("seed", 0)),
+                            args.get("corpus_class") or DEFAULT_CORPUS_CLASS,
+                            sizes["prompt_len"] if args.get("synthetic") else None, corpus_dir=target.load().corpus_dir)
 
 
-def default_profile_runner(tree: Path, argv: list[str], read: list[Path] = (), env: dict | None = None,
-                           timeout_s: int = 3600, on_start=None):
-    """Run lab.profile.profile jailed in the pristine tree: the target's engine env plus `env`, `read` read-only, the
-    harness first on the path; `on_start` as `grader.jailed`'s."""
-    path = os.pathsep.join([str(tree / HARNESS_DIR), str(tree / "src"), str(tree)])
-    return grader.jailed(tree, argv, timeout_s=timeout_s,
-                         env_extra={**target.load().engine.env, **(env or {}), "PYTHONPATH": path}, read=read,
-                         on_start=on_start)
+def default_profile_runner(tree: Path, window: list, warmup: list, out: Path, **kw) -> Path:
+    """lab.profile.profile.run on the pristine tree, served in the jail with the harness staged in it."""
+    from lab.profile import profile
+    return profile.run(tree, window, warmup, out, harness=tree / HARNESS_DIR, **kw)
+
+
+def default_post_runner(tree: Path, argv: list[str], read: list[Path] = (), env: dict | None = None,
+                        timeout_s: int = 3600):
+    """Run an instrument's report step jailed in the pristine tree: the target's engine env plus `env`, `read`
+    read-only."""
+    return grader.jailed(tree, argv, timeout_s=timeout_s, env_extra={**target.load().engine.env, **(env or {})},
+                         read=read)
 
 
 def clean_pristine(run_dir: Path) -> None:

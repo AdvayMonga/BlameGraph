@@ -1,179 +1,142 @@
-"""lab.profile.profile writes a complete bundle whose trace carries the engine's phase ranges."""
+"""lab.profile.profile serves an engine whose every Python process joins the window, opens it from outside, and writes
+the bundle."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import os
+import stat
+import sys
+from pathlib import Path
 
 import pytest
 
-pytest.importorskip("lab.profile.profile", reason="needs the engine and its deps: run with the engine's python", exc_type=ImportError)
-from inference_server.config import Settings  # noqa: E402
-from lab.profile import bundle, gpu, profile  # noqa: E402
+from evals.targets import target
+from lab.profile import bundle, profile
 
-
-@pytest.mark.asyncio
-async def test_bundle_is_complete(tmp_path, stub_backend_cls):
-    prompts = profile.synthetic_prompts(4, 8)
-    settings = Settings(max_batch_size=4)
-    out = await profile.run(stub_backend_cls(), settings, prompts, max_tokens=3, out=tmp_path, warmup=1)
-    names = {p.name for p in out.iterdir()}
-    assert set(bundle.FILES) <= names
-    assert ("gpu.csv" in names) == gpu.available()
-
-    meta = json.loads((out / "meta.json").read_text())
-    assert meta["requests"] == 4 and meta["max_tokens"] == 3 and meta["failed"] == 0
-    assert meta["outcomes"]["full"] == 4 and meta["outcomes"]["tokens_out"]["total"] == 12
-    assert meta["warmup"]["requests"] == 1 and meta["profiler_on"] is True
-    assert meta["profiler"]["activities"] == ["CPU"] and "all_threads" in meta["profiler"]
-    assert set(meta["gpu"]) == {"window_start", "window_end"}
-    assert meta["timeline"]["events_dropped"] == 0 and meta["timeline"]["events_written"] > 0
-    assert meta["workload_hash"] == bundle.workload_hash(prompts, 3)
-    assert meta["device"] == "cpu" and meta["window"]["wall_s"] > 0 and meta["torch"]
-    assert meta["settings"]["max_batch_size"] == 4
-
-    trace = json.loads((out / "trace.json").read_text())
-    names_in_trace = {e.get("name", "") for e in trace["traceEvents"]}
-    assert any(n.startswith("decode step=") for n in names_in_trace)
-    assert any(n.startswith("prefill step=") for n in names_in_trace)
-
-    events = [json.loads(l) for l in (out / "events.jsonl").read_text().splitlines()]
-    windows = [e["state"] for e in events if e["kind"] == "profile_window"]
-    assert windows == ["begin", "end"]
-    finished = [e for e in events if e["kind"] == "finish"]
-    assert len(finished) == 5          # 1 warmup + 4 profiled
-    stats = json.loads((out / "stats.json").read_text())
-    assert stats["window_start"]["total_completed"] == 1 and stats["window_end"]["total_completed"] == 5
-    assert stats["window_delta"]["total_completed"] == 4 and stats["window_delta"]["total_admitted"] == 4
-
-    ops = json.loads((out / "ops.json").read_text())
-    assert ops["top"] and {"name", "count", "self_cpu_us", "self_device_us"} <= set(ops["top"][0])
-    assert not (out / "kernels.json").exists()          # no CUDA activity on CPU
-    mem = json.loads((out / "memory.json").read_text())
-    assert mem["window_peak"] is None and mem["host_rss_peak_lifetime_bytes"] > 0
-
-
-@pytest.mark.asyncio
-async def test_warmup_defaults_to_the_window_and_peaks_reset_after_it(tmp_path, stub_backend_cls, monkeypatch):
-    calls = []
-    peaks = iter([{"allocated_bytes": 900, "reserved_bytes": 1000}, {"allocated_bytes": 500, "reserved_bytes": 1200}])
-    monkeypatch.setattr(bundle, "device_peaks", lambda d: calls.append("peak") or next(peaks))
-    monkeypatch.setattr(bundle, "reset_peaks", lambda d: calls.append("reset"))
-    prompts = profile.synthetic_prompts(3, 8)
-    out = await profile.run(stub_backend_cls(), Settings(max_batch_size=4), prompts, max_tokens=2, out=tmp_path)
-    assert calls == ["peak", "reset", "peak"]
-    mem = json.loads((out / "memory.json").read_text())
-    assert mem["window_peak"] == {"allocated_bytes": 500, "reserved_bytes": 1200}
-    assert mem["lifetime_peak"] == {"allocated_bytes": 900, "reserved_bytes": 1200}
-    meta = json.loads((out / "meta.json").read_text())
-    assert meta["warmup"]["requests"] == 3
-    events = [json.loads(l) for l in (out / "events.jsonl").read_text().splitlines()]
-    begin = next(i for i, e in enumerate(events) if e["kind"] == "profile_window")
-    assert sum(e["kind"] == "finish" for e in events[:begin]) == 3
-
-
-def test_warmup_prompts_match_lengths_not_contents():
-    prompts = [[5] * 3, [7] * 9]
-    w = profile.warmup_prompts(prompts, 3)
-    assert [len(p) for p in w] == [3, 9, 3] and not any(p in prompts for p in w)
-
-
-def test_outcomes_count_empty_as_failed_and_short_separately():
-    o = profile.outcomes([[1, 2, 3], [], [1], RuntimeError("x")], max_tokens=3)
-    assert (o["errors"], o["empty"], o["short"], o["full"]) == (1, 1, 1, 1)
-    assert o["tokens_out"] == {"total": 4, "min": 0, "mean": 4 / 3, "max": 3}
-
-
-def test_stats_delta_counts_only_the_window():
-    s0 = {"total_completed": 2, "decode_steps": 10, "active_size": 1, "wave_sizes": {1: 2}}
-    s1 = {"total_completed": 6, "decode_steps": 25, "active_size": 0, "wave_sizes": {1: 2, 4: 1}}
-    assert profile.stats_delta(s0, s1) == {"total_completed": 4, "decode_steps": 15, "wave_sizes": {4: 1}}
-
-
-def test_kernels_table_aggregates_cuda_events_by_name():
-    from types import SimpleNamespace as NS
-    from torch.autograd import DeviceType
-
-    def ev(name, us, dev=DeviceType.CUDA, annotation=False):
-        return NS(name=name, device_type=dev, time_range=NS(elapsed_us=lambda: us), is_user_annotation=annotation)
-    assert bundle.kernels_table([ev("aten::mm", 50, DeviceType.CPU)]) is None
-    k = bundle.kernels_table([ev("gemm", 10), ev("gemm", 30), ev("softmax", 5), ev("aten::mm", 50, DeviceType.CPU),
-                             ev("prefill_batch step=1", 99, annotation=True)])
-    assert k["launches"] == 3 and k["total_us"] == 45
-    assert k["kernels"][0] == {"name": "gemm", "count": 2, "total_us": 40, "mean_us": 20, "max_us": 30}
-
-
-def test_main_profiles_a_presampled_corpus_workload(tmp_path, stub_backend_cls, monkeypatch):
-    import inference_server.tokenizer as tokmod
-
-    class Tok:
-        def __init__(self, *a): pass
-        def encode_messages(self, msgs, thinking=True):
-            return [len(m["content"]) for m in msgs] + [int(thinking)]
-    monkeypatch.setattr(tokmod, "Tokenizer", Tok)
-    monkeypatch.setattr(profile, "build_backend", lambda s: stub_backend_cls())
-    w = {"source": {"kind": "corpus", "class": "steady_interactive", "split": "seen", "seed": 0,
-                    "corpus_version": "v", "lines": [0, 1]},
-         "messages": [[{"role": "user", "content": "hi"}], [{"role": "user", "content": "hello"}]]}
-    (tmp_path / "w.json").write_text(json.dumps(w))
-    assert profile.main(["--workload", str(tmp_path / "w.json"), "--max-tokens", "2", "--out", str(tmp_path / "o")]) == 0
-    meta = json.loads(next((tmp_path / "o").glob("*/meta.json")).read_text())
-    assert meta["workload"] == {**w["source"], "thinking": False} and meta["requests"] == 2
-    assert meta["workload_hash"] == bundle.workload_hash([[2, 0], [5, 0]], 2)
-
-
-def test_main_captures_the_calls_of_named_functions_into_the_bundle(tmp_path, stub_backend_cls, monkeypatch):
-    monkeypatch.setattr(profile, "build_backend", lambda s: stub_backend_cls())
-    out = tmp_path / "o"
-    assert profile.main(["--synthetic", "--requests", "2", "--prompt-len", "4", "--max-tokens", "2", "--out", str(out),
-                         "--capture", "lab.profile.bundle:workload_hash"]) == 0
-    b = next(p for p in out.iterdir() if p.is_dir())
-    calls = [json.loads(x) for x in (b / "captures" / "calls.jsonl").read_text().splitlines()]
-    assert calls and calls[0]["fn"] == "lab.profile.bundle:workload_hash" and calls[0]["args"][1] == {"value": 2}
-    assert bundle.workload_hash.__name__ == "workload_hash" and not hasattr(bundle.workload_hash, "__wrapped__")
-    assert not [p for p in out.iterdir() if p.name.startswith("capture-")]       # staging dir moved, not left
-
-
-def test_main_needs_an_explicit_workload_source():
-    with pytest.raises(SystemExit):
-        profile.main([])
-
-
-def test_synthetic_prompts_are_deterministic():
-    assert profile.synthetic_prompts(2, 5) == profile.synthetic_prompts(2, 5)
-    assert profile.synthetic_prompts(2, 5) != profile.synthetic_prompts(2, 5, seed=1)
-
-
-@pytest.mark.asyncio
-async def test_cuda_range_window_writes_no_torch_trace(tmp_path, stub_backend_cls):
-    out = await profile.run(stub_backend_cls(), Settings(max_batch_size=2), profile.synthetic_prompts(2, 4), max_tokens=2,
-                            out=tmp_path, profiler="cuda-range")
-    assert not (out / "trace.json").exists()
-    assert json.loads((out / "meta.json").read_text())["profiler"]["kind"] == "cuda-range"
-
-
-FAKE_PYSPY = r'''#!/usr/bin/env python3
-import json, sys
+ROOT = Path(__file__).resolve().parents[1]
+FAKE = ROOT / "tests" / "fake_engine.py"
+PYSPY = '''#!/usr/bin/env python3
+import sys
 a = sys.argv[1:]
-open(LOG, "a").write(json.dumps(a) + "\n")
 if a[0] == "record":
     open(a[a.index("--output") + 1], "w").write("{}")
 else:
     print("Thread 1 (active): MainThread")
 '''
+SPAWN = '''import multiprocessing as mp, os, time
+def model():                                    # the engine's model process: the only one with torch
+    import torch
+    torch.ones(4).sum()
+    open(os.environ["CHILD_PID"], "w").write(str(os.getpid()))
+    time.sleep(3600)
+'''
 
 
-@pytest.mark.asyncio
-async def test_pyspy_samples_this_process_under_a_repeated_workload(tmp_path, stub_backend_cls):
-    import os
+@pytest.fixture
+def served(tmp_path, monkeypatch):
+    """The fake engine as the target's engine; `launch(top, main)` adds code at its top and before it serves."""
+    t = target.load()
+
+    def launch(top: str = "", main: str = "") -> None:
+        script = tmp_path / "engine.py"
+        script.write_text(f"import runpy, sys\n{top}\nif __name__ == '__main__':\n    {main or 'pass'}\n"
+                          f"    runpy.run_path({str(FAKE)!r}, run_name='__main__')\n")
+        eng = dataclasses.replace(t.engine, launch=f"python {script} --port {{port}} --token-s 0", env={},
+                                  stats="/scheduler/stats", telemetry_env={}, startup_timeout_s=30)
+        monkeypatch.setattr(target, "load", lambda *a: dataclasses.replace(t, engine=eng))
+    monkeypatch.setattr(profile.engine, "python", lambda: sys.executable)
+    launch()
+    return launch
+
+
+def chats(n, max_tokens=4):
+    return [profile.Request(f"r{i}", [{"role": "user", "content": f"hi {i}"}], max_tokens, ignore_eos=True)
+            for i in range(n)]
+
+
+def run(tmp_path, window, **kw):
+    return profile.run(ROOT, window, chats(2), tmp_path / "bundles", source={"kind": "test"}, jailed=False,
+                       harness=ROOT, **kw)
+
+
+def fake_pyspy(tmp_path) -> str:
     exe = tmp_path / "py-spy"
-    exe.write_text(FAKE_PYSPY.replace("LOG, ", f"{str(tmp_path / 'calls.log')!r}, "))
-    exe.chmod(0o755)
-    out = await profile.run(stub_backend_cls(), Settings(max_batch_size=2), profile.synthetic_prompts(2, 4), max_tokens=2,
-                            out=tmp_path / "b", profiler="pyspy", pyspy=(str(exe), 0.5, 50, ["--native"]))
-    rec, dump = [json.loads(line) for line in (tmp_path / "calls.log").read_text().splitlines()]
-    assert rec[:3] == ["record", "--pid", str(os.getpid())] and "--nonblocking" in rec and "speedscope" in rec
-    assert rec[-1] == "--native"
-    assert dump == ["dump", "--pid", str(os.getpid()), "--nonblocking"]
-    assert (out / "pyspy.speedscope.json").exists() and "MainThread" in (out / "pyspy-dump.txt").read_text()
+    exe.write_text(PYSPY)
+    exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+    return str(exe)
+
+
+def test_a_window_runs_the_requests_and_the_bundle_holds_its_counters_log_and_provenance(tmp_path, served):
+    out = run(tmp_path, chats(3), profiler="pyspy", pyspy=(fake_pyspy(tmp_path), 1, 100, []))
     meta = json.loads((out / "meta.json").read_text())
-    assert meta["profiler"]["kind"] == "pyspy" and meta["rounds"] >= 1 and meta["failed"] == 0
+    assert meta["requests"] == 3 and meta["max_tokens"] == 4 and meta["failed"] == 0 and meta["rounds"] >= 1
+    assert meta["outcomes"]["tokens_out"]["min"] == 4 and meta["warmup"]["requests"] == 2
+    [proc] = meta["profiler"]["processes"]                                       # the launch's process, no torch
+    assert meta["profiler"]["kind"] == "pyspy" and proc["root"] and not proc["gpu"] and meta["window"]["wall_s"] >= 1
+    assert meta["workload"] == {"kind": "test"} and meta["engine"]["ready_s"] > 0
+    stats = json.loads((out / "stats.json").read_text())
+    assert stats["window_start"]["completed"] == 2 and stats["window_delta"]["completed"] >= 3     # warmup before it
+    assert "MainThread" in (out / "pyspy-dump.txt").read_text() and (out / "pyspy.speedscope.json").exists()
+    assert (out / "serve.log").exists() and not {"start", "stop", "end"} & {p.name for p in out.iterdir()}
+
+
+def test_a_window_that_fails_in_the_engine_is_raised(tmp_path, served):
+    with pytest.raises(RuntimeError, match="window failed in engine process"):
+        run(tmp_path, chats(1), profiler="pyspy", pyspy=(str(tmp_path / "no-py-spy"), 1, 100, []))
+    assert "Traceback" in next((tmp_path / "bundles").glob("*/procs/*/error.txt")).read_text()
+
+
+def test_the_model_process_the_engine_spawns_is_profiled_and_ends_with_the_engine(tmp_path, served, monkeypatch):
+    pytest.importorskip("torch")
+    monkeypatch.setenv("CHILD_PID", str(tmp_path / "child.pid"))
+    served(SPAWN, "mp.get_context('spawn').Process(target=model, daemon=True).start()")
+    out = run(tmp_path, chats(2))
+    child = int((tmp_path / "child.pid").read_text())
+    [proc] = json.loads((out / "meta.json").read_text())["profiler"]["processes"]
+    assert proc["pid"] == child and proc["gpu"] and not proc["root"] and proc["profiler"]["activities"][0] == "CPU"
+    own = out / "procs" / str(child)
+    assert {"trace.json", "ops.json", "memory.json", "window.json"} <= {p.name for p in own.iterdir()}
+    assert "top" in json.loads((out / "ops.json").read_text())                 # merged at the bundle's root
+    with pytest.raises(ProcessLookupError):
+        os.kill(child, 0)                                                      # stopped with the engine's group
+
+
+def test_captures_record_the_windows_calls(tmp_path, served):
+    pytest.importorskip("torch")
+    from lab.profile import capture
+    served("import torch")
+    out = run(tmp_path, chats(2), profiler="pyspy", pyspy=(fake_pyspy(tmp_path), 1, 100, []), capture=["time:sleep"])
+    calls = capture.load(out / "captures")
+    assert calls and {c["fn"] for c in calls} == {"time:sleep"}
+
+
+def test_a_region_capture_is_the_engines_own_from_launch_on(tmp_path, served):
+    pytest.importorskip("torch")
+    served("import os; print('REGION', os.environ.get('CAPTURE_REGION'), os.environ.get('CAPTURE_REGION_DIR'), flush=True)")
+    out = run(tmp_path, chats(1), profiler="pyspy", pyspy=(fake_pyspy(tmp_path), 1, 100, []),
+              capture=["region:attn:moe"])
+    assert f"REGION attn:moe {out / 'captures'}" in (out / "serve.log").read_text()
+
+
+def test_processes_kernel_tables_merge_by_name():
+    a = {"kernels": [{"name": "gemm", "count": 2, "total_us": 10.0, "mean_us": 5.0, "max_us": 6.0}]}
+    b = {"kernels": [{"name": "gemm", "count": 1, "total_us": 8.0, "mean_us": 8.0, "max_us": 8.0},
+                     {"name": "norm", "count": 4, "total_us": 4.0, "mean_us": 1.0, "max_us": 1.5}]}
+    m = bundle.merge_kernels([a, b])
+    assert m["kernels"][0] == {"name": "gemm", "count": 3, "total_us": 18.0, "max_us": 8.0, "mean_us": 6.0}
+    assert m["total_us"] == 22.0 and m["launches"] == 7 and bundle.merge_kernels([]) is None
+
+
+def test_synthetic_requests_are_token_ids_and_the_warmup_is_the_next_seeds():
+    window, warm, source = profile.workload(3, 8, seed=4, prompt_len=5)
+    assert [len(r.prompt_ids) for r in window] == [5] * 3 and len(warm) == 3 and window[0].ignore_eos
+    assert window[0].prompt_ids != warm[0].prompt_ids and source == {"kind": "synthetic", "prompt_len": 5, "seed": 4}
+    assert profile.workload(3, 8, seed=4, prompt_len=5)[0][0].prompt_ids == window[0].prompt_ids
+
+
+def test_the_counter_delta_is_every_number_both_ends_hold():
+    start = {"a": 1, "b": "x", "c": {"d": 2, "e": True}, "f": 3}
+    end = {"a": 4, "b": "y", "c": {"d": 7, "e": False}, "g": 1}
+    assert profile.delta(start, end) == {"a": 3, "c": {"d": 5}}
