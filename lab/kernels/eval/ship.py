@@ -29,14 +29,6 @@ def module_source(program: str, attr: str) -> str:
     return src
 
 
-def unstart(task, src: str) -> str:
-    """The task's start edits undone where the program kept them unchanged."""
-    for old, new in task.start_edits:
-        if src.count(new) == 1:
-            src = src.replace(new, old)
-    return src
-
-
 def no_live_autotune(src: str, base: str | None) -> str:
     """`src`; raises ValueError when it would autotune at run time where `base` does not."""
     from lab.kernels.eval.freeze import introduced
@@ -131,14 +123,11 @@ def ship(task, program: str, gate: dict, repo: Path, base: str = "HEAD", branch:
     """The engine branch: {branch, base, commit, path}. Refuses a program without a passing held-out gate."""
     if not gate_passed(gate):
         raise ValueError("the program has no fully passing gate on held-out shapes (`lab kernels evolve gate`)")
+    if not task.name.startswith("region:"):
+        raise ValueError(f"{task.name}: only a region ships")
     base = _git(repo, "rev-parse", base)
-    if task.name.startswith("region:"):
-        files = _region_files(task, program, repo, base)
-        path = next(p for p in files if not p.endswith("__init__.py"))
-    else:
-        module, _, attr = task.entry.partition(":")
-        path = _module_path(repo, base, module)
-        files = {path: no_live_autotune(unstart(task, module_source(program, attr)), _git(repo, "show", f"{base}:{path}"))}
+    files = _region_files(task, program, repo, base)
+    path = next(p for p in files if not p.endswith("__init__.py"))
     with tempfile.TemporaryDirectory() as d:
         env = {"GIT_INDEX_FILE": str(Path(d) / "index")}
         _git(repo, "read-tree", base, env=env)

@@ -1,5 +1,4 @@
-"""The `kernel_search` tool (lab/tools.py) and its pipeline: the start program and patch from the agent's engine tree,
-the worker's ssh env, the tool's refusals, and what a search that dies is charged."""
+"""The `kernel_search` tool (lab/tools.py) and its pipeline: captures and their reuse, the worker's ssh env, the tool's refusals, and what a search that dies is charged."""
 from __future__ import annotations
 
 import contextlib
@@ -22,16 +21,6 @@ MODULE = "import torch\n\n\ndef fn(x):\n    return x * 2\n"
 
 def task():
     return dataclasses.replace(load("toy_rmsnorm"), entry="pkg.mod:fn")
-
-
-def test_the_start_program_and_the_patch_come_from_the_workspace_tree(tmp_path):
-    (tmp_path / "src" / "pkg").mkdir(parents=True)
-    (tmp_path / "src" / "pkg" / "mod.py").write_text(MODULE)
-    start = pipeline.start_program(task(), tmp_path)
-    assert "EVOLVE-BLOCK-START" in start and start.rstrip().endswith("kernel = fn")
-    diff = pipeline.patch(task(), tmp_path, start.replace("x * 2", "x + x"))
-    assert diff.startswith("--- a/src/pkg/mod.py") and "-    return x * 2" in diff and "+    return x + x" in diff
-    assert pipeline.patch(task(), tmp_path, start) == ""
 
 
 def test_a_worker_host_gets_the_evaluators_ssh_mode_quoted_as_the_worker_quotes():
@@ -88,7 +77,6 @@ def test_captures_follow_the_scored_regimes_weigh_each_the_same_and_are_reused(t
         return b
     cache = tmp_path / "captures.json"
     first = pipeline.captures(task(), tree, profile, ("saturated",), cache)
-    (tree / "src" / "pkg" / "mod.py").write_text(MODULE + "# the kernel itself changed\n")
     assert pipeline.captures(task(), tree, profile, ("saturated",), cache) == first and made == ["mixed_1"]
     (tree / "src" / "pkg" / "other.py").write_text("x = 2\n")                       # upstream code changed
     assert pipeline.captures(task(), tree, profile, ("saturated",), cache) != first and len(made) == 2

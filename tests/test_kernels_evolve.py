@@ -280,72 +280,28 @@ def test_graph_timing_is_cuda_only_and_a_kernel_that_cannot_be_timed_scores_zero
     assert "CUDA graph" in system_message(g)
 
 
-def test_ship_commits_the_module_on_a_new_engine_branch_without_touching_its_tree():
-    import dataclasses
-    import subprocess
+def test_ship_takes_a_region_with_a_passing_held_out_gate_only():
     from lab.kernels.evolve.run import initial_program
-    from lab.kernels.eval.ship import module_source, ship
-    with tempfile.TemporaryDirectory() as d:
-        repo = Path(d) / "engine"
-        (repo / "src" / "fake_pkg").mkdir(parents=True)
-        (repo / "src" / "fake_pkg" / "mod.py").write_text("def entry(x):\n    return x\n")
-        git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True, check=True).stdout
-        git("init", "-q")
-        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "base", "--allow-empty")
-        git("add", ".")
-        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "engine")
-        (repo / "src" / "fake_pkg" / "mod.py").write_text("def entry(x):\n    return x  # the user's edit\n")
-        task = dataclasses.replace(load("toy_rmsnorm"), entry="fake_pkg.mod:entry")
-        program = ("# EVOLVE-BLOCK-START\ndef entry(x):\n    return x\n\ndef faster(x):\n    return x * 1\n"
-                   "# EVOLVE-BLOCK-END\n\nkernel = faster\n")
-        assert module_source(program, "entry").endswith("entry = faster\n")
-        assert "EVOLVE" not in module_source(initial_program(load("toy_rmsnorm")), "kernel")
-        ok = {"metrics": {"correct": 1.0},
-              "artifacts": {"gates": json.dumps({"correctness_heldout": {"passed": True, "cases": 6},
-                                                 "physics": {"passed": True}})}}
-        assert module_source("def kernel(x):\n    return x\n", "entry").endswith("entry = kernel\n")    # a rewrite
-        old = dict(os.environ)
-        os.environ.update(GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t", GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t")
+    from lab.kernels.eval.ship import gate_passed, module_source, ship
+    program = ("# EVOLVE-BLOCK-START\ndef entry(x):\n    return x\n\ndef faster(x):\n    return x * 1\n"
+               "# EVOLVE-BLOCK-END\n\nkernel = faster\n")
+    assert module_source(program, "entry").endswith("entry = faster\n")
+    assert "EVOLVE" not in module_source(initial_program(load("toy_rmsnorm")), "kernel")
+    assert module_source("def kernel(x):\n    return x\n", "entry").endswith("entry = kernel\n")    # a rewrite
+    ok = {"metrics": {"correct": 1.0},
+          "artifacts": {"gates": json.dumps({"correctness_heldout": {"passed": True, "cases": 6},
+                                             "physics": {"passed": True}})}}
+    flagged = json.loads(ok["artifacts"]["gates"])
+    assert gate_passed(ok)
+    assert not gate_passed({**ok, "artifacts": {"gates": json.dumps({**flagged, "physics": {"passed": False}})}})
+    assert not gate_passed({**ok, "artifacts": {"gates": json.dumps(
+        {**flagged, "correctness_heldout": {"passed": True, "cases": 0}})}})      # held-out set empty
+    for gate, why in (({"metrics": {"correct": 1.0}, "artifacts": {"gates": "{}"}}, "held-out"), (ok, "only a region")):
         try:
-            out = ship(task, program, ok, repo, branch="kernels/test")
-        finally:
-            os.environ.clear()
-            os.environ.update(old)
-        assert out["path"] == "src/fake_pkg/mod.py" and "entry = faster" in git("show", "kernels/test:src/fake_pkg/mod.py")
-        assert git("diff", "--name-only", out["base"], "kernels/test").split() == ["src/fake_pkg/mod.py"]
-        assert "the user's edit" in (repo / "src" / "fake_pkg" / "mod.py").read_text()       # working tree untouched
-        assert git("rev-parse", "--abbrev-ref", "HEAD").strip() != "kernels/test"
-        from lab.kernels.eval.ship import gate_passed
-        flagged = json.loads(ok["artifacts"]["gates"])
-        assert not gate_passed({**ok, "artifacts": {"gates": json.dumps({**flagged, "physics": {"passed": False}})}})
-        assert not gate_passed({**ok, "artifacts": {"gates": json.dumps(
-            {**flagged, "correctness_heldout": {"passed": True, "cases": 0}})}})      # held-out set empty
-        try:
-            ship(task, program, {"metrics": {"correct": 1.0}, "artifacts": {"gates": "{}"}}, repo, branch="kernels/x")
-            raise AssertionError("shipped without a held-out gate")
-        except ValueError:
-            pass
-
-
-def test_the_starting_program_can_come_from_an_older_engine_commit():
-    import dataclasses
-    import subprocess
-    from lab.kernels.evolve.run import initial_program_at
-    with tempfile.TemporaryDirectory() as d:
-        repo = Path(d) / "engine"
-        (repo / "src" / "fake_pkg").mkdir(parents=True)
-        f = repo / "src" / "fake_pkg" / "mod.py"
-        git = lambda *a: subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *a],
-                                        capture_output=True, text=True, check=True).stdout
-        git("init", "-q")
-        f.write_text("def entry(x):\n    return x  # old\n")
-        git("add", ".")
-        git("commit", "-qm", "old")
-        f.write_text("def entry(x):\n    return x  # new\n")
-        git("commit", "-qam", "new")
-        task = dataclasses.replace(load("toy_rmsnorm"), entry="fake_pkg.mod:entry")
-        prog = initial_program_at(task, repo, "HEAD~1")
-    assert "# old" in prog and "# new" not in prog and prog.rstrip().endswith("kernel = entry")
+            ship(load("toy_rmsnorm"), program, gate, Path("nowhere"))
+            raise AssertionError("shipped")
+        except ValueError as e:
+            assert why in str(e)
 
 
 def test_capture_records_calls_and_the_split_holds_out_a_band():

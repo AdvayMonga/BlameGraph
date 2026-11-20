@@ -48,32 +48,16 @@ def capture_env(task) -> dict:
 
 
 def tree_key(task, tree: Path, spec: tuple) -> str:
-    """What a capture depends on: every engine file but the task's own module, and the traffic. Equal keys reuse."""
+    """What a capture depends on: every engine file and the traffic. Equal keys reuse."""
     import hashlib
     h = hashlib.sha256(json.dumps(spec).encode())
-    skip = None if task.name.startswith("region:") else module_file(task, tree)     # a region's code is the engine's
-    for f in sorted(p for p in Path(tree).rglob("*") if p.is_file() and p != skip
+    for f in sorted(p for p in Path(tree).rglob("*") if p.is_file()
                     and not {"_harness", "runs", "__pycache__", ".git"} & set(p.relative_to(tree).parts)):
         h.update(f.relative_to(tree).as_posix().encode() + b"\0" + f.read_bytes())
     return h.hexdigest()
 ROOT = Path(__file__).resolve().parents[3]
 GATE_TIMEOUT_S = 3600        # seconds for a gate judgment: every seen and held-out shape
 HOLD = "lab.kernels.tasks.hold"        # the module a region's hold process runs
-
-
-def module_file(task, tree: Path) -> Path:
-    """The engine module the task's entry point lives in, inside an engine tree."""
-    if task.name.startswith("region:"):              # its entry is the stations tuple; a winner ships as an override
-        raise ValueError(f"{task.name}: regions have no engine module to start from or patch (`lab.kernels.evolve ship` "
-                         "writes a winner into the engine's overrides package)")
-    mod = task.entry.partition(":")[0]
-    return Path(tree) / "src" / (mod.replace(".", "/") + ".py")
-
-
-def start_program(task, tree: Path) -> str:
-    """The starting program from the engine module in `tree` (the agent's workspace, not a commit)."""
-    from lab.kernels.evolve.run import _start
-    return _start(task, module_file(task, tree).read_text(), task.entry.partition(":")[2])
 
 
 def captures(task, tree: Path, profile: Callable[[Path, dict], Path | None], regimes: tuple[str, ...] = (),
@@ -262,7 +246,7 @@ def _judged(task, caps: list[Path], program: Path, out: Path, env: dict, held: d
     """`stage` of `program` under the gate's config (every seen and held-out shape) on `device`."""
     from lab.kernels.tasks import shapes as shapes_mod
     from lab.kernels.eval import evaluator
-    from lab.kernels.evolve.run import _ints, _target_tolerances, options_from_target, tolerances
+    from lab.kernels.evolve.run import _ints, _target_tolerances, tolerances
     if held:
         sets = {**held["shapes"], "seen": [tuple(s) for s in held["shapes"]["seen"]],
                 "heldout": [tuple(s) for s in held["shapes"]["heldout"]]}
@@ -271,7 +255,7 @@ def _judged(task, caps: list[Path], program: Path, out: Path, env: dict, held: d
         sets["ints"] = shapes_mod.ints_from_captures(task, caps)
     cfg = {"task": task.name, "seen": [list(s) for s in sets["seen"]], "heldout": [list(s) for s in sets["heldout"]],
            "weights": sets.get("calls"), "device": device, "tolerances": tolerances(_target_tolerances()),
-           "ints": _ints(sets, ("seen", "heldout")), "options": options_from_target(task), "full": True,
+           "ints": _ints(sets, ("seen", "heldout")), "full": True,
            **({"samples": held["samples"], "shared_weights": held["holder"], "engine": _engine()} if held else {})}
     path = Path(out) / "gate_config.json"
     path.write_text(json.dumps(cfg))
@@ -294,22 +278,16 @@ def _engine() -> dict:
 
 
 def patch(task, tree: Path, program: str, held: dict | None = None) -> str:
-    """The winner as a unified diff of the engine module in `tree`, the task's start edits undone; a region's as its
-    override module, checked for overlap with the overrides in `tree`."""
-    from lab.kernels.eval.ship import module_source, no_live_autotune, override_keys, region_files, unstart
-    if task.name.startswith("region:"):
-        from lab.kernels.tasks import regions
-        rel_pkg = regions.load_engine().overrides.replace(".", "/")
-        pkg = next((p for p in (Path(tree) / "src" / rel_pkg, Path(tree) / rel_pkg) if p.parent.is_dir()),
-                   Path(tree) / "src" / rel_pkg)
-        rel = pkg.relative_to(tree).as_posix()
-        have = [(f"{rel}/{f.name}", f.read_text()) for f in sorted(pkg.glob("*.py"))] if pkg.is_dir() else []
-        files = region_files(task, program, rel, [k for f, src in have for k in override_keys(f, src)],
-                             held["set"], (pkg / "__init__.py").exists())
-        return "".join("".join(difflib.unified_diff([], src.splitlines(True), "/dev/null", f"b/{f}"))
-                       for f, src in files.items())
-    path = module_file(task, tree)
-    old = path.read_text()
-    new = no_live_autotune(unstart(task, module_source(program, task.entry.partition(":")[2])), old)
-    rel = path.relative_to(tree).as_posix()
-    return "".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True), f"a/{rel}", f"b/{rel}"))
+    """The region's winner as a unified diff adding its override module, checked for overlap with the overrides in
+    `tree`."""
+    from lab.kernels.eval.ship import override_keys, region_files
+    from lab.kernels.tasks import regions
+    rel_pkg = regions.load_engine().overrides.replace(".", "/")
+    pkg = next((p for p in (Path(tree) / "src" / rel_pkg, Path(tree) / rel_pkg) if p.parent.is_dir()),
+               Path(tree) / "src" / rel_pkg)
+    rel = pkg.relative_to(tree).as_posix()
+    have = [(f"{rel}/{f.name}", f.read_text()) for f in sorted(pkg.glob("*.py"))] if pkg.is_dir() else []
+    files = region_files(task, program, rel, [k for f, src in have for k in override_keys(f, src)],
+                         held["set"], (pkg / "__init__.py").exists())
+    return "".join("".join(difflib.unified_diff([], src.splitlines(True), "/dev/null", f"b/{f}"))
+                   for f, src in files.items())

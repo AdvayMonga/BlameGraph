@@ -3,7 +3,6 @@ Only tensors cross the candidate boundary; a task's `call` adds the scalars."""
 from __future__ import annotations
 
 import dataclasses
-import functools
 import importlib
 import json
 from dataclasses import dataclass, field
@@ -29,8 +28,6 @@ class Task:
     graphs: bool = False                    # timed as a CUDA graph replay; it must capture
     scales: tuple | None = None            # value scalings checked beyond the task's own (None: the evaluator's)
     make_real: Callable = None              # make_real(shape, dtype, device, generator, ints) -> inputs
-    start_edits: tuple = ()                 # (old, new) exact edits to the engine module for the starting program
-    options: tuple[str, ...] = ()           # deployment facts make_inputs/make_real take as keywords
     error_budget: float | None = None       # regions: a case's atol is at least this times the baseline's own error
     baseline_fn: Callable | None = None     # the baseline when it is not an engine entry point
     watch: tuple[str, ...] = ()             # further modules the evaluator watches for patches
@@ -46,14 +43,6 @@ class Task:
     def bind(self, fn: Callable) -> Callable:
         """fn as the checker and the timer call it: tensors in, the task's scalars added."""
         return (lambda *xs: self.call(fn, *xs)) if self.call else fn
-
-    def with_options(self, opts: dict | None) -> "Task":
-        """This task with its declared options (e.g. context_window) passed to make_inputs and make_real."""
-        kw = {k: v for k, v in (opts or {}).items() if k in self.options}
-        if not kw:
-            return self
-        real = self.make_real and functools.partial(self.make_real, **kw)
-        return dataclasses.replace(self, make_inputs=functools.partial(self.make_inputs, **kw), make_real=real)
 
     def with_ints(self, ints: dict | None) -> "Task":
         """This task with inputs built from captured int args where a shape has them ({json shape: ints})."""
@@ -108,17 +97,7 @@ TASKS = ("toy_rmsnorm",)
 
 
 def from_config(cfg: dict) -> Task:
-    """The task an evaluation config names, with its deployment options and captured ints."""
+    """The task an evaluation config names, with its captured ints."""
     region = {k: cfg[k] for k in ("samples", "shared_weights", "source", "engine") if cfg.get(k)} \
         if cfg["task"].startswith(("region:", "kb:", "fib:")) else {}
-    return load(cfg["task"], **region).with_options(cfg.get("options")).with_ints(cfg.get("ints"))
-
-
-def options_from_target(task: Task) -> dict:
-    """The task's declared options, read from the target spec's engine env (context_window <- CONTEXT_WINDOW)."""
-    if not task.options:
-        return {}
-    from evals.targets import target
-    env = target.load().engine.env
-    return {"context_window": int(env["CONTEXT_WINDOW"])} if "context_window" in task.options and \
-        "CONTEXT_WINDOW" in env else {}
+    return load(cfg["task"], **region).with_ints(cfg.get("ints"))
