@@ -42,3 +42,10 @@ class Gap:
     pct_of_time: float                  # its share of the profiled window
     pct_of_roofline: float | None       # 100 = at its ceiling; None where the layer has none
     recoverable_pct: float              # % of the window gone at its ceiling; its whole share without one
+
+
+@dataclass(frozen=True)
+class Pushed:
+    branch: str                 # the win's branch on the engine repo
+    url: str                    # its pull request
+    patch: str                  # the patch as a ledger blob

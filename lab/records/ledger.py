@@ -18,7 +18,7 @@ from typing import Any, Iterator
 SCHEMA = 1
 ROOT = Path(__file__).resolve().parents[2] / "local" / "ledger"
 KINDS = {"test", "equiv", "bench", "profile", "submit", "session", "note", "baseline", "noise", "hypothesis",
-         "reflection", "kernels"}
+         "reflection", "kernels", "turn"}
 LEGACY_KINDS = {"finding"}             # read and merged, never written
 WRITER_FIELDS = {"id", "at", "schema"}
 # The only fields a held-out record may carry, with scalar values.
