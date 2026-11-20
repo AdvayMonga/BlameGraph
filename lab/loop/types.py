@@ -10,7 +10,7 @@ from lab.infra.context.peaks import Peaks
 @dataclass(frozen=True)
 class Candidate:
     tree: Path                  # the engine tree to serve
-    patch: str = ""             # its diff from the base tree
+    patch: str = ""             # its diff from the tree it was made from
     note: str = ""              # the change in one line
 
 
