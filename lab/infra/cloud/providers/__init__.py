@@ -37,11 +37,16 @@ class Provider(Protocol):
     default_user: str    # the ssh login of a VM it created
 
     def get(self, name: str) -> Record | None: ...
-    def create(self, name: str, keyfile: str, spot: bool) -> None: ...   # spot: preemptible, at the spot price
+    def create(self, name: str, keyfile: str, spot: bool, account: str | None = None) -> None: ...
+    # spot: preemptible, at the spot price; account: a service account the VM acts as
     def start(self, name: str) -> None: ...
     def stop(self, name: str) -> None: ...      # the disk is kept
     def delete(self, name: str) -> None: ...    # the VM and its disk
     def types(self) -> str: ...
+    def account(self) -> str: ...              # the service account a VM stops itself as
+    def allow_stop(self, name: str) -> None: ...     # that account may stop VM `name`
+    def instance_id(self, name: str) -> str: ...
+    def stop_id(self, instance_id: str) -> None: ...     # run on the VM, as the account
 
 
 def load(name: str) -> Provider:
