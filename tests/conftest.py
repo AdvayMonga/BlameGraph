@@ -36,3 +36,10 @@ def stub_backend_cls():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod.StubBackend
+
+
+@pytest.fixture(autouse=True)
+def no_installed_cloud_cli(monkeypatch, tmp_path):
+    """No test reaches the machine's own `nebius` CLI: only one a test puts on PATH is found."""
+    from lab.infra.cloud.providers import nebius
+    monkeypatch.setattr(nebius, "CLI_DIR", tmp_path / "no-nebius")

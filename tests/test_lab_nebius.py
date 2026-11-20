@@ -108,3 +108,9 @@ def test_missing_cli_and_missing_key(tmp_path, monkeypatch):
     with pytest.raises(ProviderError, match="LAB_VM_KEYFILE"):
         nebius.Nebius().create("g", "/nope/key.pub", True)
 
+
+
+def test_the_cli_is_found_where_its_installer_puts_it_when_not_on_path(fake, monkeypatch):
+    monkeypatch.setattr(nebius, "CLI_DIR", fake / "bin")
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    assert nebius.Nebius().get("g") is None

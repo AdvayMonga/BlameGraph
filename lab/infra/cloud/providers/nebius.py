@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,7 @@ from lab.infra.cloud.providers import ProviderError, Record, env_field, pricing
 USER = "lab"                        # the login cloud-init creates
 IMAGE = "ubuntu24.04-cuda13.0"      # an image family
 DISK_GB = 400
+CLI_DIR = Path.home() / ".nebius" / "bin"      # where the CLI's installer puts it; searched after PATH
 
 
 @dataclass(frozen=True)
@@ -21,10 +23,10 @@ class Nebius:
     default_user: str = USER
 
     def _cli(self, *args: str) -> str:
-        try:
-            out = subprocess.run(["nebius", *args], capture_output=True, text=True)
-        except FileNotFoundError:
+        exe = shutil.which("nebius") or shutil.which("nebius", path=str(CLI_DIR))
+        if exe is None:
             raise ProviderError("`nebius` CLI not installed: https://docs.nebius.com/cli/install")
+        out = subprocess.run([exe, *args], capture_output=True, text=True)
         if out.returncode != 0:
             raise ProviderError(f"nebius {' '.join(args[:4])}: {out.stderr.strip() or out.stdout.strip()}")
         return out.stdout
