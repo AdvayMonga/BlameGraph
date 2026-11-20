@@ -56,6 +56,7 @@ the guard's query budget.
 - `lab/` — the optimization system. The loop: `session`, `agent` (+ `agent_openai`, `apiproxy`),
   `tools`/`evaltools`/`proftools`, `experiments` (hypothesis/expect/reflection rules), `experiment` (a person's run),
   `task`, `run`, `setup`, `workspace`, `budget`, `rehearsal`, `dashboard` (+ `live`), `cli`, `prompts/`.
+  - `loop/` — one run's parts, each a typed function over `types`: `calibrate`, `measure`, `gaps`.
   - `kernels/` — `search/` (the kernel search; `METHOD.md` maps each part to its source), `evolve/` (OpenEvolve arm),
     `tasks/` (regions, the whole step, shapes, pipeline, KernelBench, FlashInfer-Bench), `library/` (other
     implementations and PTX cards), `archive.py` (idea archive), `eval/` (the kernel evaluator: check, timing, core,
