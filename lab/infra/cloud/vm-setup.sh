@@ -138,12 +138,12 @@ fi
 
 echo "== peaks: HBM bandwidth and bf16 GEMM, measured (lab/infra/context/peaks.py; the ceilings' denominators)"
 ENV_DIR="${LAB_VM_ENV_DIR:-$HOME/BlameGraph}"; ENGINE_DIR="$PWD"
-(cd "$ENV_DIR" && "$ENGINE_DIR/.venv/bin/python" -m lab.infra.context.peaks --seconds 3) || echo "peaks: not measured (finding, not failure)"
+(cd "$ENV_DIR" && "$ENGINE_DIR/.venv/bin/python" -m lab.infra.context.peaks --seconds 3) || { echo "peaks: not measured"; exit 1; }
 
 echo "== model cache: the target's model and the Hub repos its tests read (every jail is offline)"
 mkdir -p "$HOME/.cache/huggingface"
 .venv/bin/python - "$here/../../../${LAB_TARGET:-evals/targets/inference-server.toml}" <<'PY' \
-  || echo "model cache: download failed (finding, not failure)"
+  || { echo "model cache: download failed"; exit 1; }
 import sys, tomllib
 from huggingface_hub import snapshot_download
 t = tomllib.load(open(sys.argv[1], "rb"))
