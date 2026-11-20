@@ -65,7 +65,7 @@ def test_start_creates_an_absent_vm(fake):
     record = labvm.start(vm)
     assert record.state == "running" and record.ip == "203.0.113.9"
     create = next(c for c in calls(fake) if c[:3] == ["compute", "instance", "create"])
-    assert create[create.index("--resources-preset") + 1] == vm.provider.type
+    assert create[create.index("--resources-preset") + 1] == vm.provider.type.split("/")[1]
 
 
 def kinds(tmp_path):
@@ -113,14 +113,14 @@ def test_cli_stop_deletes_unless_keep_disk(fake, monkeypatch, capsys):
 
 def test_run_pushes_runs_in_repo_dir_and_fetches(fake, monkeypatch):
     monkeypatch.setenv("LAB_ENGINE_REPO", str(labvm.engine.ENV_ROOT))     # its sha ships as LAB_GIT_SHA
-    vm = labvm.VM(name="t4", user="u", remote_dir="~/repo")
+    vm = labvm.VM(name="t4", remote_dir="~/repo")
     local = fake / "out"
     assert labvm.run(vm, "python -m lab.profile.profile", fetch_dir="lab/runs", local=local) == 0
     log = calls(fake)
     rsyncs = [c for c in log if c[0] == "rsync"]
-    assert rsyncs[0][-1] == "u@203.0.113.9:~/repo/" and "--filter=:- .gitignore" in rsyncs[0]          # the engine
-    assert rsyncs[1][-1] == "u@203.0.113.9:~/BlameGraph/" and "--filter=:- .gitignore" in rsyncs[1]    # this environment
-    assert rsyncs[2][-2] == "u@203.0.113.9:~/repo/lab/runs/"
+    assert rsyncs[0][-1] == "lab@203.0.113.9:~/repo/" and "--filter=:- .gitignore" in rsyncs[0]          # the engine
+    assert rsyncs[1][-1] == "lab@203.0.113.9:~/BlameGraph/" and "--filter=:- .gitignore" in rsyncs[1]    # this environment
+    assert rsyncs[2][-2] == "lab@203.0.113.9:~/repo/lab/runs/"
     sshs = [c for c in log if c[0] == "ssh"]
     cmd = [c for c in sshs if c[-1].startswith("cd ")][-1][-1]
     assert cmd.startswith("cd ~/repo && LAB_GIT_SHA=")
@@ -133,7 +133,7 @@ def test_run_in_the_environment_dir(fake, monkeypatch):
     from lab.records import ledger
     monkeypatch.setattr(ledger, "ROOT", fake / "ledger")
     monkeypatch.delenv("LAB_STORE", raising=False)
-    vm = labvm.VM(name="t4e", user="u", remote_dir="~/repo", env_dir="~/env")
+    vm = labvm.VM(name="t4e", remote_dir="~/repo", env_dir="~/env")
     assert labvm.run(vm, "lab regimes run all --url http://localhost:8000", fetch_dir="out", local=fake / "o",
                      where="env") == 0
     log = calls(fake)
@@ -141,8 +141,8 @@ def test_run_in_the_environment_dir(fake, monkeypatch):
     assert cmd.startswith("cd ~/env && ") and 'PATH="$HOME/env/bin:$HOME/repo/.venv/bin:$PATH" timeout --signal=TERM --kill-after=60 180m lab regimes' in cmd
     rsyncs = [c for c in log if c[0] == "rsync"]
     assert "--include=evals/regimes/*/heldout.jsonl" in rsyncs[1]                     # held-out traces travel
-    assert [r[-2] for r in rsyncs[-3:]] == ["u@203.0.113.9:~/env/out/", "u@203.0.113.9:~/env/local/ledger/",
-                                            "u@203.0.113.9:~/env/local/runs/"]      # a lab run is always brought home
+    assert [r[-2] for r in rsyncs[-3:]] == ["lab@203.0.113.9:~/env/out/", "lab@203.0.113.9:~/env/local/ledger/",
+                                            "lab@203.0.113.9:~/env/local/runs/"]      # a lab run is always brought home
     assert "--exclude=workspace/" in rsyncs[-1]
 
 
@@ -156,7 +156,7 @@ def test_collect_merges_the_vms_ledger(fake, monkeypatch):
         if path == "local/ledger":
             shutil.copytree(remote, local, dirs_exist_ok=True)
     monkeypatch.setattr(labvm, "fetch", fetch)
-    labvm.collect(labvm.VM(name="t4c", user="u"), None)
+    labvm.collect(labvm.VM(name="t4c"), None)
     assert [r["id"] for r in ledger.records(fake / "ledger")] == [rec["id"]]
 
 
@@ -188,7 +188,7 @@ def test_watchdog_deletes_a_running_vm_at_its_deadline(fake, monkeypatch):
 
 
 def test_run_deletes_the_vm_when_asked(fake):
-    vm = labvm.VM(name="t4d", user="u", remote_dir="~/repo")
+    vm = labvm.VM(name="t4d", remote_dir="~/repo")
     assert labvm.run(vm, "true", keep=False) == 0
     assert vm.provider.get("t4d") is None and not labvm._watchdog_file(vm).exists()     # stop disarms it
 
@@ -201,13 +201,16 @@ def test_run_returns_the_remote_exit_code_and_still_fetches(fake, monkeypatch):
 
 def test_login_defaults_to_the_provider(fake, monkeypatch):
     assert labvm.VM().login == "lab"
-    monkeypatch.setenv("LAB_VM_USER", "me")
-    assert labvm.VM().login == "me"
 
 
 def test_provider_reads_env_at_construction(fake, monkeypatch):
+    monkeypatch.setenv("LAB_VM_TYPE", "gpu-h200-sxm/2gpu-32vcpu-400gb")
+    labvm.start(labvm.VM(name="t20"))
+    create = next(c for c in calls(fake) if c[:3] == ["compute", "instance", "create"])
+    assert create[create.index("--resources-preset") + 1] == "2gpu-32vcpu-400gb"
     monkeypatch.setenv("LAB_VM_TYPE", "2gpu-32vcpu-400gb")
-    assert nebius.Nebius().type == "2gpu-32vcpu-400gb"
+    with pytest.raises(ProviderError, match="PLATFORM/PRESET"):
+        labvm.start(labvm.VM(name="t21"))
 
 
 def test_cli_status_types_and_separator(fake, capsys, monkeypatch):

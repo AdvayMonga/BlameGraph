@@ -34,7 +34,6 @@ def env_field(name: str, default: str):
 class Provider(Protocol):
     """One cloud. `name` is the VM's name there; a refusal raises ProviderError."""
     type: str            # the GPU machine type `create` asks for
-    location: str
     default_user: str    # the ssh login of a VM it created
 
     def get(self, name: str) -> Record | None: ...
