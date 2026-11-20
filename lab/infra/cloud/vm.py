@@ -69,12 +69,13 @@ def _wait(vm: VM, wanted: str, timeout_s: float) -> Record:
         time.sleep(POLL_S)
 
 
-def start(vm: VM, spot: bool = True) -> Record:
-    """The VM running: created when absent (`spot`: at the spot price, preemptible), started when stopped."""
+def start(vm: VM, spot: bool = True, account: str | None = None) -> Record:
+    """The VM running: created when absent (`spot`: at the spot price, preemptible; `account`: the service account it
+    acts as), started when stopped."""
     record = vm.provider.get(vm.name)
     if record is None:
         vm.known_hosts.unlink(missing_ok=True)
-        vm.provider.create(vm.name, vm.keyfile, spot)
+        vm.provider.create(vm.name, vm.keyfile, spot, account)
     elif record.state == "running" and record.ip:
         return record
     elif record.state == "stopping":

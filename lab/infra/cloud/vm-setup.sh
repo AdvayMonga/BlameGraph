@@ -61,6 +61,9 @@ uv pip install -q --python .venv/bin/python py-spy && .venv/bin/py-spy --version
 uv pip install -q --python .venv/bin/python duckdb zstandard    # the agent's query tool (lab/records/index.py)
 uv pip install -q --python .venv/bin/python pandas pyarrow     # the correctness task sets (lab/gate/correctness/tasks.py)
 uv pip install -q --python .venv/bin/python ninja    # torch C++ extensions: the engine's megakernel builds on first use
+uv pip install -q --python .venv/bin/python anthropic boto3    # `lab kernels run`'s search: its models and the store
+command -v nebius >/dev/null || [ -x "$HOME/.nebius/bin/nebius" ] \
+  || curl -sSL https://storage.eu-north1.nebius.cloud/cli/install.sh | bash >/dev/null   # a VM deleting itself
 if ! command -v srt >/dev/null; then
   $SUDO apt-get install -y -qq bubblewrap socat ripgrep xz-utils >/dev/null
   if ! node -e 'process.exit(+process.versions.node.split(".")[0] < 20)' 2>/dev/null; then
@@ -90,6 +93,9 @@ $SUDO docker run --rm --gpus all --network none lab-jail nvidia-smi -L && echo "
 # The agent's workbench has the internet but not the cloud's metadata service (instance credentials, user-data).
 # Only that address: a cloud's DNS resolver can sit in 169.254.0.0/16 too, and the workbench needs names.
 $SUDO iptables -C DOCKER-USER -d 169.254.169.254 -j DROP 2>/dev/null || $SUDO iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
+for ip in $(getent ahostsv4 metadata.nebius.internal 2>/dev/null | awk '{print $1}' | sort -u); do   # the VM's account
+  $SUDO iptables -C DOCKER-USER -d "$ip" -j DROP 2>/dev/null || $SUDO iptables -I DOCKER-USER -d "$ip" -j DROP
+done
 $SUDO docker run --rm lab-jail python3 -c "import socket; socket.create_connection(('169.254.169.254', 80), timeout=3)" \
   2>/dev/null && echo "workbench: METADATA REACHABLE" || echo "workbench: metadata blocked"
 $SUDO docker run --rm lab-jail python3 -c "import socket; socket.create_connection(('pypi.org', 443), timeout=10)" \
