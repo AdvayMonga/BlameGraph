@@ -1,87 +1,83 @@
-"""lab run: the commands of a run in order, nothing started when something is absent, the VM always deleted."""
-import os
+"""lab run: nothing started while something is missing or a VM exists, an ended run's VM deleted first, the job's
+command and the billing line."""
+from __future__ import annotations
 
-os.environ.setdefault("LAB_TARGET", "evals/targets/inference-server.toml")
+import types
 
 import pytest
 
 from lab import run
+from lab.infra.cloud import vm as labvm
+from lab.kernels.run import launch
+from lab.loop import record
+from lab.loop import setup as S
+from lab.records.remote import DirRemote
 
 
-class FakeVM:
-    name, exists = "lab-gpu", False
+class FakeProvider:
+    default_user = "lab"
 
-    @property
-    def provider(self):
-        return self
+    def __init__(self, state=None):
+        self.state = state
 
     def get(self, name):
-        return object() if self.exists else None
+        return None if self.state is None else labvm.Record(name, self.state, "203.0.113.9", "t")
+
+    def account(self):
+        return "sa-1"
 
 
-@pytest.fixture(autouse=True)
-def no_vm(monkeypatch):
-    monkeypatch.setattr("lab.infra.cloud.vm.VM", FakeVM)
-    monkeypatch.setattr(FakeVM, "exists", False)
+@pytest.fixture
+def host(tmp_path, monkeypatch):
+    h = types.SimpleNamespace(provider=FakeProvider(), remote=DirRemote(tmp_path / "store"), went=[], deleted=[],
+                              problems=())
+    real = labvm.VM
+    monkeypatch.setattr(labvm, "VM", lambda: real(name="lab-gpu", provider=h.provider))
+    monkeypatch.setattr(labvm, "left_s", lambda v: 3600.0)
+    monkeypatch.setattr(S, "setup", lambda v: h.problems)
+    monkeypatch.setattr("lab.records.remote.open_remote", lambda: h.remote)
+
+    def go(v, run_id, job):
+        h.went.append((run_id, job))
+        h.provider.state = "running"
+
+    def stop(v, keep_disk=False):
+        h.deleted.append(v.name)
+        h.provider.state = None
+    monkeypatch.setattr(launch, "go", go)
+    monkeypatch.setattr(labvm, "stop", stop)
+    return h
 
 
-def test_a_run_is_its_commands_in_order_and_the_vm_is_always_deleted(monkeypatch):
-    done: list = []
-    monkeypatch.setattr("lab.session.preflight", lambda provider=None: [])
-    monkeypatch.setattr(run, "lab", lambda step: done.append(step) or 0)
-    assert run.main(["--task", "t.toml", "--budget", "20"]) == 0
-    run_id = done[3][-1]
-    assert done == [["vm", "start"], ["vm", "setup"], ["setup", "--task", "t.toml"],
-                    ["session", "--task", "t.toml", "--budget", "20", "--run", run_id],
-                    ["feedback", str(run.ledger.ROOT), "--run", run_id], ["store", "push"], ["vm", "stop"]]
-    assert run_id.startswith("run-")
-    # a failing step ends the run with its code; the VM is still deleted
-    done.clear()
-    monkeypatch.setattr(run, "lab", lambda step: done.append(step) or (3 if step[0] == "setup" else 0))
-    assert run.main(["--task", "t.toml", "--budget", "20"]) == 3
-    assert [s[0] for s in done] == ["vm", "vm", "setup", "vm"] and done[-1] == ["vm", "stop"]
-    # so is it when a step is interrupted
-    done.clear()
-
-    def interrupted(step):
-        done.append(step)
-        if step[0] == "session":
-            raise KeyboardInterrupt
-        return 0
-    monkeypatch.setattr(run, "lab", interrupted)
-    try:
-        run.main(["--task", "t.toml", "--budget", "20"])
-    except KeyboardInterrupt:
-        pass
-    assert done[-1] == ["vm", "stop"]
+def test_no_flags_start_one_turn_of_the_default_task(host, capsys):
+    assert run.main([]) == 0
+    (run_id, job), = host.went
+    assert run_id.startswith("run-") and job == ["lab.loop.job", "--task", "lab/tasks/single_stream.toml"]
+    out = capsys.readouterr().out
+    assert f"{run_id}: running on lab-gpu" in out
+    assert out.strip().splitlines()[-1] == "billing: VM lab-gpu is running; deleted by its deadline in 1.0 h"
 
 
-def test_nothing_is_started_when_something_is_absent(monkeypatch, capsys):
-    done: list = []
-    monkeypatch.setattr(run, "lab", lambda step: done.append(step) or 0)
-    monkeypatch.setattr("lab.session.preflight", lambda provider=None: ["no API key"])
-    assert run.main(["--task", "t.toml", "--budget", "20"]) == 2 and done == []
-    assert "no API key" in capsys.readouterr().err
+def test_the_turns_and_the_budget_go_to_the_job(host):
+    assert run.main(["--n", "loop", "--budget", "40"]) == 0 and run.main(["--n", "3"]) == 2    # the VM now exists
+    assert host.went[0][1][3:] == ["--n", "loop", "--budget", "40"] and len(host.went) == 1
 
 
+def test_nothing_is_started_on_bad_flags_a_problem_or_an_existing_vm(host, capsys):
+    assert run.main(["--n", "loop"]) == 2 and "--n loop needs --budget" in capsys.readouterr().err
+    assert run.main(["--task", "/etc/hosts"]) == 2
+    host.problems = (S.Problem("no model key", "set ANTHROPIC_API_KEY in .env"),)
+    assert run.main([]) == 2
+    assert "- no model key\n  fix: set ANTHROPIC_API_KEY in .env" in capsys.readouterr().err
+    host.problems, host.provider.state = (), "running"
+    assert run.main([]) == 2
+    io = capsys.readouterr()
+    assert "lab-gpu already exists" in io.err and io.out.startswith("billing: VM lab-gpu is running")
+    assert host.went == [] and host.deleted == []
 
-def test_each_command_runs_with_the_vm_as_its_worker(monkeypatch):
-    seen: list = []
-    monkeypatch.setattr(run.subprocess, "run", lambda argv, env: seen.append((argv[1:], env["LAB_WORKER"])) or run.subprocess.CompletedProcess(argv, 0))
-    assert run.lab(["vm", "start"]) == 0 and seen == [(["-m", "lab", "vm", "start"], "ssh")]
 
-
-def test_nothing_is_started_and_nothing_deleted_when_the_vm_already_exists(monkeypatch, capsys):
-    done: list = []
-    monkeypatch.setattr(run, "lab", lambda step: done.append(step) or 0)
-    monkeypatch.setattr("lab.session.preflight", lambda provider=None: [])
-    monkeypatch.setattr(FakeVM, "exists", True)
-    assert run.main(["--task", "t.toml", "--budget", "20"]) == 2 and done == []
-    assert "lab-gpu already exists" in capsys.readouterr().err
-    # a provider that cannot be asked starts nothing either
-    def broken(self, name):
-        from lab.infra.cloud.providers import ProviderError
-        raise ProviderError("`nebius` CLI not installed")
-    monkeypatch.setattr(FakeVM, "get", broken)
-    assert run.main(["--task", "t.toml", "--budget", "20"]) == 2 and done == []
-    assert "not installed" in capsys.readouterr().err
+def test_the_vm_of_an_ended_run_is_deleted_before_the_next_starts(host, capsys):
+    record.record(host.remote, "run-0", {"state": "done"}, host.remote.root / "none")
+    host.provider.state = "stopped"
+    assert run.main([]) == 0
+    assert host.deleted == ["lab-gpu"] and len(host.went) == 1 and "the VM of run-0" in capsys.readouterr().out

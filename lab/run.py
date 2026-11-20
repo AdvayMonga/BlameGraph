@@ -1,70 +1,65 @@
-"""One run, start to finish: a GPU VM, the target's setup, the session, its feedback, the store. The VM is deleted
-when the run ends, however it ends. Nothing starts when a VM of that name already exists.
+"""One run: checked here, then started on its own GPU VM, which runs the loop, saves every turn to the store and stops
+itself at the end. `lab status` reads the run and deletes its VM.
 
-  lab run --task TASK.toml --budget USD [--target T]
+  lab run [--task TASK.toml] [--n N|loop] [--budget USD]
 
-`--budget` caps the session.
+No `--n` is one turn; `--n loop` runs until `--budget` is spent; `--budget` stops any run early.
 """
 from __future__ import annotations
 
 import argparse
-import os
-import subprocess
 import sys
 import time
 import uuid
+from pathlib import Path
 
-from evals.targets import target
-from lab.records import ledger
+from lab.targets import engine
 
-
-def steps(task: str, budget: float, run_id: str) -> list[list[str]]:
-    """The `lab` commands of a run, in order."""
-    usd = f"{budget:g}"
-    return [["vm", "start"], ["vm", "setup"], ["setup", "--task", task],
-            ["session", "--task", task, "--budget", usd, "--run", run_id],
-            ["feedback", str(ledger.ROOT), "--run", run_id], ["store", "push"]]
+JOB = "lab.loop.job"
+TASK = "lab/tasks/single_stream.toml"
 
 
-def lab(step: list[str]) -> int:
-    print("lab", *step, flush=True)
-    return subprocess.run([sys.executable, "-m", "lab", *step], env={**os.environ, "LAB_WORKER": "ssh"}).returncode
-
-
-def main(argv=None) -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="lab run", description=__doc__.split("\n")[0])
-    target.add_argument(ap)
-    ap.add_argument("--task", required=True, help="task spec TOML (lab/task.py)")
-    ap.add_argument("--budget", type=float, required=True, help="dollars for the run")
+    ap.add_argument("--task", default=TASK, help=f"task spec TOML inside this repo (default: {TASK})")
+    ap.add_argument("--n", help="turns: a number, or `loop` (until the budget is spent)")
+    ap.add_argument("--budget", type=float, help="dollars; the run stops before the turn after they are spent")
     a = ap.parse_args(argv)
-    if a.target:
-        os.environ["LAB_TARGET"] = a.target
-    from lab import session
-    missing = session.preflight()
-    if missing:
-        print("lab run: nothing was started.\n" + "\n".join(f"- {x}" for x in missing), file=sys.stderr)
-        return 2
     from lab.infra.cloud import vm
+    from lab.kernels.run import launch
+    from lab.loop import loop, record, status
+    from lab.loop.setup import setup
+    from lab.task import Task
+    run = f"run-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
     try:
-        v = vm.VM()
-        exists = v.provider.get(v.name) is not None
-    except vm.ProviderError as e:
+        loop.plan(run, a.n, a.budget)
+        task = Path(a.task).resolve().relative_to(engine.ENV_ROOT).as_posix()
+        Task.parse(engine.ENV_ROOT / task)
+    except (ValueError, OSError) as e:
         print(f"lab run: nothing was started. {e}", file=sys.stderr)
         return 2
-    if exists:
-        print(f"lab run: nothing was started. A VM named {v.name} already exists: `lab vm stop` deletes it, or set "
-              "LAB_VM to another name.", file=sys.stderr)
+    v = vm.VM()
+    problems = setup(v)
+    if problems:
+        print("lab run: nothing was started.\n" + "\n".join(f"- {p.what}\n  fix: {p.fix}" for p in problems),
+              file=sys.stderr)
         return 2
-    run_id = f"run-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
-    code = 0
-    try:
-        for step in steps(a.task, a.budget, run_id):
-            code = lab(step)
-            if code:
-                break
-    finally:
-        lab(["vm", "stop"])
-    return code
+    from lab.records.remote import open_remote
+    remote = open_remote()
+    last = record.last_run(remote)
+    if status.tidy(v, record.status(remote, last) if last else None):
+        print(f"deleted {v.name}, the VM of {last}", flush=True)
+    if v.provider.get(v.name) is not None:
+        print(f"lab run: nothing was started. A VM named {v.name} already exists: `lab status` reads its run, "
+              "`lab vm stop` deletes it.", file=sys.stderr)
+        print(status.billing(v))
+        return 2
+    launch.go(v, run, [JOB, "--task", task, *(["--n", a.n] if a.n else []),
+                       *(["--budget", f"{a.budget:g}"] if a.budget is not None else [])])
+    print(f"{run}: running on {v.name}; `lab status` reads it. The VM stops itself at the end; `lab status` then "
+          "deletes it.")
+    print(status.billing(v))
+    return 0
 
 
 if __name__ == "__main__":

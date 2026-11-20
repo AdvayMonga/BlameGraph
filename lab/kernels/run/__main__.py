@@ -56,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
                   "it, or set LAB_VM to another name.", file=sys.stderr)
             return 2
         run, task = f"kgen-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}", a.task
-    launch.go(v, run, task)
+    launch.go(v, run, [runs.JOB, "--task", task])
     print(f"{run}: running on {v.name}; `lab kernels status --run {run}` reads it. The VM stops itself at the end; "
           "`lab kernels status` then deletes it.")
     return 0
