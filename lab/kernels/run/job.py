@@ -76,7 +76,6 @@ def saved(search_dir: Path) -> int:
 def search(task_name: str, out: Path, stage) -> dict:
     """The kernel_search tool's pipeline on this host: the worker's jobs, the hold and the jailed evaluator run here as
     root, the search and its model calls in this process. Returns the result written to result.json."""
-    from lab.evaltools import _layer_facts
     from lab.infra.runner import worker
     from lab.kernels.eval.ship import gate_passed
     from lab.kernels.tasks import load, pipeline
@@ -105,7 +104,7 @@ def search(task_name: str, out: Path, stage) -> dict:
         start.write_text(held["start"] if held else pipeline.start_program(task, tree))
         stage("search")
         found = pipeline.search(task, caps, start, out / "search", ledger.ROOT, jail, device="cuda", held=held,
-                                facts_text=pipeline.facts(task, _layer_facts(ledger.ROOT, "kernel_tasks")))
+                                facts_text=pipeline.facts())
         stage("gate")
         best = pipeline.freeze(task, caps, out / "search" / "best_program.py", out, jail, held, "cuda")
         g = pipeline.gate(task, caps, best, out, jail, held, "cuda")

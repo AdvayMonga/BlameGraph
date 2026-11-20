@@ -18,7 +18,7 @@ from lab.kernels.run import launch
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="lab kernels run", description=__doc__.split("\n")[0])
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--task", help="a kernel task or region:FIRST:LAST")
+    g.add_argument("--task", help="the region to search: region:FIRST:LAST")
     g.add_argument("--run", help="a stopped run to go on with")
     a = ap.parse_args(argv)
     missing = launch.missing()
