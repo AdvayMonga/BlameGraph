@@ -1,17 +1,11 @@
-# all local data, the ledger and run outputs (local/ledger, local/runs) stay local
 local/
 .env
 .env.*
+.venv/
 __pycache__/
 *.py[cod]
-.pytest_cache/
-.venv/
-venv/
+*.egg-info/
 .DS_Store
-.vscode/
-.idea/
 .vibe-wise/
-# held-out traces and the corpus seed live in the store (python -m lab.records pull --corpus), never in git
 evals/regimes/*/heldout.jsonl
 evals/regimes/.seed
-*.egg-info/
