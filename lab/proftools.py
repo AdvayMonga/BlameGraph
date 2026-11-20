@@ -39,9 +39,9 @@ def _flags(args: dict, name: str, default: list[str] | None = None) -> list[str]
     return list(v)
 
 
-def workload(args: dict) -> list[str]:
-    """lab.profile.profile's workload flags from validated integers."""
-    return [w for k, (d, lo) in WORKLOAD.items() for w in (f"--{k.replace('_', '-')}", str(_int(args, k, d, lo)))]
+def workload(args: dict) -> dict:
+    """The workload's sizes, validated."""
+    return {k: _int(args, k, d, lo) for k, (d, lo) in WORKLOAD.items()}
 
 
 def kernel_regex(value) -> str:
@@ -68,23 +68,23 @@ def _head(path: Path | None) -> str:
 
 
 def instrument(kind: str, args: dict) -> dict:
-    """One instrument from validated args, as a dict: its binary (None for torch), `wrap(exe, out)`, `flags`,
-    `post(exe, out)` -> (argv, stdout file), the `summary` glob, `extra(exe)` flags and `bundle_only`."""
-    wl = workload(args)
+    """One instrument from validated args, as a dict: its binary (None for torch), `wrap(exe, out)` (its command
+    before the engine's), `run(exe)` (lab.profile.profile.run's profiler arguments), `post(exe, out)` -> (argv, stdout
+    file), the `summary` glob and `bundle_only`."""
+    workload(args)
     if kind == "profile":
-        capture = [w for f in _flags(args, "capture") for w in ("--capture", f)]
-        steady = ["--concurrency", str(_int(args, "concurrency", 1, 1))] if "concurrency" in args else []
         profiler = "cuda-range" if args.get("capture_only") else "torch"      # a capture for the kernel search: no trace
-        return {"binary": None, "flags": wl + ["--profiler", profiler, *capture, *steady], "summary": None,
-                "wrap": lambda exe, out: [], "post": None, "extra": lambda exe: [], "bundle_only": True}
+        steady = {"concurrency": _int(args, "concurrency", 1, 1)} if "concurrency" in args else {}
+        return {"binary": None, "wrap": lambda exe, out: [], "summary": None, "post": None, "bundle_only": True,
+                "run": lambda exe: {"profiler": profiler, "capture": _flags(args, "capture"), **steady}}
     if kind == "trace":
         flags = _flags(args, "nsys_args", NSYS_FLAGS)
-        return {"binary": "nsys", "flags": wl + ["--profiler", "cuda-range"], "summary": "stats_cuda_gpu_kern_sum.csv",
+        return {"binary": "nsys", "summary": "stats_cuda_gpu_kern_sum.csv", "bundle_only": False,
                 "wrap": lambda exe, out: [exe, "profile", "--output", str(out / "trace"), "--force-overwrite", "true",
                                           *flags, "--stats", "false"],
                 "post": lambda exe, out: ([exe, "stats", "--report", NSYS_REPORTS, "--format", "csv", "--output",
                                            str(out / "stats"), str(out / "trace.nsys-rep")], None),
-                "extra": lambda exe: [], "bundle_only": False}
+                "run": lambda exe: {"profiler": "cuda-range"}}
     if kind == "kernel":
         rx = kernel_regex(args["kernel_regex"]) if "kernel_regex" in args else None
         skip, count = _int(args, "launch_skip", 0, 0), _int(args, "launch_count", 8, 1)
@@ -92,21 +92,19 @@ def instrument(kind: str, args: dict) -> dict:
         if not isinstance(kset, str) or not kset:
             raise ValueError("set must be a non-empty string")
         flags = _flags(args, "ncu_args")
-        return {"binary": "ncu", "flags": wl + ["--profiler", "cuda-range"], "summary": "metrics.csv",
+        return {"binary": "ncu", "summary": "metrics.csv", "bundle_only": False,
                 "wrap": lambda exe, out: [exe, "--export", str(out / "kernel"), "--force-overwrite",
                                           *(["--kernel-name", f"regex:{rx}"] if rx else []), "--launch-skip", str(skip),
                                           "--launch-count", str(count), "--set", kset, "--profile-from-start", "off",
                                           "--target-processes", "all", *flags],
                 "post": lambda exe, out: ([exe, "--import", str(out / "kernel.ncu-rep"), "--csv", "--page", "raw"],
                                           out / "metrics.csv"),
-                "extra": lambda exe: [], "bundle_only": False}
+                "run": lambda exe: {"profiler": "cuda-range"}}
     if kind == "hostprof":
-        seconds, rate = _int(args, "seconds", 20, 1), _int(args, "rate", 100, 1)
-        more = [w for f in _flags(args, "pyspy_args") for w in ("--pyspy-arg", f)]
-        return {"binary": "py-spy", "flags": wl, "summary": "bundle/*/pyspy-dump.txt", "wrap": lambda exe, out: [],
-                "post": None,
-                "extra": lambda exe: ["--profiler", "pyspy", "--seconds", str(seconds), "--rate", str(rate),
-                                      "--pyspy-bin", exe, *more], "bundle_only": False}
+        seconds, rate, more = _int(args, "seconds", 20, 1), _int(args, "rate", 100, 1), _flags(args, "pyspy_args")
+        return {"binary": "py-spy", "summary": "bundle/*/pyspy-dump.txt", "bundle_only": False,
+                "wrap": lambda exe, out: [], "post": None,
+                "run": lambda exe: {"profiler": "pyspy", "pyspy": (exe, seconds, rate, more)}}
     raise ValueError(f"unknown instrument {kind!r}")
 
 
@@ -195,12 +193,12 @@ class ProfTools:
         extra = {"profile": {"type": "string"}} if has else {}
         note = PROFILE_ARG if has else ""
         return [
-            ToolSpec("profile", "Run the engine in process under the profiler, jailed, on `requests` sampled from a seen "
+            ToolSpec("profile", "Serve the engine, jailed, under the profiler and send it `requests` sampled from a seen "
                      "corpus class (`corpus_class`, default steady_interactive; `seed`) or on synthetic token ids "
                      "(`synthetic`, `prompt_len`); `max_tokens` default 32. Stores the raw bundle (event timeline, chrome "
                      "trace, op and kernel tables, memory, GPU samples, provenance) in the ledger and copies it into your "
-                     "workspace under lab/runs/, left out of your change. `capture`: \"module:function\" entry points whose every "
-                     "call's argument shapes (and one whole call per shape) go into the bundle's captures/; it "
+                     "workspace under lab/runs/, left out of your change. `capture`: \"module:function\" entry points; the "
+                     "argument shapes of every call in the window (and one whole call per shape) go into the bundle's captures/; it "
                      "synchronizes, so that bundle's times are not representative. Returns the bundle path and its file names."
                      + note + gpu("1-7 min measured at 16 requests x 64 tokens on an H200 (7 min when the weights were still loading from disk)"),
                      _schema(capture=FLAGS, **extra), self.profile),
@@ -223,7 +221,7 @@ class ProfTools:
                              launch_count={"type": "integer", "minimum": 1, "default": 8},
                              set={"type": "string", "default": "basic"}, ncu_args=FLAGS), self.kernel),
             ToolSpec("hostprof", "Sample the engine process with py-spy for `seconds` while the profile workload "
-                     "repeats (scheduler and backend in process, warmup excluded). Stores a speedscope profile and one "
+                     "repeats (warmup excluded). Stores a speedscope profile and one "
                      "stack dump taken halfway in the ledger; returns the head of the dump. The record's `calibrated`: "
                      "samples per thread and the functions with the most samples on top of the stack (`self`) and "
                      "anywhere in it (`total`), as shares of all samples. `pyspy_args` are appended "

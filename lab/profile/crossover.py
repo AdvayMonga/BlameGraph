@@ -18,8 +18,6 @@ PATHS = {"megakernel": {"MEGAKERNEL": "1", "MEGAKERNEL_MAX_ROWS": "16"}, "kernel
 MAX_ROWS = int(PATHS["megakernel"]["MEGAKERNEL_MAX_ROWS"])     # the most rows the megakernel path takes
 MEGA_ON = "decode-step megakernel on"                         # the engine's log line when the megakernel is on
 META = "crossover-meta.json"
-PROFILE = ("import logging, runpy; logging.basicConfig(level=logging.INFO); "     # lab.profile.profile with INFO logged
-           "runpy.run_module('lab.profile.profile', run_name='__main__', alter_sys=True)")
 
 
 def steps(bundle: Path) -> dict[int, list[float]]:
@@ -84,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
                 meta = {"env": {**served, **env}, "max_tokens": a.max_tokens}
                 if not reusable(d, meta):
                     shutil.rmtree(d, ignore_errors=True)
-                    p = subprocess.run([sys.executable, "-c", PROFILE, "--synthetic", "--prompt-len", str(plen),
+                    p = subprocess.run([sys.executable, "-m", "lab.profile.profile", "--synthetic", "--prompt-len", str(plen),
                                         "--requests", str(b), "--max-tokens", str(a.max_tokens), "--warmup", "0",
                                         "--profiler", "cuda-range", "--out", str(d)],
                                        env={**os.environ, **meta["env"]}, capture_output=True, text=True)
@@ -94,7 +92,8 @@ def main(argv: list[str] | None = None) -> int:
                         continue
                     d.mkdir(parents=True, exist_ok=True)
                     (d / META).write_text(json.dumps(meta))
-                if path == "megakernel" and MEGA_ON not in (log.read_text() if log.exists() else ""):
+                engine_log = "".join(f.read_text(errors="replace") for f in d.rglob("serve.log"))
+                if path == "megakernel" and MEGA_ON not in engine_log:
                     not_on.add((plen, b))
                 runs[(path, plen, b)] = steps(d)
     t = table(runs, not_on)
