@@ -30,17 +30,16 @@ MAX_MINUTES = 12 * 60    # a started VM is deleted this long after `lab vm start
 
 @dataclass(frozen=True)
 class VM:
-    """Read from env at construction. The provider supplies GPU type, location, image and the login user."""
+    """Read from env at construction. The provider supplies the GPU type, the image and the login user."""
     name: str = env_field("LAB_VM", "lab-gpu")
     keyfile: str = env_field("LAB_VM_KEYFILE", "~/.ssh/lab_ed25519.pub")   # must be passphrase-free
     remote_dir: str = env_field("LAB_VM_DIR", "~/inference-server")       # the engine, with its venv
     env_dir: str = env_field("LAB_VM_ENV_DIR", "~/BlameGraph")             # this environment
-    user: str = env_field("LAB_VM_USER", "")
     provider: Provider = field(default_factory=lambda: providers.load(os.environ.get("LAB_VM_PROVIDER", "nebius")))
 
     @property
     def login(self) -> str:
-        return self.user or self.provider.default_user
+        return self.provider.default_user
 
     @property
     def known_hosts(self) -> Path:
@@ -363,7 +362,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "status":
         record = p.get(vm.name)
         if record is None:
-            print(f"{vm.name}: absent (would create {p.type} in {p.location} on {type(p).__name__.lower()})")
+            print(f"{vm.name}: absent (would create {p.type} on {type(p).__name__.lower()})")
         else:
             print(f"{vm.name}: {record.state} {record.type} {record.ip or ''} [{record.detail}]")
         return 0

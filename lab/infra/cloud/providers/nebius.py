@@ -10,26 +10,19 @@ from pathlib import Path
 
 from lab.infra.cloud.providers import ProviderError, Record, env_field, pricing
 
-USER = "lab"   # the login cloud-init creates
+USER = "lab"                        # the login cloud-init creates
+IMAGE = "ubuntu24.04-cuda13.0"      # an image family
+DISK_GB = 400
 
 
 @dataclass(frozen=True)
 class Nebius:
-    type: str = env_field("LAB_VM_TYPE", "1gpu-16vcpu-200gb")          # a preset of `platform`
-    platform: str = env_field("LAB_VM_PLATFORM", "gpu-h200-sxm")
-    location: str = env_field("LAB_VM_LOCATION", "")                   # informational
-    image: str = env_field("LAB_VM_IMAGE", "ubuntu24.04-cuda13.0")      # an image family
-    disk_gb: str = env_field("LAB_VM_DISK_GB", "400")
-    project: str = env_field("LAB_VM_PROJECT", "")                      # --parent-id; empty uses the profile's
-    subnet: str = env_field("LAB_VM_SUBNET", "")                        # empty: the project's first subnet
+    type: str = env_field("LAB_VM_TYPE", "gpu-h200-sxm/1gpu-16vcpu-200gb")   # platform/preset, as `types` lists them
     default_user: str = USER
 
     def _cli(self, *args: str) -> str:
-        argv = ["nebius", *args]
-        if self.project and args[:1] in (("compute",), ("vpc",)) and args[2:3] in (("list",), ("create",)):
-            argv += ["--parent-id", self.project]
         try:
-            out = subprocess.run(argv, capture_output=True, text=True)
+            out = subprocess.run(["nebius", *args], capture_output=True, text=True)
         except FileNotFoundError:
             raise ProviderError("`nebius` CLI not installed: https://docs.nebius.com/cli/install")
         if out.returncode != 0:
@@ -65,14 +58,16 @@ class Nebius:
         return Record(name=name, state=state, ip=ip, type=kind, detail=f"{state} {pricing(spot)}", spot=spot)
 
     def _subnet(self) -> str:
-        if self.subnet:
-            return self.subnet
+        """The first subnet of the CLI profile's project."""
         items = self._json("vpc", "subnet", "list").get("items") or []
         if not items:
-            raise ProviderError("no VPC subnet in this project; set LAB_VM_SUBNET")
+            raise ProviderError("no VPC subnet in this project")
         return items[0]["metadata"]["id"]
 
     def create(self, name: str, keyfile: str, spot: bool) -> None:
+        platform, slash, preset = self.type.partition("/")
+        if not (platform and slash and preset):
+            raise ProviderError(f"LAB_VM_TYPE={self.type!r}: PLATFORM/PRESET, as `lab vm types` lists them")
         try:
             public = Path(os.path.expanduser(keyfile)).read_text().strip()
         except OSError as e:
@@ -82,11 +77,11 @@ class Nebius:
                      f"    ssh_authorized_keys:\n      - {public}\n")
         nics = json.dumps([{"name": "eth0", "ip_address": {}, "public_ip_address": {}, "subnet_id": self._subnet()}])
         self._cli("compute", "instance", "create", "--name", name,
-                  "--resources-platform", self.platform, "--resources-preset", self.type,
+                  "--resources-platform", platform, "--resources-preset", preset,
                   "--boot-disk-managed-disk-name", f"{name}-boot",
                   "--boot-disk-managed-disk-type", "network_ssd",
-                  "--boot-disk-managed-disk-size-gibibytes", str(self.disk_gb),
-                  "--boot-disk-managed-disk-source-image-family-image-family", self.image,
+                  "--boot-disk-managed-disk-size-gibibytes", str(DISK_GB),
+                  "--boot-disk-managed-disk-source-image-family-image-family", IMAGE,
                   "--boot-disk-attach-mode", "READ_WRITE",
                   "--network-interfaces", nics, "--cloud-init-user-data", user_data,
                   *(("--follows-spot-price", "--preemptible-on-preemption", "stop", "--recovery-policy", "fail")
