@@ -189,10 +189,10 @@ def _launch(monkeypatch, setup_code=0, reply="started kgen-1\n"):
 
 def test_launch_creates_the_vm_with_the_account_and_sends_secrets_on_stdin_only(monkeypatch):
     v, p, did = _launch(monkeypatch)
-    launch.go(v, "kgen-1", "region:a:b")
+    launch.go(v, "kgen-1", ["lab.kernels.run.job", "--task", "region:a:b"])
     assert did[0] == ("start", "sa-1") and did[1:3] == ["arm", "setup"] and ("allow_stop", "lab-gpu") in p.calls
     _, cmd, sent = did[-1]
-    assert "--instance ci-9" in cmd and "--task region:a:b" in cmd and "--deadline" in cmd
+    assert "python -m lab.kernels.run.job --run kgen-1 --task region:a:b --vm lab-gpu --instance ci-9 --deadline" in cmd
     assert sent["ANTHROPIC_API_KEY"] == "sk-test" and sent["AWS_SECRET_ACCESS_KEY"] == "aws-secret"
     assert sent["LAB_TARGET"] == "evals/targets/inference-server.toml"
     assert "sk-test" not in cmd and "aws-secret" not in cmd and "stop" not in did
@@ -201,11 +201,11 @@ def test_launch_creates_the_vm_with_the_account_and_sends_secrets_on_stdin_only(
 def test_launch_deletes_the_vm_when_setup_or_the_start_of_the_job_fails(monkeypatch):
     v, p, did = _launch(monkeypatch, setup_code=1)
     with pytest.raises(RuntimeError, match="setup` failed"):
-        launch.go(v, "kgen-1", "region:a:b")
+        launch.go(v, "kgen-1", ["lab.kernels.run.job", "--task", "region:a:b"])
     assert did[-1] == "stop" and not any(isinstance(d, tuple) and d[0] == "ssh" for d in did)
     v, p, did = _launch(monkeypatch, reply="Traceback ...")
     with pytest.raises(RuntimeError, match="did not start"):
-        launch.go(v, "kgen-1", "region:a:b")
+        launch.go(v, "kgen-1", ["lab.kernels.run.job", "--task", "region:a:b"])
     assert did[-1] == "stop"
 
 
@@ -226,7 +226,7 @@ def _status(tmp_path, monkeypatch, state, vm_state):
     p.state = vm_state
     monkeypatch.setattr(labvm, "VM", lambda name: types.SimpleNamespace(name=name, provider=p))
     went = []
-    monkeypatch.setattr(launch, "go", lambda v, run, task: went.append((v.name, run, task)))
+    monkeypatch.setattr(launch, "go", lambda v, run, job: went.append((v.name, run, job[-1])))
     monkeypatch.setattr(labvm, "stop", lambda v, keep_disk=False: went.append(("deleted", v.name)))
     monkeypatch.setattr(launch, "missing", lambda: [])
     return went

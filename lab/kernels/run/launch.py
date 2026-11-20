@@ -12,7 +12,8 @@ from pathlib import Path
 from lab.infra.cloud import vm
 from lab.targets import engine
 
-SECRETS = ("ANTHROPIC_API_KEY", "LAB_STORE", "LAB_STORE_ENDPOINT", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
+SECRETS = ("ANTHROPIC_API_KEY", "LAB_STORE", "LAB_STORE_ENDPOINT", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+           "GH_TOKEN")
 LAUNCH_TIMEOUT_S = 120
 
 
@@ -40,9 +41,10 @@ def tidy(v: vm.VM, st: dict) -> bool:
     return True
 
 
-def go(v: vm.VM, run: str, task: str) -> None:
-    """The VM running and set up (created with the service account, or a stopped one started) and the job started on
-    it; a VM this call created or started is deleted when a step fails."""
+def go(v: vm.VM, run: str, job: list[str]) -> None:
+    """The VM running and set up (created with the service account, or a stopped one started) and `job` (a module and
+    its arguments) started on it with the run, the VM, its instance and its deadline; a VM this call created or
+    started is deleted when a step fails."""
     p = v.provider
     try:
         record = vm.start(v, account=p.account())
@@ -55,8 +57,8 @@ def go(v: vm.VM, run: str, task: str) -> None:
         record = v.provider.get(v.name)
         deadline = time.time() + vm.left_s(v)
         venv_bin = v.remote_dir.replace("~", "$HOME", 1) + "/.venv/bin"
-        cmd = (f'cd {v.env_dir} && PATH="{venv_bin}:$PATH" python -m lab.kernels.run.job --run {shlex.quote(run)} '
-               f'--task {shlex.quote(task)} --vm {shlex.quote(v.name)} --instance {p.instance_id(v.name)} '
+        cmd = (f'cd {v.env_dir} && PATH="{venv_bin}:$PATH" python -m {job[0]} --run {shlex.quote(run)} '
+               f'{shlex.join(job[1:])} --vm {shlex.quote(v.name)} --instance {p.instance_id(v.name)} '
                f'--deadline {deadline:.0f}')
         out = subprocess.run(["ssh", *v.ssh_opts, vm.ssh_target(v, record), cmd], input=json.dumps(env()), text=True,
                              capture_output=True, timeout=LAUNCH_TIMEOUT_S)

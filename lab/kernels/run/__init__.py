@@ -17,6 +17,7 @@ from lab.records.remote import Remote
 from lab.targets import engine
 
 PREFIX = "runs/kernels"
+JOB = "lab.kernels.run.job"            # the module `launch.go` starts on the VM
 SKIP = ("tree", "samples", "holder")      # the engine tree, the captured samples, the held weights: rebuilt on the VM
 SNAPSHOT = re.compile(r"/(\d+)\.json$")
 

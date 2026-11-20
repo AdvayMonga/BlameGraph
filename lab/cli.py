@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # command -> the module it runs; a dict is a group: `lab kernels search ...`
 COMMANDS = {
-    "run": "lab.run", "setup": "lab.setup", "session": "lab.session", "rehearsal": "lab.rehearsal", "dashboard": "lab.dashboard",
+    "run": "lab.run", "status": "lab.loop.status", "setup": "lab.setup", "session": "lab.session", "rehearsal": "lab.rehearsal", "dashboard": "lab.dashboard",
     "validate": "lab.gate.validate", "feedback": "evals.agent.feedback",
     "store": "lab.records", "records": "lab.records.ledger", "import-runs": "lab.records.import_runs",
     "workloads": "evals.public",

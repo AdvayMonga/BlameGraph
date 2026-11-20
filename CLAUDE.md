@@ -37,8 +37,9 @@ One command: `lab <command> [args]` (`pip install -e .` puts it on PATH; else `b
 if present, else `python3`). `lab` lists every command, `lab <command> -h` its arguments; the table is `lab/cli.py`, where a new module
 with a CLI gets its entry. The agent's tools are the same commands by the same names, run by a person on a researcher
 run. Jailed and remote internals keep `python -m`.
-1. A whole run in one command: `lab run --task lab/tasks/single_stream.toml --budget USD` (steps 2 to 5, with the VM
-   deleted at the end). `lab dashboard` shows it live. No GPU: `lab rehearsal setup DIR` (prints the practice engine,
+1. A whole run in one command: `lab run [--task TASK.toml] [--n N|loop] [--budget USD]` checks this machine, starts
+   a GPU VM and the loop on it (`lab/loop/`), and returns; the VM saves every turn to the store and stops itself.
+   `lab status` reads the run and deletes its VM. No GPU: `lab rehearsal setup DIR` (prints the practice engine,
    target and task it wrote).
 2. A GPU: `lab vm start` (deleted 12 hours later), `lab vm setup` (also measures
    the GPU's peaks); `LAB_WORKER=ssh` runs GPU jobs there.
@@ -57,7 +58,7 @@ the guard's query budget.
   `tools`/`evaltools`/`proftools`, `experiments` (hypothesis/expect/reflection rules), `experiment` (a person's run),
   `task`, `run`, `setup`, `workspace`, `budget`, `rehearsal`, `dashboard` (+ `live`), `cli`, `prompts/`.
   - `loop/` — one run's parts, each a typed function over `types`: `calibrate`, `measure`, `gaps`, `pick`, `turn`,
-    `push`, `record` (+ finish), and `loop`, which runs them.
+    `push`, `record` (+ finish), and `loop`, which runs them; `setup`, `job` (the run on the VM) and `status`.
   - `kernels/` — `search/` (the kernel search; `METHOD.md` maps each part to its source), `evolve/` (OpenEvolve arm),
     `tasks/` (regions, the whole step, shapes, pipeline, KernelBench, FlashInfer-Bench), `library/` (other
     implementations and PTX cards), `archive.py` (idea archive), `eval/` (the kernel evaluator: check, timing, core,

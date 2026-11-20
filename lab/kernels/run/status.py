@@ -45,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
             print("  preempted; not started again here: " + "; ".join(missing), file=sys.stderr)
             return 1
         print("  preempted: starting it again from its last saved generation", flush=True)
-        launch.go(v, run, st["task"])
+        launch.go(v, run, [runs.JOB, "--task", st["task"]])
         print(f"  running again on {v.name}")
     elif st["state"] == "running" and record is None:
         print(f"  its VM is gone: `lab kernels run --run {run}` goes on from generation {st['generation']}")
