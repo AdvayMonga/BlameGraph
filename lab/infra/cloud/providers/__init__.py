@@ -36,10 +36,9 @@ class Provider(Protocol):
     type: str            # the GPU machine type `create` asks for
     location: str
     default_user: str    # the ssh login of a VM it created
-    spot: bool           # `create` asks for a preemptible VM
 
     def get(self, name: str) -> Record | None: ...
-    def create(self, name: str, keyfile: str) -> None: ...
+    def create(self, name: str, keyfile: str, spot: bool) -> None: ...   # spot: preemptible, at the spot price
     def start(self, name: str) -> None: ...
     def stop(self, name: str) -> None: ...      # the disk is kept
     def delete(self, name: str) -> None: ...    # the VM and its disk

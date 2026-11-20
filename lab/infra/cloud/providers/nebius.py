@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from lab.infra.cloud.providers import ProviderError, Record, env_field, pricing
@@ -22,7 +22,6 @@ class Nebius:
     disk_gb: str = env_field("LAB_VM_DISK_GB", "400")
     project: str = env_field("LAB_VM_PROJECT", "")                      # --parent-id; empty uses the profile's
     subnet: str = env_field("LAB_VM_SUBNET", "")                        # empty: the project's first subnet
-    spot: bool = field(default_factory=lambda: _flag("LAB_VM_SPOT"))   # preemptible at the spot price; fixed at create
     default_user: str = USER
 
     def _cli(self, *args: str) -> str:
@@ -73,7 +72,7 @@ class Nebius:
             raise ProviderError("no VPC subnet in this project; set LAB_VM_SUBNET")
         return items[0]["metadata"]["id"]
 
-    def create(self, name: str, keyfile: str) -> None:
+    def create(self, name: str, keyfile: str, spot: bool) -> None:
         try:
             public = Path(os.path.expanduser(keyfile)).read_text().strip()
         except OSError as e:
@@ -91,7 +90,7 @@ class Nebius:
                   "--boot-disk-attach-mode", "READ_WRITE",
                   "--network-interfaces", nics, "--cloud-init-user-data", user_data,
                   *(("--follows-spot-price", "--preemptible-on-preemption", "stop", "--recovery-policy", "fail")
-                    if self.spot else ()))    # spot: stop on preemption, no recovery
+                    if spot else ()))    # spot: stop on preemption, no recovery
 
     def _id(self, name: str) -> str:
         raw = self._raw(name)
@@ -116,10 +115,3 @@ class Nebius:
             presets = [x.get("name") for x in (p.get("spec") or {}).get("presets") or []]
             lines.append(f"{(p.get('metadata') or {}).get('name')}: {', '.join(filter(None, presets))}")
         return "\n".join(lines) + "\n"
-
-
-def _flag(name: str) -> bool:
-    value = os.environ.get(name, "")
-    if value not in ("", "0", "1"):
-        raise ProviderError(f"{name}={value!r}: use 1 or 0")
-    return value == "1"
