@@ -20,7 +20,7 @@ def fast_arrivals():
 def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, queue_limit: int | None = None,
                 port: int = 0, wrong_every: int = 0, ignore_eos: bool = True) -> ThreadingHTTPServer:
     """`wrong_every` = N: every Nth multiple-choice answer is wrong and token scores are shifted; `ignore_eos` False: the field is ignored."""
-    counter = [0]
+    counter, done = [0], [0]
     sem, lock, waiting = threading.Semaphore(slots), threading.Lock(), [0]
 
     class H(BaseHTTPRequestHandler):
@@ -34,7 +34,7 @@ def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, qu
             self.wfile.write(f"{len(line):x}\r\n".encode() + line + b"\r\n"); self.wfile.flush()
 
         def do_GET(self):
-            data = b'{"ok": true}'
+            data = json.dumps({"completed": done[0]} if self.path.endswith("/scheduler/stats") else {"ok": True}).encode()
             self.send_response(200); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
 
         def _json(self, obj, status=200):
@@ -44,7 +44,8 @@ def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, qu
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            if self.path.endswith("/v1/completions"):        # teacher-forced scoring, deterministic
+            text_api = self.path.endswith("/v1/completions")
+            if text_api and not body.get("stream"):        # teacher-forced scoring, deterministic
                 ids = body["prompt"]
                 off = 1.5 if wrong_every else 0.0      # a server that answers wrong also scores the tokens differently
                 plp = [None] + [{str(t): {"logprob": -0.1 - (t % 7) / 100 - off}, str(t + 1): {"logprob": -2.0 + off}}
@@ -74,7 +75,7 @@ def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, qu
             with lock:
                 waiting[0] -= 1
             try:
-                last = body["messages"][-1]["content"]
+                last = "" if text_api else body["messages"][-1]["content"]
                 text = ["42"] if "17 + 25" in last else [f"t{i} " for i in range(min(out_tokens, body.get("max_tokens") or out_tokens))]
                 fixed = ignore_eos and body.get("ignore_eos")
                 if fixed:                            # a fixed-length request runs to max_tokens
@@ -84,15 +85,17 @@ def make_server(slots: int = 4, token_s: float = 0.002, out_tokens: int = 20, qu
                 self._chunk({"choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}]})
                 for t in text:
                     time.sleep(token_s)
-                    self._chunk({"choices": [{"index": 0, "delta": {"content": t}}]})
+                    self._chunk({"choices": [{"index": 0, **({"text": t} if text_api else {"delta": {"content": t}})}]})
                 self._chunk({"choices": [{"index": 0, "delta": {}, "finish_reason": "length" if fixed else "stop"}]})
-                self._chunk({"choices": [], "usage": {"prompt_tokens": sum(len(m["content"].split()) for m in body["messages"]),
-                                                      "completion_tokens": len(text)}})
+                prompt = len(body["prompt"]) if text_api else sum(len(m["content"].split()) for m in body["messages"])
+                self._chunk({"choices": [], "usage": {"prompt_tokens": prompt, "completion_tokens": len(text)}})
                 if os.environ.get("TELEMETRY_DIR"):
                     with lock, open(os.path.join(os.environ["TELEMETRY_DIR"], "requests.jsonl"), "a") as f:
                         f.write(json.dumps({"trace_id": self.headers.get("X-Trace-Id"), "tokens_out": len(text)}) + "\n")
                 self._chunk(b"[DONE]")
                 self.wfile.write(b"0\r\n\r\n"); self.wfile.flush()
+                with lock:
+                    done[0] += 1
             finally:
                 sem.release()
 

@@ -5,8 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import asdict
-import platform
 import resource
 import subprocess
 import sys
@@ -15,8 +13,6 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import torch
-from torch.autograd import DeviceType
 
 FILES = ("events.jsonl", "trace.json", "ops.json", "memory.json", "stats.json", "meta.json")
 
@@ -42,13 +38,14 @@ def git_sha() -> str | None:
     return out.stdout.strip() if out.returncode == 0 else None
 
 
-def workload_hash(prompts: list[list[int]], max_tokens: int) -> str:
+def workload_hash(prompts: list, max_tokens: int) -> str:
     h = hashlib.sha256(json.dumps([prompts, max_tokens]).encode())
     return h.hexdigest()[:16]
 
 
 def device_memory(device: str) -> dict:
     """Allocator view for the device the engine ran on, plus peak host RSS."""
+    import torch
     out: dict[str, Any] = {"device": device,
                            "peak_host_rss_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
                            * (1 if sys.platform == "darwin" else 1024)}
@@ -62,6 +59,7 @@ def device_memory(device: str) -> dict:
 
 def device_peaks(device: str) -> dict | None:
     """Allocator high-water marks since the last reset; CUDA only (MPS keeps no peak)."""
+    import torch
     if not (device.startswith("cuda") and torch.cuda.is_available()):
         return None
     s = torch.cuda.memory_stats()
@@ -69,6 +67,7 @@ def device_peaks(device: str) -> dict | None:
 
 
 def reset_peaks(device: str) -> None:
+    import torch
     if device.startswith("cuda") and torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
 
@@ -87,6 +86,7 @@ def ops_table(prof: Any, top: int = 200) -> dict:
 def kernels_table(events: Any) -> dict | None:
     """CUDA kernels aggregated by name (times in us), by total time, user annotations excluded; None when no CUDA
     activity."""
+    from torch.autograd import DeviceType
     agg: dict[str, list[float]] = {}
     for e in events:
         if e.device_type == DeviceType.CUDA and not getattr(e, "is_user_annotation", False):
@@ -99,12 +99,30 @@ def kernels_table(events: Any) -> dict | None:
     return {"kernels": rows, "total_us": sum(r["total_us"] for r in rows), "launches": sum(r["count"] for r in rows)}
 
 
-def meta(device: str, settings: Any, prompts: list[list[int]], max_tokens: int, t0: float,
-         t1: float, **extra: Any) -> dict:
-    """The bundle's provenance: git sha, versions, device, engine settings, workload hash and time window."""
-    return {"git_sha": git_sha(), "torch": torch.__version__, "python": sys.version.split()[0],
-            "platform": platform.platform(), "device": device,
-            "settings": asdict(settings),
-            "workload_hash": workload_hash(prompts, max_tokens), "requests": len(prompts),
-            "max_tokens": max_tokens, "window": {"start": t0, "end": t1, "wall_s": t1 - t0},
-            **extra}
+def merge_kernels(tables: list[dict]) -> dict | None:
+    """Several processes' kernels.json as one: per kernel name, counts and times summed, the largest max."""
+    agg: dict[str, dict] = {}
+    for t in tables:
+        for r in t["kernels"]:
+            a = agg.setdefault(r["name"], {"name": r["name"], "count": 0, "total_us": 0.0, "max_us": 0.0})
+            a["count"] += r["count"]
+            a["total_us"] += r["total_us"]
+            a["max_us"] = max(a["max_us"], r["max_us"])
+    if not agg:
+        return None
+    rows = sorted(({**a, "mean_us": a["total_us"] / a["count"]} for a in agg.values()), key=lambda r: -r["total_us"])
+    return {"kernels": rows, "total_us": sum(r["total_us"] for r in rows), "launches": sum(r["count"] for r in rows)}
+
+
+def merge_ops(tables: list[dict], top: int = 200) -> dict:
+    """Several processes' ops.json as one: each op's counts and times summed over the processes' top rows."""
+    keys = ("count", "self_cpu_us", "cpu_us", "self_device_us", "device_us")
+    agg: dict[str, dict] = {}
+    for t in tables:
+        for r in t["top"]:
+            a = agg.setdefault(r["name"], {"name": r["name"], **{k: 0 for k in keys}})
+            for k in keys:
+                a[k] += r[k]
+    rows = sorted(agg.values(), key=lambda r: (r["self_device_us"], r["self_cpu_us"]), reverse=True)
+    return {"sort": "self_device_us, self_cpu_us", "ops_total": sum(t["ops_total"] for t in tables), "top": rows[:top],
+            "totals": {k: sum(t["totals"][k] for t in tables) for k in ("self_cpu_us", "self_device_us")}}

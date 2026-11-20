@@ -110,11 +110,11 @@ def _renumber(table: torch.Tensor, blocks: torch.Tensor) -> torch.Tensor:
 
 
 @contextlib.contextmanager
-def step(pools: list, out: Path, sample_bytes: int = STEP_SAMPLE_BYTES):
+def step(out: Path, sample_bytes: int = STEP_SAMPLE_BYTES):
     """Log every decode-step megakernel call (STEP_ENTRY) in the block as `STEP` calls in <out>/calls.jsonl.
     The first per (rows, block-table width) is saved to samples/<n>.pt: {"reads": tokens, pos, bt (renumbered), and
     the touched blocks' K/V stacked [layers, blocks, ...]; "writes": logits, next tokens and those blocks after}.
-    `pools`: the engine's per-layer K/V pools (`.k`, `.v`)."""
+    The K/V pools are the call's model's per-layer `k_pools` and `v_pools`."""
     out = Path(out)
     (out / "samples").mkdir(parents=True, exist_ok=True)
     log = open(out / "calls.jsonl", "a")
@@ -122,12 +122,12 @@ def step(pools: list, out: Path, sample_bytes: int = STEP_SAMPLE_BYTES):
     mod, attr = _resolve(STEP_ENTRY)
     orig = getattr(mod, attr)
 
-    def kv(blocks):
-        return torch.stack([p.k[blocks] for p in pools]), torch.stack([p.v[blocks] for p in pools])
+    def kv(mdl, blocks):
+        return torch.stack([k[blocks] for k in mdl.k_pools]), torch.stack([v[blocks] for v in mdl.v_pools])
 
     @functools.wraps(orig)
     def traced(mdl, tokens, pos, bt, *args, **kwargs):
-        bs = pools[0].k.shape[2]
+        bs = mdl.k_pools[0].shape[2]
         key = (tokens.shape[0], bt.shape[1])
         call = {"fn": STEP, "reads": {"tokens": _describe(tokens), "pos": _describe(pos), "bt": _describe(bt)}}
         blocks = None
@@ -135,11 +135,11 @@ def step(pools: list, out: Path, sample_bytes: int = STEP_SAMPLE_BYTES):
             seen.add(key)
             used = torch.arange(bt.shape[1], device=bt.device)[None, :] < ((pos + bs) // bs)[:, None]  # new token's too
             blocks = bt[used].long().unique()
-            k, v = kv(blocks)
+            k, v = kv(mdl, blocks)
             reads = {"tokens": tokens, "pos": pos, "bt": _renumber(bt, blocks), "k_cache": k, "v_cache": v}
         res = orig(mdl, tokens, pos, bt, *args, **kwargs)
         if blocks is not None:
-            k, v = kv(blocks)
+            k, v = kv(mdl, blocks)
             sample = {"reads": reads, "writes": {"logits": res[0], "next": res[1], "k_cache": k, "v_cache": v}}
             size = sum(t.numel() * t.element_size() for part in sample.values() for t in part.values())
             if size <= sample_bytes:

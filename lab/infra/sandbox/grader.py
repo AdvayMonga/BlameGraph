@@ -239,11 +239,11 @@ def _jail_argv(tree: Path, argv: list[str], env_extra: dict | None, domains, loc
 
 
 def jailed_popen(tree: Path, argv: list[str], *, env_extra: dict | None = None, stdout=None, stderr=None,
-                 local_binding: bool = True, port: int | None = None):
+                 local_binding: bool = True, port: int | None = None, read: list[Path] = ()):
     """A long-running jailed process in its own session, reachable on the host's 127.0.0.1:`port`.
     Returns (proc, tmp dir to remove, stop, pids): `stop` removes what lives outside proc's process group; `pids()`
-    is every host pid the jail runs."""
-    wrapped, env, tmp, name = _jail_argv(tree, argv, env_extra, (), local_binding, tag=".serve", port=port)
+    is every host pid the jail runs; `read` is mounted read-only."""
+    wrapped, env, tmp, name = _jail_argv(tree, argv, env_extra, (), local_binding, tag=".serve", read=read, port=port)
     proc = subprocess.Popen(wrapped, cwd=tree, env=env, stdout=stdout, stderr=stderr, start_new_session=True)
     if name is None:
         return proc, tmp, lambda: None, lambda: gpu.descendants(proc.pid)

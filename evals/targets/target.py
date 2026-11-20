@@ -29,6 +29,7 @@ class Server:
     api: str = "vllm"
     startup_timeout_s: float = 1800.0
     telemetry_env: dict = field(default_factory=dict)   # `[engine.telemetry] env`; `{dir}` = where serve collects from
+    stats: str | None = None                            # GET path of the engine's counters, read around a profile
 
 
 @dataclass(frozen=True)
@@ -70,7 +71,8 @@ def reference_complete(ref_dir: Path | None) -> bool:
 
 def _server(d: dict) -> Server:
     return Server(d["launch"], dict(d.get("env") or {}), d.get("health", "/health"), d.get("api", "vllm"),
-                  float(d.get("startup_timeout_s", 1800)), dict((d.get("telemetry") or {}).get("env") or {}))
+                  float(d.get("startup_timeout_s", 1800)), dict((d.get("telemetry") or {}).get("env") or {}),
+                  d.get("stats"))
 
 
 def parse(path: Path) -> Target:

@@ -8,6 +8,7 @@ import shutil
 import stat
 import subprocess
 import time
+from pathlib import Path
 
 import pytest
 
@@ -57,7 +58,23 @@ def tb(tmp_path, monkeypatch):
     ws = Workspace(repo, "HEAD", tmp_path / "ws", tmp_path / "ledger"); ws.create()
     run_dir = tmp_path / "run"; run_dir.mkdir()
     s = Session("r1", "r1-s1", run_dir, ws, Budget(100.0), tmp_path / "ledger")
-    return Toolbox(s)
+    tb = Toolbox(s)
+    tb.served = []
+
+    def served(tree, window, warmup, out, *, prefix=(), pyspy=None, **kw):     # stands in for lab.profile.profile.run
+        tb.served.append({"window": window, "prefix": prefix, "pyspy": pyspy, **kw})
+        if prefix:
+            subprocess.run([*prefix, "engine"], check=True)                     # the instrument wraps the engine
+        b = Path(out) / "b1"
+        b.mkdir(parents=True)
+        (b / "meta.json").write_text(json.dumps({"window": {"wall_s": 1.0}}))
+        if pyspy:
+            (b / "pyspy-dump.txt").write_text("Thread 1 (active): MainThread\n  step (scheduler.py:10)\n")
+            (b / "pyspy.speedscope.json").write_text(json.dumps({"shared": {"frames": [{"name": "step"}]}, "profiles": [
+                {"type": "sampled", "name": "MainThread", "samples": [[0], [0]], "weights": [1, 1]}]}))
+        return b
+    monkeypatch.setattr(labtools, "default_profile_runner", served)
+    return tb
 
 
 def calls(tb):
@@ -86,8 +103,8 @@ def test_trace_wraps_the_workload_in_nsys_then_exports_stats(tb):
     prof, stats = calls(tb)
     assert prof[:2] == ["nsys", "profile"] and after(prof, "--capture-range") == "cudaProfilerApi"
     assert after(prof, "--cuda-graph-trace") == "node"
-    assert after(prof, "-m") == "lab.profile.profile" and after(prof, "--profiler") == "cuda-range"
-    assert after(prof, "--requests") == "2" and after(prof, "--max-tokens") == "32"
+    assert prof[-1] == "engine" and tb.served[0]["profiler"] == "cuda-range"
+    assert len(tb.served[0]["window"]) == 2 and tb.served[0]["window"][0].max_tokens == 32
     assert stats[:2] == ["nsys", "stats"] and after(stats, "--report") == proftools.NSYS_REPORTS
     assert stats[-1].endswith("_instr/trace.nsys-rep")
     rec = last(tb, kind="profile")
@@ -106,7 +123,7 @@ def test_kernel_targets_the_regex_with_limits_and_keeps_raw_metrics(tb):
     prof, imp = calls(tb)
     assert prof[0] == "ncu" and after(prof, "--kernel-name") == "regex:gemm|fused_moe.*"
     assert after(prof, "--launch-count") == "4" and after(prof, "--launch-skip") == "10" and after(prof, "--set") == "full"
-    assert after(prof, "--profile-from-start") == "off" and after(prof, "--profiler") == "cuda-range"
+    assert after(prof, "--profile-from-start") == "off" and tb.served[0]["profiler"] == "cuda-range"
     assert imp[0] == "ncu" and after(imp, "--import").endswith("kernel.ncu-rep") and after(imp, "--page") == "raw"
     rec = last(tb, kind="profile")
     blob = tb.s.ledger_root / rec["result"]["bundle"]
@@ -114,25 +131,12 @@ def test_kernel_targets_the_regex_with_limits_and_keeps_raw_metrics(tb):
     assert_charged(tb, rec)
 
 
-def test_hostprof_runs_the_workload_with_py_spy_readable_in_the_jail(tb, monkeypatch):
-    seen = {}
-
-    def runner(tree, argv, read=(), **_):            # stands in for lab.profile.profile
-        seen.update(argv=argv, read=read)
-        b = tree / proftools.OUT / "bundle" / "b1"
-        b.mkdir(parents=True)
-        (b / "pyspy-dump.txt").write_text("Thread 1 (active): MainThread\n  step (scheduler.py:10)\n")
-        (b / "pyspy.speedscope.json").write_text(json.dumps({"shared": {"frames": [{"name": "step"}]}, "profiles": [
-            {"type": "sampled", "name": "MainThread", "samples": [[0], [0]], "weights": [1, 1]}]}))
-        return subprocess.CompletedProcess(argv, 0, "", "")
-    monkeypatch.setattr(labtools, "default_profile_runner", runner)
+def test_hostprof_runs_the_workload_with_py_spy_readable_in_the_jail(tb):
     out = tb.hostprof({"seconds": 5, "rate": 250})
     assert "MainThread" in out
-    argv, exe = seen["argv"], shutil.which("py-spy")
-    assert argv[1:3] == ["-m", "lab.profile.profile"] and after(argv, "--profiler") == "pyspy"
-    assert after(argv, "--seconds") == "5" and after(argv, "--rate") == "250"
-    assert after(argv, "--pyspy-bin") == os.path.realpath(exe)
-    assert os.path.dirname(os.path.realpath(exe)) in map(str, seen["read"])
+    run, exe = tb.served[0], shutil.which("py-spy")
+    assert run["profiler"] == "pyspy" and run["pyspy"] == (os.path.realpath(exe), 5, 250, [])
+    assert os.path.dirname(os.path.realpath(exe)) in map(str, run["read"])
     rec = last(tb, kind="profile")
     assert rec["tool"] == "hostprof" and (tb.s.ledger_root / rec["result"]["bundle"] / "bundle/b1/pyspy-dump.txt").exists()
     assert rec["result"]["calibrated"]["samples"] == 2 and rec["result"]["calibrated"]["self"][0]["function"] == "step"
@@ -173,20 +177,16 @@ def test_instrument_flags_pass_through_as_single_argv_items_with_no_upper_limits
               "synthetic": True})
     prof = calls(tb)[0]
     assert after(prof, "--trace") == "cuda,cublas" and "--capture-range" not in prof
-    assert after(prof, "--requests") == "1000" and after(prof, "--max-tokens") == "8192"
+    window = tb.served[0]["window"]
+    assert len(window) == 1000 and window[0].max_tokens == 8192 and len(window[0].prompt_ids) == 64
     tb.kernel({"kernel_regex": "a b; id", "set": "roofline", "launch_count": 500, "ncu_args": ["--section", "Occupancy"]})
     prof = calls(tb)[2]
     assert after(prof, "--kernel-name") == "regex:a b; id" and after(prof, "--set") == "roofline"
     assert after(prof, "--launch-count") == "500" and prof[prof.index("--section") + 1] == "Occupancy"
     tb.kernel({})
     assert "--kernel-name" not in calls(tb)[4]
-    seen = {}
-    monkeypatch.setattr(labtools, "default_profile_runner",
-                        lambda tree, argv, read=(), **_: seen.update(argv=argv) or subprocess.CompletedProcess(argv, 1, "", ""))
     tb.hostprof({"seconds": 900, "rate": 5000, "pyspy_args": ["--native", "--idle"]})
-    a = seen["argv"]
-    assert after(a, "--seconds") == "900" and after(a, "--rate") == "5000"
-    assert [a[i + 1] for i, x in enumerate(a) if x == "--pyspy-arg"] == ["--native", "--idle"]
+    assert tb.served[-1]["pyspy"][1:] == (900, 5000, ["--native", "--idle"])
 
 
 def test_cost_free_tools_record_wall_time_and_zero(tb):
@@ -225,12 +225,10 @@ def test_gpu_time_is_charged_to_the_budget_and_stops_at_the_cap(tb, monkeypatch)
 
 def test_every_instrument_passes_a_workload_source_to_lab_profile(tb):
     tb.trace({"requests": 2, "synthetic": True})
-    prof = calls(tb)[0]
-    assert "--synthetic" in prof and after(prof, "--prompt-len") == "64"
+    assert [len(r.prompt_ids) for r in tb.served[0]["window"]] == [64, 64] and tb.served[0]["source"]["kind"] == "synthetic"
     tb.kernel({"kernel_regex": "gemm", "requests": 2})          # default: the seen corpus
-    ncu = [c for c in calls(tb) if c[0] == "ncu"][0]
-    wl = after(ncu, "--workload")
-    assert wl.endswith("_harness/workload.json")
+    run = tb.served[1]
+    assert run["source"]["kind"] == "corpus" and run["source"]["split"] == "seen" and run["window"][0].messages
 
 
 def test_symlinks_left_by_the_jailed_run_are_not_copied_out(tb, monkeypatch):
@@ -238,13 +236,13 @@ def test_symlinks_left_by_the_jailed_run_are_not_copied_out(tb, monkeypatch):
     secret.parent.mkdir()
     secret.write_text("held-out")
 
-    def runner(tree, argv, read=(), **_):
-        b = __import__("pathlib").Path(after(argv, "--out")) / "b1"
+    def runner(tree, window, warmup, out, **_):
+        b = Path(out) / "b1"
         b.mkdir(parents=True)
         (b / "meta.json").write_text("{}")
         (b / "leak").symlink_to(secret)
         (b / "dir").symlink_to(secret.parent, target_is_directory=True)
-        return subprocess.CompletedProcess(argv, 0, "", "")
+        return b
     monkeypatch.setattr(labtools, "default_profile_runner", runner)
     tb.profile({"synthetic": True})
     copy = tb.s.workspace.path / last(tb, kind="profile")["result"]["workspace_copy"]
@@ -253,8 +251,11 @@ def test_symlinks_left_by_the_jailed_run_are_not_copied_out(tb, monkeypatch):
 
 def test_profiler_tools_run_a_launch_profile_only_when_the_file_has_it(tb, monkeypatch):
     seen = []
-    monkeypatch.setattr(labtools, "default_profile_runner", lambda tree, argv, read=(), env=None, **_:
-                        seen.append(env) or subprocess.CompletedProcess(argv, 1, "", "no engine"))
+
+    def runner(tree, window, warmup, out, env=None, **_):
+        seen.append(env)
+        raise serve.NotReady("no engine")
+    monkeypatch.setattr(labtools, "default_profile_runner", runner)
     assert tb.profile({"profile": "single_stream"}).startswith("profile refused: no [single_stream] table")
     assert tb.trace({"profile": "single_stream"}).startswith("trace refused: no [single_stream] table")
     assert seen == [] and last(tb)["result"]["verdict"] == "refused"
@@ -262,7 +263,7 @@ def test_profiler_tools_run_a_launch_profile_only_when_the_file_has_it(tb, monke
     tb.profile({"profile": "single_stream"})
     tb.hostprof({"profile": "single_stream", "seconds": 5})
     tb.profile({})
-    assert seen == [{"ENGINE_PROFILE": "single_stream"}] * 2 + [None]
+    assert seen == [{"ENGINE_PROFILE": "single_stream"}] * 2 + [{}]
     assert all("profile" in t.schema["properties"] for t in tb.specs()
                if t.name in ("profile", "trace", "kernel", "hostprof", "equiv"))
 
@@ -272,18 +273,22 @@ def test_every_instrument_is_refused_on_a_busy_gpu_and_contaminated_by_a_sharer(
     other = {"pid": 4242, "used_mib": 9000, "name": "python"}
     monkeypatch.setattr(serve, "POLL_S", 0.01)
     monkeypatch.setattr(gpu, "compute_apps", lambda: [other])
+
+    def busy(tree, window, warmup, out, **_):
+        serve.Watch()                                        # as Served: raises GpuBusy before the launch
+    monkeypatch.setattr(labtools, "default_profile_runner", busy)
     assert getattr(tb, tool)(dict(args)).startswith(f"{tool} refused: the GPU was in use")
     rec = last(tb, kind="profile")["result"]
     assert rec["verdict"] == "refused" and rec["gpu_processes"] == [other] and calls(tb) == []
     held = []
     monkeypatch.setattr(gpu, "compute_apps", lambda: list(held))
 
-    def runner(tree, argv, read=(), on_start=None, **_):      # the jail's own pid is 1; 4242 arrives mid-run
-        if on_start:
-            on_start(lambda: {1})
-            held.append(other)
-            time.sleep(0.1)
-        return subprocess.CompletedProcess(argv, 0, "", "")
+    def runner(tree, window, warmup, out, **_):                # as Served: the jail's own pid is 1; 4242 arrives mid-run
+        w = serve.Watch()
+        w.start(lambda: {1})
+        held.append(other)
+        time.sleep(0.1)
+        raise serve.Contaminated(w.stop())
     monkeypatch.setattr(labtools, "default_profile_runner", runner)
     assert getattr(tb, tool)(dict(args)).startswith(f"{tool} contaminated: another process held the GPU")
     rec = last(tb, kind="profile")["result"]
@@ -292,14 +297,7 @@ def test_every_instrument_is_refused_on_a_busy_gpu_and_contaminated_by_a_sharer(
 
 
 @pytest.mark.parametrize("tool,args", [("profile", {"synthetic": True}), ("trace", {}), ("kernel", {}), ("hostprof", {})])
-def test_every_instrument_records_the_same_shape(tb, monkeypatch, tool, args):
-    def runner(tree, argv, read=(), **_):
-        if "--out" in argv:
-            b = __import__("pathlib").Path(after(argv, "--out")) / "b1"
-            b.mkdir(parents=True)
-            (b / "meta.json").write_text("{}")
-        return subprocess.CompletedProcess(argv, 0, "", "")
-    monkeypatch.setattr(labtools, "default_profile_runner", runner)
+def test_every_instrument_records_the_same_shape(tb, tool, args):
     getattr(tb, tool)(dict(args))
     rec = last(tb, kind="profile")
     assert rec["tool"] == tool and rec["result"]["verdict"] == "ok"
@@ -327,15 +325,19 @@ def test_the_runner_gets_the_jobs_timeout_for_the_run_and_its_report(tb, monkeyp
     from lab.infra.runner import worker
     seen = []
     monkeypatch.setattr(labtools, "stage_harness", lambda tree: tree)
-    monkeypatch.setattr(labtools, "workload_flags", lambda a, h, n: [])
+    monkeypatch.setattr(labtools, "workload", lambda a, w: ([], [], {}))
 
-    def runner(tree, argv, read=(), timeout_s=None, **_):
+    def runner(tree, window, warmup, out, timeout_s=None, **_):
+        seen.append(timeout_s)
+        return Path(out)
+
+    def post(tree, argv, timeout_s=None, **_):
         seen.append(timeout_s)
         return subprocess.CompletedProcess(argv, 0, "", "")
     tree = tb.s.run_dir / "t"
     tree.mkdir()
     worker._profile({"tree": tree}, tb.s.run_dir / "out", {"kind": "trace", "args": {}, "timeout_s": 900},
-                    {"profile_runner": runner})
+                    {"profile_runner": runner, "post_runner": post})
     assert seen == [900, 900]
 
 def test_a_trace_prediction_is_measured_against_its_numbers(tb):

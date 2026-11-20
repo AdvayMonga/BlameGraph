@@ -317,7 +317,8 @@ def test_crossover_reruns_on_a_changed_setting_and_marks_a_megakernel_that_never
         b = int(argv[argv.index("--requests") + 1])
         (d / "events.jsonl").write_text(json.dumps({"kind": "step", "active": b, "dur_s": 0.004}))
         on = env["MEGAKERNEL"] == "1" and plen != 4096 and env["W"] == "1"
-        return _proc(crossover.MEGA_ON + ": batch <= 16" if on else "")
+        (d / "serve.log").write_text(crossover.MEGA_ON + ": batch <= 16" if on else "")       # the engine's log
+        return _proc("")
     monkeypatch.setattr(crossover.subprocess, "run", run)
     out = tmp_path / "new" / "dir"                                                     # made by the run
     args = ["--out", str(out), "--batches", "1", "--prompt-lens", "512,4096"]

@@ -1,248 +1,206 @@
-"""profile: run the served engine in process under torch.profiler on a workload and write a raw bundle."""
+"""Profile the served engine: its own launch command (after an instrument's, if given) runs with lab/profile/hook on
+PYTHONPATH, so every Python process it starts joins lab.profile.window; the load generator warms it, then sends the
+window's requests while the window is open. The bundle gets each process's profiler files (procs/<pid>/) and their
+kernel and op tables merged, the engine's counters at the window's ends, its telemetry, device samples and log, and
+provenance.
+
+  python -m lab.profile.profile (--corpus-class C | --synthetic) [--requests N] [--max-tokens N] [--out DIR] ...
+"""
 
 from __future__ import annotations
 
 import argparse
-import asyncio
 import contextlib
-import dataclasses
+import itertools
 import json
-import logging
 import os
+import platform
 import random
-import shutil
 import subprocess
 import sys
-import tempfile
 import time
+import urllib.request
 from pathlib import Path
 
-import torch
-from torch.profiler import ProfilerActivity
+from evals.loadgen import runner
+from evals.loadgen.client import Request
+from evals.targets import target
+from lab.infra.runner import serve
+from lab.profile import bundle, gpu
+from lab.targets import engine
 
-from inference_server.backends.base import InferenceBackend
-from inference_server.config import Settings, load_settings
-from inference_server.scheduler import ContinuousBatchScheduler, ScheduledRequest
-from inference_server.server import build_backend, build_scheduler
-from inference_server.timeline import Timeline
-from lab.profile import bundle, capture, gpu
-
-logger = logging.getLogger(__name__)
-
-
-COUNTERS = ("total_admitted", "total_completed", "total_rejected", "total_preempted", "total_expired",
-            "total_iteration_errors", "decode_steps", "kv_admit_blocked", "prefill_chunks_processed")
+WINDOW_S = 300           # the longest the engine may take to open or close the window
+SETTLE_S = 1.0           # the window is open once no further process has joined it for this long
+EXIT_S = 600             # the longest the engine, and an instrument writing its report, may take to end after it
+CAPTURE_BYTES = 64 * 2**20
 
 
-def synthetic_prompts(n: int, length: int, vocab: int = 1000, seed: int = 0) -> list[list[int]]:
+def synthetic(n: int, length: int, max_tokens: int, seed: int, vocab: int = 1000) -> list[Request]:
     rng = random.Random(seed)
-    return [[rng.randrange(1, vocab) for _ in range(length)] for _ in range(n)]
+    return [Request(f"s{seed}-{i}", [], max_tokens, ignore_eos=True,
+                    prompt_ids=[rng.randrange(1, vocab) for _ in range(length)]) for i in range(n)]
 
 
-def warmup_prompts(prompts: list[list[int]], n: int, vocab: int = 1000, seed: int = 1) -> list[list[int]]:
-    """`n` prompts of random ids at the window's prompt lengths."""
-    rng = random.Random(seed)
-    return [[rng.randrange(1, vocab) for _ in prompts[i % len(prompts)]] for i in range(n)]
+def workload(n: int, max_tokens: int, seed: int = 0, corpus_class: str | None = None, prompt_len: int | None = None,
+             warmup: int | None = None, corpus_dir: Path | None = None) -> tuple[list[Request], list[Request], dict]:
+    """The window's `n` requests, `warmup` more (default n) drawn with the next seed, all run to `max_tokens`, and
+    their source: random token ids of `prompt_len` if given, else seen-split requests of `corpus_class`."""
+    warmup = n if warmup is None else warmup
+    if prompt_len is not None:
+        return (synthetic(n, prompt_len, max_tokens, seed), synthetic(warmup, prompt_len, max_tokens, seed + 1),
+                {"kind": "synthetic", "prompt_len": prompt_len, "seed": seed})
+    from evals import regimes as corpus
+    d = corpus_dir or corpus.CORPUS_DIR
+
+    def chats(seed, k):
+        w = corpus.sample(corpus_class, "seen", seed, k, d)
+        return [Request(f"c{seed}-{i}", m, max_tokens, ignore_eos=True) for i, m in enumerate(w["messages"])], w["source"]
+    (window, source), (warm, _) = chats(seed, n), chats(seed + 1, warmup)
+    return window, warm, source
 
 
-def _profiler(device: str) -> tuple[torch.profiler.profile, dict]:
-    """A torch profiler that records all threads where torch supports it, and its config."""
-    acts = [ProfilerActivity.CPU]
-    if device.startswith("cuda"):
-        acts.append(ProfilerActivity.CUDA)
-    config = {"activities": [a.name for a in acts], "all_threads": True}
-    try:
-        from torch._C._profiler import _ExperimentalConfig
-        exp = _ExperimentalConfig(profile_all_threads=True)
-    except (ImportError, TypeError):   # older torch: main thread only
-        logger.warning("torch %s cannot profile all threads; trace covers the main thread only",
-                       torch.__version__)
-        return torch.profiler.profile(activities=acts), {**config, "all_threads": False}
-    return torch.profiler.profile(activities=acts, experimental_config=exp), config
+def _get(url: str) -> dict:
+    with urllib.request.urlopen(url, timeout=30) as r:
+        return json.loads(r.read())
 
 
-@contextlib.contextmanager
-def _cuda_range(device: str):
-    """cudaProfilerStart/Stop around the window, the range nsys and ncu capture."""
-    on = device.startswith("cuda")
-    if on:
-        torch.cuda.profiler.start()
-    try:
-        yield None
-    finally:
-        if on:
-            torch.cuda.synchronize()
-            torch.cuda.profiler.stop()
+def delta(start, end):
+    """end - start for every number both hold, nested dicts included."""
+    if isinstance(start, dict) and isinstance(end, dict):
+        d = {k: delta(start[k], end[k]) for k in start.keys() & end.keys()}
+        return {k: v for k, v in d.items() if v is not None}
+    num = (int, float)
+    if isinstance(start, num) and isinstance(end, num) and not isinstance(start, bool) and not isinstance(end, bool):
+        return end - start
+    return None
 
 
-def _allow_ptrace() -> None:
-    """Allow any process to ptrace this one (Linux), for py-spy."""
-    if sys.platform.startswith("linux"):
-        import ctypes
-        ctypes.CDLL(None).prctl(0x59616D61, ctypes.c_ulong(-1), 0, 0, 0)    # PR_SET_PTRACER, PR_SET_PTRACER_ANY
+def _await(srv: serve.Served, out: Path, done, what: str) -> None:
+    """Poll until `done()`; raise on a process's error.txt, the engine's exit or WINDOW_S."""
+    deadline = time.monotonic() + WINDOW_S
+    while not done():
+        for e in out.glob("procs/*/error.txt"):
+            raise RuntimeError(f"the profiling window failed in engine process {e.parent.name}:\n{e.read_text()[-2000:]}")
+        if srv.proc.poll() is not None:
+            raise RuntimeError(f"the engine exited with {srv.proc.returncode} while {what}")
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"no engine process answered within {WINDOW_S}s while {what}")
+        time.sleep(0.05)
 
 
-async def _sampled(sched: ContinuousBatchScheduler, prompts: list[list[int]], max_tokens: int, out: Path,
-                   pyspy: tuple[str, float, int, list[str]]) -> tuple[list, int]:
-    """Repeat the workload for `seconds` while py-spy samples this process; one stack dump halfway. (results, rounds)"""
-    exe, seconds, rate, extra = pyspy
-    _allow_ptrace()
-    pid = str(os.getpid())
-    with open(out / "pyspy-record.log", "w") as log:
-        rec = subprocess.Popen([exe, "record", "--pid", pid, "--duration", str(int(seconds)), "--rate", str(rate),
-                                "--format", "speedscope", "--output", str(out / "pyspy.speedscope.json"),
-                                "--nonblocking", *extra], stdout=log, stderr=log)
+def _open(srv: serve.Served, out: Path) -> list[Path]:
+    """Open the window; the dirs of the processes taking part, once each has started and none has joined for
+    SETTLE_S."""
+    (out / "start").write_text(str(time.time()))
+    seen = {"n": 0, "at": time.monotonic()}
 
-    async def dump():
-        await asyncio.sleep(seconds / 2)
-        d = await asyncio.to_thread(subprocess.run, [exe, "dump", "--pid", pid, "--nonblocking"],
-                                    capture_output=True, text=True)
-        (out / "pyspy-dump.txt").write_text(d.stdout + d.stderr)
-    dumper = asyncio.create_task(dump())
-    results, rounds, end = [], 0, time.monotonic() + seconds
-    while time.monotonic() < end:
-        results += await _fire(sched, prompts, max_tokens, f"profile{rounds}")
-        rounds += 1
-    await dumper
-    await asyncio.to_thread(rec.wait, seconds + 60)
-    return results, rounds
+    def settled():
+        joined = list(out.glob("procs/*"))
+        if len(joined) != seen["n"]:
+            seen.update(n=len(joined), at=time.monotonic())
+        return (joined and all((p / "started").exists() for p in joined)
+                and time.monotonic() - seen["at"] >= SETTLE_S)
+    _await(srv, out, settled, "opening the window")
+    return sorted(p.parent for p in out.glob("procs/*/started"))
 
 
-async def _fire(sched: ContinuousBatchScheduler, prompts: list[list[int]], max_tokens: int,
-                session: str) -> list:
-    loop = asyncio.get_running_loop()
-    fixed = {"ignore_eos": True} if "ignore_eos" in {f.name for f in dataclasses.fields(ScheduledRequest)} else {}
-    reqs = [ScheduledRequest(token_ids=p, max_tokens=max_tokens, session_id=f"{session}-{i}",   # runs to max_tokens
-                             future=loop.create_future(), **fixed) for i, p in enumerate(prompts)]
-    return await asyncio.gather(*(sched.submit(r) for r in reqs), return_exceptions=True)
+def _close(srv: serve.Served, out: Path, procs: list[Path]) -> None:
+    (out / "stop").write_text(str(time.time()))
+    _await(srv, out, lambda: all((p / "window.json").exists() for p in procs), "closing the window")
 
 
-async def _steady(sched: ContinuousBatchScheduler, prompts: list[list[int]], max_tokens: int, concurrency: int,
-                  session: str) -> list:
-    """Closed loop: `concurrency` requests in flight, each replaced by the next prompt when it ends, until every prompt
-    has run once."""
-    loop = asyncio.get_running_loop()
-    fixed = {"ignore_eos": True} if "ignore_eos" in {f.name for f in dataclasses.fields(ScheduledRequest)} else {}
-    todo, results = iter(enumerate(prompts)), [None] * len(prompts)
-
-    async def lane():
-        for i, p in todo:                        # one iterator shared by every lane
-            r = ScheduledRequest(token_ids=p, max_tokens=max_tokens, session_id=f"{session}-{i}",
-                                 future=loop.create_future(), **fixed)
-            try:
-                results[i] = await sched.submit(r)
-            except Exception as e:               # noqa: BLE001  counted as an error
-                results[i] = e
-    await asyncio.gather(*(lane() for _ in range(min(concurrency, len(prompts)))))
-    return results
+def outcomes(rows: list) -> dict:
+    """Per-request outcome counts and output lengths."""
+    toks = [r.n_tokens for r in rows if r.status == "ok"]
+    return {"errors": len(rows) - len(toks), "tokens_out": ({"total": sum(toks), "min": min(toks),
+                                                            "mean": sum(toks) / len(toks), "max": max(toks)}
+                                                           if toks else None)}
 
 
-def stats_delta(start: dict, end: dict) -> dict:
-    """Counter differences over the window, wave sizes included."""
-    d = {k: end[k] - start[k] for k in COUNTERS if k in start and k in end}
-    waves = {k: v - start.get("wave_sizes", {}).get(k, 0) for k, v in end.get("wave_sizes", {}).items()}
-    d["wave_sizes"] = {k: v for k, v in waves.items() if v}
-    return d
-
-
-def outcomes(results: list, max_tokens: int) -> dict:
-    """Per-request outcome counts and output lengths; `short` stopped before max_tokens."""
-    toks = [len(r) for r in results if not isinstance(r, BaseException)]
-    return {"errors": len(results) - len(toks), "empty": toks.count(0),
-            "short": sum(0 < n < max_tokens for n in toks), "full": toks.count(max_tokens),
-            "tokens_out": ({"total": sum(toks), "min": min(toks), "mean": sum(toks) / len(toks), "max": max(toks)}
-                           if toks else None)}
-
-
-async def run(backend: InferenceBackend, settings: Settings, prompts: list[list[int]],
-              max_tokens: int, out: Path, warmup: int | None = None, source: dict | None = None,
-              profiler: str = "torch", pyspy: tuple[str, float, int, list[str]] | None = None,
-              concurrency: int | None = None) -> Path:
-    """Profile `prompts` through the served scheduler config on `backend`; return the bundle directory.
-    `warmup` requests (default: as many as the window) are fired together first, outside the window.
-    `profiler`: torch (torch.profiler trace), cuda-range (window marked for nsys/ncu), pyspy (`pyspy` = exe, s, Hz).
-    `concurrency`: the window's requests run closed loop at that many in flight (`_steady`); default all at once."""
+def run(tree: Path, window: list[Request], warmup: list[Request], out: Path, *, source: dict, profiler: str = "torch",
+        capture: list[str] = (), capture_bytes: int = CAPTURE_BYTES, pyspy: tuple[str, float, int, list[str]] | None = None,
+        concurrency: int | None = None, prefix: list[str] = (), read: list[Path] = (), env: dict | None = None,
+        harness: Path = engine.ENV_ROOT, jailed: bool = True, timeout_s: float = 3600) -> Path:
+    """Serve `tree` under the profiler and return the bundle directory, made in `out`. `warmup` runs first, all at once;
+    then the window's requests, closed loop at `concurrency` in flight (default all), repeated for py-spy's seconds.
+    `profiler`: torch (torch.profiler trace), cuda-range (the window marked for nsys and ncu), pyspy (`pyspy` = exe,
+    seconds, rate, extra flags). `capture`: "module:function" entries recorded in the window, or the engine's own
+    region capture (region:FIRST:LAST, its CAPTURE_REGION) from launch on. `prefix`: an instrument's command before the
+    engine's; `harness` is where lab.profile imports from in the engine."""
+    t = target.load()
     out = bundle.new_dir(out)
-    device = backend.device_str
-    warmup = len(prompts) if warmup is None else warmup
-    timeline = Timeline(out)
-    sched = build_scheduler(backend, settings, timeline=timeline)
-    sched.start()
-    sampler = gpu.Sampler(out / "gpu.csv")
-    prof, prof_config = _profiler(device)
-    try:
+    env = dict(env or {})
+    cfg = {"dir": str(out), "profiler": profiler, "capture": list(capture), "capture_bytes": capture_bytes,
+           "pyspy": dict(zip(("exe", "seconds", "rate", "extra"), pyspy)) if pyspy else None}
+    path = os.pathsep.join([str(harness), str(Path(harness) / "lab" / "profile" / "hook"), str(Path(tree) / "src"),
+                            str(tree)])
+    load = {"timeout": timeout_s, "chat_kwargs": t.chat_kwargs}
+    with serve.Served(tree, t.engine, log=out.parent / "engine.log", jailed=jailed, artifacts=out,
+                      env_extra={**env, "PYTHONPATH": path, "LAB_PROFILE": json.dumps(cfg)}, prefix=prefix,
+                      read=read) as srv:
         w0 = time.time()
         if warmup:
-            await _fire(sched, warmup_prompts(prompts, warmup), max_tokens, "warmup")
+            runner.run_closed(srv.url, t.model, warmup, len(warmup), **load)
         w1 = time.time()
-        peak_before = bundle.device_peaks(device)
-        bundle.reset_peaks(device)
-        mem0, stats0, gpu0 = bundle.device_memory(device), sched.stats(), gpu.query()
-        timeline.event("profile_window", state="begin")
-        sampler.start()
-        t0, rounds = time.time(), 1
-        if profiler == "pyspy":
-            results, rounds = await _sampled(sched, prompts, max_tokens, out, pyspy)
-        elif profiler == "torch":
-            with prof:
-                results = await (_steady(sched, prompts, max_tokens, concurrency, "profile") if concurrency
-                                 else _fire(sched, prompts, max_tokens, "profile"))
+        stats0 = _get(srv.url + t.engine.stats) if t.engine.stats else None
+        gpu0 = gpu.query()
+        procs = _open(srv, out)
+        t0 = time.time()
+        lanes = concurrency or len(window)
+        if pyspy:
+            rows, _ = runner.run_closed(srv.url, t.model, itertools.cycle(window), lanes, duration_s=pyspy[1], **load)
         else:
-            with _cuda_range(device):
-                results = await (_steady(sched, prompts, max_tokens, concurrency, "profile") if concurrency
-                                 else _fire(sched, prompts, max_tokens, "profile"))
+            rows, _ = runner.run_closed(srv.url, t.model, window, lanes, **load)
         t1 = time.time()
-        timeline.event("profile_window", state="end")
-        mem1, stats1, gpu1 = bundle.device_memory(device), sched.stats(), gpu.query()
-        peak_window = bundle.device_peaks(device)
-    finally:
-        sampler.stop()
-        await sched.stop()
-    if profiler == "torch":
-        prof.export_chrome_trace(str(out / "trace.json"))
-        bundle.write_json(out / "ops.json", bundle.ops_table(prof))
-        kernels = bundle.kernels_table(prof.events())
-        if kernels is not None:
-            bundle.write_json(out / "kernels.json", kernels)
-    lifetime = (None if peak_window is None else
-                {k: max(v, (peak_before or {}).get(k, 0)) for k, v in peak_window.items()})
-    bundle.write_json(out / "memory.json", {
-        "device": device, "window_peak": peak_window, "lifetime_peak": lifetime,
-        "host_rss_peak_lifetime_bytes": mem1["peak_host_rss_bytes"],
-        "at_window_start": mem0, "at_window_end": mem1})
-    bundle.write_json(out / "stats.json", {"window_start": stats0, "window_end": stats1,
-                                           "window_delta": stats_delta(stats0, stats1)})
-    done = outcomes(results, max_tokens)
-    bundle.write_json(out / "meta.json", bundle.meta(
-        device, settings, prompts, max_tokens, t0, t1, failed=done["errors"] + done["empty"], outcomes=done,
-        warmup={"requests": warmup, "concurrent": True, "prompts": "random ids at the window's prompt lengths",
-                "max_tokens": max_tokens, "wall_s": w1 - w0},
-        profiler_on=profiler == "torch", profiler={"kind": profiler, **(prof_config if profiler == "torch" else {})},
-        rounds=rounds, gpu={"window_start": gpu0, "window_end": gpu1}, timeline=timeline.stats(), workload=source,
-        concurrency=concurrency))
+        stats1 = _get(srv.url + t.engine.stats) if t.engine.stats else None
+        gpu1 = gpu.query()
+        _close(srv, out, procs)
+        (out / "end").write_text(str(time.time()))
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            srv.proc.wait(EXIT_S)
+        srv.exclusive()
+        ready_s = srv.ready_s
+    for f in ("start", "stop", "end", *(p / "started" for p in procs)):
+        (out / f).unlink(missing_ok=True)
+    for name, merge in (("kernels.json", bundle.merge_kernels), ("ops.json", bundle.merge_ops)):
+        tables = [json.loads(f.read_text()) for f in sorted(out.glob(f"procs/*/{name}"))]
+        merged = merge(tables) if tables else None
+        if merged is not None:
+            bundle.write_json(out / name, merged)
+    if stats0 is not None:
+        bundle.write_json(out / "stats.json", {"window_start": stats0, "window_end": stats1,
+                                               "window_delta": delta(stats0, stats1)})
+    done = outcomes(rows)
+    wl = [r.prompt_ids if r.prompt_ids is not None else r.messages for r in window]
+    bundle.write_json(out / "meta.json", {
+        "git_sha": bundle.git_sha(), "python": sys.version.split()[0], "platform": platform.platform(),
+        "engine": {"launch": t.engine.launch, "env": {**t.engine.env, **env}, "ready_s": ready_s},
+        "profiler": {"kind": profiler, "processes": [json.loads((p / "window.json").read_text()) for p in procs]},
+        "workload": source, "workload_hash": bundle.workload_hash(wl, window[0].max_tokens if window else 0),
+        "requests": len(window), "max_tokens": window[0].max_tokens if window else 0, "concurrency": lanes,
+        "rounds": len(rows) / len(window) if window else 0,
+        "window": {"start": t0, "end": t1, "wall_s": t1 - t0}, "failed": done["errors"], "outcomes": done,
+        "warmup": {"requests": len(warmup), "concurrent": True, "wall_s": w1 - w0},
+        "gpu": {"window_start": gpu0, "window_end": gpu1}})
     return out
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("(")[0])
-    ap.add_argument("--backend", help="override BACKEND, e.g. custom-mps")
-    ap.add_argument("--model", help="override MODEL_NAME")
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     src = ap.add_mutually_exclusive_group(required=True)
-    src.add_argument("--corpus-class", help="prompts drawn from this corpus class (verified loader)")
-    src.add_argument("--workload", help="JSON from evals.regimes.sample, for a tree without the corpus (the profile tool)")
-    src.add_argument("--prompts", help="JSON list of prompt strings")
+    src.add_argument("--corpus-class", help="seen-split requests drawn from this corpus class")
     src.add_argument("--synthetic", action="store_true", help="random token ids of --prompt-len")
-    ap.add_argument("--split", default="seen", choices=("seen", "heldout"))
     ap.add_argument("--corpus-dir", help="default: this repo's evals/regimes/")
-    ap.add_argument("--enable-thinking", action="store_true", help="chat template thinking on, for corpus prompts")
+    ap.add_argument("--tree", help="the engine tree to serve; default the target's engine repo")
+    ap.add_argument("--jailed", action="store_true", help="serve it in the jail")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--requests", type=int, default=8)
     ap.add_argument("--concurrency", type=int, help="the window's requests closed loop at this many in flight; "
-                                                    "default: all fired together")
+                                                    "default: all at once")
     ap.add_argument("--prompt-len", type=int, default=64)
     ap.add_argument("--max-tokens", type=int, default=32)
-    ap.add_argument("--warmup", type=int, help="warmup requests, fired together; default: as many as the window")
-    ap.add_argument("--out", default="lab/runs")
+    ap.add_argument("--warmup", type=int, help="warmup requests, sent together; default: as many as the window")
+    ap.add_argument("--out", default="local/runs/profile")
     ap.add_argument("--profiler", choices=("torch", "cuda-range", "pyspy"), default="torch",
                     help="torch: torch.profiler trace; cuda-range: mark the window for nsys/ncu; pyspy: sample with py-spy")
     ap.add_argument("--seconds", type=float, default=20.0, help="pyspy: how long to sample under load")
@@ -250,54 +208,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--pyspy-bin", default="py-spy")
     ap.add_argument("--pyspy-arg", action="append", default=[], help="pyspy: extra `py-spy record` flag (repeatable)")
     ap.add_argument("--capture", action="append", default=[], metavar="MODULE:FUNCTION",
-                    help="record every call's argument shapes and the first call per shape whole (repeatable); "
-                         "region:FIRST:LAST records that stretch of the engine's decode stations (its CAPTURE_REGION), "
-                         f"{capture.STEP} the decode-step megakernel; it synchronizes, so the window's times are not "
-                         "representative")
-    ap.add_argument("--capture-bytes", type=int, default=64 * 2**20, help="largest call kept whole as a sample")
-    args = ap.parse_args(argv)
-
-    # settings from the env the server reads
-    settings = load_settings()
-    overrides = {k: v for k, v in (("backend_name", args.backend), ("model_name", args.model)) if v}
-    settings = dataclasses.replace(settings, **overrides)
-    staged = Path(tempfile.mkdtemp(prefix="capture-", dir=Path(args.out).parent if Path(args.out).parent.exists() else None))
-    entries = [c for c in args.capture if not c.startswith("region:")]
-    for c in args.capture:                       # the engine's own region capture
-        if c.startswith("region:") and c != capture.STEP:
-            os.environ.update(CAPTURE_REGION=c.removeprefix("region:"), CAPTURE_REGION_DIR=str(staged))
-    backend = build_backend(settings)
-    if args.synthetic:
-        prompts = synthetic_prompts(args.requests, args.prompt_len, seed=args.seed)
-        source = {"kind": "synthetic", "prompt_len": args.prompt_len, "seed": args.seed}
-    else:
-        from inference_server.tokenizer import Tokenizer
-        tok = Tokenizer(settings.model_name, settings.context_window)
-        if args.prompts:
-            prompts = [tok.encode_chat(t) for t in json.loads(Path(args.prompts).read_text())]
-            source = {"kind": "prompts", "file": args.prompts}
-        else:
-            if args.workload:
-                w = json.loads(Path(args.workload).read_text())
-            else:
-                from evals import regimes as corpus
-                w = corpus.sample(args.corpus_class, args.split, args.seed, args.requests,
-                                  Path(args.corpus_dir) if args.corpus_dir else corpus.CORPUS_DIR)
-            prompts = [tok.encode_messages(m, thinking=args.enable_thinking) for m in w["messages"]]
-            source = {**w["source"], "thinking": args.enable_thinking}
-    with contextlib.ExitStack() as stack:
-        if entries:
-            stack.enter_context(capture.capture(entries, staged, args.capture_bytes))
-        if capture.STEP in args.capture:
-            stack.enter_context(capture.step(backend.pools, staged))
-        out = asyncio.run(run(backend, settings, prompts, args.max_tokens, Path(args.out), warmup=args.warmup,
-                              source=source, profiler=args.profiler, pyspy=(args.pyspy_bin, args.seconds, args.rate, args.pyspy_arg),
-                              concurrency=args.concurrency))
-    if args.capture:
-        shutil.move(str(staged), str(Path(out) / "captures"))
-    else:
-        shutil.rmtree(staged, ignore_errors=True)
-    print(out)
+                    help="record every call's argument shapes in the window and the first call per shape whole "
+                         "(repeatable); region:FIRST:LAST records that stretch of the engine's decode stations (its "
+                         "CAPTURE_REGION) from launch on; it synchronizes, so the window's times are not representative")
+    ap.add_argument("--capture-bytes", type=int, default=CAPTURE_BYTES, help="largest call kept whole as a sample")
+    a = ap.parse_args(argv)
+    window, warm, source = workload(a.requests, a.max_tokens, a.seed, a.corpus_class,
+                                    a.prompt_len if a.synthetic else None, a.warmup,
+                                    Path(a.corpus_dir) if a.corpus_dir else None)
+    print(run(Path(a.tree) if a.tree else target.load().engine_repo, window, warm, Path(a.out), source=source,
+              profiler=a.profiler, capture=a.capture,
+              capture_bytes=a.capture_bytes, pyspy=(a.pyspy_bin, a.seconds, a.rate, a.pyspy_arg) if a.profiler == "pyspy"
+              else None, concurrency=a.concurrency, jailed=a.jailed))
     return 0
 
 
