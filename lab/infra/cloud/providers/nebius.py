@@ -1,6 +1,7 @@
 """Nebius AI Cloud through the `nebius` CLI (auth: `nebius profile create`). A VM created with the lab's service
-account deletes itself: the account's group is an editor of that one instance, and the CLI on the VM authenticates
-as the account through the instance's metadata."""
+account stops itself: the account's group may power that one instance on and off, and the CLI on the VM authenticates
+as the account through the instance's metadata. Deleting needs rights on the boot disk, which Nebius grants only
+project-wide, so the delete is the user's `lab` command's."""
 
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ USER = "lab"                        # the login cloud-init creates
 IMAGE = "ubuntu24.04-cuda13.0"      # an image family
 DISK_GB = 400
 CLI_DIR = Path.home() / ".nebius" / "bin"      # where the CLI's installer puts it; searched after PATH
-ACCOUNT = "lab-vm"                  # the service account a VM deletes itself as, and the group that holds it
+ACCOUNT = "lab-vm"                  # the service account a VM stops itself as, and the group that holds it
 
 
 @dataclass(frozen=True)
@@ -109,16 +110,16 @@ class Nebius:
         """Delete the instance and its managed boot disk."""
         self._cli("compute", "instance", "delete", self._id(name))
 
-    def delete_id(self, instance_id: str) -> None:
-        """Delete an instance by id (a VM deleting itself knows its id, not the project's list)."""
-        self._cli("compute", "instance", "delete", instance_id)
+    def stop_id(self, instance_id: str) -> None:
+        """Stop an instance by id (a VM stopping itself knows its id, not the project's list)."""
+        self._cli("compute", "instance", "stop", instance_id)
 
     def _named(self, kind: str, name: str) -> str | None:
         items = self._json("iam", kind, "list").get("items") or []
         return next((i["metadata"]["id"] for i in items if (i.get("metadata") or {}).get("name") == name), None)
 
     def account(self) -> str:
-        """The id of the service account VMs delete themselves as, with its group; both made on first use."""
+        """The id of the service account VMs stop themselves as, with its group; both made on first use."""
         sa = self._named("service-account", ACCOUNT) or \
             self._json("iam", "service-account", "create", "--name", ACCOUNT)["metadata"]["id"]
         group = self._named("group", ACCOUNT)
@@ -127,8 +128,8 @@ class Nebius:
             self._cli("iam", "group-membership", "create", "--parent-id", group, "--member-id", sa)
         return sa
 
-    def allow_delete(self, name: str) -> None:
-        """The account's group made an editor of instance `name` alone; its permits on instances that are gone are
+    def allow_stop(self, name: str) -> None:
+        """The account's group may power instance `name` alone on and off; its permits on instances that are gone are
         removed."""
         group = self._named("group", ACCOUNT)
         if group is None:
@@ -139,7 +140,7 @@ class Nebius:
             if (p.get("spec") or {}).get("resource_id") not in live:
                 self._cli("iam", "access-permit", "delete", p["metadata"]["id"])
         self._cli("iam", "access-permit", "create", "--parent-id", group, "--resource-id", self._id(name),
-                  "--role", "editor")
+                  "--role", "compute.instance-power-operator")
 
     def instance_id(self, name: str) -> str:
         return self._id(name)

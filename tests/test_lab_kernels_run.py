@@ -1,5 +1,6 @@
 """lab kernels run / status and the job on the VM, with fakes of the VM, the provider and the search: snapshots in the
-store, saves per generation, the VM deleted at every end, secrets on stdin only, the service account's grants."""
+store, saves per generation, the VM stopped at every end and deleted from here, secrets on stdin only, the service
+account's grants."""
 
 from __future__ import annotations
 
@@ -42,10 +43,10 @@ def test_snapshots_are_numbered_and_restore_the_last_without_what_the_vm_rebuild
 
 class FakeProvider:
     def __init__(self):
-        self.deleted = []
+        self.stopped = []
 
-    def delete_id(self, instance):
-        self.deleted.append(instance)
+    def stop_id(self, instance):
+        self.stopped.append(instance)
 
 
 def _job(tmp_path, monkeypatch, remote=None):
@@ -78,18 +79,18 @@ def test_the_job_saves_when_the_search_saves_a_generation(tmp_path, monkeypatch)
     assert runs.state(remote, "kgen-1")["generation"] == 3
 
 
-def test_the_end_saves_then_deletes_the_vm_even_when_the_save_fails(tmp_path, monkeypatch):
+def test_the_end_saves_then_stops_the_vm_even_when_the_save_fails(tmp_path, monkeypatch):
     j, remote, out = _job(tmp_path, monkeypatch)
     j.end("done")
     j.end("failed", "late")                             # once only
-    assert runs.state(remote, "kgen-1")["state"] == "done" and j.provider.deleted == ["computeinstance-1"]
+    assert runs.state(remote, "kgen-1")["state"] == "done" and j.provider.stopped == ["computeinstance-1"]
 
     class Broken(DirRemote):
         def put(self, key, path):
             raise OSError("store down")
     j, _, _ = _job(tmp_path / "b", monkeypatch, Broken(tmp_path / "b" / "store"))
     j.end("failed", "boom")
-    assert j.provider.deleted == ["computeinstance-1"]
+    assert j.provider.stopped == ["computeinstance-1"]
 
 
 def _main(tmp_path, monkeypatch, search):
@@ -109,7 +110,7 @@ def _main(tmp_path, monkeypatch, search):
     return remote, provider, argv
 
 
-def test_the_job_ends_done_or_failed_and_deletes_its_vm_either_way(tmp_path, monkeypatch):
+def test_the_job_ends_done_or_failed_and_stops_its_vm_either_way(tmp_path, monkeypatch):
     import os
     seen = {}
 
@@ -120,14 +121,14 @@ def test_the_job_ends_done_or_failed_and_deletes_its_vm_either_way(tmp_path, mon
     remote, provider, argv = _main(tmp_path, monkeypatch, ok)
     assert job.main(argv) == 0
     assert seen["key"] == "sk-test" and "sk-test" not in " ".join(argv)
-    assert runs.state(remote, "kgen-1")["state"] == "done" and provider.deleted == ["ci-1"]
+    assert runs.state(remote, "kgen-1")["state"] == "done" and provider.stopped == ["ci-1"]
 
     def boom(task, out, stage):
         raise RuntimeError("no capture traffic")
     remote, provider, argv = _main(tmp_path / "f", monkeypatch, boom)
     job.main(argv)
     st = runs.state(remote, "kgen-1")
-    assert st["state"] == "failed" and "no capture traffic" in st["reason"] and provider.deleted == ["ci-1"]
+    assert st["state"] == "failed" and "no capture traffic" in st["reason"] and provider.stopped == ["ci-1"]
 
 
 def test_a_run_on_a_new_vm_starts_from_its_last_snapshot(tmp_path, monkeypatch):
@@ -150,8 +151,8 @@ class FakeNebius:
         self.calls.append("account")
         return "sa-1"
 
-    def allow_delete(self, name):
-        self.calls.append(("allow_delete", name))
+    def allow_stop(self, name):
+        self.calls.append(("allow_stop", name))
 
     def instance_id(self, name):
         return "ci-9"
@@ -189,7 +190,7 @@ def _launch(monkeypatch, setup_code=0, reply="started kgen-1\n"):
 def test_launch_creates_the_vm_with_the_account_and_sends_secrets_on_stdin_only(monkeypatch):
     v, p, did = _launch(monkeypatch)
     launch.go(v, "kgen-1", "region:a:b")
-    assert did[0] == ("start", "sa-1") and did[1:3] == ["arm", "setup"] and ("allow_delete", "lab-gpu") in p.calls
+    assert did[0] == ("start", "sa-1") and did[1:3] == ["arm", "setup"] and ("allow_stop", "lab-gpu") in p.calls
     _, cmd, sent = did[-1]
     assert "--instance ci-9" in cmd and "--task region:a:b" in cmd and "--deadline" in cmd
     assert sent["ANTHROPIC_API_KEY"] == "sk-test" and sent["AWS_SECRET_ACCESS_KEY"] == "aws-secret"
@@ -226,15 +227,19 @@ def _status(tmp_path, monkeypatch, state, vm_state):
     monkeypatch.setattr(labvm, "VM", lambda name: types.SimpleNamespace(name=name, provider=p))
     went = []
     monkeypatch.setattr(launch, "go", lambda v, run, task: went.append((v.name, run, task)))
+    monkeypatch.setattr(labvm, "stop", lambda v, keep_disk=False: went.append(("deleted", v.name)))
     monkeypatch.setattr(launch, "missing", lambda: [])
     return went
 
 
-def test_status_starts_a_preempted_run_again_and_leaves_others(tmp_path, monkeypatch, capsys):
+def test_status_starts_a_preempted_run_again_deletes_an_ended_runs_vm_and_leaves_others(tmp_path, monkeypatch, capsys):
     went = _status(tmp_path, monkeypatch, "running", "stopped")
     assert status.main([]) == 0 and went == [("lab-gpu", "kgen-1", "region:a:b")]
     went = _status(tmp_path / "d", monkeypatch, "done", "absent")
     assert status.main(["--run", "kgen-1"]) == 0 and went == []
+    for ended in ("done", "failed", "stopped"):
+        went = _status(tmp_path / ended, monkeypatch, ended, "stopped")
+        assert status.main([]) == 0 and went == [("deleted", "lab-gpu")]
     went = _status(tmp_path / "g", monkeypatch, "running", "absent")
     status.main([])
     assert went == [] and "goes on from generation 4" in capsys.readouterr().out
@@ -271,22 +276,22 @@ def test_the_account_and_its_group_are_made_once(monkeypatch):
     assert p.account() == "sa1" and not any(a[2] == "create" for a in seen)
 
 
-def test_the_group_edits_only_the_new_vm_and_permits_on_gone_vms_are_removed(monkeypatch):
+def test_the_group_powers_only_the_new_vm_and_permits_on_gone_vms_are_removed(monkeypatch):
     permits = [{"metadata": {"id": "p-old"}, "spec": {"resource_id": "ci-gone"}},
                {"metadata": {"id": "p-live"}, "spec": {"resource_id": "ci-1"}}]
     p, seen = _nebius(monkeypatch, groups=[_meta("g1", "lab-vm")], permits=permits,
                       instances=[_meta("ci-1", "other"), _meta("ci-2", "lab-gpu")])
-    p.allow_delete("lab-gpu")
+    p.allow_stop("lab-gpu")
     assert ("iam", "access-permit", "delete", "p-old") in seen and ("iam", "access-permit", "delete", "p-live") not in seen
-    assert ("iam", "access-permit", "create", "--parent-id", "g1", "--resource-id", "ci-2", "--role", "editor") in seen
+    assert ("iam", "access-permit", "create", "--parent-id", "g1", "--resource-id", "ci-2", "--role", "compute.instance-power-operator") in seen
 
 
-def test_a_vm_is_created_as_the_account_and_deletes_itself_by_id(tmp_path, monkeypatch):
+def test_a_vm_is_created_as_the_account_and_stops_itself_by_id(tmp_path, monkeypatch):
     key = tmp_path / "k.pub"
     key.write_text("ssh-ed25519 AAA")
     p, seen = _nebius(monkeypatch)
     p.create("n1", str(key), True, "sa1")
     create = next(a for a in seen if a[:3] == ("compute", "instance", "create"))
     assert create[create.index("--service-account-id") + 1] == "sa1"
-    p.delete_id("ci-7")
-    assert seen[-1] == ("compute", "instance", "delete", "ci-7")
+    p.stop_id("ci-7")
+    assert seen[-1] == ("compute", "instance", "stop", "ci-7")

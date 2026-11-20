@@ -1,5 +1,5 @@
-"""A kernel search on its own GPU VM, to its end: the VM saves to the store after every generation and deletes itself
-when the search ends. This host only starts it; `lab kernels status` reads it.
+"""A kernel search on its own GPU VM, to its end: the VM saves to the store after every generation and stops itself
+when the search ends; `lab kernels status` reads it and deletes the stopped VM. This host only starts it.
 
   lab kernels run --task TASK          a new run
   lab kernels run --run RUN            the stopped run RUN again, from its last saved generation
@@ -47,13 +47,18 @@ def main(argv: list[str] | None = None) -> int:
         except argparse.ArgumentTypeError as e:
             print(f"lab kernels run: {e}", file=sys.stderr)
             return 2
+        last = runs.last_run(open_remote())
+        st = runs.state(open_remote(), last) if last else None
+        if st is not None and launch.tidy(v, st):
+            print(f"deleted {v.name}, the VM of the ended run {last}", flush=True)
         if v.provider.get(v.name) is not None:
             print(f"lab kernels run: nothing was started. A VM named {v.name} already exists: `lab vm stop` deletes "
                   "it, or set LAB_VM to another name.", file=sys.stderr)
             return 2
         run, task = f"kgen-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}", a.task
     launch.go(v, run, task)
-    print(f"{run}: running on {v.name}; `lab kernels status --run {run}` reads it. The VM deletes itself at the end.")
+    print(f"{run}: running on {v.name}; `lab kernels status --run {run}` reads it. The VM stops itself at the end; "
+          "`lab kernels status` then deletes it.")
     return 0
 
 

@@ -1,5 +1,5 @@
-"""A kernel search run's status, from the store; a run whose VM was preempted (stopped) is started again from its last
-saved generation.
+"""A kernel search run's status, from the store. The VM of a run that ended is deleted; a run whose VM was preempted
+(stopped) is started again from its last saved generation.
 
   lab kernels status [--run RUN]       default: the newest run
 """
@@ -37,7 +37,9 @@ def main(argv: list[str] | None = None) -> int:
     v = vm.VM(name=st["vm"])
     record = v.provider.get(v.name)
     print(line(st, record.state if record else "deleted"))
-    if st["state"] == "running" and record is not None and record.state == "stopped":
+    if launch.tidy(v, st):
+        print(f"  {v.name} deleted: billing ended")
+    elif st["state"] == "running" and record is not None and record.state == "stopped":
         missing = launch.missing()
         if missing:
             print("  preempted; not started again here: " + "; ".join(missing), file=sys.stderr)

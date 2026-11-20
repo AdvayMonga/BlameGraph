@@ -43,10 +43,10 @@ class Provider(Protocol):
     def stop(self, name: str) -> None: ...      # the disk is kept
     def delete(self, name: str) -> None: ...    # the VM and its disk
     def types(self) -> str: ...
-    def account(self) -> str: ...              # the service account a VM deletes itself as
-    def allow_delete(self, name: str) -> None: ...   # that account may delete VM `name`
+    def account(self) -> str: ...              # the service account a VM stops itself as
+    def allow_stop(self, name: str) -> None: ...     # that account may stop VM `name`
     def instance_id(self, name: str) -> str: ...
-    def delete_id(self, instance_id: str) -> None: ...   # run on the VM, as the account
+    def stop_id(self, instance_id: str) -> None: ...     # run on the VM, as the account
 
 
 def load(name: str) -> Provider:

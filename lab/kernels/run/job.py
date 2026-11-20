@@ -1,6 +1,6 @@
 """The kernel search on this VM, start to end: the task's captures, hold, search, freeze, gate, patch. The run folder and
-the ledger go to the store after every saved generation, at each stage and at the end; then the VM deletes itself,
-also after a failure and before its deadline. `lab kernels run` starts it and sends the secrets on stdin (JSON).
+the ledger go to the store after every saved generation, at each stage and at the end; then the VM stops itself,
+also after a failure and before its deadline (`lab kernels status` deletes it). `lab kernels run` starts it and sends the secrets on stdin (JSON).
 
   python -m lab.kernels.run.job --run RUN --task TASK --vm NAME --instance ID --deadline EPOCH  < env.json
 """
@@ -53,7 +53,7 @@ class Job:
                     traceback.print_exc()
 
     def end(self, state: str, reason: str | None = None) -> None:
-        """Save the final state, then delete this VM; the delete runs even when the save fails."""
+        """Save the final state, then stop this VM; the stop runs even when the save fails."""
         if not self.ending.acquire(blocking=False):      # the deadline's end and the search's: the first one only
             return
         self.ended.set()
@@ -64,7 +64,7 @@ class Job:
         finally:
             sys.stdout.flush()
             sys.stderr.flush()
-            self.provider.delete_id(self.a.instance)
+            self.provider.stop_id(self.a.instance)
 
 
 def saved(search_dir: Path) -> int:
@@ -135,8 +135,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--run", required=True)
     ap.add_argument("--task", required=True)
     ap.add_argument("--vm", required=True)
-    ap.add_argument("--instance", required=True, help="this VM's instance id, which it deletes at the end")
-    ap.add_argument("--deadline", type=float, required=True, help="epoch seconds by which the VM is deleted")
+    ap.add_argument("--instance", required=True, help="this VM's instance id, which it stops at the end")
+    ap.add_argument("--deadline", type=float, required=True, help="epoch seconds by which the VM is stopped")
     a = ap.parse_args(argv)
     os.environ.update(json.loads(sys.stdin.read() or "{}"))       # the secrets: in this process's memory only
     from lab.infra.cloud import providers
@@ -158,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         search(a.task, out, lambda s: job.save(stage=s))
         job.end("done")
-    except BaseException as e:                       # noqa: BLE001  the VM is deleted whatever happened
+    except BaseException as e:                       # noqa: BLE001  the VM is stopped whatever happened
         traceback.print_exc()
         job.end("failed", f"{type(e).__name__}: {e}")
     return 0

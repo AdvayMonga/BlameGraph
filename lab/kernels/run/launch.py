@@ -1,4 +1,5 @@
-"""The laptop's part of a VM run: the VM up with the lab's service account, set up, the job started there detached."""
+"""The laptop's part of a VM run: the VM up with the lab's service account, set up, the job started there detached;
+the VM of a run that ended deleted."""
 from __future__ import annotations
 
 import json
@@ -31,6 +32,14 @@ def env() -> dict:
             "LAB_VM_PROVIDER": os.environ.get("LAB_VM_PROVIDER", "nebius")}
 
 
+def tidy(v: vm.VM, st: dict) -> bool:
+    """Delete the VM of run status `st` once the run has ended (its job stopped it); True when deleted."""
+    if st["state"] == "running" or st["vm"] != v.name or v.provider.get(v.name) is None:
+        return False
+    vm.stop(v)
+    return True
+
+
 def go(v: vm.VM, run: str, task: str) -> None:
     """The VM running and set up (created with the service account, or a stopped one started) and the job started on
     it; a VM this call created or started is deleted when a step fails."""
@@ -40,7 +49,7 @@ def go(v: vm.VM, run: str, task: str) -> None:
         vm.wait_ssh(v, record)
         if vm.left_s(v) < 60:
             vm.arm(v, record, vm.MAX_MINUTES)
-        p.allow_delete(v.name)
+        p.allow_stop(v.name)
         if vm.setup(v):
             raise RuntimeError(f"`lab vm setup` failed on {v.name}")
         record = v.provider.get(v.name)
