@@ -2,7 +2,6 @@
                                [--config CONFIG.yaml] [--device cuda] [--initial PROGRAM.py]
 lab kernels evolve gate --task T --shapes SHAPES.json --program BEST.py [--device cuda]
    (T may be region:FIRST:LAST with --samples DIR, a CAPTURE_REGION dir, and --shared-weights FILE, a holder file)
-lab kernels evolve initial --task T --engine REPO --ref REF --out P.py   (start from the kernel at an engine commit)
 lab kernels evolve ship --task T --program BEST.py --gate GATE.json --engine REPO [--base REF] [--budget USD]
 
 `run` runs OpenEvolve on one kernel task, starting from the engine's current kernel and selecting on the seen shapes
@@ -10,8 +9,6 @@ only; `gate` judges a program on the held-out shapes."""
 from __future__ import annotations
 
 import argparse
-import importlib
-import inspect
 import json
 import os
 import re
@@ -22,40 +19,19 @@ import torch
 
 from lab.kernels.tasks import shapes as shapes_mod
 from lab.kernels.eval.jailed import judge_jailed
-from lab.kernels.tasks import TASKS, load, options_from_target
+from lab.kernels.tasks import TASKS, load
 
 HERE = Path(__file__).resolve().parent
 
 
 def initial_program(task) -> str:
-    """The engine's module source with `kernel` bound to the entry point, all of it open to evolution."""
+    """The task's starting program; a toy's from its seed file."""
     if task.start_program is not None:
         return task.start_program()
     if task.entry is None:
         return (HERE / "seeds" / f"{task.name}.py").read_text()
-    if task.name.startswith("region:"):              # its entry is the stations tuple, not a function
-        raise ValueError(f"{task.name}: a region's starting program needs its holder (`shared_weights`: the layer "
-                         "config and the weights' constants are written into it)")
-    mod, _, attr = task.entry.partition(":")
-    return _start(task, inspect.getsource(importlib.import_module(mod)), attr)
-
-
-def _start(task, src: str, attr: str) -> str:
-    """The engine module as the starting program: the task's start edits applied (each exactly once), `kernel` bound
-    to the entry point."""
-    for old, new in task.start_edits:
-        if src.count(old) != 1:
-            raise ValueError(f"{task.name}: a start edit no longer matches the engine module: {old[:60]!r}")
-        src = src.replace(old, new)
-    return f"# EVOLVE-BLOCK-START\n{src}\n# EVOLVE-BLOCK-END\n\nkernel = {attr}\n"
-
-
-def initial_program_at(task, repo: Path, ref: str) -> str:
-    """The starting program from the engine module at `ref` in the engine repo."""
-    from lab.kernels.eval.ship import _git, _module_path
-    mod, _, attr = task.entry.partition(":")
-    src = _git(repo, "show", f"{ref}:{_module_path(repo, _git(repo, 'rev-parse', ref), mod)}")
-    return _start(task, src, attr)
+    raise ValueError(f"{task.name}: a region's starting program needs its holder (`shared_weights`: the layer "
+                     "config and the weights' constants are written into it)")
 
 
 def system_message(task) -> str:
@@ -127,9 +103,6 @@ def setting(task, sets: dict, device: str, tol: dict) -> str:
         out.append(f"The engine's launch settings: {json.dumps(target.load().engine.env, sort_keys=True)}")
     except Exception:                           # noqa: BLE001  no target: nothing to state
         pass
-    opts = options_from_target(task)
-    if opts:
-        out.append(f"Options the task's inputs are built with: {json.dumps(opts)}")
     if task.graphs:
         out.append("The engine replays this entry point inside CUDA graphs.")
     eff = {str(d).removeprefix("torch."): list(TOLERANCES.get(d, ())) for d in task.dtypes}
@@ -261,11 +234,6 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--shapes")
         p.add_argument("--captures", action="append")
         p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    ini = sub.add_parser("initial")
-    ini.add_argument("--task", required=True, choices=TASKS)
-    ini.add_argument("--engine", required=True, help="the engine repo")
-    ini.add_argument("--ref", required=True, help="the engine commit whose kernel to start from")
-    ini.add_argument("--out", required=True)
     sh = sub.add_parser("ship")
     task_args(sh)
     sh.add_argument("--program", required=True)
@@ -292,10 +260,6 @@ def main(argv: list[str] | None = None) -> int:
             out["run"] = experiment.start(Path(a.engine), out["base"], out["branch"], a.budget)
         print(json.dumps(out, indent=1))
         return 0
-    if a.cmd == "initial":
-        Path(a.out).write_text(initial_program_at(load(a.task), Path(a.engine), a.ref))
-        print(a.out)
-        return 0
     task = load_task(a)
     sets = _shapes(task, a)
     tol = tolerances(_target_tolerances(task))
@@ -307,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg = {"task": task.name, "seen": [list(s) for s in sets["seen"]],
                "heldout": [list(s) for s in sets["heldout"]], "weights": sets.get("calls"),
                "device": a.device, "tolerances": tol, "ints": _ints(sets, ("seen", "heldout")),
-               "options": options_from_target(task), "full": True, **region_args(a)}
+               "full": True, **region_args(a)}
         src = Path(a.program).read_text()
         frozen, _ = freeze.freeze(src, lambda s: judge_jailed(cfg, s, freeze.FREEZE_STAGE, timeout_s=3600))
         if frozen != src:
@@ -363,8 +327,7 @@ def prepare(task, sets: dict, out: Path, device: str, tol: dict, timing_shapes: 
     cfg_path.write_text(json.dumps({"task": task.name, "seen": [list(s) for s in sets["seen"]],
                                     "weights": {k: v for k, v in (sets.get("calls") or {}).items() if k in seen},
                                     "device": device, "tolerances": tol, "ints": _ints(sets, ("seen",)),
-                                    "arch": _arch(device),
-                                    "options": options_from_target(task), **(region or {})}))
+                                    "arch": _arch(device), **(region or {})}))
     (out / "shapes.json").write_text(json.dumps({k: [list(s) for s in v] if k in ("seen", "heldout") else v
                                                  for k, v in sets.items()}, indent=1))
     program = Path(initial) if initial else out / "initial_program.py"

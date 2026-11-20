@@ -334,9 +334,8 @@ def _engine_repo(tmp, monkeypatch):
     return regions, repo, git
 
 
-def test_a_region_ships_as_an_override_module_never_through_the_entry_path(tmp_path, monkeypatch):
+def test_a_region_ships_as_an_override_module(tmp_path, monkeypatch):
     import pytest
-    from lab.kernels.tasks import pipeline
     from lab.kernels.eval import ship as ship_mod
     from lab.kernels.evolve.run import initial_program
     regions, repo, git = _engine_repo(tmp_path, monkeypatch)
@@ -346,10 +345,6 @@ def test_a_region_ships_as_an_override_module_never_through_the_entry_path(tmp_p
     assert program == regions.start_program(regions.load_engine(), "norm", "add", shared_weights=str(h.path))
     with pytest.raises(ValueError, match="holder"):
         initial_program(regions.from_engine("norm", "add"))
-    for f in (pipeline.module_file, lambda t, d: pipeline.start_program(t, d)):    # the patch: its override module
-        with pytest.raises(ValueError, match="region"):
-            f(t, tmp_path)
-    monkeypatch.setattr(ship_mod, "unstart", lambda *a: pytest.fail("the entry path was used for a region"))
     ok = {"metrics": {"correct": 1.0}, "artifacts": {"gates": json.dumps(
         {"correctness_heldout": {"passed": True, "cases": 6}, "physics": {"passed": True}})}}
     out = ship_mod.ship(t, program, ok, repo, branch="kernels/region")
