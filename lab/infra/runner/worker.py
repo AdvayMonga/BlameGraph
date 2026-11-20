@@ -28,6 +28,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import uuid
 from pathlib import Path
 
 from evals.targets import target
@@ -227,9 +228,20 @@ def _profile(inputs: dict, out: Path, args: dict, hooks: dict) -> dict:
         keep = bundles[-1] if bundles else None
     if keep and any(p.is_file() for p in keep.rglob("*")):
         shutil.copytree(keep, out / "files")
+    if a.get("capture_only"):
+        _leave_samples(out / "files" / "captures")
     found = sorted(work.glob(ins["summary"])) if ins["summary"] else []
     return {"returncode": proc.returncode, "instrument": exe, "argv": commands, "output": log[-3000:],
             "head": proftools._head(found[-1] if found else None), "gpu": gpu.query()}
+
+
+def _leave_samples(captures: Path) -> None:
+    """A capture's samples stay on this host: moved into the cache, their dir named in `samples.at`."""
+    if (captures / "samples").is_dir():
+        dest = cache_dir() / "captures" / uuid.uuid4().hex
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(captures / "samples"), str(dest))
+        (captures / "samples.at").write_text(str(dest))
 
 
 JOBS = {"test": job_test, "measure": job_measure, "equiv": job_equiv, "reference": job_reference,

@@ -135,6 +135,7 @@ def test_captures_follow_the_scored_regimes_weigh_each_the_same_and_are_reused(t
     pipeline.captures(dataclasses.replace(task(), name="t8", capture_env=(("KV", "fp8"),)), tree,
                       lambda t, a: asked.append(a), ("saturated",))
     assert asked[0]["capture_task"] == "t8"                       # the worker applies the task's capture env
+    assert asked[0]["capture_only"] is True                       # no profiler trace; the samples stay on the worker
 
 
 def test_a_search_that_dies_still_charges_what_it_spent(tb, monkeypatch, tmp_path):

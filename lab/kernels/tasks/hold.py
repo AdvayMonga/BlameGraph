@@ -62,6 +62,8 @@ def main(argv: list[str] | None = None) -> int:
         os.environ.setdefault(k, v)
     from lab.kernels.tasks import regions
     from lab.kernels.tasks.shared_weights import Holder
+    from lab.kernels.tasks import pipeline
+    pipeline.link(Path(a.samples))
     eng = regions.load_engine()
     os.environ.update(eng.hold_env)
     model = eng.module().load_model()

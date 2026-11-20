@@ -167,6 +167,34 @@ def test_a_capture_profile_runs_with_the_targets_capture_env(tmp_path, monkeypat
         assert (seen["env"] or None) == want
 
 
+def test_a_capture_only_run_has_no_profiler_trace_and_leaves_its_samples_on_the_worker(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    from lab import proftools, tools as T
+    monkeypatch.setattr(T, "stage_harness", lambda tree: tmp_path / "h")
+    monkeypatch.setattr(T, "workload_flags", lambda a, h, n: [])
+    monkeypatch.setenv("LAB_WORKER_CACHE", str(tmp_path / "cache"))
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    seen = []
+
+    def runner(tree, argv, **kw):
+        seen.append(argv)
+        caps = tree / proftools.OUT / "bundle" / "b1" / "captures"
+        (caps / "samples").mkdir(parents=True)
+        (caps / "samples" / "0.pt").write_text("tensor")
+        (caps / "calls.jsonl").write_text("{}\n")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    for only in (True, False):
+        out = tmp_path / f"out{only}"
+        worker._profile({"tree": tree}, out, {"kind": "profile", "args": {"capture": ["m:f"], **({"capture_only": True} if only else {})}},
+                        {"profile_runner": runner})
+        caps = out / "files" / "captures"
+        assert (caps / "calls.jsonl").exists() and (caps / "samples").is_dir() != only
+        assert seen[-1][seen[-1].index("--profiler") + 1] == ("cuda-range" if only else "torch")
+    kept = Path((tmp_path / "outTrue" / "files" / "captures" / "samples.at").read_text())
+    assert kept.is_relative_to(tmp_path / "cache") and (kept / "0.pt").read_text() == "tensor"
+
+
 def test_a_capture_for_a_task_adds_the_tasks_own_env(tmp_path, monkeypatch):
     pytest.importorskip("torch")
     from lab import tools as T
