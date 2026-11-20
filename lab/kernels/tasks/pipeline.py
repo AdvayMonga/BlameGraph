@@ -205,21 +205,11 @@ def saved(out: Path) -> int:
     return json.loads(f.read_text())["ran"] if f.exists() else -1
 
 
-def facts(task, kernel_tasks: dict | None, regimes: tuple[str, ...] = ()) -> str:
-    """Facts for every prompt of the search: the scored regimes and, from the latest profile (`kernel_tasks`), the
-    task's share of the profiled window and the window's speedup if its kernels took no time."""
+def facts(regimes: tuple[str, ...] = ()) -> str:
+    """Facts for every prompt of the search: the scored regimes."""
     out = ["# The engine this kernel runs in"]
     if regimes:
         out.append(f"Scored regimes of the task the engine is optimized for: {', '.join(regimes)}.")
-    t = ((kernel_tasks or {}).get("tasks") or {}).get(task.name)
-    if t and t.get("share_of_window") is not None:
-        s = t["share_of_window"]
-        free = t.get("speedup_if_free")
-        out.append(f"In the latest profile of the engine (record {kernel_tasks.get('record')}), this kernel's launches "
-                   f"took {100 * s:.1f}% of the window ({', '.join(t.get('kernels') or [])}); the window would be "
-                   + (f"{free:.3f}x faster if they took no time" if free else "no faster: the share is 1") + ".")
-    else:
-        out.append("No profile of the engine with this kernel's share of its time is recorded yet.")
     return "\n".join(out)
 
 

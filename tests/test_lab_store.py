@@ -192,14 +192,14 @@ def test_index_kernel_ideas_has_one_row_per_idea_of_a_search(tmp_path):
             {"idea_id": "i2", "generation": 1, "plan": {}, "calls": {}, "program": None, "fate": "not applied",
              "gain": None, "reflection": ""}]
     blob = ledger.put_blob("".join(json.dumps(r) + "\n" for r in rows).encode(), root, ".jsonl")
-    ledger.append({"kind": "kernels", "run": "kernels-1", "config": {"task": "rmsnorm"},
+    ledger.append({"kind": "kernels", "run": "kernels-1", "config": {"task": "toy_rmsnorm"},
                    "result": {"ideas": blob, "calls": "blobs/c.jsonl", "texts": "blobs/t.jsonl"}}, root)
-    ledger.append({"kind": "kernels", "run": "kernels-0", "config": {"task": "rmsnorm"}, "result": {}}, root)
+    ledger.append({"kind": "kernels", "run": "kernels-0", "config": {"task": "toy_rmsnorm"}, "result": {}}, root)
     out = index.build(root, root / "index" / "all.duckdb")
     assert out["tables"]["kernel_ideas"] == 2 and not out["missing_blobs"]
     q = index.query(root / "index" / "all.duckdb", "SELECT task, idea_id, gain, texts_blob, "
                     "json_extract(plan, '$.prediction.speedup') FROM kernel_ideas WHERE fate = 'full exam'")
-    assert q["rows"] == [["rmsnorm", "i1", 1.1, "blobs/t.jsonl", "1.2"]]
+    assert q["rows"] == [["toy_rmsnorm", "i1", 1.1, "blobs/t.jsonl", "1.2"]]
 
 
 def test_index_tables_and_the_agent_never_sees_heldout_rows(lab):

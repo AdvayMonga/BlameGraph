@@ -2,7 +2,6 @@
                                [--config CONFIG.yaml] [--device cuda] [--initial PROGRAM.py]
 lab kernels evolve gate --task T --shapes SHAPES.json --program BEST.py [--device cuda]
    (T may be region:FIRST:LAST with --samples DIR, a CAPTURE_REGION dir, and --shared-weights FILE, a holder file)
-lab kernels evolve share --profile BUNDLE [--profile ...] [--gate TASK=GATE.json ...]   (tasks ranked by headroom)
 lab kernels evolve initial --task T --engine REPO --ref REF --out P.py   (start from the kernel at an engine commit)
 lab kernels evolve ship --task T --program BEST.py --gate GATE.json --engine REPO [--base REF] [--budget USD]
 
@@ -262,9 +261,6 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--shapes")
         p.add_argument("--captures", action="append")
         p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    shp = sub.add_parser("share")
-    shp.add_argument("--profile", action="append", required=True, help="a `profile` bundle dir (repeat per class)")
-    shp.add_argument("--gate", action="append", default=[], help="TASK=GATE.json: the engine kernel's gate result")
     ini = sub.add_parser("initial")
     ini.add_argument("--task", required=True, choices=TASKS)
     ini.add_argument("--engine", required=True, help="the engine repo")
@@ -299,12 +295,6 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "initial":
         Path(a.out).write_text(initial_program_at(load(a.task), Path(a.engine), a.ref))
         print(a.out)
-        return 0
-    if a.cmd == "share":
-        from lab.kernels.tasks.share import rank
-        gates = {k: json.loads(Path(v).read_text()) for k, v in (g.split("=", 1) for g in a.gate)}
-        names = list(gates) or list(TASKS)       # with gates, only the gated tasks: two tasks can name one kernel
-        print(json.dumps(rank([Path(p) for p in a.profile], [load(n) for n in names], gates), indent=1))
         return 0
     task = load_task(a)
     sets = _shapes(task, a)

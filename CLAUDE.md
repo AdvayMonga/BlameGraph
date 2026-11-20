@@ -57,7 +57,7 @@ the guard's query budget.
   `tools`/`evaltools`/`proftools`, `experiments` (hypothesis/expect/reflection rules), `experiment` (a person's run),
   `task`, `run`, `setup`, `workspace`, `budget`, `rehearsal`, `dashboard` (+ `live`), `cli`, `prompts/`.
   - `kernels/` — `search/` (the kernel search; `METHOD.md` maps each part to its source), `evolve/` (OpenEvolve arm),
-    `tasks/` (kernel tasks, regions, shapes, pipeline, KernelBench, FlashInfer-Bench), `library/` (other
+    `tasks/` (regions, the whole step, shapes, pipeline, KernelBench, FlashInfer-Bench), `library/` (other
     implementations and PTX cards), `archive.py` (idea archive), `eval/` (the kernel evaluator: check, timing, core,
     jailed, verify, ncu, precheck, sanitize, freeze, ship).
   - `gate/` — correctness gate, holdout guard, repeat audit, validate.

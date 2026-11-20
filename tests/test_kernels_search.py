@@ -69,22 +69,6 @@ def test_the_search_arm_gets_the_one_model_and_openevolves_promotion():
         pass
 
 
-def test_share_with_gates_ranks_only_the_gated_tasks():
-    from lab.kernels.tasks import share
-    from lab.kernels.evolve import run
-    seen, orig = {}, share.rank
-    share.rank = lambda bundles, tasks, gates: seen.update(tasks=[t.name for t in tasks]) or {"tasks": []}
-    try:
-        with tempfile.TemporaryDirectory() as d:
-            (Path(d) / "g.json").write_text("{}")
-            run.main(["share", "--profile", d, "--gate", f"paged_decode={d}/g.json"])
-            assert seen["tasks"] == ["paged_decode"]               # not every task naming the same kernel
-            run.main(["share", "--profile", d])
-            assert len(seen["tasks"]) > 1
-    finally:
-        share.rank = orig
-
-
 def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_program():
     from lab.kernels.evolve.run import record, retime, system_message
     from lab.kernels.search.diversity import Novelty, Similar
@@ -115,7 +99,7 @@ def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_program():
                                    "iters": 3}))
         os.environ["KERNEL_EVAL_CONFIG"] = str(cfg)
         out = Path(d) / "run"
-        pop, cost = search(SEED.read_text(), {}, system_message(t), namer, writer, Evaluator(), Novelty(), Similar(),
+        pop, cost = search(SEED.read_text(), system_message(t), namer, writer, Evaluator(), Novelty(), Similar(),
                            out, Config(generations=2, ideas=3, ports=0, parents=1, workers=1))
         root, best = pop[0], max(pop, key=lambda p: p.score)             # the naive seed is ~0.1x the baseline
         assert "rsqrt" in best.code and best.metrics["correct"] == 1.0 and best.score > 3 * root.score
@@ -147,13 +131,12 @@ def test_a_search_on_the_toy_task_finds_the_speedup_and_keeps_every_program():
         assert len(rec["result"]["candidates"]) == len(pop)
 
 
-def test_diagnosis_facts_bound_type_two_shape_counters_and_ranking():
+def test_diagnosis_facts_bound_type_and_two_shape_counters():
     from types import SimpleNamespace
     import torch
     from lab.kernels.eval.core import _roofline
     from lab.kernels.search import context
     from lab.kernels.search.program import Program
-    from lab.kernels.tasks.share import rank
     from lab.kernels.tasks import load
     t = load("toy_rmsnorm")                     # 4 FLOPs and ~8 bytes per element: memory-bound on any GPU
     hw = SimpleNamespace(bf16_flops=1e15, bw_bytes_s=4e12)
@@ -166,21 +149,6 @@ def test_diagnosis_facts_bound_type_two_shape_counters_and_ranking():
                       {"shape": [512, 256], "kernels": [{"name": "k_big"}]}]}
     f = context.counters(Program("n", None, "", {}, {"ncu": json.dumps(two)}, 0))
     assert "shape [1, 256]" in f and "k_big" in f
-    with tempfile.TemporaryDirectory() as d:
-        bundles = []
-        for i, dur in enumerate((200_000.0, 100_000.0)):
-            b = Path(d) / f"b{i}"
-            b.mkdir()
-            (b / "meta.json").write_text(json.dumps({"window": {"wall_s": 1.0}}))
-            (b / "kernels.json").write_text(json.dumps({"kernels": [
-                {"name": "_moe_gemm_kernel", "count": 1, "total_us": dur},
-                {"name": "_gqa_decode_splitk_kernel", "count": 1, "total_us": 100_000.0}]}))
-            bundles.append(b)
-        gate = {"artifacts": {"timings": json.dumps([{"weight": 1.0, "pct_of_roofline": 90.0}])}}
-        out = rank(bundles, [load("moe_gemm"), load("paged_decode")], {"paged_decode": gate})
-    moe, pd = (next(r for r in out["tasks"] if r["task"] == n) for n in ("moe_gemm", "paged_decode"))
-    assert moe["share_by_profile"] == [0.2, 0.1] and abs(moe["share"] - 0.15) < 1e-9 and moe["gain_at_roofline"] is None
-    assert abs(pd["gain_at_roofline"] - 0.1 * 0.1) < 1e-9 and pd["pct_of_roofline"] == 90.0
 
 
 def test_ncu_counters_parse_and_a_host_without_ncu_says_so():
@@ -252,7 +220,7 @@ def test_the_openevolve_arm_gets_the_same_single_model_and_the_facts_only_prompt
     run.main = lambda argv: seen.update(argv=argv) or print('{"ledger": "x"}')
     try:
         with tempfile.TemporaryDirectory() as d:
-            a = SimpleNamespace(model="claude-opus-5-5", task="moe_gemm", shapes="s.json", evals=30, device="cuda",
+            a = SimpleNamespace(model="claude-opus-5-5", task="toy_rmsnorm", shapes="s.json", evals=30, device="cuda",
                                 initial=None)
             assert ab._openevolve(a, Path(d), 1) == {"ledger": "x"}
             import yaml
@@ -467,8 +435,9 @@ def test_the_setting_states_seen_shapes_with_calls_weight_and_traffic_never_the_
 
 def test_selection_carries_each_buckets_sources():
     from lab.kernels.tasks.shapes import select
+    import dataclasses
     from lab.kernels.tasks import load
-    task = load("paged_decode")
+    task = dataclasses.replace(load("toy_rmsnorm"), heldout_axes=(0, 5))
     seen = [(b, 32, 4, 128, 16, c) for b in (1, 8, 64, 128, 256) for c in (512, 4096)]
     sets = {"seen": seen, "heldout": [], "calls": {json.dumps(list(s)): 1 for s in seen},
             "sources": {json.dumps(list(s)): {"mixed_1": 1} for s in seen}}
@@ -483,11 +452,11 @@ def test_a_query_tool_that_cannot_run_answers_the_model_instead_of_crashing_the_
     assert out.startswith("query failed: ") and "Error" in out
 
 
-def test_the_cli_starts_the_search_from_every_competitor_port_with_its_namer_writer_and_earlier_ideas(monkeypatch, tmp_path):
+def test_the_cli_starts_the_search_with_its_namer_writer_and_earlier_ideas(monkeypatch, tmp_path):
     from lab.kernels.search import __main__ as cli
     program = tmp_path / "start.py"
-    program.write_text("# EVOLVE-BLOCK-START\nimport torch\n\n\ndef silu_mul(x):\n    return x\n"
-                       "# EVOLVE-BLOCK-END\n\nkernel = silu_mul\n")
+    program.write_text("# EVOLVE-BLOCK-START\nimport torch\n\n\ndef f(x):\n    return x\n"
+                       "# EVOLVE-BLOCK-END\n\nkernel = f\n")
     monkeypatch.setattr(cli, "_shapes", lambda task, a: {})
     monkeypatch.setattr(cli, "prepare", lambda *a, **k: ({}, program))
     monkeypatch.setattr(cli, "setting", lambda *a, **k: "SETTING")
@@ -496,18 +465,16 @@ def test_the_cli_starts_the_search_from_every_competitor_port_with_its_namer_wri
     monkeypatch.setattr(cli, "_past", lambda root, task, embedder, run: [task])
     seen = {}
 
-    def search(start, seeds, setting, namer, writer, evaluator, novelty, similar, *a):
-        seen.update(seeds=seeds, setting=setting, models=(namer, writer), past=similar.past)
+    def search(start, setting, namer, writer, evaluator, novelty, similar, *a):
+        seen.update(setting=setting, models=(namer, writer), past=similar.past)
         raise SystemExit("judged")
     monkeypatch.setattr(cli, "search", search)
     try:
-        cli.main(["--task", "silu_mul", "--shapes", "s.json", "--out", str(tmp_path / "out"), "--device", "cpu"])
+        cli.main(["--task", "toy_rmsnorm", "--shapes", "s.json", "--out", str(tmp_path / "out"), "--device", "cpu"])
     except SystemExit as e:
         assert str(e) == "judged"
-    assert list(seen["seeds"]) == ["vllm.silu_and_mul"] and "_silu_mul_engine = silu_mul" in seen["seeds"][
-        "vllm.silu_and_mul"]
     assert seen["models"] == ("claude-opus-5-5", "claude-sonnet-5-5") and "SETTING" in seen["setting"]
-    assert seen["past"] == ["silu_mul"]
+    assert seen["past"] == ["toy_rmsnorm"]
 
 
 def test_the_run_is_a_ledger_record_after_every_generation_under_one_run_id(monkeypatch, tmp_path):
@@ -515,8 +482,8 @@ def test_the_run_is_a_ledger_record_after_every_generation_under_one_run_id(monk
     from lab.kernels.search import __main__ as cli
     from lab.records import ledger
     program, out, root = tmp_path / "start.py", tmp_path / "out", tmp_path / "ledger"
-    program.write_text("# EVOLVE-BLOCK-START\nimport torch\n\n\ndef silu_mul(x):\n    return x\n"
-                       "# EVOLVE-BLOCK-END\n\nkernel = silu_mul\n")
+    program.write_text("# EVOLVE-BLOCK-START\nimport torch\n\n\ndef f(x):\n    return x\n"
+                       "# EVOLVE-BLOCK-END\n\nkernel = f\n")
     root.mkdir()
     monkeypatch.setattr(cli, "_shapes", lambda task, a: {})
     monkeypatch.setattr(cli, "prepare", lambda *a, **k: ({"seen": []}, program))
@@ -527,7 +494,7 @@ def test_the_run_is_a_ledger_record_after_every_generation_under_one_run_id(monk
     monkeypatch.setattr(cli, "_exclude", lambda *a: lambda code, row: None)
     stop = [True]
 
-    def search(start, seeds, setting, namer, writer, evaluator, novelty, similar, out, cfg, gaming, calls, each):
+    def search(start, setting, namer, writer, evaluator, novelty, similar, out, cfg, gaming, calls, each):
         from lab.kernels.search.program import Program
         pop = [Program("p0", None, start, {"correct": 1.0, "combined_score": 1.0}, {}, 0)]
         for gen in (0, 1):
@@ -547,7 +514,7 @@ def test_the_run_is_a_ledger_record_after_every_generation_under_one_run_id(monk
         from lab.kernels.search.loop import trace_row
         return trace_row(p)
     monkeypatch.setattr(cli, "search", search)
-    argv = ["--task", "silu_mul", "--shapes", "s.json", "--out", str(out), "--device", "cpu", "--ledger", str(root)]
+    argv = ["--task", "toy_rmsnorm", "--shapes", "s.json", "--out", str(out), "--device", "cpu", "--ledger", str(root)]
     try:
         cli.main(argv)
     except RuntimeError as e:

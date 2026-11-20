@@ -1,9 +1,9 @@
-"""Other implementations of the kernel tasks: index.toml names each library's kernel and its upstream source (downloaded
-to local/library on first read); `block` is the search prompt's part on them: their source and PTX/SASS cards.
+"""Other implementations of the engine's stations: index.toml names each library's kernel and its upstream source
+(downloaded to local/library on first read); `block` is the search prompt's part on them: their source and PTX/SASS cards.
 
-  lab kernels library cards --task T --out lab/kernels/library/ptx/T.txt [--dump DIR]   (on the GPU host: each entry's card
-      from its library's .so (`sass` in the index) or from DIR, a `lab.kernels.library.competitors` dump (<name>.ptx|.sass,
-      ours.ptx for the engine's kernel))
+  lab kernels library cards --name NAME --out FILE [--dump DIR]   (on the GPU host: the card of each entry whose
+      `cards` names NAME, from its library's .so (`sass` in the index) or from DIR (<entry name>.ptx|.sass, ours.ptx for
+      the engine's kernel); FILE is the card file ptx/NAME.txt here)
 """
 from __future__ import annotations
 
@@ -11,7 +11,10 @@ import argparse
 import functools
 import importlib.util
 import json
+import os
 import re
+import shutil
+import subprocess
 import tomllib
 import urllib.request
 from dataclasses import dataclass
@@ -20,8 +23,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 INDEX = HERE / "index.toml"
 SRC = HERE.parents[2] / "local" / "library"   # <library>/<version>/<path>: each indexed file as downloaded
-CARDS = HERE / "ptx"         # the cards, one file per task (lab/kernels/library/ptx.py's format)
-ENGINE = "engine"                                       # the starting program's card in a task's card file
+CARDS = HERE / "ptx"         # the card files (lab/kernels/library/ptx.py's format)
+ENGINE = "engine"                                       # the engine's own kernel's card in a card file
 
 
 @dataclass(frozen=True)
@@ -29,7 +32,7 @@ class Kernel:
     name: str                                           # <library>.<kernel>
     repo: str
     version: str
-    tasks: tuple[str, ...]
+    cards: tuple[str, ...]                              # the card files (ptx/<name>.txt) its card is in
     source: tuple[str, ...]                             # upstream paths, each optionally "#L<a>-L<b>"
     sass: dict | None = None
     stations: tuple[str, ...] = ()                      # the engine stations it implements (a region's prompt)
@@ -51,12 +54,8 @@ def index(path: Path = INDEX) -> list[Kernel]:
     raw = tomllib.loads(path.read_text())
     libs = raw["libraries"]
     return [Kernel(k["name"], libs[k["name"].split(".", 1)[0]]["repo"], libs[k["name"].split(".", 1)[0]]["version"],
-                   tuple(k.get("tasks", ())), tuple(k["source"]), k.get("sass"), tuple(k.get("stations", ())))
+                   tuple(k.get("cards", ())), tuple(k["source"]), k.get("sass"), tuple(k.get("stations", ())))
             for k in raw["kernel"]]
-
-
-def for_task(task: str, path: Path = INDEX) -> list[Kernel]:
-    return [k for k in index(path) if task in k.tasks]
 
 
 def for_stations(names, path: Path = INDEX) -> list[Kernel]:
@@ -90,9 +89,9 @@ def text(k: Kernel, src: Path = SRC) -> str:
     return "\n\n".join(out)
 
 
-def cards(task: str, cards_dir: Path = CARDS) -> dict[str, list[str]]:
-    """{implementation: its card's lines} from the task's card file, any timing in a heading dropped."""
-    f = cards_dir / f"{task}.txt"
+def cards(name: str, cards_dir: Path = CARDS) -> dict[str, list[str]]:
+    """{implementation: its card's lines} from the card file `name`, any timing in a heading dropped."""
+    f = cards_dir / f"{name}.txt"
     out: dict[str, list[str]] = {}
     name = None
     for line in (f.read_text().splitlines() if f.exists() else []):
@@ -105,19 +104,16 @@ def cards(task: str, cards_dir: Path = CARDS) -> dict[str, list[str]]:
     return out
 
 
-def block(task: str, path: Path = INDEX, src: Path = SRC, cards_dir: Path = CARDS, stations=None) -> str:
-    """The prompt's part on other implementations: each one's upstream source and card, and the starting program's
-    card; empty when the task has neither. `stations` (a region's): every entry implementing one of them."""
-    if stations:
-        ks = for_stations(stations, path)
-        cs = {}
-        for t in {t for k in ks for t in k.tasks}:
-            cs.update({n: c for n, c in cards(t, cards_dir).items() if n != ENGINE})
-    else:
-        ks, cs = for_task(task, path), cards(task, cards_dir)
-    if not ks and not cs:
+def block(stations, path: Path = INDEX, src: Path = SRC, cards_dir: Path = CARDS) -> str:
+    """The prompt's part on other implementations of a region's `stations`: each one's upstream source and card;
+    empty when no entry implements one of them."""
+    ks = for_stations(stations, path)
+    if not ks:
         return ""
-    out = ["# Other implementations of " + ("these operations" if stations else "this operation"),
+    cs = {}
+    for name in {n for k in ks for n in k.cards}:
+        cs.update(cards(name, cards_dir))
+    out = ["# Other implementations of these operations",
            "Their upstream source as published, and, where built, a card counted from the compiled code of each "
            "(lab/kernels/library/ptx.py: instruction classes, widest vector access, registers, static shared memory, Hopper "
            "features in use). They are not timed on our shapes."]
@@ -126,15 +122,33 @@ def block(task: str, path: Path = INDEX, src: Path = SRC, cards_dir: Path = CARD
         out.append(f"## {k.name} ({k.library} {k.version}; " + ", ".join(url(k, p) for p in k.source) + ")")
         out.append(f"```{lang}\n{text(k, src)}\n```")
         out.append("Card: " + ("\n".join(cs[k.name]) if k.name in cs else "not built"))
-    if ENGINE in cs:
-        out.append("## The starting program's card\n" + "\n".join(cs[ENGINE]))
     return "\n\n".join(out)
+
+
+def _tool(name: str) -> str:
+    return shutil.which(name) or str(Path(os.environ.get("CUDA_HOME", "/usr/local/cuda")) / "bin" / name)
+
+
+def cuobjdump(module_file: str) -> str:
+    """`cuobjdump -sass` of a file. Raises if cuobjdump fails."""
+    p = subprocess.run([_tool("cuobjdump"), "-sass", module_file], capture_output=True, text=True)
+    if p.returncode != 0:
+        raise RuntimeError(f"cuobjdump exited {p.returncode} on {module_file}: {p.stderr.strip()[:300]}")
+    return p.stdout
+
+
+def sass(module_file: str, pattern: str, arch: str | None = None, dump=cuobjdump) -> str:
+    """The SASS of the functions in a library's extension whose names match `pattern`, only `arch`'s code when given.
+    `dump(file)` disassembles. Raises if cuobjdump fails."""
+    code = dump(module_file)
+    if arch:                                     # cuobjdump heads each architecture's code with "code for sm_XY"
+        code = "".join(c for c in re.split(r"(?=\n\s*code for sm_)", code) if re.match(rf"\s*code for {arch}[a-z]?\s", c))
+    return "".join(b for b in re.split(r"(?=\n\s+Function : )", code) if re.search(r"Function : \S*(" + pattern + r")", b))
 
 
 @functools.lru_cache(maxsize=None)
 def _dump(so: str) -> str:
     """A .so's disassembly, once per process: every entry of a package reads the same files."""
-    from lab.kernels.library.competitors import cuobjdump
     return cuobjdump(so)
 
 
@@ -149,7 +163,6 @@ def _names(so: Path, pattern: str) -> bool:
 
 def _package_sass(package: str, pattern: str, arch: str | None) -> str:
     """SASS of the functions matching `pattern` in every .so of an installed package."""
-    from lab.kernels.library.competitors import sass
     spec = importlib.util.find_spec(package)
     if spec is None or not spec.submodule_search_locations:
         raise FileNotFoundError(f"package {package} is not installed")
@@ -165,12 +178,12 @@ def _package_sass(package: str, pattern: str, arch: str | None) -> str:
     return "".join(texts)
 
 
-def build_cards(task: str, dump: Path | None, arch: str | None) -> tuple[list[dict], dict[str, str]]:
-    """Each entry's card (from the dump when it has the entry's code, else from its package's .so) and the engine's
-    from the dump's ours.ptx; with why each missing one is missing."""
+def build_cards(name: str, dump: Path | None, arch: str | None) -> tuple[list[dict], dict[str, str]]:
+    """The card of each entry of the card file `name` (from the dump when it has the entry's code, else from its
+    package's .so) and the engine's from the dump's ours.ptx; with why each missing one is missing."""
     from lab.kernels.library.ptx import card
     built, missing = [], {}
-    for k in for_task(task):
+    for k in (k for k in index() if name in k.cards):
         code = ""
         for ext in (".ptx", ".sass"):
             if dump and (dump / f"{k.name}{ext}").exists():
@@ -200,14 +213,14 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="lab kernels library")
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("cards")
-    c.add_argument("--task", required=True)
+    c.add_argument("--name", required=True, help="the card file's name")
     c.add_argument("--out", required=True)
-    c.add_argument("--dump", help="a lab.kernels.library.competitors out dir")
+    c.add_argument("--dump", help="a dir of <entry name>.ptx|.sass files and optionally ours.ptx")
     a = ap.parse_args(argv)
     from lab.kernels.library.ptx import render
     import torch
     arch = "sm_%d%d" % torch.cuda.get_device_capability() if torch.cuda.is_available() else None
-    built, missing = build_cards(a.task, Path(a.dump) if a.dump else None, arch)
+    built, missing = build_cards(a.name, Path(a.dump) if a.dump else None, arch)
     Path(a.out).write_text(render(built) + "\n")
     print(json.dumps({"cards": [c["implementation"] for c in built], "missing": missing, "out": a.out}))
     return 0

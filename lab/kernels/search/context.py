@@ -38,13 +38,13 @@ HISTORY_MAX = 400            # rows of the run's ideas shown; the rest are count
 TEXT = 240                   # characters of an idea's text shown
 
 
-def ports(setting: str, start: Program, ported: list[str], n: int) -> tuple[str, str]:
-    """(system, user) for the call before the first generation: the public implementations to port, `ported` aside."""
+def ports(setting: str, start: Program, n: int) -> tuple[str, str]:
+    """(system, user) for the call before the first generation: the public implementations to port."""
     ask = (f"Name up to {n} public implementations of this operation to port as further starting programs of the "
            "search: those shown above, or others you find. A port is this program with its kernel replaced by that "
            "implementation's, computing the same result through the same entry point. Each is written, applied and "
-           "judged beside this program." + (f" Already ported and judged: {', '.join(ported)}." if ported else "")
-           + ' Answer with one JSON object and nothing else: {"ideas": [{"parent": "<this program\'s id>", "source": '
+           "judged beside this program."
+           ' Answer with one JSON object and nothing else: {"ideas": [{"parent": "<this program\'s id>", "source": '
            '"<the library, its kernel and where its source is>", "modification_plan": "<what replaces what, max 60 '
            'words>"}]}')
     return setting + CACHE_SPLIT + "\n\n" + PORTER, program(start) + CACHE_SPLIT + "\n\n" + ask
@@ -108,7 +108,7 @@ def run(population: list[Program]) -> str:
                         "change": short(n.plan) if n.plan else "the starting program"})
             for n in lineage(best, population)]
     return "\n".join(["# Each generation's programs and the best score among those still usable (generation 0: the "
-                      "start, the seeds and the ports)", *rows,
+                      "start and the ports)", *rows,
                       "# The best usable program's line of descent, with the change that made each program", *path])
 
 

@@ -32,7 +32,6 @@ COMMANDS = {
     "kernels": {"search": "lab.kernels.search", "ab": "lab.kernels.search.ab",
                 "evolve": "lab.kernels.evolve", "library": "lab.kernels.library",
                 "archive": "lab.kernels.archive", "ptx": "lab.kernels.library.ptx",
-                "competitors": "lab.kernels.library.competitors",
                 "kernelbench": "lab.kernels.tasks.kernelbench",
                 "flashinfer-bench": "lab.kernels.tasks.flashinfer_bench"},
 }

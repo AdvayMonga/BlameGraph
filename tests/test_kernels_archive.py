@@ -51,16 +51,16 @@ def test_ideas_fold_near_duplicates_keep_every_outcome_and_answer_lookups(tmp_pa
             {"parent_id": "a", "parent_score": 1.12,
              "hypotheses": [idea("Fuse the combine into the split"), idea("one launch")],
              "measured": [{"index": 0, "child_id": "c", "child_score": 1.05, "improved": False}]}]
-    run(root, "paged_decode", rows, {"b": ({"stage": 1, "correct": 0.0}, {"error": "max_abs 3.1"}),
+    run(root, "region:attention:attention", rows, {"b": ({"stage": 1, "correct": 0.0}, {"error": "max_abs 3.1"}),
                                      "a": ({"stage": 2}, {}), "c": ({"stage": 2}, {})})
     es = archive.build(root, FakeEmbed())
     assert [len(e.outcomes) for e in es] == [2, 1, 1]          # the two "fuse the combine" ideas are one
     assert es[1].outcomes[0].error == "max_abs 3.1" and es[1].outcomes[0].stage == 1
     assert es[2].outcomes[0].child_id is None                  # named, never measured
     assert es[0].best().child_score == 1.12 and es[0].ever_improved()
-    top = archive.matches(es, "fuse combine split", "paged_decode", k=1, embedder=FakeEmbed())
-    assert top[0][1] is es[0] and not archive.matches(es, "fuse", "moe_gemm", embedder=FakeEmbed())
-    assert archive.retry(es, {"paged_decode": "a"}) == [es[1]]    # failed on r only; the best is now a
+    top = archive.matches(es, "fuse combine split", "region:attention:attention", k=1, embedder=FakeEmbed())
+    assert top[0][1] is es[0] and not archive.matches(es, "fuse", "region:gate_up:down", embedder=FakeEmbed())
+    assert archive.retry(es, {"region:attention:attention": "a"}) == [es[1]]    # failed on r only; the best is now a
     assert es[1].ever_failed() and not es[2].ever_failed()            # never measured: not a failure
     path = archive.export(es, tmp_path / "archive.jsonl")
     back = archive.load(path)
@@ -72,7 +72,7 @@ def test_without_an_embedder_only_identical_ideas_fold_and_lookup_is_by_words(tm
     root = tmp_path / "ledger"
     rows = [{"parent_id": "r", "parent_score": 1.0, "hypotheses": [idea("fuse"), idea("fuse"), idea("tile")],
              "measured": []}]
-    run(root, "rmsnorm", rows, {})
+    run(root, "toy_rmsnorm", rows, {})
     es = archive.build(root)
     assert len(es) == 2 and len(es[0].outcomes) == 2
     assert archive.matches(es, "tile the rows")[0][1].text.startswith("tile")

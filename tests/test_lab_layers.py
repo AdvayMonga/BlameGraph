@@ -73,9 +73,9 @@ def test_the_decode_floor_needs_a_target_and_peaks_and_says_so(tmp_path, monkeyp
 
 def test_kernel_distance_from_gates(tmp_path):
     gate = {"artifacts": {"timings": json.dumps([{"pct_of_roofline": 10.0, "weight": 3}, {"pct_of_roofline": 30.0, "weight": 1}])}}
-    out = layers.from_bundle(bundle(tmp_path), gates={"paged_decode": gate, "other": {"artifacts": {}}})
+    out = layers.from_bundle(bundle(tmp_path), gates={"region:norm:add": gate, "other": {"artifacts": {}}})
     k = out["kernels"]
-    assert k["pct_of_ceiling"] == pytest.approx(15.0) and k["pct_of_roofline_by_task"] == {"paged_decode": 15.0, "other": None}
+    assert k["pct_of_ceiling"] == pytest.approx(15.0) and k["pct_of_roofline_by_task"] == {"region:norm:add": 15.0, "other": None}
 
 
 def test_a_bundle_without_a_window_is_none(tmp_path):

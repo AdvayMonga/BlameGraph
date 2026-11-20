@@ -1,7 +1,8 @@
 """The `kernel_search` tool (lab/tools.py) and its pipeline: the start program and patch from the agent's engine tree,
-the worker's ssh env, the tool's refusals, and one call end to end with the capture, search and gate faked."""
+the worker's ssh env, the tool's refusals, and what a search that dies is charged."""
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
 from pathlib import Path
@@ -20,7 +21,7 @@ MODULE = "import torch\n\n\ndef fn(x):\n    return x * 2\n"
 
 
 def task():
-    return dataclasses.replace(load("silu_mul"), entry="pkg.mod:fn", start_edits=())
+    return dataclasses.replace(load("toy_rmsnorm"), entry="pkg.mod:fn")
 
 
 def test_the_start_program_and_the_patch_come_from_the_workspace_tree(tmp_path):
@@ -57,48 +58,16 @@ def spec(tb):
     return next(s for s in tb.specs() if s.name == "kernel_search")
 
 
-def test_refused_off_the_kernels_layer_and_for_an_unknown_task(tb, monkeypatch):
+def test_refused_off_the_kernels_layer_and_for_a_task_that_is_no_region(tb, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     h = next(s for s in tb.specs() if s.name == "hypothesis").fn
     rt = h({"hypothesis": "h", "rationale": "r", "layer": "runtime"}).split()[1]
     with pytest.raises(ValueError, match="kernels layer only"):
-        spec(tb).fn({"hypothesis_id": rt, "expect": EXPECT, "task": "silu_mul"})
+        spec(tb).fn({"hypothesis_id": rt, "expect": EXPECT, "task": "region:norm:add"})
     k = h({"hypothesis": "k", "rationale": "r", "layer": "kernels"}).split()[1]
-    for bad, why in (({"task": "nope"}, "task"), ({"task": "region:norm"}, "region:FIRST:LAST")):
-        with pytest.raises(ValueError, match=why):
-            spec(tb).fn({"hypothesis_id": k, "expect": EXPECT, **bad})
-
-
-def test_one_call_records_the_search_and_saves_a_patch_when_the_gate_passes(tb, monkeypatch, tmp_path):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
-    monkeypatch.setenv("LAB_GPU_USD_PER_HOUR", "3")
-    from lab.kernels.tasks import load as real_load
-    import lab.kernels.tasks
-    engine_task = dataclasses.replace(task(), entry="inference_server.engine:speed")     # the fixture repo's module
-    monkeypatch.setattr(lab.kernels.tasks, "load", lambda n: engine_task if n == "silu_mul" else real_load(n))
-    caps = tmp_path / "captures"
-    caps.mkdir()
-    monkeypatch.setattr(pipeline, "captures", lambda t, tree, profile, *a: [caps])
-
-    def search(t, cs, start, out, root, env, device="cuda", facts_text=None, held=None):
-        assert "No profile of the engine" in facts_text                 # the bigger picture, as facts, for every prompt
-        out.mkdir(parents=True)
-        (out / "best_program.py").write_text(start.read_text().replace("return 1", "return 2"))
-        return {"best": {"combined_score": 1.3, "correct": 1.0}, "cost": {"usd": 2.5}, "ledger": "ev-search"}
-    monkeypatch.setattr(pipeline, "search", search)
-    gates = {"correctness_seen": {"passed": True}, "correctness_heldout": {"passed": True, "cases": 4}}
-    monkeypatch.setattr(pipeline, "gate", lambda *a: {"metrics": {"correct": 1.0, "heldout_speedup": 1.2},
-                                                        "artifacts": {"gates": json.dumps(gates)}})
-    h = next(s for s in tb.specs() if s.name == "hypothesis").fn
-    k = h({"hypothesis": "fuse", "rationale": "r", "layer": "kernels"}).split()[1]
-    spent = tb.s.budget.spent_usd
-    out = json.loads(spec(tb).fn({"hypothesis_id": k, "expect": EXPECT, "task": "silu_mul"}
-                                 ).split("\n\nExperiment record")[0])
-    assert out["gate"]["passed"] and out["metrics"] == {"speedup": 1.3, "heldout_speedup": 1.2}
-    patch = (tb.s.workspace.path / out["patch"]).read_text()
-    assert "+    return 2" in patch and tb.s.budget.spent_usd >= spent + 2.5
-    rec = list(ledger.records(tb.s.ledger_root, kind="kernels"))[-1]
-    assert rec["tool"] == "kernel_search" and rec["experiment"]["actual"] == 1.3 and rec["result"]["search_record"]
+    for bad in ("toy_rmsnorm", "region:norm", "kb:1:1"):
+        with pytest.raises(ValueError, match="region:START:END"):
+            spec(tb).fn({"hypothesis_id": k, "expect": EXPECT, "task": bad})
 
 
 def test_captures_follow_the_scored_regimes_weigh_each_the_same_and_are_reused(tmp_path, monkeypatch):
@@ -139,13 +108,10 @@ def test_captures_follow_the_scored_regimes_weigh_each_the_same_and_are_reused(t
 
 
 def test_a_search_that_dies_still_charges_what_it_spent(tb, monkeypatch, tmp_path):
-    from lab.kernels.tasks import load as real_load
-    import lab.kernels.tasks
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     monkeypatch.setenv("LAB_GPU_USD_PER_HOUR", "3")
-    engine_task = dataclasses.replace(task(), entry="inference_server.engine:speed")
-    monkeypatch.setattr(lab.kernels.tasks, "load", lambda n: engine_task if n == "silu_mul" else real_load(n))
     monkeypatch.setattr(pipeline, "captures", lambda *a: [tmp_path])
+    monkeypatch.setattr(pipeline, "hold", lambda *a: contextlib.nullcontext({"start": "x = 1\n"}))
 
     def dies(t, cs, start, out, *a, **k):
         out.mkdir(parents=True)
@@ -155,6 +121,6 @@ def test_a_search_that_dies_still_charges_what_it_spent(tb, monkeypatch, tmp_pat
     h = next(s for s in tb.specs() if s.name == "hypothesis").fn
     k = h({"hypothesis": "fuse", "rationale": "r", "layer": "kernels"}).split()[1]
     spent = tb.s.budget.spent_usd
-    out = spec(tb).fn({"hypothesis_id": k, "expect": EXPECT, "task": "silu_mul"})
+    out = spec(tb).fn({"hypothesis_id": k, "expect": EXPECT, "task": "region:norm:add"})
     assert out.startswith("kernel_search failed") and tb.s.budget.spent_usd >= spent + 1.75
     assert list(ledger.records(tb.s.ledger_root, kind="kernels"))[-1]["result"]["model_usd"] == 1.75

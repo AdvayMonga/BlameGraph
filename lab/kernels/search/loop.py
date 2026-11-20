@@ -1,4 +1,4 @@
-"""The search: the start, the seeds and the ports are judged, then each generation picks parents, names and reviews its
+"""The search: the start and the ports are judged, then each generation picks parents, names and reviews its
 changes, has a writer make each and judges the programs. Its records go under `<out>` (trace, hypotheses, ideas, calls),
 and its state after every generation (state.json): a search started in an `<out>` that has one goes on from it."""
 from __future__ import annotations
@@ -99,22 +99,22 @@ def write(calls: Calls, writer: Model, setting: str, idea: Idea, by: dict[str, P
         idea.fate = f"not applied: {why}"
 
 
-def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer: Model, evaluator: Evaluator,
+def search(start: str, setting: str, namer: Model, writer: Model, evaluator: Evaluator,
            novelty: diversity.Novelty, similar: diversity.Similar, out: Path,
            cfg: Config = Config(), detect: Callable | None = None, calls: Calls | None = None,
            each: Callable[[int, list[Program]], None] | None = None) -> tuple[list[Program], dict]:
-    """The population (the start first) and the run's cost {usd, model_calls, evals, generations}. `seeds`: name ->
-    program; `namer` names, reviews and writes the ports; `writer` makes each change; `detect(code, row)` flags a
+    """The population (the start first) and the run's cost {usd, model_calls, evals, generations}.
+    `namer` names, reviews and writes the ports; `writer` makes each change; `detect(code, row)` flags a
     parent; `calls`: the `Calls` of `out`, when the caller makes model calls of its own; `each(generation,
     population)` runs after every saved state. `out` holds one search: another's state there is refused."""
     out.mkdir(parents=True, exist_ok=True)
     own = calls is None
     calls = calls or Calls(out)
     rng, population, ideas, ran, closed, rows = random.Random(cfg.seed), [], [], 0, False, []
-    of = hashlib.sha256(json.dumps([start, sorted(seeds), asdict(cfg)]).encode()).hexdigest()[:16]
+    of = hashlib.sha256(json.dumps([start, asdict(cfg)]).encode()).hexdigest()[:16]
     saved = json.loads((out / STATE).read_text()) if (out / STATE).exists() else None
     if saved and saved["of"] != of:
-        raise ValueError(f"{out} holds the state of another search (another start, seeds or settings)")
+        raise ValueError(f"{out} holds the state of another search (another start or settings)")
     if saved:
         population = [Program(**p) for p in saved["population"]]
         by = {p.id: p for p in population}
@@ -182,16 +182,11 @@ def search(start: str, seeds: dict[str, str], setting: str, namer: Model, writer
                 "".join(json.dumps(table_row(i, score), default=str) + "\n" for i in ideas))
 
         if not saved:
-            first = [start, *seeds.values()]
-            for code in first:
-                novelty.add(code)
-            results = evaluator.evaluate(first)
-            root = keep(start, results[0], 0)
-            for name, code, r in zip(seeds, first[1:], results[1:]):
-                keep(code, r, 0, root.id, {"competitor": name}, "competitor")
+            novelty.add(start)
+            root = keep(start, evaluator.evaluate([start])[0], 0)
             if cfg.ports:
                 spent = calls.usd
-                text, nid = calls(namer, "ports", 0, *context.ports(setting, root, list(seeds), cfg.ports))
+                text, nid = calls(namer, "ports", 0, *context.ports(setting, root, cfg.ports))
                 plans = changes(context.read(text), [root])[:cfg.ports]
                 make(0, [root], [idea(p, 0, {"name": nid}) for p in plans], namer, spent,
                      {"named": len(plans), "calls": {"name": nid}}, "competitor")

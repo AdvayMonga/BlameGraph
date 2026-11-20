@@ -156,109 +156,6 @@ def test_ncu_counters_reach_the_judge_on_the_gpu():
     assert "ncu" in a and "ERR_NVGPUCTRPERM" not in json.dumps(a), a
     shapes = json.loads(a["ncu"])["shapes"]
     assert len(shapes) == 2 and all(s.get("kernels") for s in shapes), shapes      # counters on both shapes
-def test_the_fused_tasks_start_launches_what_the_engine_module_launches():
-    """The original fused.py and the edited start make the same launches."""
-    import types
-    from lab.kernels.evolve.run import _start
-    from lab.targets import engine
-    try:
-        src = (engine.repo() / "src" / "inference_server" / "models" / "fused.py").read_text()
-    except Exception:                            # noqa: BLE001  no engine checkout here (CI)
-        print("skip: no engine source")
-        return
-    log = []
-
-    class Launch:
-        def __init__(self, name):
-            self.name = name
-
-        def __getitem__(self, grid):
-            return lambda *a, **k: log.append((self.name, grid, [tuple(x.shape) if hasattr(x, "shape") else x
-                                                                 for x in a], sorted(k.items())))
-    stub = types.ModuleType("inference_server.models.fused_kernels")
-    stub.triton = types.SimpleNamespace(next_power_of_2=lambda n: 1 << (n - 1).bit_length(), cdiv=lambda a, b: -(-a // b))
-    for name in ("_rmsnorm_kernel", "_add_rmsnorm_kernel", "_rmsnorm_rope_kernel", "_silu_mul_kernel",
-                 "_kv_store_kernel", "_topk_softmax_kernel", "_add_cast_kernel"):
-        setattr(stub, name, Launch(name))
-    saved = {k: sys.modules.get(k) for k in ("inference_server", "inference_server.models",
-                                             "inference_server.models.fused_kernels")}
-    pkg, models = types.ModuleType("inference_server"), types.ModuleType("inference_server.models")
-    pkg.models, models.fused_kernels = models, stub
-    sys.modules.update({"inference_server": pkg, "inference_server.models": models,
-                        "inference_server.models.fused_kernels": stub})
-    try:
-        runs = []
-        for task in ("rmsnorm", "silu_mul", "topk_softmax"):
-            start = _start(load(task), src, "x").split("# EVOLVE-BLOCK-END")[0].replace("# EVOLVE-BLOCK-START\n", "")
-        import importlib.util
-        find, enabled = importlib.util.find_spec, []
-        importlib.util.find_spec = lambda name, *a: object() if name == "triton" else find(name, *a)   # triton present
-        try:
-            for code in (src, start):
-                ns, log[:] = {"__name__": "fused_under_test"}, []
-                exec(compile(code, "fused.py", "exec"), ns)             # noqa: S102  the module under test
-                bf = dict(dtype=torch.bfloat16)
-                x, w = torch.randn(4, 64, **bf), torch.ones(64, **bf)
-                ns["rmsnorm"](x, w, 1e-6), ns["add_rmsnorm"](x, x.clone(), w, 1e-6)
-                q, cs = torch.randn(1, 2, 4, 16, **bf), torch.randn(1, 2, 16, **bf)
-                ns["rmsnorm_rope"](q, torch.ones(16, **bf), cs, cs.clone(), 1e-6)
-                ns["silu_mul"](torch.randn(4, 128, **bf))
-                ns["topk_softmax"](torch.randn(4, 128, **bf), 8, True, fp32=True)
-                runs.append(list(log))
-                enabled.append(ns["ENABLED"])
-        finally:
-            importlib.util.find_spec = find
-    finally:
-        for k, v in saved.items():
-            sys.modules.pop(k, None) if v is None else sys.modules.__setitem__(k, v)
-    assert len(runs[0]) == 5 and runs[0] == runs[1] and enabled == [True, True]   # same launches, args, switch
-    from lab.kernels.eval.ship import unstart
-    assert unstart(load("rmsnorm"), start).rstrip() == src.rstrip()      # shipping undoes the edits
-def test_the_fp8_moe_tasks_judge_the_engines_calls():
-    """An engine-shaped kernel passes every gate; a 5% scale error fails; each task reads only its own calls."""
-    from lab.kernels.eval.check import _gen, check_kernel
-    from lab.kernels.eval.core import _scaled
-    from lab.kernels.tasks.moe_gemm import _block_m
-    t, u = load("moe_gemm_fp8"), load("moe_gemm_scatter_fp8")
-
-    def pairs(sid, eid, M, E):
-        bm, out = _block_m(sid, eid), {}
-        for blk, e in enumerate(eid.tolist()):
-            out.update({r: e for r in sid[blk * bm:(blk + 1) * bm].tolist() if r < M and e < E})
-        return out
-    a, tok, w, sc, sid, eid = t.make_inputs(t.seen_default[1], torch.bfloat16, "cpu", _gen(0))
-    pe, wd = pairs(sid, eid, tok.numel(), w.shape[0]), w.float() * sc[..., None]
-    want = torch.stack([a[tok[r]].float() @ wd[pe[r]].T for r in range(tok.numel())])
-    assert w.dtype == torch.float8_e4m3fn and (t.reference(a, tok, w, sc, sid, eid).float() - want).abs().max() < 2e-2
-    a, w, sc, sid, eid, tok, pw, out0 = u.make_inputs(u.seen_default[1], torch.bfloat16, "cpu", _gen(1))
-    pe, wd, want = pairs(sid, eid, a.shape[0], w.shape[0]), w.float() * sc[..., None], torch.zeros_like(out0)
-    for r in range(a.shape[0]):
-        want[tok[r]] += pw[r] * (a[r].float() @ wd[pe[r]].T)
-    assert (u.reference(a, w, sc, sid, eid, tok, pw, out0) - want).abs().max() < 1e-3
-
-    def gemm(a, tok, w, sorted_ids, expert_ids, M, block_m=16, split_k=None, w_scale=None):
-        return t.reference(a, tok if tok is not None else torch.empty(0, dtype=torch.int32), w, w_scale, sorted_ids,
-                           expert_ids)
-
-    def scatter(a, w, sorted_ids, expert_ids, M, tok, pair_w, out, block_m=16, w_scale=None):
-        out += u.reference(a, w, w_scale, sorted_ids, expert_ids, tok, pair_w, out)
-    for task, fn in ((t, gemm), (u, scatter)):
-        r = check_kernel(task.reference, task.bind(fn), task.make_inputs, list(task.seen_default),
-                         list(task.heldout_default), dtypes=task.dtypes, edge_shapes=task.edge_shapes(task.seen_default[0]),
-                         layouts=())
-        assert r["passed"], (task.name, r["reasons"])
-        assert check_kernel(task.reference, task.bind(fn), _scaled(task.make_inputs, -1.0), list(task.seen_default[:2]),
-                            [], dtypes=task.dtypes, edge_shapes=[], layouts=())["passed"]
-    off = lambda a, tok, w, s, e, M, block_m=16, split_k=None, w_scale=None: gemm(a, tok, w, s, e, M, w_scale=w_scale * 1.05)  # noqa: E731
-    assert not check_kernel(t.reference, t.bind(off), t.make_inputs, list(t.seen_default), [], dtypes=t.dtypes,
-                            edge_shapes=[], layouts=())["passed"]
-    arg = lambda shape, dtype: {"shape": shape, "dtype": dtype}                                       # noqa: E731
-    ints = {**arg([32], "int32"), "values": []}
-    fp8 = {"args": [arg([4, 2048], "bfloat16"), ints, arg([128, 1536, 2048], "float8_e4m3fn"), ints, ints, {"value": 32}],
-           "kwargs": {"w_scale": arg([128, 1536], "float32")}}
-    bf16 = {"args": fp8["args"][:2] + [arg([128, 1536, 2048], "bfloat16")] + fp8["args"][3:], "kwargs": {}}
-    assert t.shape_of(fp8) == load("moe_gemm").shape_of(bf16) == (32, 2048, 1536, 128, 4, 1)
-    assert t.shape_of(bf16) is None and load("moe_gemm").shape_of(fp8) is None
 def test_the_evaluators_modules_are_out_of_reach():
     from lab.kernels.eval import core
     t = load("toy_rmsnorm")
@@ -339,31 +236,11 @@ def test_noise_rule_and_physics_alarm():
     assert r["metrics"]["combined_score"] == 0.0 and g["physics"]["passed"] is False
 
 
-def test_paged_decode_tables_are_as_wide_as_the_engines_graphs():
-    from lab.kernels.eval.check import _gen
-    from lab.kernels.tasks import from_config
-    t, shape = load("paged_decode"), (3, 8, 2, 16, 16, 40)
-    wide = from_config({"task": "paged_decode", "options": {"context_window": 32768}})
-    narrow_in, wide_in = t.make_inputs(shape, torch.float32, "cpu", _gen(0)), wide.make_inputs(shape, torch.float32,
-                                                                                                "cpu", _gen(0))
-    assert narrow_in[3].shape == (3, 3) and wide_in[3].shape == (3, 2048) and not wide_in[3][:, 3:].any()
-    assert torch.equal(t.reference(*narrow_in), t.reference(*wide_in))        # same answer, the engine's layout
-    real = wide.with_ints({json.dumps(list(shape)): [[40, 7, 33]]})
-    assert real.make_inputs(shape, torch.float32, "cpu", _gen(0))[3].shape == (3, 2048)
-
-
-def test_paged_decode_checks_with_no_edge_shapes_do_not_fall_back_to_the_defaults():
-    from lab.kernels.eval import check_kernel
-    t = load("paged_decode")                    # its default edge shapes are not valid GQA inputs
-    r = check_kernel(t.reference, t.reference, t.make_inputs, [(2, 8, 2, 16, 4, 11)], [], dtypes=(torch.float32,),
-                     edge_shapes=[], repeats=1, layouts=())
-    assert r["passed"]
-
-
 def test_split_holds_out_a_region_even_when_calls_pile_up_at_the_largest_value():
+    import dataclasses
     from collections import Counter
     from lab.kernels.tasks import randn
-    t = load("moe_gemm")
+    t = load("toy_rmsnorm")
     counts = Counter({(m, 64, 96, 8, m, 1): (1000 if m == 512 else 3) for m in range(8, 513, 8)})
     s = shapes.split(t, counts)
     assert s["cut_by"] == "distinct" and s["heldout"] and (512, 64, 96, 8, 512, 1) in s["seen"]   # the top stays seen
@@ -372,24 +249,11 @@ def test_split_holds_out_a_region_even_when_calls_pile_up_at_the_largest_value()
     two = Counter({(n, 32, 4, 128, 16, L): (900 if (n, L) == (33, 8032) else 10)
                    for n in range(1, 257, 8) for L in (650, 8032)})
     two.update({(n, 32, 4, 128, 16, 8032): 300 for n in range(200, 257, 8)})
-    s2 = shapes.split(load("paged_decode"), two)
+    s2 = shapes.split(dataclasses.replace(t, heldout_axes=(0, 5)), two)
     held = sum(two[x] for x in s2["heldout"])
     assert s2["heldout"] and held <= sum(two.values()) / 2 and (33, 32, 4, 128, 16, 8032) in s2["seen"]
     g1, g2 = torch.Generator().manual_seed(3), torch.Generator().manual_seed(3)
     assert torch.equal(randn((4, 5), g1, "cpu", torch.float32), randn((4, 5), g2, "cpu", torch.float32))
-
-
-def test_real_sequence_lengths_replace_synthetic_ones_where_captured():
-    t = load("paged_decode")
-    shape, other = (3, 8, 2, 16, 4, 11), (2, 8, 2, 16, 4, 9)
-    real = t.with_ints({json.dumps(list(shape)): [[5, 9, 11]]})
-    g = torch.Generator().manual_seed(0)
-    assert real.make_inputs(shape, torch.float32, "cpu", g)[4].tolist() == [5, 9, 11]
-    assert int(real.make_inputs(other, torch.float32, "cpu", g)[4][0]) == 9               # not captured: synthetic
-    q, k, v, table, lens = real.make_inputs(shape, torch.float32, "cpu", torch.Generator().manual_seed(1))
-    out = t.reference(q, k, v, table, lens)
-    assert out.shape == (3, 8, 16) and torch.isfinite(out).all()
-    assert load("toy_rmsnorm").with_ints({"[8, 256]": [[1]]}) is load("toy_rmsnorm")      # no int args: unchanged
 
 
 def test_graph_timing_is_cuda_only_and_a_kernel_that_cannot_be_timed_scores_zero():
@@ -413,27 +277,7 @@ def test_graph_timing_is_cuda_only_and_a_kernel_that_cannot_be_timed_scores_zero
         core.time_pair = orig
     gate = json.loads(r["artifacts"]["gates"])["timing"]
     assert r["metrics"]["combined_score"] == 0.0 and not gate["passed"] and "must capture" in gate["reason"]
-    assert load("paged_decode").graphs and "CUDA graph" in system_message(load("paged_decode"))
-
-
-def test_share_of_the_window_per_task_and_the_kernels_no_task_covers():
-    from lab.kernels.evolve.run import main
-    from lab.kernels.tasks.share import shares
-    with tempfile.TemporaryDirectory() as d:
-        b = Path(d)
-        (b / "meta.json").write_text(json.dumps({"window": {"wall_s": 1.0}}))
-        (b / "kernels.json").write_text(json.dumps({"kernels": [
-            {"name": "fused_moe_kernel", "count": 10, "total_us": 500_000.0},
-            {"name": "_paged_decode_splitk_kernel", "count": 10, "total_us": 150_000.0},
-            {"name": "_gqa_decode_splitk_kernel", "count": 10, "total_us": 30_000.0},
-            {"name": "_splitk_combine_vec_kernel", "count": 10, "total_us": 20_000.0},
-            {"name": "rms_norm_kernel", "count": 10, "total_us": 20_000.0}]}))
-        r = shares(b, [load("paged_decode"), load("toy_rmsnorm")])
-        pd = r["tasks"]["paged_decode"]
-        assert abs(pd["share_of_window"] - 0.2) < 1e-9 and abs(pd["speedup_if_free"] - 1.25) < 1e-9
-        assert len(pd["kernels"]) == 3 and r["tasks"]["toy_rmsnorm"]["share_of_window"] == 0
-        assert [k["name"] for k in r["unmatched"]] == ["fused_moe_kernel", "rms_norm_kernel"]
-        assert main(["share", "--profile", str(b)]) == 0
+    assert "CUDA graph" in system_message(g)
 
 
 def test_ship_commits_the_module_on_a_new_engine_branch_without_touching_its_tree():
@@ -483,57 +327,6 @@ def test_ship_commits_the_module_on_a_new_engine_branch_without_touching_its_tre
             pass
 
 
-def test_moe_gemm_task_reference_routing_capture_and_judge():
-    import dataclasses
-    from lab.kernels.tasks import moe_gemm as mg
-    g = torch.Generator().manual_seed(0)
-    M, K, N, E, T = 37, 32, 24, 8, 9
-    sorted_e = torch.sort(torch.randint(0, E, (M,), generator=g)).values
-    tok, sorted_ids, expert_ids = mg._routing(M, E, T, 1, g, sorted_e)
-    assert sorted_ids.numel() == M + E * 15 and int((sorted_ids < M).sum()) == M
-    a, w = torch.randn(T, K, generator=g), torch.randn(E, N, K, generator=g)
-    out = mg.reference(a, tok, w, sorted_ids, expert_ids)
-    loop = torch.stack([a[tok[i]] @ w[sorted_e[i]].T for i in range(M)])
-    assert torch.allclose(out, loop, atol=1e-4)
-    rows = torch.randn(M, K, generator=g)                                   # down projection: rows given directly
-    empty = torch.empty(0, dtype=torch.int32)
-    assert torch.allclose(mg.reference(rows, empty, w, sorted_ids, expert_ids),
-                          torch.stack([rows[i] @ w[sorted_e[i]].T for i in range(M)]), atol=1e-4)
-    seen = {}
-    mg._call(lambda *x, **k: seen.update(args=x, kw=k) or torch.zeros(M, N), rows, empty, w, sorted_ids, expert_ids)
-    padded = torch.full((sorted_ids.numel() // 16 * 16,), M, dtype=torch.int32)        # align_fused's exact padding
-    assert padded.numel() // expert_ids.numel() == 16
-    f32 = mg._call(lambda *x, **k: torch.zeros(M, N, dtype=torch.float32), rows.bfloat16(), empty, w, sorted_ids,
-                   expert_ids)
-    assert f32.dtype == torch.bfloat16                                                  # split-K's fp32, compared as bf16
-    assert seen["args"][1] is None and seen["args"][5] == M and seen["kw"] == {"block_m": 16}
-    call = {"fn": "x", "args": [{"shape": [T, K]}, {"shape": [M], "values": tok.tolist()}, {"shape": [E, N, K]},
-                                {"shape": [sorted_ids.numel()], "values": sorted_ids.tolist()},
-                                {"shape": [expert_ids.numel()], "values": expert_ids.tolist()}, {"value": M}],
-            "kwargs": {}}
-    t = load("moe_gemm")
-    shape = t.shape_of(call)
-    assert shape == (M, K, N, E, T, 1)
-    assert t.shape_of({**call, "args": [{"shape": [M, K]}, {"value": None}, *call["args"][2:]]}) == (M, K, N, E, M, 0)
-    ints = [x["values"] for x in call["args"] if "values" in x]
-    real = t.with_ints({json.dumps(list(shape)): ints}).make_inputs(shape, torch.float32, "cpu", g)
-    assert real[1].tolist() == tok.tolist() and real[3].tolist() == sorted_ids.tolist()
-    assert t.cost(shape, torch.bfloat16, real)[1] <= t.cost(shape, torch.bfloat16)[1] and t.graphs
-    toy = dataclasses.replace(t, entry=None)                    # the reference as baseline
-    with tempfile.TemporaryDirectory() as d:
-        prog = Path(d) / "k.py"
-        prog.write_text("import torch\n\n\ndef kernel(a, tok, w, sorted_ids, expert_ids, M, block_m=16):\n"
-            "    bm = block_m\n    E, N, _ = w.shape\n"
-            "    expert = torch.full((sorted_ids.numel(),), E, dtype=torch.long)\n"
-            "    expert[: expert_ids.numel() * bm] = expert_ids.long().repeat_interleave(bm)\n"
-            "    real = (sorted_ids < M) & (expert < E)\n    ids, ex = sorted_ids[real].long(), expert[real]\n"
-            "    rows = a[tok[ids]] if tok is not None else a[ids]\n"
-            "    out = torch.empty(M, N, dtype=torch.float32)\n"
-            "    out[ids] = torch.einsum('mk,mnk->mn', rows.float(), w[ex].float())\n    return out.to(a.dtype)\n")
-        r = judge(toy, prog, list(t.seen_default), list(t.heldout_default), None, "cpu", None, 2, iters=3)
-    assert r["metrics"]["correct"] == 1.0, r["artifacts"]
-
-
 def test_the_starting_program_can_come_from_an_older_engine_commit():
     import dataclasses
     import subprocess
@@ -555,70 +348,36 @@ def test_the_starting_program_can_come_from_an_older_engine_commit():
     assert "# old" in prog and "# new" not in prog and prog.rstrip().endswith("kernel = entry")
 
 
-def test_the_fused_kernel_tasks_check_their_own_references_and_read_captured_shapes():
-    from lab.kernels.eval import check_kernel
-    from lab.kernels.tasks import rmsnorm_rope
-    for name in ("rmsnorm", "add_rmsnorm", "rmsnorm_rope", "silu_mul", "topk_softmax"):
-        t = load(name)
-        r = check_kernel(t.reference, lambda *x, t=t: t.reference(*x), t.make_inputs, list(t.seen_default)[:2],
-                         list(t.heldout_default), dtypes=t.dtypes, seeds=(0,), repeats=1, layouts=(),
-                         edge_shapes=t.edge_shapes(t.seen_default[0]))
-        assert r["passed"], (name, r["reasons"])
-        inputs = t.make_inputs(t.seen_default[0], torch.bfloat16, "cpu", torch.Generator().manual_seed(0))
-        call = {"fn": t.entry, "args": [{"shape": list(x.shape)} for x in inputs], "kwargs": {}}
-        assert t.shape_of(call) == tuple(t.seen_default[0]), name
-        assert all(v > 0 for v in t.cost(t.seen_default[0], torch.bfloat16)) and t.graphs and t.kernel_names
-    x, w, cos, sin = rmsnorm_rope.make_inputs((2, 3, 4, 128), torch.float32, "cpu", torch.Generator().manual_seed(1))
-    x32 = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-6) * w                    # RMSNorm in fp32
-    half = 64
-    hf = x32 * cos[:, :, None] + torch.cat((-x32[..., half:], x32[..., :half]), -1) * sin[:, :, None]
-    assert torch.allclose(rmsnorm_rope.reference(x, w, cos, sin), hf, atol=1e-4)
-    t = load("topk_softmax")
-    w, ids = t.reference(torch.randn(5, 128, generator=torch.Generator().manual_seed(2)))
-    assert ids.dtype == torch.int64 and ids.shape == (5, 8) and torch.allclose(w.sum(-1), torch.ones(5))
-    assert t.scales == (3.0, -1.0)
-
-
-def test_paged_decode_reference_matches_dense_attention():
-    t = load("paged_decode")
-    shape = (3, 8, 2, 16, 4, 11)
-    q, k, v, table, lens = t.make_inputs(shape, torch.float32, "cpu", torch.Generator().manual_seed(0))
-    out = t.reference(q, k, v, table, lens)
-    i = 1
-    n = int(lens[i])
-    kk = k[table[i].long()].permute(1, 0, 2, 3).reshape(2, -1, 16)[:, :n].repeat_interleave(4, 0)
-    vv = v[table[i].long()].permute(1, 0, 2, 3).reshape(2, -1, 16)[:, :n].repeat_interleave(4, 0)
-    dense = torch.nn.functional.scaled_dot_product_attention(q[i][:, None], kk, vv).squeeze(1)
-    assert torch.allclose(out[i], dense, atol=1e-5) and out.shape == (3, 8, 16) and int(lens[0]) == 11
-    flops, nbytes = t.cost(shape, torch.bfloat16)
-    assert flops > 0 and nbytes > 0
-    real = t.cost(shape, torch.bfloat16, (q, k, v, table, lens))          # the bound for these exact lengths
-    assert real[1] < nbytes and real[0] == 4 * 8 * int(lens.sum()) * 16
-
-
 def test_capture_records_calls_and_the_split_holds_out_a_band():
-    t = load("paged_decode")
+    import dataclasses
     import types
     mod = types.ModuleType("fake_engine_kernels")
 
-    def paged_decode_attention(q, k_pool, v_pool, block_tables, seq_lens, scale=1.0):
+    def shape_of(call):
+        a = call["args"]
+        if "values" not in a[4]:
+            return None
+        return (*a[0]["shape"][:2], a[1]["shape"][1], a[0]["shape"][2], a[1]["shape"][2], max(a[4]["values"]))
+
+    def decode_attention(q, k_pool, v_pool, block_tables, seq_lens, scale=1.0):
         return q
-    mod.paged_decode_attention = paged_decode_attention
+    mod.decode_attention = decode_attention
     sys.modules["fake_engine_kernels"] = mod
     user = types.ModuleType("fake_engine_model")
-    user.paged_decode_attention = paged_decode_attention           # a `from x import f` copy
+    user.decode_attention = decode_attention           # a `from x import f` copy
     sys.modules["fake_engine_model"] = user
     with tempfile.TemporaryDirectory() as d:
-        with capture.capture(["fake_engine_kernels:paged_decode_attention"], Path(d)):
+        with capture.capture(["fake_engine_kernels:decode_attention"], Path(d)):
             for n in (1, 1, 2, 4, 8, 16, 32, 64, 128, 256):
                 q = torch.zeros(n, 32, 128)
                 pool = torch.zeros(4, 4, 16, 128)
-                user.paged_decode_attention(q, pool, pool, torch.zeros(n, 2, dtype=torch.int32),
+                user.decode_attention(q, pool, pool, torch.zeros(n, 2, dtype=torch.int32),
                                             torch.full((n,), 17 * n, dtype=torch.int32), scale=0.1)
-        assert user.paged_decode_attention is paged_decode_attention          # restored
+        assert user.decode_attention is decode_attention          # restored
         calls = capture.load(Path(d))
         assert len(calls) == 10 and calls[0]["kwargs"]["scale"] == {"value": 0.1} and calls[0]["sample"]
-        task = type(t)(**{**t.__dict__, "entry": "fake_engine_kernels:paged_decode_attention"})
+        task = dataclasses.replace(load("toy_rmsnorm"), entry="fake_engine_kernels:decode_attention",
+                                   shape_of=shape_of, heldout_axes=(0, 5))
         counts = shapes.from_captures(task, [Path(d)])
         assert counts[(1, 32, 4, 128, 16, 17)] == 2
         s = shapes.split(task, counts)
@@ -629,9 +388,9 @@ def test_capture_records_calls_and_the_split_holds_out_a_band():
         assert ints[json.dumps([1, 32, 4, 128, 16, 17])] == [[17]] and len(ints) == 9       # first call per shape
         from unittest import mock
         with mock.patch.object(capture, "SMALL_INT", 8), tempfile.TemporaryDirectory() as d2:
-            with capture.capture(["fake_engine_kernels:paged_decode_attention"], Path(d2)):
+            with capture.capture(["fake_engine_kernels:decode_attention"], Path(d2)):
                 for n in (4, 16):                            # 16 lengths: not logged by value
-                    user.paged_decode_attention(torch.zeros(n, 32, 128), pool, pool, torch.zeros(n, 2, dtype=torch.int32),
+                    user.decode_attention(torch.zeros(n, 32, 128), pool, pool, torch.zeros(n, 2, dtype=torch.int32),
                                                 torch.full((n,), 17, dtype=torch.int32), scale=0.1)
             part = shapes.ints_from_captures(task, [Path(d2)])
             assert list(part) == [json.dumps([4, 32, 4, 128, 16, 17])]                     # none rather than a part
@@ -658,7 +417,8 @@ def test_prompts_carry_facts_never_advice():
         return
     from lab.kernels.evolve.run import HERE, system_message
     cfg = load_config(str(HERE / "config.yaml"))
-    cfg.prompt.system_message = system_message(load("paged_decode"))
+    import dataclasses
+    cfg.prompt.system_message = system_message(dataclasses.replace(load("toy_rmsnorm"), entry="fake_pkg.mod:entry"))
     s = PromptSampler(cfg.prompt)
     prev = [{"id": "a", "code": "x", "metrics": {"combined_score": 2.0}, "changes": "c"}]
     for diff in (True, False):
@@ -668,7 +428,7 @@ def test_prompts_carry_facts_never_advice():
                            program_artifacts={"gates": "{}"}, feature_dimensions=cfg.database.feature_dimensions)
         text = (p["system"] + p["user"]).lower()
         assert not [w for w in ADVICE if w in text], [w for w in ADVICE if w in text]
-        assert "score declined: 2.0000" in text and "paged_decode_attention" in text
+        assert "score declined: 2.0000" in text and "fake_pkg.mod:entry" in text
 
 
 def test_remote_evaluation_sends_the_source_on_stdin_and_never_a_key():
