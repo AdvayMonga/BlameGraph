@@ -28,7 +28,6 @@ class Task:
     layouts: tuple = ("strided", "transposed")  # non-contiguous variants its callers pass
     graphs: bool = False                    # timed as a CUDA graph replay; it must capture
     scales: tuple | None = None            # value scalings checked beyond the task's own (None: the evaluator's)
-    kernel_names: tuple[str, ...] = ()      # regexes of the device kernels its entry launches
     make_real: Callable = None              # make_real(shape, dtype, device, generator, ints) -> inputs
     start_edits: tuple = ()                 # (old, new) exact edits to the engine module for the starting program
     options: tuple[str, ...] = ()           # deployment facts make_inputs/make_real take as keywords
@@ -105,8 +104,7 @@ def load(name: str, **region) -> Task:
     return importlib.import_module(f"lab.kernels.tasks.{name}").TASK
 
 
-TASKS = ("toy_rmsnorm", "paged_decode", "paged_decode_fp8", "moe_gemm", "moe_gemm_fp8", "moe_gemm_scatter_fp8", "rmsnorm", "add_rmsnorm",
-         "rmsnorm_rope", "silu_mul", "topk_softmax")
+TASKS = ("toy_rmsnorm",)
 
 
 def from_config(cfg: dict) -> Task:

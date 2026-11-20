@@ -24,8 +24,8 @@ class Program:
     metrics: dict
     artifacts: dict
     generation: int
-    plan: dict = field(default_factory=dict)     # the idea it was written from (empty for the start and the seeds)
-    kind: str = ""                               # "competitor": a seed or a port, judged beside the start
+    plan: dict = field(default_factory=dict)     # the idea it was written from (empty for the start)
+    kind: str = ""                               # "competitor": a port, judged beside the start
 
     @property
     def score(self) -> float:

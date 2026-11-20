@@ -85,10 +85,10 @@ def lines(path):
     return [json.loads(x) for x in Path(path).read_text().splitlines()]
 
 
-def run(out, namer=None, writer=None, seeds=None, start=START, **cfg):
+def run(out, namer=None, writer=None, start=START, **cfg):
     Writer.made[0] = 0
     namer, writer = namer or Namer(), writer or Writer()
-    pop, cost = search(start, seeds or {}, "SETTING", namer, writer, Evaluator(stage), diversity.Novelty(),
+    pop, cost = search(start, "SETTING", namer, writer, Evaluator(stage), diversity.Novelty(),
                        diversity.Similar(), out,
                        Config(**{"generations": 2, "ideas": 6, "merges": 2, "ports": 0, "parents": 2, "workers": 2,
                                  **cfg}))
@@ -150,7 +150,7 @@ def test_the_archive_reads_a_run_back(tmp_path):
 def test_it_runs_every_generation_though_nothing_improves_and_stops_when_no_program_can_be_a_parent(tmp_path):
     flat = lambda code, n: {"metrics": {"correct": 1.0, "combined_score": 1.0, "stage": n}, "artifacts": {}}  # noqa: E731
     Writer.made[0] = 0
-    _, cost = search(START, {}, "S", Namer(), Writer(), Evaluator(flat), diversity.Novelty(), diversity.Similar(),
+    _, cost = search(START, "S", Namer(), Writer(), Evaluator(flat), diversity.Novelty(), diversity.Similar(),
                      tmp_path / "flat", Config(generations=3, ideas=2, ports=0, parents=1, workers=2))
     assert cost["generations"] == 3 and cost["model_calls"] == 3 * 4 + 1
     pop, cost, rows, _, _ = run(tmp_path / "dead", start="a = 1  # wrong\n")
@@ -171,14 +171,14 @@ def test_a_stopped_search_goes_on_from_its_last_saved_generation(tmp_path):
         return stage(code, n)
     Writer.made[0] = 0
     try:
-        search(START, {}, "S", Namer(), Writer(), Evaluator(dies), diversity.Novelty(), diversity.Similar(), tmp_path,
+        search(START, "S", Namer(), Writer(), Evaluator(dies), diversity.Novelty(), diversity.Similar(), tmp_path,
                cfg, each=each)
     except RuntimeError:
         pass
     assert saved == [0, 1] and len(lines(tmp_path / "hypotheses.jsonl")) == 1
     first, state = lines(tmp_path / "hypotheses.jsonl")[0], json.loads((tmp_path / "state.json").read_text())
     assert len(state["population"]) == 7 and len(lines(tmp_path / "calls.jsonl")) == 16     # generation 2's were made
-    pop, cost = search(START, {}, "S", Namer(), Writer(), Evaluator(stage), diversity.Novelty(), diversity.Similar(),
+    pop, cost = search(START, "S", Namer(), Writer(), Evaluator(stage), diversity.Novelty(), diversity.Similar(),
                        tmp_path, cfg, each=each)
     rows = lines(tmp_path / "hypotheses.jsonl")
     assert saved == [0, 1, 2, 3, 3] and [r["iteration"] for r in rows] == [1, 2, 3] and rows[0] == first
@@ -187,22 +187,15 @@ def test_a_stopped_search_goes_on_from_its_last_saved_generation(tmp_path):
     assert [t["child_id"] for t in lines(tmp_path / "trace.jsonl")] == [p.id for p in pop] and len(pop) == 19
     assert [p.id for p in pop[:7]] == [p["id"] for p in state["population"]]
     assert len(lines(tmp_path / "ideas.jsonl")) == 18 and (tmp_path / "reflection.txt").read_text() == "the run"
-    again, cost = search(START, {}, "S", Namer(), Writer(), Evaluator(stage), diversity.Novelty(), diversity.Similar(),
+    again, cost = search(START, "S", Namer(), Writer(), Evaluator(stage), diversity.Novelty(), diversity.Similar(),
                          tmp_path, cfg)                                                 # a finished search: nothing more
     assert len(again) == 19 and cost["model_calls"] == 33
     try:
-        search("a = 2\n", {}, "S", Namer(), Writer(), Evaluator(stage), diversity.Novelty(), diversity.Similar(),
+        search("a = 2\n", "S", Namer(), Writer(), Evaluator(stage), diversity.Novelty(), diversity.Similar(),
                tmp_path, cfg)
         raise AssertionError("another search went on from this one's state")
     except ValueError as e:
         assert "another search" in str(e)
-
-
-def test_seeds_are_judged_beside_the_start_and_can_be_parents(tmp_path):
-    pop, _, rows, _, _ = run(tmp_path, seeds={"vllm": "a = 7\n"}, generations=1)
-    assert pop[1].kind == "competitor" and pop[1].parent == pop[0].id and pop[1].plan == {"competitor": "vllm"}
-    assert {p["id"] for p in rows[0]["parents"]} == {pop[0].id, pop[1].id}
-    assert {x["idea"]["parent_id"] for x in rows[0]["ideas"]} == {pop[0].id, pop[1].id}
 
 
 def test_the_review_merges_and_adds_changes_and_an_unreadable_one_leaves_the_named_changes(tmp_path):
@@ -276,7 +269,7 @@ def test_a_picked_parent_that_fails_the_full_check_is_dropped_and_never_picked_a
         checked.extend([code] if n == 8 else [])
         return stage(code, n)
     Writer.made[0] = 0
-    pop, _ = search(START, {}, "S", Namer(), Marked("shaky", a=190), Evaluator(st), diversity.Novelty(),
+    pop, _ = search(START, "S", Namer(), Marked("shaky", a=190), Evaluator(st), diversity.Novelty(),
                     diversity.Similar(), tmp_path, Config(generations=3, ideas=6, ports=0, parents=2, workers=1))
     rows, shaky = lines(tmp_path / "hypotheses.jsonl"), next(p for p in pop if "shaky" in p.code)
     assert shaky.score == max(p.score for p in pop if p.generation == 1) and rows[0]["dropped"] == {}
@@ -295,7 +288,7 @@ def test_a_parent_the_detector_flags_is_dropped_and_each_program_is_read_once(tm
         read.append(code)
         return "flagged as gaming: `# gamed`" if "gamed" in code else None
     Writer.made[0] = 0
-    pop, _ = search(START, {}, "S", Namer(), Marked("gamed", a=190), Evaluator(stage), diversity.Novelty(),
+    pop, _ = search(START, "S", Namer(), Marked("gamed", a=190), Evaluator(stage), diversity.Novelty(),
                     diversity.Similar(), tmp_path, Config(generations=3, ideas=6, ports=0, parents=2, workers=1), detect)
     rows, gamed = lines(tmp_path / "hypotheses.jsonl"), next(p for p in pop if "gamed" in p.code)
     assert rows[0]["dropped"] == {} and rows[1]["dropped"] == {gamed.id: "flagged as gaming: `# gamed`"}
@@ -306,14 +299,14 @@ def test_a_parent_the_detector_flags_is_dropped_and_each_program_is_read_once(tm
 
 
 def test_public_implementations_are_ported_before_the_first_generation_and_judged_beside_the_start(tmp_path):
-    pop, cost, rows, namer, _ = run(tmp_path, seeds={"vllm": "a = 7\n"}, generations=1, ports=2)
+    pop, cost, rows, namer, _ = run(tmp_path, generations=1, ports=2)
     assert rows[0]["iteration"] == 0 and rows[0]["named"] == 2 and rows[0]["examined"] == 2
-    assert [p.kind for p in pop[:4]] == ["", "competitor", "competitor", "competitor"]
-    assert pop[2].parent == pop[0].id and pop[2].plan == {"source": "lib.k0", "modification_plan": "port 0"}
+    assert [p.kind for p in pop[:3]] == ["", "competitor", "competitor"]
+    assert pop[1].parent == pop[0].id and pop[1].plan == {"source": "lib.k0", "modification_plan": "port 0"}
     calls = lines(tmp_path / "calls.jsonl")
     assert [(c["role"], c["model"]) for c in calls[:3]] == [("ports", "opus"), ("write", "opus"), ("write", "opus")]
     ask = namer.calls[0][1].split(CACHE_SPLIT)[-1]
-    assert "Name up to 2 public implementations" in ask and "Already ported and judged: vllm." in ask
+    assert "Name up to 2 public implementations" in ask
     assert namer.calls[0][0] == "SETTING" + CACHE_SPLIT + "\n\n" + context.PORTER
     assert "last generation" not in namer.calls[1][1]                             # ports carry no prediction
     ports = [i for i in lines(tmp_path / "ideas.jsonl") if i["generation"] == 0]

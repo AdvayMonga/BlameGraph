@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 if __name__ == "__main__":          # run as a script: these need pytest's fixtures
@@ -18,6 +18,7 @@ torch = pytest.importorskip("torch")
 pytest_plugins = ["tests.test_lab_proftools"]   # its `tb` fixture: a Toolbox with fake instruments
 
 from lab.kernels.tasks import pipeline  # noqa: E402
+from lab.records import ledger  # noqa: E402
 from tests.test_kernels_region_engine import captures, declared, engine, held  # noqa: E402
 
 EXPECT = {"metric": "speedup", "value": 1.1, "unit": "absolute", "why": "fused"}
@@ -150,7 +151,7 @@ def test_kernel_search_runs_a_region_and_hands_back_its_override_module(tb, monk
     monkeypatch.setattr(pipeline, "hold", hold)
 
     def search(t, cs, s, out, root, env, device="cuda", facts_text=None, held=None):
-        seen["search"] = (s.read_text(), held["holder"])
+        seen["search"], seen["facts"] = (s.read_text(), held["holder"]), facts_text
         out.mkdir(parents=True)
         (out / "best_program.py").write_text(s.read_text().replace("(h,)", "(h + 0,)"))
         return {"best": {"combined_score": 1.2, "correct": 1.0}, "cost": {"usd": 1.0}, "ledger": "ev"}
@@ -161,9 +162,15 @@ def test_kernel_search_runs_a_region_and_hands_back_its_override_module(tb, monk
     h = next(s for s in tb.specs() if s.name == "hypothesis").fn
     k = h({"hypothesis": "fuse norm..add", "rationale": "r", "layer": "kernels"}).split()[1]
     fn = next(s for s in tb.specs() if s.name == "kernel_search").fn
+    spent = tb.s.budget.spent_usd
     out = json.loads(fn({"hypothesis_id": k, "expect": EXPECT, "task": "region:norm:add"}
                         ).split("\n\nExperiment record")[0])
     assert seen["hold"] == "region:norm:add" and seen["search"] == (start, "/gpu/w.pkl") and seen["gate"]["samples"]
+    assert seen["facts"].startswith("# The engine this kernel runs in")
+    assert out["gate"]["passed"] and out["metrics"] == {"speedup": 1.2, "heldout_speedup": 1.1}
+    assert tb.s.budget.spent_usd >= spent + 1.0
+    rec = list(ledger.records(tb.s.ledger_root, kind="kernels"))[-1]
+    assert rec["tool"] == "kernel_search" and rec["experiment"]["actual"] == 1.2 and rec["result"]["search_record"]
     patch = (tb.s.workspace.path / out["patch"]).read_text()
     assert "+++ b/src/inference_server/models/regions/norm_add.py" in patch and "OVERRIDES = {('norm', 'add')" in patch
 
@@ -212,7 +219,7 @@ def test_a_lost_worker_that_is_no_stopped_vm_fails_the_search(tb, monkeypatch, t
     from lab.kernels.eval.evaluator import WorkerLost
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     monkeypatch.setattr(pipeline, "captures", lambda t, tree, profile, *a: [tmp_path])
-    monkeypatch.setattr(pipeline, "start_program", lambda t, tree: "x = 1\n")
+    monkeypatch.setattr(pipeline, "hold", lambda *a: nullcontext({"start": "x = 1\n"}))
 
     def search(*a, **k):
         raise WorkerLost("ssh: permission denied")
@@ -221,7 +228,7 @@ def test_a_lost_worker_that_is_no_stopped_vm_fails_the_search(tb, monkeypatch, t
     h = next(s for s in tb.specs() if s.name == "hypothesis").fn
     fn = next(s for s in tb.specs() if s.name == "kernel_search").fn
     k = h({"hypothesis": "faster", "rationale": "r", "layer": "kernels"}).split()[1]
-    assert fn({"hypothesis_id": k, "expect": EXPECT, "task": "silu_mul"}).startswith(
+    assert fn({"hypothesis_id": k, "expect": EXPECT, "task": "region:norm:add"}).startswith(
         "kernel_search failed: WorkerLost: ssh: permission denied")
 
 

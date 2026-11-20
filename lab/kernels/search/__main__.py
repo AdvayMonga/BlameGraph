@@ -18,7 +18,6 @@ import torch
 from lab.kernels.eval import evaluator as jail
 from lab.kernels.evolve.run import _shapes, _target_tolerances, load_task, prepare, record, region_args, retime, setting, system_message, task_args, tolerances
 from lab.kernels.library import block as other_implementations
-from lab.kernels.library import competitors
 from lab.kernels.search import detect
 from lab.kernels.search.diversity import Novelty, Similar
 from lab.kernels.search.evaluate import WINNER, Evaluator
@@ -42,11 +41,11 @@ def _exclude(evaluator: Evaluator, gaming):
     return check
 
 
-def _stations(task, sets: dict) -> list[str] | None:
-    """A region's station names (from its shapes file, else from the engine here), for the libraries block; None for a
-    task."""
+def _stations(task, sets: dict) -> list[str]:
+    """A region's station names (from its shapes file, else from the engine here), for the libraries block; none for
+    another task."""
     if not task.name.startswith("region:"):
-        return None
+        return []
     if sets.get("stations"):
         return list(sets["stations"])
     from lab.kernels.tasks import regions
@@ -58,7 +57,7 @@ def _stations(task, sets: dict) -> list[str] | None:
         first, last = task.name.split(":")[1:3]
         return [s.name for s in regions.span(regions.engine_stations(eng, eng.which(first)), first, last)]
     except Exception:                            # noqa: BLE001  no engine here: the block shows what it can, nothing
-        return None
+        return []
 
 
 def _embedder(root: Path):
@@ -104,7 +103,7 @@ def run(argv: list[str] | None = None, namer: str = NAMER, writer: str = WRITER,
     sets, program = prepare(task, _shapes(task, a), out, a.device, tol, TIMING_SHAPES, a.initial, region_args(a))
     start = program.read_text()
     facts = [system_message(task), setting(task, sets, a.device, tol), Path(a.facts).read_text().strip() if a.facts else "",
-             other_implementations(task.name, stations=_stations(task, sets))]
+             other_implementations(_stations(task, sets))]
     root = Path(a.ledger) if a.ledger else ledger.ROOT
     embedder, cfg = _embedder(ledger.ROOT), Config(seed=a.seed)
     evaluator, calls = Evaluator(counters=a.device.startswith("cuda")), Calls(out)
@@ -134,7 +133,7 @@ def run(argv: list[str] | None = None, namer: str = NAMER, writer: str = WRITER,
     def each(done: int, population: list) -> None:
         top = max(population, key=lambda p: (p.usable, p.score, -p.generation))
         save(top.code, top.metrics, done, False)
-    population, cost = search(start, competitors.starts(task.name, start), "\n\n".join(f for f in facts if f),
+    population, cost = search(start, "\n\n".join(f for f in facts if f),
                               Claude(namer, EFFORT, tools=True), Claude(writer, EFFORT), evaluator, Novelty(),
                               Similar(embedder, _past(root, task.name, embedder, run_id)), out, cfg, gaming, calls, each)
     exclude = _exclude(evaluator, gaming)

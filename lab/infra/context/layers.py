@@ -110,7 +110,7 @@ def from_bundle(bundle: str | Path, t=None, gpu: dict | None = None, gates: dict
 
 def _kernel_distance(gates: dict | None, tasks: list | None) -> dict:
     if not gates:
-        return {"pct_of_ceiling": None, "ceiling_missing": "no kernel gate results given (lab.kernels.tasks.share.rank joins them)"}
+        return {"pct_of_ceiling": None, "ceiling_missing": "no kernel gate results given"}
     per = {name: _weighted_pct(g) for name, g in gates.items()}
     known = {k: v for k, v in per.items() if v is not None}
     return {"pct_of_ceiling": sum(known.values()) / len(known) if known else None, "pct_of_roofline_by_task": per,

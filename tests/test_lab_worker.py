@@ -197,16 +197,20 @@ def test_a_capture_only_run_has_no_profiler_trace_and_leaves_its_samples_on_the_
 
 def test_a_capture_for_a_task_adds_the_tasks_own_env(tmp_path, monkeypatch):
     pytest.importorskip("torch")
+    import types
+    import lab.kernels.tasks
     from lab import tools as T
     seen = {}
     monkeypatch.setattr(T, "stage_harness", lambda tree: tmp_path / "h")
     monkeypatch.setattr(T, "workload", lambda a, w: ([], [], {}))
+    monkeypatch.setattr(lab.kernels.tasks, "load", lambda name: types.SimpleNamespace(
+        capture_env=(("KV_CACHE_DTYPE", "fp8"),)) if name == "region:norm:add" else None)
 
     def runner(tree, window, warmup, out, env=None, **kw):
         seen["env"] = env
         return out
     worker._profile({"tree": tmp_path}, tmp_path / "out", {"kind": "profile", "args": {
-        "capture": ["m:f"], "capture_task": "paged_decode_fp8"}}, {"profile_runner": runner})
+        "capture": ["m:f"], "capture_task": "region:norm:add"}}, {"profile_runner": runner})
     assert seen["env"] == {"CUSTOM_BACKEND_CUDA_GRAPH": "0", "KV_CACHE_DTYPE": "fp8"}
 
 

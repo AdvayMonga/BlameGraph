@@ -1,26 +1,27 @@
 """The library of other implementations (kernels/library): the index, the downloaded source, the prompt block and the
 cards, no network or GPU."""
 import sys
+import types
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lab.kernels import library as L  # noqa: E402
-from lab.kernels.tasks import TASKS  # noqa: E402
 
 INDEX = """[libraries]
 a = { repo = "o/a", version = "v1" }
 
 [[kernel]]
 name = "a.k"
-tasks = ["t"]
+cards = ["t"]
+stations = ["st1"]
 source = ["x/k.cu#L2-L3", "x/k.cu#L5-L5"]
 sass = { package = "a", pattern = "k" }
 
 [[kernel]]
 name = "a.py"
-tasks = ["t", "u"]
-stations = ["st1"]
+cards = ["t", "u"]
+stations = ["st1", "st2"]
 source = ["y.py"]
 """
 
@@ -36,9 +37,8 @@ def make(tmp_path):
     return tmp_path / "index.toml", tmp_path / "src", tmp_path / "cards"
 
 
-def test_every_entrys_tasks_exist_its_ranges_are_well_formed_and_a_file_is_downloaded_once(tmp_path, monkeypatch):
+def test_every_entrys_ranges_are_well_formed_and_a_file_is_downloaded_once(tmp_path, monkeypatch):
     for k in L.index():
-        assert set(k.tasks) <= set(TASKS), k.name
         for part in k.source:
             r = L._part(part)[1]
             assert r is None or 1 <= r[0] <= r[1], part
@@ -58,27 +58,28 @@ def test_every_entrys_tasks_exist_its_ranges_are_well_formed_and_a_file_is_downl
             return b"1\n2\n3\n4\n5\n6\n"
     monkeypatch.setattr(L.urllib.request, "urlopen", lambda url, timeout: Reply(url))
     (tmp_path / "index.toml").write_text(INDEX)
-    k = L.for_task("t", tmp_path / "index.toml")[0]
+    k = L.index(tmp_path / "index.toml")[0]
     assert L.text(k, tmp_path / "src") == L.text(k, tmp_path / "src") == "2\n3\n\n5"
     assert asked == ["https://raw.githubusercontent.com/o/a/v1/x/k.cu"]
     assert (tmp_path / "src" / "a" / "v1" / "x" / "k.cu").exists()
-    assert {t for k in L.index() for t in k.tasks} == set(TASKS) - {"toy_rmsnorm"}     # every real task has some
 
 
 def test_the_block_shows_each_source_by_range_with_its_url_and_card_and_no_timings(tmp_path):
     idx, src, cards = make(tmp_path)
-    b = L.block("t", idx, src, cards)
+    b = L.block(["st1"], idx, src, cards)
+    assert b.startswith("# Other implementations of these operations")
     assert "```cuda\n2\n3\n\n5\n```" in b and "```python\ndef f(): pass\n```" in b
     assert "https://github.com/o/a/blob/v1/x/k.cu#L2-L3" in b and 'k: {"mma": 2}' in b
     assert "ms" not in b.replace("instruction classes", "")            # a card's timing never reaches the prompt
-    assert b.index("## a.py") < b.index("Card: not built") and "## The starting program's card" in b
-    assert L.block("u", idx, src, cards).count("## ") == 1 and L.block("none", idx, src, cards) == ""
+    assert b.index("## a.py") < b.index("Card: not built") and '{"mma": 1}' not in b      # not the engine's card
+    assert L.block(["st2"], idx, src, cards).count("## ") == 1
+    assert L.block(["none"], idx, src, cards) == L.block([], idx, src, cards) == ""
 
 
 def test_cards_come_from_a_dump_before_the_package(tmp_path, monkeypatch):
     idx, *_ = make(tmp_path)
     monkeypatch.setattr(L, "INDEX", idx)
-    monkeypatch.setattr(L, "for_task", lambda task, path=idx: [k for k in L.index(idx) if task in k.tasks])
+    monkeypatch.setattr(L, "index", lambda path=idx, index=L.index: index(path))
     dump = tmp_path / "dump"
     dump.mkdir()
     (dump / "a.k.ptx").write_text(".visible .entry k(\n)\n{\n\tmma.sync.aligned.m16n8k16 x;\n\tret;\n}\n")
@@ -87,6 +88,25 @@ def test_cards_come_from_a_dump_before_the_package(tmp_path, monkeypatch):
     built, missing = L.build_cards("t", dump, "sm_90")
     assert [c["implementation"] for c in built] == ["engine", "a.k"] and built[1]["per_kernel"]["k"]["mma"] == 1
     assert missing == {"a.py": "no compiled code found"}
+    assert L.build_cards("u", None, "sm_90") == ([], {"a.py": "no compiled code found"})   # by card file name
+
+
+def test_sass_keeps_the_named_kernels_of_the_running_gpus_code_and_raises_when_cuobjdump_fails(monkeypatch):
+    def proc(stdout="", returncode=0, stderr=""):
+        return types.SimpleNamespace(stdout=stdout, returncode=returncode, stderr=stderr)
+    dump = ("\n\tcode for sm_80\n\t\tFunction : _Z15rms_norm_kernelv\n\t/*0000*/ OLD ;\n"
+            "\n\tcode for sm_90a\n\t\tFunction : _Z15rms_norm_kernelv\n\t/*0000*/ NEW ;\n"
+            "\n\t\tFunction : _Z9otherKernv\n\t/*0000*/ BRA 0x0 ;\n")
+    monkeypatch.setattr(L.subprocess, "run", lambda *a, **k: proc(dump))
+    got = L.sass("lib.so", r"rms_norm_kernel", arch="sm_90")
+    assert "NEW" in got and "OLD" not in got and "otherKern" not in got
+    assert "OLD" in L.sass("lib.so", r"rms_norm_kernel", arch="sm_80") and "OLD" in L.sass("lib.so", r"rms_norm_kernel")
+    monkeypatch.setattr(L.subprocess, "run", lambda *a, **k: proc("", 1, "no device code"))
+    try:
+        L.sass("lib.so", r"rms_norm_kernel")
+        raise AssertionError("a failed cuobjdump returned")
+    except RuntimeError as e:
+        assert "no device code" in str(e)
 
 
 ENGINE_STATIONS = {"input_norm", "qkv", "qk_norm_rope", "kv_append", "attention", "o_proj", "add_norm", "router", "route",
@@ -94,11 +114,7 @@ ENGINE_STATIONS = {"input_norm", "qkv", "qk_norm_rope", "kv_append", "attention"
                    "p_attention", "p_o_proj", "p_add_norm", "p_moe"}       # inference-server's DECODE and PREFILL
 
 
-def test_every_entry_names_engine_stations_and_a_region_gets_the_entries_of_its_stations(tmp_path):
+def test_every_entry_names_engine_stations_and_a_region_gets_the_entries_of_its_stations():
     assert all(k.stations and set(k.stations) <= ENGINE_STATIONS for k in L.index())
     assert {k.name for k in L.for_stations(["p_attention"])} == {"flashinfer.batch_prefill"}
     assert {"vllm.fused_moe", "sglang.fused_moe"} <= {k.name for k in L.for_stations(["router", "route", "gate_up"])}
-    idx, src, cards = make(tmp_path)
-    b = L.block("region:x:y", idx, src, cards, stations=["st1"])
-    assert b.startswith("# Other implementations of these operations") and "## a.py" in b and "## a.k" not in b
-    assert "## The starting program's card" not in b                 # a task's engine card is not the region's

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -161,17 +162,12 @@ class Toolbox(EvalTools, ProfTools):
 
 
     def kernel_search(self, args: dict) -> str:
-        """Capture the task's calls, search, gate the winner on the held-out shapes (lab/kernels/tasks/pipeline.py); a
-        passing winner is saved in the workspace as a patch of the engine module (a region's: its override module)."""
-        import argparse
-        import contextlib
+        """Capture the region's calls, search, gate the winner on the held-out shapes (lab/kernels/tasks/pipeline.py); a
+        passing winner is saved in the workspace as a patch of its override module."""
         from lab.kernels.tasks import pipeline
-        from lab.kernels.evolve.run import task_name
-        from lab.kernels.tasks import TASKS, load
-        try:
-            task_name(str(args.get("task")))
-        except argparse.ArgumentTypeError:
-            raise ValueError(f"`task` must be one of {list(TASKS)} or region:FIRST:LAST") from None
+        from lab.kernels.tasks import load
+        if not re.fullmatch(r"region:\w+:\w+", str(args.get("task"))):
+            raise ValueError("`task` must be region:START:END")
         if not os.environ.get("ANTHROPIC_API_KEY"):
             raise ValueError("kernel_search needs ANTHROPIC_API_KEY on this host (its search calls the models)")
         task = load(args["task"])
@@ -196,21 +192,17 @@ class Toolbox(EvalTools, ProfTools):
             caps = pipeline.captures(task, tree, profile, scored, self.s.run_dir / "kernel_search" / "captures.json")
             if not caps:
                 raise RuntimeError("no capture traffic produced calls to the task's entry point")
-            region = task.name.startswith("region:")     # loads where the GPU is: held and described there
             at = None
             while True:                          # again from the search's last generation after the worker was lost
                 w = self.worker
                 env = pipeline.remote_env(w.prefix, w.env_dir, w.python, w.env, w.sudo) if remote else {}
                 try:
-                    with pipeline.hold(task, caps, out, env, w if remote else None) if region else \
-                            contextlib.nullcontext() as held:
+                    with pipeline.hold(task, caps, out, env, w if remote else None) as held:
                         start = out / "start.py"
-                        start.write_text(held["start"] if held else pipeline.start_program(task, tree))
-                        from lab.evaltools import _layer_facts
+                        start.write_text(held["start"])
                         found = pipeline.search(task, caps, start, out / "search", self.s.ledger_root, env,
                                                 device=device, held=held,
-                                                facts_text=pipeline.facts(task, _layer_facts(self.s.ledger_root,
-                                                                                             "kernel_tasks"), scored))
+                                                facts_text=pipeline.facts(scored))
                         best = pipeline.freeze(task, caps, out / "search" / "best_program.py", out, env, held, device)
                         g = pipeline.gate(task, caps, best, out, env, held, device)
                     break
@@ -464,12 +456,12 @@ class Toolbox(EvalTools, ProfTools):
                      {"type": "object", "properties": {"regimes": {"type": "array", "items": {"type": "string"}}}},
                      self.submit),
             *self.prof_specs(gpu),
-            ToolSpec("kernel_search", "Search for a faster version of one engine kernel: `task` (one of the kernel "
-                     "tasks, the engine entry point it replaces). Captures the task's calls under real seen-split traffic at several concurrencies, splits "
-                     "the shapes seen / held-out, searches from your workspace's version of the kernel (lab.kernels.search), "
+            ToolSpec("kernel_search", "Search for a faster version of one region of the engine: `task` "
+                     "(`region:START:END`, the engine's stations from START to END). Captures the region's calls under real seen-split traffic at several concurrencies, splits "
+                     "the shapes seen / held-out, searches for a faster replacement of the region (lab.kernels.search), "
                      "and gates the winner on the held-out shapes. Returns the winner's seen-shape speedup, the gate's "
                      "verdict and held-out speedup, the `kernels` ledger record of the search, and, if the gate passed, "
-                     "the path of a patch of the engine module in your workspace (not applied). Blocks until done; "
+                     "the path of a patch of the engine in your workspace (not applied). Blocks until done; "
                      "its model calls and GPU time are charged to the run." + gpu("hours"),
                      {"type": "object", "required": ["task"], "properties": {"task": {"type": "string"}}},
                      self.kernel_search),
@@ -522,25 +514,6 @@ def workload(args: dict, sizes: dict):
     return profile.workload(sizes["requests"], sizes["max_tokens"], int(args.get("seed", 0)),
                             args.get("corpus_class") or DEFAULT_CORPUS_CLASS,
                             sizes["prompt_len"] if args.get("synthetic") else None, corpus_dir=target.load().corpus_dir)
-
-
-def task_shares(bundle: Path) -> dict:
-    """Each kernel task's share of the profiled window (lab/kernels/tasks/share.py) and the kernels no task covers; or
-    why there is none."""
-    try:
-        from lab.kernels.tasks import share
-        from lab.kernels.tasks import TASKS, load
-        tasks = [load(n) for n in TASKS]
-    except ImportError as e:                    # the kernel tasks import torch, which the controller may lack
-        return {"missing": f"the kernel tasks do not import here: {e}"}
-    out = share.shares(bundle, tasks)
-    if not out:
-        return {"missing": "no kernel table in the bundle"}
-    for t in tasks:                              # tasks matching the same device kernels show the same share
-        same = sorted(o.name for o in tasks if o is not t and set(o.kernel_names) == set(t.kernel_names) and t.kernel_names)
-        if same:
-            out["tasks"][t.name]["same_kernels_as"] = same
-    return out
 
 
 def default_profile_runner(tree: Path, window: list, warmup: list, out: Path, **kw) -> Path:

@@ -170,14 +170,12 @@ class ProfTools:
 
     def _calibrated(self, tool: str, args: dict, blob: str, gpu: dict | None) -> dict | None:
         """The instrument's numbers in context (layer facts, GPU peaks, window shares, samples per function)."""
-        from lab.tools import task_shares
         path = self.s.ledger_root / blob
         try:
             if tool == "profile":
                 cal = calibrate.calibrate_kernels(path, gpu)
                 if cal is not None:
                     cal["layers"] = layers.from_bundle(path, target.load(), gpu)
-                    cal["kernel_tasks"] = task_shares(path)
                 return cal
             if tool == "kernel":
                 return calibrate.calibrate_ncu(path / "metrics.csv", gpu)
