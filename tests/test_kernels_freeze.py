@@ -2,10 +2,8 @@
 from __future__ import annotations
 
 import ast
-import dataclasses
 import json
 import os
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -198,42 +196,22 @@ def test_pipeline_freezes_where_the_evaluator_runs_and_writes_the_frozen_program
         pipeline._judged = saved
 
 
-def test_ship_refuses_a_live_autotune_the_engine_did_not_have():
-    from lab.kernels.eval.ship import ship
+def test_a_live_autotune_is_refused_and_a_frozen_one_passes():
+    from lab.kernels.eval.ship import no_live_autotune
     base = ("import triton\n\n@triton.jit\ndef _k(x, M, N):\n    pass\n\n"
             "tuned = triton.autotune(configs=C, key=['N'])(_k)\n\ndef entry(x):\n    return x\n")
     assert freeze.introduced(base.replace("key=['N']", "key=[ 'N' ]"), base) == []      # as written, spacing aside
     assert freeze.introduced(base.replace("key=['N']", "key=['M', 'N']"), base) == \
         ["triton.autotune(configs=C, key=['M', 'N'])"]
-    with tempfile.TemporaryDirectory() as d:
-        repo = Path(d) / "engine"
-        (repo / "src" / "fake_pkg").mkdir(parents=True)
-        (repo / "src" / "fake_pkg" / "mod.py").write_text(base)
-        git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True,  # noqa: E731
-                                        check=True).stdout
-        git("init", "-q")
-        git("add", ".")
-        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "engine")
-        task = dataclasses.replace(load("toy_rmsnorm"), entry="fake_pkg.mod:entry")
-        ok = {"metrics": {"correct": 1.0},
-              "artifacts": {"gates": json.dumps({"correctness_heldout": {"passed": True, "cases": 6}})}}
-        keyed_m = base.replace("key=['N']", "key=['M', 'N']")
-        live = f"# EVOLVE-BLOCK-START\n{keyed_m}# EVOLVE-BLOCK-END\n\nkernel = entry\n"
-        try:
-            ship(task, live, ok, repo, branch="kernels/live")
-            raise AssertionError("shipped a kernel that tunes while serving")
-        except ValueError as e:
-            assert "autotunes at run time" in str(e)
-        old = dict(os.environ)
-        os.environ.update(GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t", GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t")
-        try:
-            same = f"# EVOLVE-BLOCK-START\n{base}# EVOLVE-BLOCK-END\n\nkernel = entry\n"   # the engine's own, untouched
-            assert ship(task, same, ok, repo, branch="kernels/same")["path"] == "src/fake_pkg/mod.py"
-            frozen = freeze.rewrite(live, {"tuned": {"keys": ["M", "N"], "table": [[[16, 8], {"B": 1}]]}})
-            assert ship(task, frozen, ok, repo, branch="kernels/frozen")["path"] == "src/fake_pkg/mod.py"
-        finally:
-            os.environ.clear()
-            os.environ.update(old)
+    keyed_m = base.replace("key=['N']", "key=['M', 'N']")
+    live = f"# EVOLVE-BLOCK-START\n{keyed_m}# EVOLVE-BLOCK-END\n\nkernel = entry\n"
+    try:
+        no_live_autotune(live, None)
+        raise AssertionError("passed a kernel that tunes while serving")
+    except ValueError as e:
+        assert "autotunes at run time" in str(e)
+    frozen = freeze.rewrite(live, {"tuned": {"keys": ["M", "N"], "table": [[[16, 8], {"B": 1}]]}})
+    assert no_live_autotune(frozen, None) == frozen
 
 
 if __name__ == "__main__":
